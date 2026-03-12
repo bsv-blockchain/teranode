@@ -42,7 +42,6 @@ type blobStore interface {
 	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
 	SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error
 	SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error
-	GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
 	Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error
 	Close(ctx context.Context) error
 	SetCurrentBlockHeight(height uint32)
@@ -197,14 +196,6 @@ func (s *Logger) SetDAH(ctx context.Context, key []byte, fileType fileformat.Fil
 	s.debugf("[BlobStore][logger][SetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
 
 	return err
-}
-
-func (s *Logger) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	dah, err := s.store.GetDAH(ctx, key, fileType, opts...)
-	k := bt.ReverseBytes(key)
-	s.debugf("[BlobStore][logger][GetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
-
-	return dah, err
 }
 
 func (s *Logger) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {

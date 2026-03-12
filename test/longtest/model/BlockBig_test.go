@@ -59,7 +59,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -398,7 +398,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.Error(t, err)
 	require.False(t, v)
 
@@ -455,7 +455,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	start := time.Now()
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 

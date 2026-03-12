@@ -44,7 +44,6 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -457,6 +456,12 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 //   - error: Any error encountered (always nil for this method)
 func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error) {
 	status := u.getCatchupStatusInternal()
+	if status != nil && !status.IsCatchingUp && u.blockchainClient != nil {
+		_, meta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+		if err == nil && meta != nil {
+			status.CurrentHeight = meta.Height
+		}
+	}
 
 	resp := &blockvalidation_api.CatchupStatusResponse{
 		IsCatchingUp:         status.IsCatchingUp,
@@ -628,12 +633,19 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 						// If block is invalid, don't try other peers; continue to next catchup request
 						// Block is expected to be added to the block store as invalid somewhere else
+						// Note: ErrBlockIncomplete intentionally falls through to retry with alternative peers,
+						// since incomplete blocks (e.g. from seeded peers) may be available from other peers
 						if errors.Is(err, errors.ErrBlockInvalid) ||
 							errors.Is(err, errors.ErrTxMissingParent) ||
 							errors.Is(err, errors.ErrTxNotFound) ||
 							errors.Is(err, errors.ErrTxInvalid) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
-							// Clean up the processing notification for this block so it can be retried later if needed
+
+							// Mark peer as malicious for providing unvalidatable block
+							// All these errors indicate the peer is sending blocks we can't validate
+							u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
+
+							// Clean up the processing notification for this block
 							u.processBlockNotify.Delete(*c.block.Hash())
 							continue
 						}
@@ -993,36 +1005,51 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Blocks until the FSM transitions from the IDLE state
-	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+	g, gctx := errgroup.WithContext(ctx)
 
-		return err
-	}
+	// Start Kafka consumer only after the blockchain FSM transitions from IDLE.
+	// This prevents validation processing from starting too early, while still allowing
+	// the gRPC server to accept administrative calls (e.g. RevalidateBlock).
+	g.Go(func() error {
+		// Blocks until the FSM transitions from the IDLE state
+		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
+		if err != nil {
+			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+			return err
+		}
 
-	u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
+		u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
 
-	// start blocks kafka consumer
-	if u.kafkaConsumerClient == nil {
-		u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
-		return errors.NewServiceError("kafkaConsumerClient is nil")
-	}
+		// start blocks kafka consumer
+		if u.kafkaConsumerClient == nil {
+			u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
+			return errors.NewServiceError("kafkaConsumerClient is nil")
+		}
 
-	u.logger.Infof("[Start] Starting Kafka consumer with handler")
-	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
+		u.logger.Infof("[Start] Starting Kafka consumer with handler")
+		u.kafkaConsumerClient.Start(gctx, u.consumerMessageHandler(gctx), kafka.WithLogErrorAndMoveOn())
 
-	u.logger.Infof("[Start] Kafka consumer started successfully")
+		u.logger.Infof("[Start] Kafka consumer started successfully")
 
-	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
-		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
-		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
-		return err
-	}
+		<-gctx.Done()
 
-	return nil
+		u.logger.Infof("[Start] Kafka consumer context done, closing consumer")
+		if err := u.kafkaConsumerClient.Close(); err != nil {
+			u.logger.Errorf("[Start] failed to close kafka consumer gracefully: %v", err)
+		}
+
+		return nil
+	})
+
+	// Start gRPC server immediately (blocks until shutdown)
+	g.Go(func() error {
+		return util.StartGRPCServer(gctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
+			blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
+			closeOnce.Do(func() { close(readyCh) })
+		}, nil)
+	})
+
+	return g.Wait()
 }
 
 // Stop gracefully shuts down the block validation server by stopping background
@@ -1040,6 +1067,7 @@ func (u *Server) Stop(_ context.Context) error {
 	// Wait for all background tasks in BlockValidation to complete
 	if u.blockValidation != nil {
 		u.blockValidation.Wait()
+		u.blockValidation.StopCaches()
 	}
 
 	// close the kafka consumer gracefully
@@ -1068,14 +1096,14 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", util.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
 	)
 	defer deferFn()
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("[BlockFound][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err))
+			errors.NewProcessingError("[BlockFound][%s] failed to create hash from bytes", util.ReverseAndHexEncodeSlice(req.Hash), err))
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
@@ -1086,7 +1114,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", utils.ReverseAndHexEncodeSlice(req.Hash))
+		u.logger.Infof("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
@@ -1121,13 +1149,13 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_api.RevalidateBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[RevalidateBlock][%s] revalidate block called", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithLogMessage(u.logger, "[RevalidateBlock][%s] revalidate block called", util.ReverseAndHexEncodeSlice(request.Hash)),
 	)
 	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[RevalidateBlock][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(request.Hash), err))
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[RevalidateBlock][%s] failed to create hash from bytes", util.ReverseAndHexEncodeSlice(request.Hash), err))
 	}
 
 	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
@@ -1140,13 +1168,28 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to get block header", blockHash.String(), err))
 	}
 
+	// Ensure all subtree files exist before proceeding with revalidation.
+	// This handles the case where pruner has removed subtree data for old invalid blocks.
+	var baseURL string
+	if u.p2pClient != nil {
+		if peer, err := u.p2pClient.GetPeer(ctx, blockHeaderMeta.PeerID); err != nil {
+			u.logger.Warnf("[RevalidateBlock][%s] failed to get peer %s for DataHubURL, will use fallback peers: %v", block.String(), blockHeaderMeta.PeerID, err)
+		} else if peer != nil {
+			baseURL = peer.DataHubURL
+		}
+		if err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
+		}
+	}
+
 	// Create validation options
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: true,
 		IsRevalidation:          true,
+		PeerID:                  blockHeaderMeta.PeerID,
 	}
 
-	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, opts)
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", block.String(), err))
 	}
@@ -1262,7 +1305,9 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
+	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
+	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1362,6 +1407,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: baseURL == "legacy",
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
+		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
@@ -1591,6 +1637,14 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
+
+		// Report peer failure to P2P service for reputation tracking
+		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
+		if blockFound.peerID != "" {
+			u.reportCatchupFailure(ctx, blockFound.peerID)
+			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
+		}
+
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
 		}

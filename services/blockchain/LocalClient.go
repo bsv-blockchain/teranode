@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -357,6 +358,18 @@ func (c *LocalClient) Subscribe(ctx context.Context, source string) (chan *block
 	return ch, nil
 }
 
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (c *LocalClient) GetSubscribers(_ context.Context) ([]string, error) {
+	c.subscribersMu.RLock()
+	defer c.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(c.subscribers))
+	for source := range c.subscribers {
+		sources = append(sources, source)
+	}
+	return sources, nil
+}
+
 func (c *LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return c.store.GetState(ctx, key)
 }
@@ -531,4 +544,51 @@ func (c *LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32,
 	}
 
 	return meta.Height, medianTimestampUint32, nil
+}
+
+// Blob deletion methods - LocalClient implementations
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (c *LocalClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, false, errors.NewProcessingError("not implemented")
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (c *LocalClient) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	return false, errors.NewProcessingError("not implemented")
+}
+
+// ListScheduledDeletions lists scheduled blob deletions with optional filtering.
+func (c *LocalClient) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	return nil, 0, errors.NewProcessingError("not implemented")
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (c *LocalClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	return nil, errors.NewProcessingError("not implemented")
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule.
+func (c *LocalClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	return errors.NewProcessingError("not implemented")
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (c *LocalClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	return false, 0, errors.NewProcessingError("not implemented")
+}
+
+// CompleteBlobDeletions completes multiple blob deletions in a single batch call.
+func (c *LocalClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	return 0, 0, errors.NewProcessingError("not implemented")
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	return "", nil, errors.NewProcessingError("not implemented")
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	return errors.NewProcessingError("not implemented")
 }

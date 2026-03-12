@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -568,6 +569,7 @@ func TestStartHTTPServer(t *testing.T) {
 			Propagation: settings.PropagationSettings{
 				HTTPRateLimit: 20,
 			},
+			Policy: &settings.PolicySettings{},
 		},
 	}
 
@@ -1021,5 +1023,218 @@ func TestPropagationServerCoverage(t *testing.T) {
 		// Should have multiple server checks
 		assert.Contains(t, msg, "gRPC Server")
 		assert.Contains(t, msg, "HTTP Server")
+	})
+}
+
+// TestTxSanityChecks tests the transaction sanity checks.
+func TestTxSanityChecks(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	ps := &PropagationServer{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	t.Run("valid transaction version 1", func(t *testing.T) {
+		// Create a transaction chain with version 1 transaction
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		tx := txs[1] // Non-coinbase transaction
+		tx.Version = 1
+
+		err := ps.txSanityChecks(tx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("valid transaction version 2", func(t *testing.T) {
+		// Create a transaction chain with version 2 transaction
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		tx := txs[1] // Non-coinbase transaction
+		tx.Version = 2
+
+		err := ps.txSanityChecks(tx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("no inputs", func(t *testing.T) {
+		// Transaction with no inputs
+		tx := bt.NewTx()
+		tx.Version = 1
+		err := tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)
+		require.NoError(t, err)
+
+		err = ps.txSanityChecks(tx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no inputs")
+	})
+
+	t.Run("no outputs", func(t *testing.T) {
+		// Transaction with no outputs
+		tx := bt.NewTx()
+		tx.Version = 1
+		tx.Inputs = append(tx.Inputs, &bt.Input{PreviousTxOutIndex: 0})
+
+		err := ps.txSanityChecks(tx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no outputs")
+	})
+
+	// Note: Size check is now performed in processTransaction BEFORE parsing
+	// to avoid wasting CPU on oversized transactions. See TestProcessTransaction_ExceedsMaxSize.
+}
+
+// TestProcessTransaction_ExceedsMaxSize tests that oversized transactions are rejected
+// BEFORE parsing to save CPU cycles.
+func TestProcessTransaction_ExceedsMaxSize(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Set a small max tx size for testing
+	tSettings.Policy.SetMaxTxSizePolicy(100)
+
+	ps := &PropagationServer{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	// Create a transaction chain and use one with real data (will be > 100 bytes)
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+	tx := txs[1]
+
+	req := &propagation_api.ProcessTransactionRequest{
+		Tx: tx.ExtendedBytes(),
+	}
+
+	err := ps.processTransaction(context.Background(), req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum allowed size")
+}
+
+// TestCheckDuplicateInputs tests the duplicate input detection.
+func TestCheckDuplicateInputs(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	ps := &PropagationServer{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	t.Run("no duplicate inputs", func(t *testing.T) {
+		// Create a test transaction chain - second tx has valid input referencing first tx
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		tx := txs[1]
+
+		err := ps.checkDuplicateInputs(tx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("duplicate input detected", func(t *testing.T) {
+		// Create a transaction chain to get a valid input
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		tx := txs[1]
+
+		// Duplicate the first input to create a duplicate input scenario
+		tx.Inputs = append(tx.Inputs, tx.Inputs[0])
+
+		err := ps.checkDuplicateInputs(tx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate input found")
+	})
+}
+
+// TestParseAllowedSources tests the IP/CIDR parsing for UDP allowlist.
+func TestParseAllowedSources(t *testing.T) {
+	t.Run("empty list", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{})
+		require.NoError(t, err)
+		assert.Len(t, nets, 0)
+	})
+
+	t.Run("single IPv4", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{"192.168.1.1"})
+		require.NoError(t, err)
+		assert.Len(t, nets, 1)
+		// Check it's a /32
+		ones, bits := nets[0].Mask.Size()
+		assert.Equal(t, 32, ones)
+		assert.Equal(t, 32, bits)
+	})
+
+	t.Run("single IPv6", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{"2001:db8::1"})
+		require.NoError(t, err)
+		assert.Len(t, nets, 1)
+		// Check it's a /128
+		ones, bits := nets[0].Mask.Size()
+		assert.Equal(t, 128, ones)
+		assert.Equal(t, 128, bits)
+	})
+
+	t.Run("CIDR notation", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{"10.0.0.0/8"})
+		require.NoError(t, err)
+		assert.Len(t, nets, 1)
+		ones, bits := nets[0].Mask.Size()
+		assert.Equal(t, 8, ones)
+		assert.Equal(t, 32, bits)
+	})
+
+	t.Run("mixed list", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{"192.168.1.1", "10.0.0.0/16", "2001:db8::/32"})
+		require.NoError(t, err)
+		assert.Len(t, nets, 3)
+	})
+
+	t.Run("invalid IP", func(t *testing.T) {
+		_, err := parseAllowedSources([]string{"not-an-ip"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid IP or CIDR")
+	})
+
+	t.Run("whitespace handling", func(t *testing.T) {
+		nets, err := parseAllowedSources([]string{" 192.168.1.1 ", "  ", ""})
+		require.NoError(t, err)
+		assert.Len(t, nets, 1)
+	})
+}
+
+// TestIsIPAllowed tests the IP allowlist checking logic.
+func TestIsIPAllowed(t *testing.T) {
+	t.Run("empty allowlist allows all", func(t *testing.T) {
+		ip := net.ParseIP("192.168.1.100")
+		assert.True(t, isIPAllowed(ip, nil))
+		assert.True(t, isIPAllowed(ip, []*net.IPNet{}))
+	})
+
+	t.Run("exact IP match", func(t *testing.T) {
+		nets, _ := parseAllowedSources([]string{"192.168.1.100"})
+		assert.True(t, isIPAllowed(net.ParseIP("192.168.1.100"), nets))
+		assert.False(t, isIPAllowed(net.ParseIP("192.168.1.101"), nets))
+	})
+
+	t.Run("CIDR range match", func(t *testing.T) {
+		nets, _ := parseAllowedSources([]string{"10.0.0.0/8"})
+		assert.True(t, isIPAllowed(net.ParseIP("10.0.0.1"), nets))
+		assert.True(t, isIPAllowed(net.ParseIP("10.255.255.255"), nets))
+		assert.False(t, isIPAllowed(net.ParseIP("11.0.0.1"), nets))
+	})
+
+	t.Run("IPv6 CIDR match", func(t *testing.T) {
+		nets, _ := parseAllowedSources([]string{"2001:db8::/32"})
+		assert.True(t, isIPAllowed(net.ParseIP("2001:db8::1"), nets))
+		assert.True(t, isIPAllowed(net.ParseIP("2001:db8:ffff::1"), nets))
+		assert.False(t, isIPAllowed(net.ParseIP("2001:db9::1"), nets))
+	})
+
+	t.Run("multiple allowed sources", func(t *testing.T) {
+		nets, _ := parseAllowedSources([]string{"192.168.1.0/24", "10.0.0.1"})
+		assert.True(t, isIPAllowed(net.ParseIP("192.168.1.50"), nets))
+		assert.True(t, isIPAllowed(net.ParseIP("10.0.0.1"), nets))
+		assert.False(t, isIPAllowed(net.ParseIP("10.0.0.2"), nets))
+		assert.False(t, isIPAllowed(net.ParseIP("192.168.2.1"), nets))
 	})
 }

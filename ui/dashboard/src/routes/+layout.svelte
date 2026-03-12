@@ -24,7 +24,7 @@
 
   import { connectToP2PServer } from '$internal/stores/p2pStore'
 
-  onMount(async () => {
+  onMount(() => {
     connectToP2PServer()
   })
 

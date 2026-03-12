@@ -22,23 +22,25 @@ import (
 //
 // Each handler will have its execution time measured and reported via Prometheus metrics.
 var peerServerMetricHandlers = []string{
-	"OnVersion",    // Version message handler metrics
-	"OnProtoconf",  // Protocol configuration message handler metrics
-	"OnMemPool",    // Memory pool query handler metrics
-	"OnTx",         // Transaction message handler metrics
-	"OnBlock",      // Block message handler metrics
-	"OnInv",        // Inventory message handler metrics
-	"OnHeaders",    // Headers message handler metrics
-	"OnGetData",    // GetData message handler metrics
-	"OnGetBlocks",  // GetBlocks message handler metrics
-	"OnGetHeaders", // GetHeaders message handler metrics
-	"OnFeeFilter",  // FeeFilter message handler metrics
-	"OnGetAddr",    // GetAddr message handler metrics
-	"OnAddr",       // Addr message handler metrics
-	"OnReject",     // Reject message handler metrics
-	"OnNotFound",   // NotFound message handler metrics
-	"OnRead",       // General read operation metrics
-	"OnWrite",      // General write operation metrics
+	"OnVersion",      // Version message handler metrics
+	"OnProtoconf",    // Protocol configuration message handler metrics
+	"OnMemPool",      // Memory pool query handler metrics
+	"OnTx",           // Transaction message handler metrics
+	"OnBlock",        // Block message handler metrics
+	"OnInv",          // Inventory message handler metrics
+	"OnHeaders",      // Headers message handler metrics
+	"OnGetData",      // GetData message handler metrics
+	"OnGetBlocks",    // GetBlocks message handler metrics
+	"OnGetHeaders",   // GetHeaders message handler metrics
+	"OnFeeFilter",    // FeeFilter message handler metrics
+	"OnGetAddr",      // GetAddr message handler metrics
+	"OnAddr",         // Addr message handler metrics
+	"OnReject",       // Reject message handler metrics
+	"OnNotFound",     // NotFound message handler metrics
+	"OnRead",         // General read operation metrics
+	"OnWrite",        // General write operation metrics
+	"OnCreateStream", // CreateStream message handler metrics
+	"OnStreamAck",    // StreamAck message handler metrics
 }
 
 var (

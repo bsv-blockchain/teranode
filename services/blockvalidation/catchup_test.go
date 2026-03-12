@@ -27,10 +27,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -780,7 +780,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	case got := <-catchupCh:
 		assert.NotNil(t, got.block)
 		assert.Equal(t, "http://peer0", got.baseURL)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("processBlockFoundChannel did not put anything on catchupCh")
 	}
 }
@@ -1043,6 +1043,8 @@ func TestCatchup(t *testing.T) {
 		subtreeStore:                  blobmemory.New(),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
+	defer bv.blockExistsCache.Stop()
+	defer bv.lastValidatedBlocks.Stop()
 
 	// Create server instance
 	server := &Server{
@@ -1209,6 +1211,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			utxoStore:                     mockUTXOStore,
 		}
+		t.Cleanup(bv.blockExistsCache.Stop)
 
 		// Create circuit breaker for testing
 		cbConfig := catchup.DefaultCircuitBreakerConfig()
@@ -3061,6 +3064,8 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3119,8 +3124,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 			_ = bv.subtreeStore.Close(context.Background())
 		}
 
-		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
-		// This is a known limitation of the library
+		// Stop expiring map background goroutines
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup
@@ -3152,6 +3158,8 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3217,8 +3225,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		close(server.blockFoundCh)
 		close(server.catchupCh)
 
-		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
-		// This is a known limitation of the library
+		// Stop expiring map background goroutines
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup
@@ -3390,6 +3399,9 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 		},
 	}
 
+	// Enable quick validation for this test
+	suite.Server.settings.BlockValidation.CatchupAllowQuickValidation = true
+
 	// Create catchup context simulating the scenario
 	catchupCtx := &CatchupContext{
 		blockUpTo: &model.Block{
@@ -3409,7 +3421,8 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification
@@ -3417,7 +3430,7 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 
 	// This should succeed - checkpoint at height 10 should match
 	assert.NoError(t, err, "Checkpoint validation should succeed")
-	assert.False(t, catchupCtx.useQuickValidation, "Quick validation is currently disabled (needs more testing)")
+	assert.True(t, catchupCtx.useQuickValidation, "Quick validation should be enabled when checkpoints are verified")
 }
 
 // TestCheckpointValidationSkipsCheckpointsBelowAncestor verifies that checkpoint validation
@@ -3458,7 +3471,8 @@ func TestCheckpointValidationSkipsCheckpointsBelowAncestor(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification

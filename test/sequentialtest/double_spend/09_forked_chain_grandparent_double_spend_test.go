@@ -86,6 +86,7 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 
 	// Mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block3gp, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -104,6 +105,7 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 	t.Logf("Parent: %s - spends GP:0, GP:4", parent.TxIDChainHash().String())
 
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
@@ -138,6 +140,9 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, child1))
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, child2))
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentSibling))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(child1, blockWait))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(child2, blockWait))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parentSibling, blockWait))
 	td.MineAndWait(t, 1)
 
 	block5a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 5)

@@ -17,7 +17,7 @@ x-teranode-coinbase-base: &teranode-coinbase-base
     - kafka-shared
 
 x-aerospike-base: &aerospike-base
-  image: aerospike:ce-7.2.0.3_1
+  image: aerospike/aerospike-server:8.0
   network_mode: "host"
   command: --config-file /etc/aerospike.conf
 
@@ -84,6 +84,23 @@ services:
           brokers: ["localhost:19092"]
     depends_on:
       - kafka-shared
+
+  # Legacy Bitcoin SV node for testing teranode <-> legacy sync
+  svnode1:
+    container_name: svnode1
+    image: bitcoinsv/bitcoin-sv:1.2.0
+    platform: linux/amd64
+    network_mode: "host"
+    profiles:
+      - svnode1
+    healthcheck:
+      test: ["CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - ./config/svnode-1.conf:/data/bitcoin.conf
+    command: ["/entrypoint.sh", "bitcoind"]
 
   teranode-1:
     <<: *teranode-base

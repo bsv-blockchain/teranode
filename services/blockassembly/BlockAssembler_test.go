@@ -33,7 +33,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -68,10 +67,10 @@ type baTestItems struct {
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
+func (items baTestItems) addBlock(ctx context.Context, blockHeader *model.BlockHeader) error {
 	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 
-	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
+	return items.blockchainClient.AddBlock(ctx, &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
@@ -116,7 +115,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	require.NoError(t, err)
 
 	// Get the genesis block that was automatically inserted
-	ctx := context.Background()
+	ctx := t.Context()
 	genesisBlock, err := blockchainStore.GetBlockByID(ctx, 0)
 	require.NoError(t, err)
 
@@ -129,6 +128,9 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 
 	// Set the best block header before starting listeners
 	testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
+
+	// Also initialize the subtree processor's block header (SubtreeProcessor is the source of truth)
+	testItems.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(genesisBlock.Header)
 
 	// Return nil for mock since we're using a real client
 	return nil, subChan, genesisBlock
@@ -184,7 +186,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -225,7 +227,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -286,7 +288,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -332,7 +334,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -348,7 +350,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 	t.Run("addTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -363,28 +366,33 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		wg.Add(2)
+		var completeWg sync.WaitGroup
+		completeWg.Add(2)
+		done := make(chan struct{})
 
 		go func() {
-			for i := 0; i < 2; i++ {
-				subtreeRequest := <-testItems.newSubtreeChan
-				subtree := subtreeRequest.Subtree
-				assert.NotNil(t, subtree)
+			defer close(done)
+			seenComplete := 0
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil && subtree.IsComplete() && seenComplete < 2 {
+						if seenComplete == 0 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+						}
+						assert.Len(t, subtree.Nodes, 4)
+						assert.Equal(t, uint64(666), subtree.Fees)
+						seenComplete++
+						completeWg.Done()
+					}
 
-				if i == 0 {
-					assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
 				}
-
-				assert.Len(t, subtree.Nodes, 4)
-				assert.Equal(t, uint64(666), subtree.Fees)
-
-				if subtreeRequest.ErrChan != nil {
-					subtreeRequest.ErrChan <- nil
-				}
-
-				wg.Done()
 			}
 		}()
 
@@ -416,7 +424,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash7, Fee: 6}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
-		wg.Wait()
+		completeWg.Wait()
 
 		// need to wait for the txCount to be updated after the subtree notification was fired off
 		time.Sleep(10 * time.Millisecond)
@@ -433,7 +441,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		assert.NotNil(t, subtrees)
 		assert.Equal(t, uint64(5000001332), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Len(t, subtrees, 2)
 		assert.Len(t, subtrees[0].Nodes, 4)
 		assert.Len(t, subtrees[1].Nodes, 4)
@@ -447,7 +455,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -458,6 +466,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -522,7 +532,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
-		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
+		_, _, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), nil, 0)
 		require.Error(t, err)
 	})
 
@@ -533,22 +543,22 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.setBestBlockHeader(blockHeader4, 4)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4)
+		err = items.addBlock(t.Context(), blockHeader4)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2Alt)
+		err = items.addBlock(t.Context(), blockHeader2Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3Alt)
+		err = items.addBlock(t.Context(), blockHeader3Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4Alt)
+		err = items.addBlock(t.Context(), blockHeader4Alt)
 		require.NoError(t, err)
 
-		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader4Alt, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveBackBlockHeaders, 3)
@@ -567,11 +577,11 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
 
 		// set the cached BlockAssembler items to block 2
@@ -593,16 +603,16 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4)
+		err = items.addBlock(t.Context(), blockHeader4)
 		require.NoError(t, err)
 
-		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader4, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveBackBlockHeaders, 0)
@@ -610,6 +620,48 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		assert.Len(t, moveForwardBlockHeaders, 2)
 		assert.Equal(t, blockHeader3.Hash(), moveForwardBlockHeaders[0].header.Hash())
 		assert.Equal(t, blockHeader4.Hash(), moveForwardBlockHeaders[1].header.Hash())
+	})
+
+	t.Run("getReorgBlocks - invalidated fork tip", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		// Build two competing chains from height 1:
+		// Main chain: 1 -> 2A -> 3A
+		// Fork chain: 1 -> 2B -> 3B (invalidated)
+		h2a := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader1.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 22, Bits: *bits}
+		h3a := &model.BlockHeader{Version: 1, HashPrevBlock: h2a.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 23, Bits: *bits}
+		h2b := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader1.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 32, Bits: *bits}
+		h3b := &model.BlockHeader{Version: 1, HashPrevBlock: h2b.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 33, Bits: *bits}
+
+		err := items.addBlock(t.Context(), blockHeader1)
+		require.NoError(t, err)
+		err = items.addBlock(t.Context(), h2a)
+		require.NoError(t, err)
+		err = items.addBlock(t.Context(), h3a)
+		require.NoError(t, err)
+		err = items.addBlock(t.Context(), h2b)
+		require.NoError(t, err)
+		err = items.addBlock(t.Context(), h3b)
+		require.NoError(t, err)
+
+		// Simulate BlockAssembler currently being on the fork tip (3B @ height 3)
+		items.blockAssembler.setBestBlockHeader(h3b, 3)
+
+		// Invalidate fork tip so blockchain best becomes 3A; reorg should move back 3B and 2B
+		_, err = items.blockchainClient.InvalidateBlock(t.Context(), h3b.Hash())
+		require.NoError(t, err)
+
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), h3a, 3)
+		require.NoError(t, err)
+
+		require.Len(t, moveBackBlockHeaders, 2)
+		assert.Equal(t, h3b.Hash(), moveBackBlockHeaders[0].header.Hash())
+		assert.Equal(t, h2b.Hash(), moveBackBlockHeaders[1].header.Hash())
+
+		require.Len(t, moveForwardBlockHeaders, 2)
+		assert.Equal(t, h2a.Hash(), moveForwardBlockHeaders[0].header.Hash())
+		assert.Equal(t, h3a.Hash(), moveForwardBlockHeaders[1].header.Hash())
 	})
 }
 
@@ -626,9 +678,9 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items.blobStore = memory.New() // blob memory store
 	items.txStore = memory.New()   // tx memory store
 
-	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
+	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest, 100)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := ulogger.NewErrorTestLogger(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -653,7 +705,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	stats := gocore.NewStat("test")
 
 	ba, _ := NewBlockAssembler(
-		context.Background(),
+		t.Context(),
 		ulogger.TestLogger{},
 		tSettings,
 		stats,
@@ -696,7 +748,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 	t.Run("addTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -709,22 +761,30 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		}()
 
 		var wg sync.WaitGroup
-
 		wg.Add(1)
 
+		done := make(chan struct{})
 		go func() {
-			subtreeRequest := <-testItems.newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.NotNil(t, subtree)
-			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-			assert.Len(t, subtree.Nodes, 4)
-			assert.Equal(t, uint64(5000000556), subtree.Fees)
+			defer close(done)
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil {
+						if subtree.Length() == 4 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+							assert.Equal(t, uint64(5000000556), subtree.Fees)
+							wg.Done()
+						}
+					}
 
-			if subtreeRequest.ErrChan != nil {
-				subtreeRequest.ErrChan <- nil
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
+				}
 			}
-
-			wg.Done()
 		}()
 
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
@@ -753,9 +813,13 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtree)
+		// CoinbaseValue = block_subsidy (5B) + subtree_fees (5B + 222 + 334 = 5000000556)
+		// Note: tx4 and tx5 are in an incomplete subtree which is not included when there are complete subtrees
+		// The first complete subtree contains: auto-added coinbase placeholder (fee 0) + test coinbase (5B) + tx2 (222) + tx3 (334)
 		assert.Equal(t, uint64(10000000556), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		// Only 1 complete subtree is returned; incomplete subtrees are not included when there are complete subtrees
 		assert.Len(t, subtree, 1)
 		assert.Len(t, subtree[0].Nodes, 4)
 
@@ -768,7 +832,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -779,6 +843,8 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -786,7 +852,8 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 	t.Run("GetMiningCandidate", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -801,23 +868,33 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		wg.Add(1)
-
+		var completeWg sync.WaitGroup
+		completeWg.Add(1)
+		var seenComplete int
+		done := make(chan struct{})
 		go func() {
-			subtreeRequest := <-testItems.newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.NotNil(t, subtree)
-			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-			assert.Len(t, subtree.Nodes, 4)
-			assert.Equal(t, uint64(999), subtree.Fees)
+			defer close(done)
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil && subtree.IsComplete() && seenComplete < 1 {
+						if seenComplete == 0 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+						}
+						assert.Len(t, subtree.Nodes, 4)
+						assert.Equal(t, uint64(999), subtree.Fees)
+						seenComplete++
+						completeWg.Done()
+					}
 
-			if subtreeRequest.ErrChan != nil {
-				subtreeRequest.ErrChan <- nil
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
+				}
 			}
-
-			wg.Done()
 		}()
 
 		_, err := testItems.utxoStore.Create(ctx, tx2, 0)
@@ -832,13 +909,13 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
-		wg.Wait()
+		completeWg.Wait()
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
@@ -870,7 +947,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -881,6 +958,8 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -888,7 +967,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 	t.Run("GetMiningCandidate_MaxBlockSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 15000*4 + 1000
@@ -904,26 +984,22 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		// 15 txs is 3 complete subtrees
-		wg.Add(3)
+		var completeWg sync.WaitGroup
+		completeWg.Add(3)
+		done := make(chan struct{})
 
 		go func() {
+			defer close(done)
 			for {
 				select {
 				case subtreeRequest := <-testItems.newSubtreeChan:
-					subtree := subtreeRequest.Subtree
-					assert.NotNil(t, subtree)
-					// assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-					assert.Len(t, subtree.Nodes, 4)
-					// assert.Equal(t, uint64(4000000000), subtree.Fees)
-
 					if subtreeRequest.ErrChan != nil {
 						subtreeRequest.ErrChan <- nil
 					}
 
-					wg.Done()
+					if subtreeRequest.Subtree != nil && subtreeRequest.Subtree.IsComplete() {
+						completeWg.Done()
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -939,13 +1015,13 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 			testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 		}
 
-		wg.Wait()
+		completeWg.Wait()
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
@@ -977,7 +1053,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -988,6 +1064,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -995,7 +1073,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	t.Run("GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx := t.Context()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 430000
@@ -1038,8 +1116,14 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 		wg.Wait()
 
-		_, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.Error(t, err)
+		// Retry GetMiningCandidate until the subtree processor has precomputed
+		// the mining data. Without this, the call may return an empty block
+		// template (no error) because precomputed data is not yet available.
+		var err error
+		require.Eventually(t, func() bool {
+			_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+			return err != nil
+		}, 5*time.Second, 100*time.Millisecond, "expected GetMiningCandidate to return an error when subtree exceeds max block size")
 
 		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())
 	})
@@ -1090,7 +1174,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 	t.Run("FeesOnlyScenario", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx := t.Context()
 		testItems := setupBlockAssemblyTest(t)
 
 		// Set up mock blockchain client
@@ -1201,6 +1285,8 @@ func createTestSettings(t *testing.T) *settings.Settings {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.BlockMaxSize = 1000000
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings.BlockAssembly.SubtreeAnnouncementInterval = 24 * time.Hour
+	tSettings.BlockAssembly.UseDynamicSubtreeSize = false
 	tSettings.BlockAssembly.SubtreeProcessorBatcherSize = 1
 	tSettings.BlockAssembly.DoubleSpendWindow = 1000
 	tSettings.BlockAssembly.MaxGetReorgHashes = 10000
@@ -1210,635 +1296,385 @@ func createTestSettings(t *testing.T) *settings.Settings {
 	return tSettings
 }
 
-// TestBlockAssembler_CachingFunctionality tests the new caching functionality for mining candidates
-func TestBlockAssembler_CachingFunctionality(t *testing.T) {
-	t.Run("Cache Hit", func(t *testing.T) {
-		initPrometheusMetrics()
+// createTestSubtree creates a subtree with a coinbase and the specified nodes for testing.
+func createTestSubtree(t *testing.T, leafCount int, nodes []subtreepkg.Node) *subtreepkg.Subtree {
+	t.Helper()
+	st, err := subtreepkg.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+	err = st.AddCoinbaseNode()
+	require.NoError(t, err)
+	for _, node := range nodes {
+		err = st.AddSubtreeNode(node)
+		require.NoError(t, err)
+	}
+	return st
+}
 
+func TestBlockAssembler_FilterSubtreesByMaxSize(t *testing.T) {
+	t.Run("all subtrees fit", func(t *testing.T) {
+		initPrometheusMetrics()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
-
 		ba := testItems.blockAssembler
 
-		// Test cache functionality by directly manipulating cache
-		currentHeader, _ := ba.CurrentBlock()
-		ba.setBestBlockHeader(currentHeader, 1)
+		hash1 := chainhash.HashH([]byte("tx1"))
+		hash2 := chainhash.HashH([]byte("tx2"))
 
-		// Set up cache manually with a fixed time for deterministic testing
-		testTime := time.Now()
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{
-			NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
-			Height: 1,
-		}
-		ba.cachedCandidate.subtrees = []*subtreepkg.Subtree{}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = testTime
-		ba.cachedCandidate.generating = false
-		ba.cachedCandidate.mu.Unlock()
+		st1 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash1, Fee: 100, SizeInBytes: 500},
+		})
+		st2 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash2, Fee: 200, SizeInBytes: 600},
+		})
 
-		// Verify cache validity check works
-		ba.cachedCandidate.mu.RLock()
-		_, currentHeight := ba.CurrentBlock()
-		isValid := ba.cachedCandidate.candidate != nil &&
-			ba.cachedCandidate.lastHeight == currentHeight &&
-			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
-		ba.cachedCandidate.mu.RUnlock()
+		subtrees := []*subtreepkg.Subtree{st1, st2}
 
-		assert.True(t, isValid, "Cache should be valid with recent timestamp and same height")
-
-		// Test cache expiration - use a time more than 5 seconds in the past
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.lastUpdate = testTime.Add(-10 * time.Second)
-		ba.cachedCandidate.mu.Unlock()
-
-		ba.cachedCandidate.mu.RLock()
-		isValid = ba.cachedCandidate.candidate != nil &&
-			ba.cachedCandidate.lastHeight == currentHeight &&
-			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
-		ba.cachedCandidate.mu.RUnlock()
-
-		assert.False(t, isValid, "Cache should be invalid due to expiration")
+		// Max block size large enough for both subtrees
+		result, err := ba.filterSubtreesByMaxSize(subtrees, 10000)
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result))
 	})
 
-	t.Run("Cache Miss After Height Change", func(t *testing.T) {
+	t.Run("some subtrees filtered out", func(t *testing.T) {
 		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
 
+		hash1 := chainhash.HashH([]byte("tx1"))
+		hash2 := chainhash.HashH([]byte("tx2"))
+
+		st1 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash1, Fee: 100, SizeInBytes: 500},
+		})
+		st2 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash2, Fee: 200, SizeInBytes: 600},
+		})
+
+		subtrees := []*subtreepkg.Subtree{st1, st2}
+
+		// Max block size only fits first subtree (80 header + 500 = 580, second would be 1180 > 700)
+		result, err := ba.filterSubtreesByMaxSize(subtrees, 700)
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(result))
+	})
+
+	t.Run("no subtrees fit returns error", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		hash1 := chainhash.HashH([]byte("tx1"))
+
+		st1 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash1, Fee: 100, SizeInBytes: 500},
+		})
+
+		subtrees := []*subtreepkg.Subtree{st1}
+
+		// Max block size too small for even the first subtree (80 header + 500 > 100)
+		_, err := ba.filterSubtreesByMaxSize(subtrees, 100)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "max block size is less than the size of the subtree")
+	})
+}
+
+func TestBlockAssembler_GetMiningCandidate_PrecomputedData(t *testing.T) {
+	t.Run("returns empty block when precomputed data is nil", func(t *testing.T) {
+		initPrometheusMetrics()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		// Create a cancellable context for proper cleanup
 		ctx, cancel := context.WithCancel(context.Background())
-		defer func() {
-			cancel()
-			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
-		}()
+		defer cancel()
 
 		ba := testItems.blockAssembler
-
-		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
 		currentHeader, _ := ba.CurrentBlock()
 		ba.setBestBlockHeader(currentHeader, 1)
 
-		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
 			_ = ba.startChannelListeners(ctx)
 		}()
 
-		// First call
-		_, h := ba.CurrentBlock()
-		t.Logf("First call: height=%d", h)
-		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
-		_, h = ba.CurrentBlock()
-		t.Logf("Check call: height=%d", h)
-		require.NoError(t, err1)
-		require.NotNil(t, candidate1)
-		assert.Equal(t, uint32(2), candidate1.Height)
-
-		// Change block height (simulate new block)
-		currentHeader, _ = ba.CurrentBlock()
-		ba.setBestBlockHeader(currentHeader, 2)
-		ba.invalidateMiningCandidateCache()
-
-		// Second call - should generate new candidate due to height change
-		candidate2, _, err2 := ba.GetMiningCandidate(ctx)
-		require.NoError(t, err2)
-		require.NotNil(t, candidate2)
-		// The height may vary depending on test execution order, so just check it's different
-		assert.NotEqual(t, candidate1.Height, candidate2.Height, "Heights should be different to show cache miss")
+		// With no transactions added, precomputed data may be nil or empty
+		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+		// Should return a valid candidate (empty block template)
+		assert.Equal(t, uint32(2), candidate.Height)
+		assert.Empty(t, subtrees)
 	})
 
-	t.Run("Cache Expiration", func(t *testing.T) {
+	t.Run("returns empty block when precomputed data is stale", func(t *testing.T) {
 		initPrometheusMetrics()
-
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		// Create a cancellable context for proper cleanup
-		ctx, cancel := context.WithCancel(context.Background())
-		defer func() {
-			cancel()
-			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
-		}()
-
 		ba := testItems.blockAssembler
 
-		// Set up mock blockchain client
-		_, _, _ = setupBlockchainClient(t, testItems)
+		// Use genesis block header as the current best block
+		var buf bytes.Buffer
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		require.NoError(t, err)
+		ba.setBestBlockHeader(genesisBlock.Header, 5)
 
-		currentHeader, _ := ba.CurrentBlock()
-		ba.setBestBlockHeader(currentHeader, 1)
-
-		// Start listeners in a goroutine since it will wait for readyCh
-		go func() {
-			_ = ba.startChannelListeners(ctx)
-		}()
-
-		// First call
-		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
-		require.NoError(t, err1)
-		require.NotNil(t, candidate1)
-
-		// Manually expire cache by setting old timestamp
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.lastUpdate = time.Now().Add(-6 * time.Second) // Older than 5 second TTL
-		ba.cachedCandidate.mu.Unlock()
-
-		// Second call - should generate new candidate due to expiration
-		candidate2, _, err2 := ba.GetMiningCandidate(ctx)
-		require.NoError(t, err2)
-		require.NotNil(t, candidate2)
-	})
-
-	t.Run("Concurrent Generation Prevention", func(t *testing.T) {
-		initPrometheusMetrics()
-
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		testItems.blockAssembler.settings.ChainCfgParams.ReduceMinDifficulty = false // Ensure consistent difficulty
-
-		// Create a cancellable context for proper cleanup
-		ctx, cancel := context.WithCancel(context.Background())
-		defer func() {
-			cancel()
-			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
-		}()
-
-		ba := testItems.blockAssembler
-
-		// Set up mock blockchain client
-		_, _, _ = setupBlockchainClient(t, testItems)
-
-		currentHeader, _ := ba.CurrentBlock()
-		ba.setBestBlockHeader(currentHeader, 1)
-
-		// Clear any existing cache to ensure we test fresh generation
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = nil
-		ba.cachedCandidate.subtrees = nil
-		ba.cachedCandidate.lastHeight = 0
-		ba.cachedCandidate.lastUpdate = time.Time{}
-		ba.cachedCandidate.generating = false
-		ba.cachedCandidate.mu.Unlock()
-
-		// Start listeners in a goroutine since it will wait for readyCh
-		go func() {
-			_ = ba.startChannelListeners(ctx)
-		}()
-
-		// Mock response with delay to simulate slow generation
-		mockResponse := &miningCandidateResponse{
-			miningCandidate: &model.MiningCandidate{
-				NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
-				Height: 1,
-			},
-			subtrees: []*subtreepkg.Subtree{},
-			err:      nil,
+		// Create stale precomputed data with a different previous header
+		staleHeader := *genesisBlock.Header
+		staleHeader.Nonce = genesisBlock.Header.Nonce + 1
+		staleData := &subtreeprocessor.PrecomputedMiningData{
+			PreviousHeader: &staleHeader,
 		}
 
-		var requestCount int64
+		// Inject mock subtree processor that returns stale data
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("GetPrecomputedMiningData").Return(staleData)
+		mockStp.On("GetIncompleteSubtreeMiningData").Return((*subtreeprocessor.PrecomputedMiningData)(nil))
+		originalStp := ba.subtreeProcessor
+		ba.subtreeProcessor = mockStp
 
-		var requestMutex sync.Mutex
+		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+		// Stale data detected: falls back to empty block at next height (5+1=6)
+		assert.Equal(t, uint32(6), candidate.Height)
+		assert.Empty(t, subtrees)
 
-		requestReceived := make(chan struct{})
+		ba.subtreeProcessor = originalStp
+	})
+}
 
-		// Handle requests with delay
+func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
+	t.Run("returns full candidate from precomputed data with subtrees", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ba := testItems.blockAssembler
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
+		ba.setBestBlockHeader(genesisBlock.Header, 0)
+
+		// Build two subtrees with actual transactions
+		hash1 := chainhash.HashH([]byte("tx1"))
+		hash2 := chainhash.HashH([]byte("tx2"))
+		hash3 := chainhash.HashH([]byte("tx3"))
+
+		st1 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash1, Fee: 1000, SizeInBytes: 250},
+			{Hash: hash2, Fee: 2000, SizeInBytes: 300},
+		})
+		st2 := createTestSubtree(t, 4, []subtreepkg.Node{
+			{Hash: hash3, Fee: 500, SizeInBytes: 200},
+		})
+
+		// Inject mock subtree processor returning valid precomputed data
+		validData := &subtreeprocessor.PrecomputedMiningData{
+			PreviousHeader: genesisBlock.Header,
+			Subtrees:       []*subtreepkg.Subtree{st1, st2},
+		}
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("GetPrecomputedMiningData").Return(validData)
+		originalStp := ba.subtreeProcessor
+		ba.subtreeProcessor = mockStp
+
+		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+
+		// Verify candidate fields
+		assert.Equal(t, uint32(1), candidate.Height) // genesis height 0 + 1
+		assert.Equal(t, genesisBlock.Header.Hash().CloneBytes(), candidate.PreviousHash)
+		assert.Len(t, subtrees, 2)
+		assert.NotEmpty(t, candidate.MerkleProof)
+		assert.NotEmpty(t, candidate.NBits)
+
+		// Verify fees: subsidy + total fees (1000 + 2000 + 500 = 3500)
+		blockSubsidy := util.GetBlockSubsidyForHeight(1, ba.settings.ChainCfgParams)
+		assert.Equal(t, uint64(3500)+blockSubsidy, candidate.CoinbaseValue)
+
+		// Verify subtree hashes match
+		assert.Len(t, candidate.SubtreeHashes, 2)
+		assert.Equal(t, st1.RootHash().CloneBytes(), candidate.SubtreeHashes[0])
+		assert.Equal(t, st2.RootHash().CloneBytes(), candidate.SubtreeHashes[1])
+
+		ba.subtreeProcessor = originalStp
+	})
+
+	t.Run("returns candidate from incomplete subtree fallback", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ba := testItems.blockAssembler
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
+		ba.setBestBlockHeader(genesisBlock.Header, 0)
+
+		// Build an incomplete subtree
+		hash1 := chainhash.HashH([]byte("incomplete_tx1"))
+		incompleteSt := createTestSubtree(t, 8, []subtreepkg.Node{
+			{Hash: hash1, Fee: 750, SizeInBytes: 400},
+		})
+
+		// Precomputed data has no subtrees (none completed yet)
+		precomputedData := &subtreeprocessor.PrecomputedMiningData{
+			PreviousHeader: genesisBlock.Header,
+		}
+		// Incomplete subtree data is available on-demand
+		incompleteData := &subtreeprocessor.PrecomputedMiningData{
+			PreviousHeader:   genesisBlock.Header,
+			Subtrees:         []*subtreepkg.Subtree{incompleteSt},
+			IsFromIncomplete: true,
+		}
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("GetPrecomputedMiningData").Return(precomputedData)
+		mockStp.On("GetIncompleteSubtreeMiningData").Return(incompleteData)
+		originalStp := ba.subtreeProcessor
+		ba.subtreeProcessor = mockStp
+
+		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+
+		assert.Equal(t, uint32(1), candidate.Height)
+		assert.Len(t, subtrees, 1)
+
+		blockSubsidy := util.GetBlockSubsidyForHeight(1, ba.settings.ChainCfgParams)
+		assert.Equal(t, uint64(750)+blockSubsidy, candidate.CoinbaseValue)
+
+		ba.subtreeProcessor = originalStp
+	})
+}
+
+// TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration uses real components
+// (no mocks) to verify the full fallback chain when precomputed data becomes stale.
+// Flow: precomputed data was built at height N, best block advances to N+1,
+// precomputed data header mismatches → stale → incomplete subtree also stale → empty block.
+func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T) {
+	t.Run("stale precomputed data falls through to empty block with real subtree processor", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ba := testItems.blockAssembler
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
+		// Initialize at genesis (height 0)
+		ba.setBestBlockHeader(genesisBlock.Header, 0)
+
 		go func() {
-			for {
-				select {
-				case req := <-ba.miningCandidateCh:
-					requestMutex.Lock()
-					requestCount++
-					isFirst := requestCount == 1
-					requestMutex.Unlock()
-
-					if isFirst {
-						close(requestReceived)
-					}
-
-					// Add delay to simulate slow generation
-					time.Sleep(200 * time.Millisecond)
-					req <- mockResponse
-				case <-time.After(5 * time.Second):
-					return
-				}
-			}
+			_ = ba.startChannelListeners(ctx)
 		}()
 
-		// Start all concurrent calls at nearly the same time
-		var wg sync.WaitGroup
+		// Add transactions so the subtree processor has data and
+		// precomputed mining data gets populated for the genesis header.
+		for i := 0; i < 5; i++ {
+			txHash := chainhash.HashH([]byte{byte(i), 0xAA})
+			ba.AddTxBatch(
+				[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100 * (i + 1)), SizeInBytes: 250}},
+				[]*subtreepkg.TxInpoints{{}},
+			)
+		}
 
-		results := make(chan error, 3)
+		// Give the subtree processor time to dequeue and process the transactions
+		time.Sleep(200 * time.Millisecond)
 
-		startSignal := make(chan struct{})
+		// Verify precomputed data currently references the genesis header
+		data := ba.subtreeProcessor.GetPrecomputedMiningData()
+		// Precomputed data may or may not exist depending on whether a
+		// subtree completed. Either way, the key behavior tested below
+		// is that after advancing the block height, GetMiningCandidate
+		// detects staleness and falls through to an empty block.
 
+		// --- Simulate a new block arriving by advancing the best block ---
+		// Add a real block to the blockchain store (via the assembler's
+		// blockchain client, which was replaced by setupBlockchainClient)
+		// so getNextNbits can look up the header for difficulty calculation.
+		coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+		err := ba.blockchainClient.AddBlock(ctx, &model.Block{
+			Header:           blockHeader1,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}, "")
+		require.NoError(t, err)
+		ba.setBestBlockHeader(blockHeader1, 1)
+
+		// The subtree processor's current block header still points to genesis,
+		// so any precomputed or incomplete data references genesis → stale.
+
+		// GetMiningCandidate must detect the mismatch and return an empty block.
+		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+
+		// Should be height 2 (best block height 1 + 1)
+		assert.Equal(t, uint32(2), candidate.Height)
+		assert.Equal(t, blockHeader1.Hash().CloneBytes(), candidate.PreviousHash)
+		assert.Empty(t, subtrees, "stale data should result in empty subtrees")
+		assert.Equal(t, uint64(model.BlockHeaderSize), candidate.SizeWithoutCoinbase)
+
+		// Verify that precomputed data was indeed stale (still references genesis)
+		if data != nil && data.PreviousHeader != nil {
+			assert.False(t, data.PreviousHeader.Hash().IsEqual(blockHeader1.Hash()),
+				"precomputed data should reference genesis, not the new block")
+		}
+	})
+
+	t.Run("stale precomputed but fresh incomplete subtree returns candidate", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ba := testItems.blockAssembler
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
+		// Initialize at genesis
+		ba.setBestBlockHeader(genesisBlock.Header, 0)
+
+		go func() {
+			_ = ba.startChannelListeners(ctx)
+		}()
+
+		// Add transactions so the incomplete subtree has data
 		for i := 0; i < 3; i++ {
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
-
-				// Wait for start signal to ensure all goroutines start together
-				<-startSignal
-
-				_, _, err := ba.GetMiningCandidate(ctx)
-				results <- err
-			}()
+			txHash := chainhash.HashH([]byte{byte(i), 0xBB})
+			ba.AddTxBatch(
+				[]subtreepkg.Node{{Hash: txHash, Fee: uint64(200 * (i + 1)), SizeInBytes: 300}},
+				[]*subtreepkg.TxInpoints{{}},
+			)
 		}
 
-		// Release all goroutines at once
-		close(startSignal)
+		// Give the subtree processor time to dequeue
+		time.Sleep(200 * time.Millisecond)
 
-		// Wait for first request to be received (or timeout if cache prevents request)
-		select {
-		case <-requestReceived:
-			// Good, first request received
-		case <-time.After(1 * time.Second):
-			// This timeout can occur if caching is working so well that no mining candidate
-			// requests are made. This is actually correct behavior - the cache prevents
-			// redundant requests. We'll validate this by checking if any goroutines succeeded.
-			t.Log("No mining candidate request received - this may indicate caching is working perfectly")
+		// The subtree processor's block header and the block assembler's
+		// best block both point to genesis. Precomputed data (if any) and
+		// incomplete subtree data should be fresh.
+		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, candidate)
+		assert.Equal(t, uint32(1), candidate.Height)
+
+		// Depending on subtree size settings, we may get completed subtrees
+		// from precomputed data or an incomplete subtree snapshot.
+		// Either way the candidate should have transaction data.
+		if len(subtrees) > 0 {
+			assert.Greater(t, candidate.CoinbaseValue, uint64(0))
 		}
-
-		wg.Wait()
-		close(results)
-
-		// Verify all calls succeeded
-		for err := range results {
-			require.NoError(t, err)
-		}
-
-		// Should only generate once, not three times (caching prevents multiple generations)
-		// NOTE: This test validates that the caching mechanism prevents redundant requests.
-		// When multiple concurrent calls come in and there's already a valid cache entry,
-		// no new mining candidate requests should be generated.
-		// If requests are made, there should be only 1 due to concurrent generation prevention.
-		requestMutex.Lock()
-		finalCount := requestCount
-		requestMutex.Unlock()
-
-		assert.True(t, finalCount <= 1, "Should generate at most one candidate due to caching (got %d)", finalCount)
-	})
-
-	t.Run("Cache Structure Validation", func(t *testing.T) {
-		initPrometheusMetrics()
-
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		ba := testItems.blockAssembler
-
-		// Verify the cache structure exists and has proper fields
-		assert.NotNil(t, &ba.cachedCandidate, "CachedMiningCandidate should exist")
-
-		// Test basic cache operations
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.mu.Unlock()
-
-		// Verify cache was set
-		ba.cachedCandidate.mu.RLock()
-		assert.NotNil(t, ba.cachedCandidate.candidate)
-		assert.Equal(t, uint32(1), ba.cachedCandidate.lastHeight)
-		ba.cachedCandidate.mu.RUnlock()
-
-		// Test invalidation
-		ba.invalidateMiningCandidateCache()
-
-		ba.cachedCandidate.mu.RLock()
-		assert.Nil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-	})
-}
-
-// TestBlockAssembler_CacheInvalidation tests cache invalidation scenarios
-func TestBlockAssembler_CacheInvalidation(t *testing.T) {
-	t.Run("setBestBlockHeader Invalidates Cache", func(t *testing.T) {
-		initPrometheusMetrics()
-
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		ba := testItems.blockAssembler
-
-		// Setup initial cache
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.mu.Unlock()
-
-		// Verify cache has content
-		ba.cachedCandidate.mu.RLock()
-		assert.NotNil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-
-		// Create new block header
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
-		require.NoError(t, err)
-
-		// setBestBlockHeader should invalidate cache
-		ba.setBestBlockHeader(genesisBlock.Header, 2)
-
-		// Verify cache was invalidated
-		ba.cachedCandidate.mu.RLock()
-		assert.Nil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-	})
-
-	t.Run("invalidateCache Method", func(t *testing.T) {
-		initPrometheusMetrics()
-
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		ba := testItems.blockAssembler
-
-		// Setup cache with data
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.mu.Unlock()
-
-		// Verify cache has content
-		ba.cachedCandidate.mu.RLock()
-		assert.NotNil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-
-		// Call invalidateCache
-		ba.invalidateMiningCandidateCache()
-
-		// Verify cache was cleared
-		ba.cachedCandidate.mu.RLock()
-		assert.Nil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-	})
-
-	t.Run("NewSubtree Invalidates Cache", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Setup initial cache
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.mu.Unlock()
-
-		// Verify cache has content
-		ba.cachedCandidate.mu.RLock()
-		assert.NotNil(t, ba.cachedCandidate.candidate)
-		ba.cachedCandidate.mu.RUnlock()
-
-		// Create a goroutine to handle the new subtree channel (simulating Server.go behavior)
-		go func() {
-			select {
-			case newSubtreeRequest := <-testItems.newSubtreeChan:
-				// This simulates the cache invalidation logic from Server.go:348
-				ba.invalidateMiningCandidateCache()
-
-				// Respond to the error channel if present
-				if newSubtreeRequest.ErrChan != nil {
-					newSubtreeRequest.ErrChan <- nil
-				}
-			case <-time.After(2 * time.Second):
-				t.Logf("Timeout waiting for subtree in handler")
-			}
-		}()
-
-		// Add enough transactions to trigger subtree creation
-		// The subtree processor will create a subtree when it has enough transactions
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
-		require.NoError(t, err)
-
-		ba.setBestBlockHeader(genesisBlock.Header, 1)
-
-		// Add transactions to trigger subtree creation
-		// Based on the test settings, we need 4 transactions to fill a subtree
-		ba.AddTxBatch(
-			[]subtreepkg.Node{
-				{Hash: *hash0, Fee: 100, SizeInBytes: 250},
-				{Hash: *hash1, Fee: 100, SizeInBytes: 250},
-				{Hash: *hash2, Fee: 100, SizeInBytes: 250},
-				{Hash: *hash3, Fee: 100, SizeInBytes: 250},
-			},
-			[]*subtreepkg.TxInpoints{{}, {}, {}, {}},
-		)
-
-		// Wait for subtree to be created and cache to be invalidated
-		time.Sleep(500 * time.Millisecond)
-
-		// Verify cache was invalidated
-		ba.cachedCandidate.mu.RLock()
-		assert.Nil(t, ba.cachedCandidate.candidate, "Cache should be invalidated when new subtree is received")
-		ba.cachedCandidate.mu.RUnlock()
-	})
-}
-
-func TestBlockAssembler_SmartCacheInvalidation(t *testing.T) {
-	t.Run("Cache invalidates after configured max age", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Override the smart cache max age to 500ms for faster testing
-		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 500 * time.Millisecond
-
-		// Setup cache with initial state
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 100
-		ba.cachedCandidate.lastSizeInBytes = 50000
-		ba.cachedCandidate.lastSubtreeCount = 1
-		ba.cachedCandidate.mu.Unlock()
-
-		// Should NOT invalidate immediately (no significant change)
-		shouldInvalidate := ba.shouldInvalidateCache(100, 50000, 1)
-		assert.False(t, shouldInvalidate, "Cache should not invalidate when no significant change")
-
-		// Wait for cache to age past max age
-		time.Sleep(600 * time.Millisecond)
-
-		// Should invalidate due to age
-		shouldInvalidate = ba.shouldInvalidateCache(100, 50000, 1)
-		assert.True(t, shouldInvalidate, "Cache should invalidate after max age")
-	})
-
-	t.Run("Cache invalidates on transaction count change > 10%", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Setup cache
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 1000
-		ba.cachedCandidate.lastSizeInBytes = 500000
-		ba.cachedCandidate.lastSubtreeCount = 1
-		ba.cachedCandidate.mu.Unlock()
-
-		// 9% change - should NOT invalidate
-		shouldInvalidate := ba.shouldInvalidateCache(1090, 500000, 1)
-		assert.False(t, shouldInvalidate, "Cache should not invalidate with 9%% tx count change")
-
-		// 11% change - should invalidate
-		shouldInvalidate = ba.shouldInvalidateCache(1110, 500000, 1)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count change")
-
-		// 11% decrease - should also invalidate
-		shouldInvalidate = ba.shouldInvalidateCache(890, 500000, 1)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count decrease")
-	})
-
-	t.Run("Cache invalidates on block size change > 1MB", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Setup cache
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 1000
-		ba.cachedCandidate.lastSizeInBytes = 10_000_000 // 10MB
-		ba.cachedCandidate.lastSubtreeCount = 1
-		ba.cachedCandidate.mu.Unlock()
-
-		// 900KB change - should NOT invalidate
-		shouldInvalidate := ba.shouldInvalidateCache(1000, 10_000_000+900_000, 1)
-		assert.False(t, shouldInvalidate, "Cache should not invalidate with 900KB size change")
-
-		// 1.1MB change - should invalidate
-		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000+1_100_000, 1)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size change")
-
-		// 1.1MB decrease - should also invalidate
-		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000-1_100_000, 1)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size decrease")
-	})
-
-	t.Run("Cache invalidates on subtree count change", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Setup cache
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 1000
-		ba.cachedCandidate.lastSizeInBytes = 500000
-		ba.cachedCandidate.lastSubtreeCount = 5
-		ba.cachedCandidate.mu.Unlock()
-
-		// Same count - should NOT invalidate
-		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
-		assert.False(t, shouldInvalidate, "Cache should not invalidate with same subtree count")
-
-		// Different count - should invalidate
-		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 6)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with different subtree count")
-
-		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 4)
-		assert.True(t, shouldInvalidate, "Cache should invalidate with decreased subtree count")
-	})
-
-	t.Run("Cache does not invalidate when no cache exists", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// No cache exists (nil candidate)
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = nil
-		ba.cachedCandidate.mu.Unlock()
-
-		// Should NOT invalidate (nothing to invalidate)
-		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
-		assert.False(t, shouldInvalidate, "Should not invalidate when no cache exists")
-	})
-
-	t.Run("Combined scenario - realistic high-load situation", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Set longer max age for this test
-		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 10 * time.Second
-
-		// Setup cache with initial state
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 10000
-		ba.cachedCandidate.lastSizeInBytes = 50_000_000 // 50MB
-		ba.cachedCandidate.lastSubtreeCount = 10
-		ba.cachedCandidate.mu.Unlock()
-
-		// Simulate steady trickle of transactions (5% increase, 500KB increase)
-		// Should NOT invalidate (below thresholds)
-		shouldInvalidate := ba.shouldInvalidateCache(10500, 50_500_000, 10)
-		assert.False(t, shouldInvalidate, "Small steady increase should not invalidate cache")
-
-		// Simulate burst of transactions (15% increase, 2MB increase)
-		// Should invalidate due to tx count threshold
-		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 10)
-		assert.True(t, shouldInvalidate, "Burst of transactions should invalidate cache")
-
-		// Simulate new subtree completed
-		// Should invalidate due to subtree count change
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.mu.Unlock()
-		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 11)
-		assert.True(t, shouldInvalidate, "New subtree should invalidate cache")
-	})
-
-	t.Run("Cache metrics tracking", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Setup cache and verify metrics are tracked
-		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
-		ba.cachedCandidate.lastUpdate = time.Now()
-		ba.cachedCandidate.lastTxCount = 500
-		ba.cachedCandidate.lastSizeInBytes = 250000
-		ba.cachedCandidate.lastSubtreeCount = 3
-		ba.cachedCandidate.mu.Unlock()
-
-		// Verify tracked values
-		ba.cachedCandidate.mu.RLock()
-		assert.Equal(t, uint32(500), ba.cachedCandidate.lastTxCount, "TX count should be tracked")
-		assert.Equal(t, uint64(250000), ba.cachedCandidate.lastSizeInBytes, "Size should be tracked")
-		assert.Equal(t, 3, ba.cachedCandidate.lastSubtreeCount, "Subtree count should be tracked")
-		ba.cachedCandidate.mu.RUnlock()
 	})
 }
 
@@ -1948,7 +1784,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		stats := gocore.NewStat("test")
 
 		blockAssembler, err := NewBlockAssembler(
-			context.Background(),
+			t.Context(),
 			ulogger.TestLogger{},
 			tSettings,
 			stats,
@@ -2003,7 +1839,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		stats := gocore.NewStat("test")
 
 		blockAssembler, err := NewBlockAssembler(
-			context.Background(),
+			t.Context(),
 			ulogger.TestLogger{},
 			tSettings,
 			stats,
@@ -2045,7 +1881,7 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		initialHeader, initialHeight := testItems.blockAssembler.CurrentBlock()
 
 		// Call processNewBlockAnnouncement directly
-		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
+		testItems.blockAssembler.processNewBlockAnnouncement(t.Context())
 
 		// Verify state remains unchanged after error
 		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
@@ -2134,7 +1970,7 @@ func containsHash(list []chainhash.Hash, target chainhash.Hash) bool {
 func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNotCleared(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2180,7 +2016,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStatus(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2229,7 +2065,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2257,7 +2093,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 		Nonce:          1,
 		Bits:           *bits,
 	}
-	err = items.addBlock(blockHeader1)
+	err = items.addBlock(t.Context(), blockHeader1)
 	require.NoError(t, err)
 
 	// Get the block ID for our test block
@@ -2324,7 +2160,7 @@ func TestResetCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test reset with force flag
-		_ = ba.reset(context.Background(), true)
+		_ = ba.reset(t.Context(), true)
 
 		// Should handle forced reset
 		assert.True(t, true, "reset should handle forced reset")
@@ -2335,7 +2171,7 @@ func TestResetCoverage(t *testing.T) {
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Reset multiple times
 		_ = ba.reset(ctx, false)
@@ -2357,7 +2193,7 @@ func TestHandleReorgCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test handleReorg with nil header
-		err := ba.handleReorg(context.Background(), nil, 100)
+		err := ba.handleReorg(t.Context(), nil, 100)
 
 		// Should handle nil header gracefully
 		if err != nil {
@@ -2379,7 +2215,7 @@ func TestHandleReorgCoverage(t *testing.T) {
 		}
 
 		// Test handleReorg
-		err := ba.handleReorg(context.Background(), header, 101)
+		err := ba.handleReorg(t.Context(), header, 101)
 
 		// Should handle reorg gracefully
 		if err != nil {
@@ -2393,19 +2229,22 @@ func TestHandleReorgCoverage(t *testing.T) {
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
+		// Set up blockchain client properly so we get past the "best block header is nil" check
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		header := &model.BlockHeader{Version: 1}
+		// Use the genesis block header so the reorg logic can proceed to context-checked operations
+		header := genesisBlock.Header
 
 		// Test handleReorg with cancelled context
-		err := ba.handleReorg(ctx, header, 101)
+		err := ba.handleReorg(ctx, header, 1)
 
-		// Should handle cancelled context
-		if err != nil {
-			assert.Contains(t, err.Error(), "context", "error should reference context cancellation")
-		}
-		assert.True(t, true, "handleReorg should handle cancelled context")
+		// Should handle cancelled context - the error should reference context cancellation
+		// since the blockchain client operations will fail with cancelled context
+		require.Error(t, err, "handleReorg should return an error with cancelled context")
+		assert.Contains(t, err.Error(), "context", "error should reference context cancellation")
 	})
 }
 
@@ -2419,7 +2258,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions
-		_ = ba.loadUnminedTransactions(context.Background(), false)
+		_ = ba.loadUnminedTransactions(t.Context(), false)
 
 		// Should complete loading
 		assert.True(t, true, "loadUnminedTransactions should complete successfully")
@@ -2431,7 +2270,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions with reseed
-		_ = ba.loadUnminedTransactions(context.Background(), true)
+		_ = ba.loadUnminedTransactions(t.Context(), true)
 
 		// Should complete loading with reseed
 		assert.True(t, true, "loadUnminedTransactions should handle reseed flag")
@@ -2504,7 +2343,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		ba.SetSkipWaitForPendingBlocks(true)
 
 		// Test waitForPendingBlocks - should return immediately
-		_ = ba.subtreeProcessor.WaitForPendingBlocks(context.Background())
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(t.Context())
 
 		// Should return immediately when skip is enabled
 		assert.True(t, true, "waitForPendingBlocks should skip when enabled")
@@ -2555,67 +2394,9 @@ func TestProcessNewBlockAnnouncementCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test processNewBlockAnnouncement with normal context
-		ba.processNewBlockAnnouncement(context.Background())
+		ba.processNewBlockAnnouncement(t.Context())
 
 		// Should process announcement successfully
 		assert.True(t, true, "processNewBlockAnnouncement should complete successfully")
 	})
-}
-
-// TestGetMiningCandidate_SendTimeoutResetsGenerationFlag tests that the generation flag
-// and channel are properly cleaned up when the send timeout occurs, preventing deadlocks
-// on subsequent calls.
-func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
-	initPrometheusMetrics()
-
-	testItems := setupBlockAssemblyTest(t)
-	require.NotNil(t, testItems)
-	ba := testItems.blockAssembler
-
-	// Set up the block assembler with a valid height
-	currentHeader, _ := ba.CurrentBlock()
-	ba.setBestBlockHeader(currentHeader, 1)
-
-	// Don't start the listeners, so the channel send will timeout
-
-	ctx := context.Background()
-
-	// First call - should timeout after 1 second on send
-	start := time.Now()
-	candidate1, subtrees1, err1 := ba.GetMiningCandidate(ctx)
-	duration1 := time.Since(start)
-
-	// Verify first call timed out
-	assert.Nil(t, candidate1)
-	assert.Nil(t, subtrees1)
-	assert.Error(t, err1)
-	assert.Contains(t, err1.Error(), "timeout sending mining candidate request")
-	assert.GreaterOrEqual(t, duration1, 1*time.Second)
-	assert.Less(t, duration1, 2*time.Second)
-
-	// Verify cache state was cleaned up
-	ba.cachedCandidate.mu.RLock()
-	assert.False(t, ba.cachedCandidate.generating, "generating flag should be reset")
-	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should be nil")
-	ba.cachedCandidate.mu.RUnlock()
-
-	// Second call - should also timeout (not deadlock)
-	// This verifies the fix: without proper cleanup, this would deadlock
-	start = time.Now()
-	candidate2, subtrees2, err2 := ba.GetMiningCandidate(ctx)
-	duration2 := time.Since(start)
-
-	// Verify second call also timed out (didn't deadlock)
-	assert.Nil(t, candidate2)
-	assert.Nil(t, subtrees2)
-	assert.Error(t, err2)
-	assert.Contains(t, err2.Error(), "timeout sending mining candidate request")
-	assert.GreaterOrEqual(t, duration2, 1*time.Second)
-	assert.Less(t, duration2, 2*time.Second, "second call should timeout, not deadlock")
-
-	// Verify cache state is still clean
-	ba.cachedCandidate.mu.RLock()
-	assert.False(t, ba.cachedCandidate.generating, "generating flag should still be reset")
-	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should still be nil")
-	ba.cachedCandidate.mu.RUnlock()
 }

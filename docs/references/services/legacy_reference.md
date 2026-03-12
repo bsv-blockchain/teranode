@@ -280,4 +280,11 @@ The Legacy Service depends on several components:
 - `blockvalidation.Interface`: Interface for block validation
 - `blockassembly.Client`: Client for block assembly
 
-These dependencies are injected into the `Server` struct during initialization
+These dependencies are injected into the `Server` struct during initialization.
+
+## Related Documents
+
+- [Legacy Topic Guide](../../topics/services/legacy.md)
+- [Legacy Settings](../settings/services/legacy_settings.md)
+- [Legacy Peer Protobuf Reference](../protobuf_docs/legacyPeerProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

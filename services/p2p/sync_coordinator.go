@@ -428,20 +428,27 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
 
 	if len(eligiblePeers) == 0 {
-		// This shouldn't happen given the check above, but keep for safety
-		sc.logger.Infof("[SyncCoordinator] Node is up to date at height %d", localHeight)
+		// No eligible peers - either we're caught up or all peers are filtered
+		// (banned, malicious, low reputation, etc.)
+		sc.logger.Infof("[SyncCoordinator] No eligible peers found at height %d", localHeight)
+		// Enter backoff to prevent busy loop
+		sc.enterBackoffMode()
 		return
 	}
 
 	// Select from eligible peers
 	criteria := SelectionCriteria{
-		LocalHeight: int32(localHeight),
+		LocalHeight:         int32(localHeight),
+		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
 
 	newSyncPeer := sc.selector.SelectSyncPeer(eligiblePeers, criteria)
 	if newSyncPeer == "" || newSyncPeer == oldPeer {
 		sc.logger.Warnf("[SyncCoordinator] No suitable new sync peer found (different from %s)", oldPeer)
 		sc.logCandidateList(eligiblePeers)
+		// Enter backoff mode to prevent busy loop when all peers fail selection
+		// (e.g., all health checks fail or peers are on cooldown)
+		sc.enterBackoffMode()
 		return
 	}
 

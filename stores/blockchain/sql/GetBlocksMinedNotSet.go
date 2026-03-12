@@ -39,8 +39,8 @@ import (
 // subtree validation (whether valid or invalid), preventing infinite waits on blocks
 // that will never be fully processed. This is used by:
 //   - BlockValidation's periodic job to process blocks needing mined status updates
-//   - SubtreeProcessor.WaitForPendingBlocks() to wait only for processable blocks
 //   - BlockValidation.isParentMined() to check if parent blocks are ready
+//   - SubtreeProcessor.WaitForPendingBlocks() to wait for all blocks to be processed
 //
 // The query is ordered by height to process blocks in chronological order.
 //

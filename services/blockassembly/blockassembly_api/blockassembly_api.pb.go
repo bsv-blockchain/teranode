@@ -856,6 +856,7 @@ func (x *StateMessage) GetSubtrees() []string {
 type GetCurrentDifficultyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Difficulty    float64                `protobuf:"fixed64,1,opt,name=difficulty,proto3" json:"difficulty,omitempty"` // the current difficulty of the blockchain
+	BlockHash     []byte                 `protobuf:"bytes,2,opt,name=blockHash,proto3" json:"blockHash,omitempty"`     // the hash of the block at which the difficulty is measured
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -895,6 +896,13 @@ func (x *GetCurrentDifficultyResponse) GetDifficulty() float64 {
 		return x.Difficulty
 	}
 	return 0
+}
+
+func (x *GetCurrentDifficultyResponse) GetBlockHash() []byte {
+	if x != nil {
+		return x.BlockHash
+	}
+	return nil
 }
 
 // Request for generating a block.
@@ -1124,11 +1132,12 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\vcurrentHash\x18\b \x01(\tR\vcurrentHash\x12&\n" +
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
-	" \x03(\tR\bsubtrees\">\n" +
+	" \x03(\tR\bsubtrees\"\\\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +
-	"difficulty\"\x86\x01\n" +
+	"difficulty\x12\x1c\n" +
+	"\tblockHash\x18\x02 \x01(\fR\tblockHash\"\x86\x01\n" +
 	"\x15GenerateBlocksRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x05R\x05count\x12\x1d\n" +
 	"\aaddress\x18\x02 \x01(\tH\x00R\aaddress\x88\x01\x01\x12\x1f\n" +

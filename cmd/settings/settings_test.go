@@ -2,6 +2,7 @@ package settings
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 
@@ -58,6 +59,11 @@ func (l *BufferLogger) Duplicate(_ ...ulogger.Option) ulogger.Logger {
 // LogLevel returns the log level of the logger.
 func (l *BufferLogger) LogLevel() int {
 	return 0 // Return a default log level for testing purposes.
+}
+
+// WithTraceContext returns the same logger since BufferLogger is a test logger.
+func (l *BufferLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
 }
 
 // TestPrintSettings tests the PrintSettings function to ensure it correctly formats and outputs the settings, version, and commit information.

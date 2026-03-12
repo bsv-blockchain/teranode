@@ -235,6 +235,15 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		require.NoError(t, err)
 		stp.Start(ctx)
 
+		// Handle subtree requests - must be started before any GetChainedSubtrees() call
+		go func() {
+			for req := range newSubtreeChan {
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			}
+		}()
+
 		// Create transactions that will conflict during reset
 		conflictTx1Hash, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		require.NoError(t, err)
@@ -287,15 +296,6 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		t.Logf("  Transaction count: %d", initialTxCount)
 		t.Logf("  Current subtree nodes: %d", len(initialCurrentSubtree.Nodes))
 		t.Logf("  Chained subtrees: %d", len(initialChainedSubtrees))
-
-		// Handle subtree requests
-		go func() {
-			for req := range newSubtreeChan {
-				if req.ErrChan != nil {
-					req.ErrChan <- nil
-				}
-			}
-		}()
 
 		// Perform reset with moveBackBlocks containing conflicting transactions
 		// This should:
@@ -671,7 +671,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Set up mock expectations for SetBlockProcessedAt calls
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
@@ -715,7 +715,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		}
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Test reorg with only blocks to move forward - should fail
 		err = stp.Reorg(nil, []*model.Block{block2})
@@ -737,6 +737,9 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		mockBlockchainClient := &blockchain.Mock{}
 		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)

@@ -29,20 +29,11 @@ var (
 	// prometheusBlockAssemblyGetMiningCandidateDuration measures mining candidate retrieval time
 	prometheusBlockAssemblyGetMiningCandidateDuration prometheus.Histogram
 
-	// prometheusBlockAssemblerCacheHits tracks cache hits for mining candidates
-	prometheusBlockAssemblerCacheHits prometheus.Counter
-
-	// prometheusBlockAssemblerCacheMisses tracks cache misses for mining candidates
-	prometheusBlockAssemblerCacheMisses prometheus.Counter
-
 	// prometheusBlockAssemblySubmitMiningSolutionCh tracks mining solution submission queue size
 	prometheusBlockAssemblySubmitMiningSolutionCh prometheus.Gauge
 
 	// prometheusBlockAssemblySubmitMiningSolution measures mining solution submission time
 	prometheusBlockAssemblySubmitMiningSolution prometheus.Histogram
-
-	// prometheusBlockAssemblyUpdateSubtreesDAH measures subtree DAH update time
-	prometheusBlockAssemblyUpdateSubtreesDAH prometheus.Histogram
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
@@ -159,16 +150,6 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblyUpdateSubtreesDAH = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
-			Name:      "update_subtrees_dah",
-			Help:      "Histogram of updating subtrees DAH in the blockassembly service",
-			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
 	prometheusBlockAssemblerGetMiningCandidate = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -185,24 +166,6 @@ func _initPrometheusMetrics() {
 			Name:      "subtree_stored",
 			Help:      "Histogram of subtree stored duration in block assembler",
 			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockAssemblerCacheHits = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
-			Name:      "cache_hits",
-			Help:      "Number of cache hits for mining candidates",
-		},
-	)
-
-	prometheusBlockAssemblerCacheMisses = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
-			Name:      "cache_misses",
-			Help:      "Number of cache misses for mining candidates",
 		},
 	)
 

@@ -59,6 +59,11 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 			return nil
 		}
 
+		// In BlocksOnly mode, skip processing peer-announced subtrees (only process subtrees from blocks)
+		if u.settings.SubtreeValidation.BlocksOnly {
+			return nil
+		}
+
 		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to unmarshal kafka message: %v", err)
@@ -121,7 +126,7 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 		return errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
 	}
 
-	gotLock, _, releaseLockFunc, err := q.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
+	gotLock, _, releaseLockFunc, err := u.quorum.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
 	if err != nil {
 		return errors.NewProcessingError("[subtreesHandler] error getting lock for Subtree %s", hash.String(), err)
 	}

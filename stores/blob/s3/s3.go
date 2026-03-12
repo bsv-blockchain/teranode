@@ -32,16 +32,15 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/expiringmap"
 )
 
 // S3 implements the blob.Store interface using Amazon S3 or compatible object storage services.
@@ -208,6 +207,8 @@ func (g *S3) Close(_ context.Context) error {
 	_, _, endTrace := tracing.Tracer("s3").Start(context.Background(), "Close")
 	defer endTrace()
 
+	cache.Stop()
+
 	return nil
 }
 
@@ -273,7 +274,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
+	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
 
@@ -331,7 +332,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
+	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
@@ -346,14 +347,6 @@ func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileTyp
 
 	// TODO implement
 	return nil
-}
-
-func (g *S3) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:GetDAH")
-	defer endSpan()
-
-	// TODO implement
-	return 0, nil
 }
 
 func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
@@ -398,7 +391,7 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	objectKey := g.getObjectKey(key, fileType, merged)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", util.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -407,13 +400,10 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		return cached, nil
 	}
 
-	buf := manager.NewWriteAtBuffer([]byte{})
-	_, err := g.client.Download(ctx, buf,
-		&s3.GetObjectInput{
-			Bucket: aws.String(g.bucket),
-			Key:    objectKey,
-		})
-
+	content, err := g.client.Download(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			span.RecordError(errors.ErrNotFound)
@@ -425,9 +415,6 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 		return nil, err
 	}
-
-	// Remove header and footer from the downloaded content
-	content := buf.Bytes()
 
 	// Skip the header bytes
 	header, err := fileformat.ReadHeaderFromBytes(content)
@@ -547,7 +534,7 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 	if o.Filename != "" {
 		key = o.Filename
 	} else {
-		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
+		key = fmt.Sprintf("%s%s", util.ReverseAndHexEncodeSlice(hash), ext)
 
 		prefix = o.CalculatePrefix(key)
 	}

@@ -9,12 +9,12 @@ package validator
 import (
 	"strings"
 
-	"github.com/bitcoin-sv/go-sdk/chainhash"
-	"github.com/bitcoin-sv/go-sdk/script"
-	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
-	"github.com/bitcoin-sv/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/go-sdk/chainhash"
+	"github.com/bsv-blockchain/go-sdk/script"
+	interpreter_sdk "github.com/bsv-blockchain/go-sdk/script/interpreter"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"

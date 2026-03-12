@@ -2,12 +2,14 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -16,13 +18,12 @@ var _ pruner.Service = (*Service)(nil)
 
 // Service implements the utxo.CleanupService interface for SQL-based UTXO stores
 type Service struct {
-	safetyWindow       uint32 // Block height retention for child stability verification
-	defensiveEnabled   bool   // Enable defensive checks before deleting UTXO transactions
-	logger             ulogger.Logger
-	settings           *settings.Settings
-	db                 *usql.DB
-	ctx                context.Context
-	getPersistedHeight func() uint32
+	safetyWindow     uint32 // Block height retention for child stability verification
+	defensiveEnabled bool   // Enable defensive checks before deleting UTXO transactions
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	db               *usql.DB
+	ctx              context.Context
 }
 
 // Options contains configuration options for the cleanup service
@@ -78,12 +79,6 @@ func (s *Service) Start(ctx context.Context) {
 	s.logger.Infof("[SQLCleanupService] service ready")
 }
 
-// SetPersistedHeightGetter sets the function used to get block persister progress.
-// This allows cleanup to coordinate with block persister to avoid premature deletion.
-func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
-	s.getPersistedHeight = getter
-}
-
 // AddObserver adds an observer to be notified when pruning completes.
 // This is a no-op for the SQL pruner service as it doesn't support observers yet.
 func (s *Service) AddObserver(observer pruner.Observer) {
@@ -93,70 +88,40 @@ func (s *Service) AddObserver(observer pruner.Observer) {
 // Prune removes transactions marked for deletion at or before the specified height.
 // Returns the number of records processed and any error encountered.
 // This method is synchronous and blocks until pruning completes or context is cancelled.
-func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) {
+func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr string) (int64, error) {
 	if blockHeight == 0 {
 		return 0, errors.NewProcessingError("Cannot prune at block height 0")
 	}
 
-	s.logger.Infof("Starting pruner for block height %d", blockHeight)
 	startTime := time.Now()
 
-	// BLOCK PERSISTER COORDINATION: Calculate safe cleanup height
-	//
-	// PROBLEM: Block persister creates .subtree_data files after a delay (BlockPersisterPersistAge blocks).
-	// If we delete transactions before block persister creates these files, catchup will fail with
-	// "subtree length does not match tx data length" (actually missing transactions).
-	//
-	// SOLUTION: Limit cleanup to transactions that block persister has already processed:
-	//   safe_height = min(requested_cleanup_height, persisted_height + retention)
-	//
-	// EXAMPLE with retention=288, persisted=100, requested=200:
-	//   - Block persister has processed blocks up to height 100
-	//   - Those blocks' transactions are in .subtree_data files (safe to delete after retention)
-	//   - Safe deletion height = 100 + 288 = 388... but wait, we want to clean height 200
-	//   - Since 200 < 388, we can safely proceed with cleaning up to 200
-	//
-	// EXAMPLE where cleanup would be limited (persisted=50, requested=200, retention=100):
-	//   - Block persister only processed up to height 50
-	//   - Safe deletion = 50 + 100 = 150
-	//   - Requested cleanup of 200 is LIMITED to 150 to protect unpersisted blocks 51-200
-	//
-	// HEIGHT=0 SPECIAL CASE: If persistedHeight=0, block persister isn't running or hasn't
-	// processed any blocks yet. Proceed with normal cleanup without coordination.
-	safeCleanupHeight := blockHeight
-
-	if s.getPersistedHeight != nil {
-		persistedHeight := s.getPersistedHeight()
-
-		// Only apply limitation if block persister has actually processed blocks (height > 0)
-		if persistedHeight > 0 {
-			retention := s.settings.GetUtxoStoreBlockHeightRetention()
-
-			// Calculate max safe height: persisted_height + retention
-			// Block persister at height N means blocks 0 to N are persisted in .subtree_data files.
-			// Those transactions can be safely deleted after retention blocks.
-			maxSafeHeight := persistedHeight + retention
-			if maxSafeHeight < safeCleanupHeight {
-				s.logger.Infof("Limiting cleanup from height %d to %d (persisted: %d, retention: %d)",
-					blockHeight, maxSafeHeight, persistedHeight, retention)
-				safeCleanupHeight = maxSafeHeight
-			}
-		}
-	}
-
 	// Log start of cleanup
-	s.logger.Infof("Starting cleanup scan for height %d (delete_at_height <= %d)",
-		blockHeight, safeCleanupHeight)
+	s.logger.Infof("[pruner][%s:%d] phase 2: starting cleanup scan (delete_at_height <= %d)",
+		blockHashStr, blockHeight, blockHeight)
 
-	// Execute the cleanup with safe height
-	deletedCount, err := s.deleteTombstoned(ctx, safeCleanupHeight)
+	// Execute the cleanup
+	deletedCount, err := s.deleteTombstoned(ctx, blockHeight)
 	if err != nil {
-		s.logger.Errorf("Cleanup failed for height %d: %v", blockHeight, err)
+		s.logger.Errorf("[pruner][%s:%d] phase 2: cleanup failed: %v", blockHashStr, blockHeight, err)
 		return 0, err
 	}
 
-	s.logger.Infof("Cleanup completed for block height %d in %v - deleted %d records",
-		blockHeight, time.Since(startTime), deletedCount)
+	// Calculate throughput
+	elapsed := time.Since(startTime)
+	tps := float64(deletedCount) / elapsed.Seconds()
+
+	// Format TPS for readability
+	var tpsStr string
+	if tps >= 1_000_000 {
+		tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
+	} else if tps >= 1_000 {
+		tpsStr = fmt.Sprintf("%.1fK records/sec", tps/1_000)
+	} else {
+		tpsStr = fmt.Sprintf("%.2f records/sec", tps)
+	}
+
+	s.logger.Infof("[pruner][%s:%d] phase 2: completed cleanup in %v: deleted %s records (%s)",
+		blockHashStr, blockHeight, elapsed, util.FormatComma(deletedCount), tpsStr)
 
 	return deletedCount, nil
 }

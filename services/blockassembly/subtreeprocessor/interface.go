@@ -271,6 +271,23 @@ type Interface interface {
 	//   - int: Total number of subtrees
 	SubtreeCount() int
 
+	// GetChainedSubtreesTotalSize returns the total size in bytes of all chained subtrees.
+	// This uses atomic access and is safe to call from any context without channel-based
+	// synchronization, avoiding potential deadlocks in scenarios where the worker is blocked.
+	//
+	// Returns:
+	//   - uint64: Total size in bytes of all chained subtrees
+	GetChainedSubtreesTotalSize() uint64
+
+	// GetPrecomputedMiningData returns the pre-computed mining data for lock-free reads.
+	// This can be called from any goroutine without synchronization.
+	GetPrecomputedMiningData() *PrecomputedMiningData
+
+	// GetIncompleteSubtreeMiningData requests a snapshot of the incomplete subtree
+	// from the processing goroutine. Called on-demand when no complete subtrees exist.
+	// The context is used for cancellation/timeout to prevent blocking indefinitely.
+	GetIncompleteSubtreeMiningData(ctx context.Context) *PrecomputedMiningData
+
 	// WaitForPendingBlocks waits for any pending block operations to complete.
 	// This ensures that all block-related processing is finalized before proceeding.
 	//

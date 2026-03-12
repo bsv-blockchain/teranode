@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/ordishs/gocore"
 )
 
@@ -56,9 +57,17 @@ func getUint64(key string, defaultValue uint64, alternativeContext ...string) ui
 }
 
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
-	value, _, _ := gocore.Config(alternativeContext...).GetURL(key, defaultValue)
+	str, _ := gocore.Config(alternativeContext...).Get(key, defaultValue)
+	if str == "" {
+		return nil
+	}
 
-	return value
+	u, err := urlutil.ParseMultiHostURL(str)
+	if err != nil {
+		return nil
+	}
+
+	return u
 }
 
 func getBool(key string, defaultValue bool, alternativeContext ...string) bool {
@@ -127,16 +136,23 @@ func getPostgresPoolSettings(servicePrefix string, alternativeContext ...string)
 	maxIdleConns := getInt(servicePrefix+"_postgres_maxIdleConns", 0, alternativeContext...)
 	connMaxLifetime := getDuration(servicePrefix+"_postgres_connMaxLifetime", 0, alternativeContext...)
 	connMaxIdleTime := getDuration(servicePrefix+"_postgres_connMaxIdleTime", 0, alternativeContext...)
+	retryMaxAttempts := getInt(servicePrefix+"_postgres_retryMaxAttempts", 0, alternativeContext...)
+	retryBaseDelay := getDuration(servicePrefix+"_postgres_retryBaseDelay", 0, alternativeContext...)
+	retryEnabled := getBool(servicePrefix+"_postgres_retryEnabled", false, alternativeContext...)
 
 	// Only return settings if at least one is configured (non-zero)
-	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 {
+	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 &&
+		retryMaxAttempts == 0 && retryBaseDelay == 0 {
 		return nil
 	}
 
 	return &PostgresSettings{
-		MaxOpenConns:    maxOpenConns,
-		MaxIdleConns:    maxIdleConns,
-		ConnMaxLifetime: connMaxLifetime,
-		ConnMaxIdleTime: connMaxIdleTime,
+		MaxOpenConns:     maxOpenConns,
+		MaxIdleConns:     maxIdleConns,
+		ConnMaxLifetime:  connMaxLifetime,
+		ConnMaxIdleTime:  connMaxIdleTime,
+		RetryMaxAttempts: retryMaxAttempts,
+		RetryBaseDelay:   retryBaseDelay,
+		RetryEnabled:     retryEnabled,
 	}
 }

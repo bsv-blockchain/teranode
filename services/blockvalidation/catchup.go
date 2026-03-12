@@ -46,6 +46,14 @@ type CatchupContext struct {
 	useQuickValidation      bool   // Whether to use quick validation for checkpointed blocks
 	highestCheckpointHeight uint32 // Highest checkpoint height for validation checks
 	catchupError            error  // Any error encountered during catchup
+
+	// Performance monitoring and dynamic peer switching
+	performanceMonitor   *CatchupPerformanceMonitor
+	enableParallelFetch  bool // Whether to fetch subtrees from multiple peers in parallel
+	parallelFetchWorkers int  // Number of parallel fetch workers (default: 3)
+
+	// Checkpoints to use for this catchup (isolated copy, not shared with settings)
+	checkpoints []chaincfg.Checkpoint
 }
 
 // catchup orchestrates the complete blockchain synchronization process.
@@ -76,6 +84,31 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	)
 	defer deferFn()
 
+	// Initialize checkpoints for this catchup session (isolated copy, doesn't affect settings)
+	var checkpoints []chaincfg.Checkpoint
+
+	// Check if there's a checkpoint override in settings (WARNING: This is a dangerous setting that bypasses
+	// the standard checkpoint verification. It should only be used for testing or in controlled
+	// environments where the checkpoint hash and height are known to be valid. Using incorrect
+	// values can lead to accepting an invalid blockchain state.)
+	if u.settings.BlockValidation.CatchupCheckpointHash != "" && u.settings.BlockValidation.CatchupCheckpointHeight != 0 {
+		checkpointHash, err := chainhash.NewHashFromStr(u.settings.BlockValidation.CatchupCheckpointHash)
+		if err != nil {
+			return errors.NewInvalidArgumentError("invalid catchup checkpoint hash '%s': %v", u.settings.BlockValidation.CatchupCheckpointHash, err)
+		}
+
+		u.logger.Warnf("[catchup][%s] WARNING: Using custom checkpoint override at height %d, hash %s. This bypasses standard checkpoint verification and should only be used for testing!", blockUpTo.Hash().String(), u.settings.BlockValidation.CatchupCheckpointHeight, checkpointHash.String())
+
+		// Use the custom checkpoint (replaces all standard checkpoints for this catchup only)
+		checkpoints = []chaincfg.Checkpoint{
+			{Height: u.settings.BlockValidation.CatchupCheckpointHeight, Hash: checkpointHash},
+		}
+	} else if u.settings.ChainCfgParams != nil && len(u.settings.ChainCfgParams.Checkpoints) > 0 {
+		// Make a copy of the chain config checkpoints (don't mutate the shared settings)
+		checkpoints = make([]chaincfg.Checkpoint, len(u.settings.ChainCfgParams.Checkpoints))
+		copy(checkpoints, u.settings.ChainCfgParams.Checkpoints)
+	}
+
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return errors.NewInvalidArgumentError("baseURL is required for catchup")
@@ -100,11 +133,26 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// Report catchup attempt to P2P service
 	u.reportCatchupAttempt(ctx, peerID)
 
+	// Configure performance monitoring
+	perfConfig := DefaultPerformanceMonitorConfig()
+	if u.settings.BlockValidation.CatchupMinThroughputKBps > 0 {
+		perfConfig.MinThroughputKBPerSec = float64(u.settings.BlockValidation.CatchupMinThroughputKBps)
+	}
+
 	catchupCtx := &CatchupContext{
-		blockUpTo: blockUpTo,
-		baseURL:   baseURL,
-		peerID:    peerID,
-		startTime: time.Now(),
+		blockUpTo:            blockUpTo,
+		baseURL:              baseURL,
+		peerID:               peerID,
+		startTime:            time.Now(),
+		performanceMonitor:   NewCatchupPerformanceMonitor(u.logger, peerID, baseURL, perfConfig),
+		enableParallelFetch:  u.settings.BlockValidation.CatchupParallelFetchEnabled,
+		parallelFetchWorkers: u.settings.BlockValidation.CatchupParallelFetchWorkers,
+		checkpoints:          checkpoints,
+	}
+
+	// Default parallel fetch workers if not configured
+	if catchupCtx.parallelFetchWorkers <= 0 {
+		catchupCtx.parallelFetchWorkers = 3
 	}
 
 	// Step 1: Acquire exclusive catchup lock
@@ -290,6 +338,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		case errors.Is(*err, errors.ErrServiceUnavailable):
 			// Service unavailable errors are local system issues, not peer errors
 			errorType = "local_service_unavailable"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrBlockIncomplete):
+			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			errorType = "block_incomplete"
 			isPeerError = false
 		}
 
@@ -574,8 +626,15 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 // Returns:
 //   - error: If checkpoint verification fails
 func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) error {
-	// Get checkpoints from settings
-	if u.settings.ChainCfgParams == nil || len(u.settings.ChainCfgParams.Checkpoints) == 0 {
+	catchupCtx.useQuickValidation = false
+
+	// Quick validation disabled, no need to verify checkpoints
+	if !u.settings.BlockValidation.CatchupAllowQuickValidation {
+		return nil
+	}
+
+	// Get checkpoints from catchup context
+	if len(catchupCtx.checkpoints) == 0 {
 		u.logger.Debugf("[catchup][%s] No checkpoints configured", catchupCtx.blockUpTo.Hash().String())
 		return nil // No checkpoints to verify
 	}
@@ -586,24 +645,47 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 		return nil // Fork handling takes precedence
 	}
 
-	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
-	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
-
 	// Calculate the height range - much simpler now since headers are sequential with no gaps
 	if len(catchupCtx.blockHeaders) == 0 {
 		u.logger.Debugf("[catchup][%s] No headers to verify", catchupCtx.blockUpTo.Hash().String())
 		return nil
 	}
 
+	// Verify checkpoints and determine if quick validation can be used
+	checkpointsChecked, err := u.verifyCheckpointsAgainstHeaders(catchupCtx)
+	if err != nil {
+		return err
+	}
+
+	if checkpointsChecked > 0 {
+		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
+		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
+	}
+
+	return nil
+}
+
+// verifyCheckpointsAgainstHeaders verifies checkpoints against the fetched headers
+// and determines the highest checkpoint height for quick validation eligibility.
+//
+// Parameters:
+//   - catchupCtx: Catchup context with headers and checkpoints to verify
+//
+// Returns:
+//   - int: Number of checkpoints successfully verified
+//   - error: If checkpoint verification fails (hash mismatch)
+func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
+	// Get the highest checkpoint height for reference
+	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
+	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
+
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
 	lastBlockHeight := catchupCtx.commonAncestorMeta.Height + uint32(len(catchupCtx.blockHeaders))
 
 	u.logger.Debugf("[catchup][%s] Verifying checkpoints in height range %d-%d (common ancestor at %d)", catchupCtx.blockUpTo.Hash().String(), firstBlockHeight, lastBlockHeight, catchupCtx.commonAncestorMeta.Height)
 
-	// Verify checkpoints within our header range
 	checkpointsChecked := 0
-	for _, checkpoint := range u.settings.ChainCfgParams.Checkpoints {
+	for _, checkpoint := range catchupCtx.checkpoints {
 		checkpointHeight := uint32(checkpoint.Height)
 
 		// Skip checkpoints at or below the common ancestor height
@@ -617,13 +699,13 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 			// Calculate the index in blockHeaders (simple sequential calculation)
 			headerIndex := checkpointHeight - firstBlockHeight
 			if int(headerIndex) >= len(catchupCtx.blockHeaders) {
-				return errors.NewProcessingError("[catchup][%s] internal error: checkpoint height %d maps to invalid header index %d", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, headerIndex)
+				return 0, errors.NewProcessingError("[catchup][%s] internal error: checkpoint height %d maps to invalid header index %d", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, headerIndex)
 			}
 
 			headerHash := catchupCtx.blockHeaders[headerIndex].Hash()
 			if !headerHash.IsEqual(checkpoint.Hash) {
 				// CRITICAL: Checkpoint hash mismatch - we're on the wrong chain!
-				return errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
+				return 0, errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
 			}
 
 			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
@@ -631,14 +713,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 		}
 	}
 
-	if checkpointsChecked > 0 {
-		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
-		catchupCtx.useQuickValidation = false // quick validation is turned off for now, need more testing
-	} else {
-		catchupCtx.useQuickValidation = false
-	}
-
-	return nil
+	return checkpointsChecked, nil
 }
 
 // verifyChainContinuity ensures the first block properly connects to our chain.
@@ -700,6 +775,9 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	validationBufferSize := min(int(size.Load()), maxValidationBuffer)
 	validateBlocksChan := make(chan *model.Block, validationBufferSize)
 
+	// Channel for async subtree file writes (only used by quick validation)
+	var writeJobsChan chan *SubtreeWriteJob
+
 	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return errors.NewProcessingError("failed to get best block header", err)
@@ -720,6 +798,22 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Create error group for concurrent operations
 	errorGroup, gCtx := errgroup.WithContext(ctx)
 
+	// Start async write workers only if quick validation is enabled
+	if catchupCtx.useQuickValidation {
+		const writeJobsBufferSize = 256
+		writeJobsChan = make(chan *SubtreeWriteJob, writeJobsBufferSize)
+
+		numWriteWorkers := u.settings.BlockValidation.SubtreeBatchWriteConcurrency
+		if numWriteWorkers <= 0 {
+			numWriteWorkers = 16
+		}
+		for i := 0; i < numWriteWorkers; i++ {
+			errorGroup.Go(func() error {
+				return u.blockValidation.subtreeWriteWorker(gCtx, writeJobsChan)
+			})
+		}
+	}
+
 	// Start fetching blocks
 	errorGroup.Go(func() error {
 		return u.fetchBlocksConcurrently(gCtx, catchupCtx, validateBlocksChan, &size)
@@ -727,7 +821,10 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 
 	// Start validation in parallel
 	errorGroup.Go(func() error {
-		return u.validateBlocksOnChannel(validateBlocksChan, gCtx, catchupCtx, &size)
+		if writeJobsChan != nil {
+			defer close(writeJobsChan)
+		}
+		return u.validateBlocksOnChannel(validateBlocksChan, gCtx, catchupCtx, &size, writeJobsChan)
 	})
 
 	// Wait for both operations to complete
@@ -890,10 +987,11 @@ func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext
 //   - gCtx: Context for cancellation
 //   - catchupCtx: Catchup context with validation mode information
 //   - size: Atomic counter for remaining blocks
+//   - writeJobsChan: Channel for async subtree writes (used only by quick validation)
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64) error {
+func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64, writeJobsChan chan<- *SubtreeWriteJob) error {
 	i := 0
 	blockUpTo := catchupCtx.blockUpTo
 	baseURL := catchupCtx.baseURL
@@ -925,7 +1023,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
 			// Try quick validation if applicable
-			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, baseURL)
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan)
 			if err != nil {
 				return err
 			}
@@ -945,12 +1043,14 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
-					// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
-					// Just log and record metrics
-					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
+					// Block was NOT stored as invalid, so another peer can provide the full version
+					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					if errors.Is(err, errors.ErrBlockIncomplete) {
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
-
-						// Mark peer as malicious for providing invalid block
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 
@@ -982,7 +1082,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 // tryQuickValidation attempts quick validation for checkpointed blocks
 // Returns true if normal validation should be tried, false if quick validation succeeded
-func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, baseURL string) (bool, error) {
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
 	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
@@ -992,10 +1092,36 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		return true, nil
 	}
 
+	// Wait for block assembly to be ready before quick validation.
+	// This ensures coinbase UTXOs are created by BlockAssembly before we try to spend them.
+	// Without this check, quick validation could outpace BlockAssembly by more than the
+	// coinbase maturity period (100 blocks), causing attempts to spend non-existent UTXOs.
+	if err := blockassemblyutil.WaitForBlockAssemblyReady(
+		ctx,
+		u.logger,
+		u.blockAssemblyClient,
+		block.Height,
+		u.settings.BlockValidation.MaxBlocksBehindBlockAssembly,
+	); err != nil {
+		u.logger.Warnf("[tryQuickValidation][%s] block assembly not ready, falling back to normal validation: %v",
+			block.Hash().String(), err)
+		return true, nil // Fall back to normal validation
+	}
+
 	// Quick validation: create UTXOs for the block and validate transactions in parallel
-	if err := u.blockValidation.quickValidateBlock(ctx, block, baseURL); err != nil {
+	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
 		if prometheusCatchupErrors != nil {
-			prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+			prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
+		}
+
+		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
+		// Keep subtree files — they contain valid data that the next peer's validation can reuse
+		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		if errors.Is(err, errors.ErrBlockIncomplete) {
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			return false, err
 		}
 
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",

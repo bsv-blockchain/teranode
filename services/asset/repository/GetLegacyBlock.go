@@ -48,7 +48,6 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 	if err := acquireSemaphorePermit(ctx, repo.semGetLegacyBlockReader, "GetLegacyBlockReader"); err != nil {
 		return nil, err
 	}
-	// Note: semaphore will be released when the returned reader is closed
 
 	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
 
@@ -60,11 +59,15 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 	r, w := io.Pipe()
 
+	// Release semaphore after initial setup is complete but before streaming begins.
+	// The semaphore protects the database query (GetBlockByHash) and pipe creation,
+	// but streaming is I/O-bound and doesn't need CPU-based concurrency limiting.
+	// File operations have their own semaphore protection (readSemaphore with 768 slots).
+	// This allows unlimited concurrent streams while protecting database/initialization.
+	releaseSemaphorePermit(repo.semGetLegacyBlockReader)
+
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		// Release semaphore when goroutine completes (after all Aerospike reads are done)
-		defer releaseSemaphorePermit(repo.semGetLegacyBlockReader)
-
 		if err = repo.writeLegacyBlockHeader(w, block, returnWireBlock); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
@@ -234,13 +237,13 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 //
 // Parameters:
 //   - ctx: Context for the operation
-//   - w: Pipe writer to stream transaction data to
+//   - w: Writer to stream transaction data to
 //   - block: Optional block containing coinbase transaction (can be nil)
 //   - subtreeHash: Hash of the subtree to process
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Context, w *io.PipeWriter, block *model.Block,
+func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Context, w io.Writer, block *model.Block,
 	subtreeHash *chainhash.Hash) error {
 	// 1. Load subtree structure (lightweight - just hashes and tree structure)
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)
@@ -318,12 +321,13 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 
 			if missed > 0 {
 				// Log which transactions are missing in this chunk
+				ctxLogger := repo.logger.WithTraceContext(gCtx)
 				for i := 0; i < currentChunkSize; i++ {
 					if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
 						continue
 					}
 					if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
-						repo.logger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
+						ctxLogger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
 					}
 				}
 				missErr := errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get %d of %d tx meta from store in chunk at offset %d", subtreeHash.String(), missed, currentChunkSize, offset)
@@ -392,8 +396,8 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 	return nil
 }
 
-// writeChunkToWriter writes a chunk of transactions to the pipe writer in order.
-func (repo *Repository) writeChunkToWriter(w *io.PipeWriter, block *model.Block,
+// writeChunkToWriter writes a chunk of transactions to the writer in order.
+func (repo *Repository) writeChunkToWriter(w io.Writer, block *model.Block,
 	chunkHashes []chainhash.Hash, chunkMetaSlice []*meta.Data, chunkOffset int) error {
 	for i := 0; i < len(chunkHashes); i++ {
 		if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {

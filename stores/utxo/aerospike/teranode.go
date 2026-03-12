@@ -71,7 +71,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v54" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v56" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 

@@ -190,7 +190,7 @@ func TestDoHTTPRequestInvalidURL(t *testing.T) {
 	_, err := DoHTTPRequest(ctx, "invalid-url")
 
 	require.Error(t, err)
-	// Invalid URL error happens during Do, not NewRequest
+	// Non-http URL passes SSRF validation but fails at HTTP client level
 	assert.Contains(t, err.Error(), "failed to do http request")
 }
 
@@ -261,7 +261,7 @@ func TestDoHTTPRequestBodyReaderError(t *testing.T) {
 
 	assert.Nil(t, reader)
 	require.Error(t, err)
-	// Invalid URL error happens during Do, not NewRequest
+	// Non-http URL passes SSRF validation but fails at HTTP client level
 	assert.Contains(t, err.Error(), "failed to do http request")
 }
 
@@ -640,10 +640,104 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
-	// Test with malformed URL that will fail NewRequestWithContext
+	// Test with malformed URL that will fail validation/request creation
 	ctx := context.Background()
 	_, err := DoHTTPRequest(ctx, "ht\ttp://invalid-url-with-control-char")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create http request")
+	assert.Contains(t, err.Error(), "invalid URL")
+}
+
+func TestValidateURL(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid https URL",
+			url:     "https://example.com/path",
+			wantErr: false,
+		},
+		{
+			name:    "valid http URL",
+			url:     "http://example.com/path",
+			wantErr: false,
+		},
+		{
+			name:    "skip ftp scheme",
+			url:     "ftp://example.com/file",
+			wantErr: false,
+		},
+		{
+			name:    "skip file scheme",
+			url:     "file:///etc/passwd",
+			wantErr: false,
+		},
+		{
+			name:    "allow loopback IPv4",
+			url:     "http://127.0.0.1:8080/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow localhost",
+			url:     "http://localhost:8080/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 10.x",
+			url:     "http://10.0.0.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 192.168.x",
+			url:     "http://192.168.1.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 172.16.x",
+			url:     "http://172.16.0.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "reject link-local 169.254.x",
+			url:     "http://169.254.169.254/latest/meta-data",
+			wantErr: true,
+			errMsg:  "blocked IP",
+		},
+		{
+			name:    "skip non-http scheme",
+			url:     "no-scheme-url",
+			wantErr: false,
+		},
+		{
+			name:    "reject empty hostname",
+			url:     "http:///path",
+			wantErr: true,
+			errMsg:  "no hostname",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateURL(tt.url)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateURL_Disabled(t *testing.T) {
+	// Verify that disabling SSRF protection allows all URLs
+	ssrfProtectionEnabled = false
+	defer func() { ssrfProtectionEnabled = true }()
+
+	err := ValidateURL("http://127.0.0.1:8080/path")
+	require.NoError(t, err)
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
@@ -50,7 +51,6 @@ import (
 	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -107,6 +107,10 @@ var (
 // validation, and error handling to ensure system stability under high load.
 //
 // Thread Safety:
+// udpWorkerPoolSize limits concurrent goroutines for UDP transaction processing
+// to prevent resource exhaustion from high-volume UDP traffic.
+const udpWorkerPoolSize = 100
+
 // The PropagationServer is designed for concurrent operation and maintains internal
 // synchronization for shared resources. Multiple goroutines can safely process
 // transactions simultaneously through the same server instance.
@@ -121,6 +125,10 @@ type PropagationServer struct {
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
+	banList                      banlist.Interface
+	udpWorkerPool                chan struct{} // Semaphore for limiting UDP processing goroutines
+	udpConns                     []*net.UDPConn
+	udpConnsMu                   sync.Mutex
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -136,7 +144,7 @@ type PropagationServer struct {
 //
 // Returns:
 //   - *PropagationServer: configured server instance
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer {
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
@@ -148,6 +156,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		blockchainClient:             blockchainClient,
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
+		banList:                      banList,
+		udpWorkerPool:                make(chan struct{}, udpWorkerPoolSize),
 	}
 }
 
@@ -316,16 +326,75 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 		}
 	}
 
+	// Build auth options with ban list interceptor if available
+	var authOptions *util.AuthOptions
+	if ps.banList != nil {
+		authOptions = &util.AuthOptions{
+			ExtraUnaryInterceptors: []grpc.UnaryServerInterceptor{
+				banlist.CreateGRPCUnaryInterceptor(ps.banList),
+			},
+		}
+	}
+
 	// this will block
 	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 		closeOnce.Do(func() { close(readyCh) })
-	}, nil, maxConnectionAge); err != nil {
+	}, authOptions, maxConnectionAge); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// parseAllowedSources parses a list of IP addresses and CIDR ranges into net.IPNet structures.
+func parseAllowedSources(sources []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(sources))
+	for _, src := range sources {
+		src = strings.TrimSpace(src)
+		if src == "" {
+			continue
+		}
+
+		// Try parsing as CIDR first
+		_, ipNet, err := net.ParseCIDR(src)
+		if err == nil {
+			nets = append(nets, ipNet)
+			continue
+		}
+
+		// If not CIDR, treat as single IP
+		ip := net.ParseIP(src)
+		if ip == nil {
+			return nil, errors.NewConfigurationError("invalid IP or CIDR in allowed sources: %s", src)
+		}
+
+		// Normalize IPv4-mapped IPv6 addresses to IPv4 for consistent matching
+		// in dual-stack environments
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)})
+		} else {
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)})
+		}
+	}
+	return nets, nil
+}
+
+// isIPAllowed checks if an IP address is allowed based on the allowlist.
+// Returns true if the allowlist is empty (allow all) or if the IP matches any entry.
+func isIPAllowed(ip net.IP, allowedNets []*net.IPNet) bool {
+	// Empty allowlist means allow all
+	if len(allowedNets) == 0 {
+		return true
+	}
+	for _, ipNet := range allowedNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // StartUDP6Listeners initializes IPv6 multicast listeners for transaction propagation.
@@ -352,6 +421,18 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 		return errors.NewConfigurationError("error resolving interface", err)
 	}
 
+	// Parse allowed source IPs/CIDRs
+	allowedSources := ps.settings.Propagation.IPv6AllowedSources
+	allowedNets, err := parseAllowedSources(allowedSources)
+	if err != nil {
+		return err
+	}
+	if len(allowedNets) > 0 {
+		ps.logger.Infof("UDP6 source allowlist configured with %d entries", len(allowedNets))
+	} else {
+		ps.logger.Infof("UDP6 source allowlist not configured, accepting from all sources")
+	}
+
 	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
 		var conn *net.UDPConn
 
@@ -364,7 +445,12 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			return errors.NewServiceError("error starting listener", err)
 		}
 
-		go func(conn *net.UDPConn) {
+		// Track connection for cleanup on shutdown
+		ps.udpConnsMu.Lock()
+		ps.udpConns = append(ps.udpConns, conn)
+		ps.udpConnsMu.Unlock()
+
+		go func(conn *net.UDPConn, allowedNets []*net.IPNet) {
 			// Loop forever reading from the socket
 			var (
 				// numBytes int
@@ -383,7 +469,17 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			for {
 				n, _, _, src, err = conn.ReadMsgUDP(buffer, oobB)
 				if err != nil {
+					if errors.Is(err, net.ErrClosed) {
+						ps.logger.Infof("UDP listener shutting down")
+						return
+					}
 					ps.logger.Errorf("ReadMsgUDP failed: %v", err)
+					continue
+				}
+
+				// Check if source IP is in allowlist
+				if !isIPAllowed(src.IP, allowedNets) {
+					ps.logger.Warnf("Dropping UDP packet from unauthorized source: %s", src.IP.String())
 					continue
 				}
 				// ps.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
@@ -421,24 +517,29 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 						continue
 					}
 
-					// Process the received bytes
-					go func(txb []byte) {
-						if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-							Tx: txb,
-						}); err != nil {
-							ps.logger.Errorf("error processing transaction: %v", err)
-						}
-					}(txBytes.Bytes())
+					// Process the received bytes using worker pool to limit concurrency
+					select {
+					case ps.udpWorkerPool <- struct{}{}:
+						go func(txb []byte) {
+							defer func() { <-ps.udpWorkerPool }()
+							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+								Tx: txb,
+							}); err != nil {
+								ps.logger.Errorf("error processing transaction: %v", err)
+							}
+						}(txBytes.Bytes())
+					default:
+						ps.logger.Warnf("UDP worker pool full, dropping transaction from %s", src.String())
+					}
 				}
 			}
-		}(conn)
+		}(conn, allowedNets)
 	}
 
 	return nil
 }
 
-// Stop gracefully stops the PropagationServer.
-// Currently a no-op, reserved for future cleanup operations.
+// Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
 //   - ctx: context for stop operation (unused)
@@ -446,6 +547,14 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Returns:
 //   - error: always returns nil in current implementation
 func (ps *PropagationServer) Stop(_ context.Context) error {
+	ps.udpConnsMu.Lock()
+	defer ps.udpConnsMu.Unlock()
+	for _, conn := range ps.udpConns {
+		if err := conn.Close(); err != nil {
+			ps.logger.Errorf("Error closing UDP connection: %v", err)
+		}
+	}
+	ps.udpConns = nil
 	return nil
 }
 
@@ -482,7 +591,7 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+errors.UserMessage(err))
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -537,18 +646,32 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			}
 		}()
 
-		errStr := ""
+		// Collect errors in a slice - single goroutine writes, WaitGroup provides synchronization
+		var errMsgs []string
 
 		go func() {
 			for err := range processErrors {
-				errStr += err.Error() + "\n"
-
+				errMsgs = append(errMsgs, errors.UserMessage(err))
 				processingErrorWg.Done()
 			}
 		}()
 
+		// Track early-exit error to return after cleanup
+		var earlyExitMsg string
+
 		// Read transactions with the bt reader in a loop
 		for {
+			// Check limits BEFORE reading the next transaction to prevent bypass attacks
+			if totalNrTransactions >= maxTransactionsPerRequest {
+				earlyExitMsg = "Invalid request body: too many transactions"
+				break
+			}
+
+			if totalBytesRead >= maxDataPerRequest {
+				earlyExitMsg = "Invalid request body: too much data"
+				break
+			}
+
 			tx := &bt.Tx{}
 
 			// Read transaction from request body with panic recovery
@@ -586,27 +709,24 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			totalNrTransactions++
 			totalBytesRead += bytesRead
 
-			if totalNrTransactions > maxTransactionsPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too many transactions")
-			}
-
-			if totalBytesRead > maxDataPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too much data")
-			}
-
 			// Send transaction to processing channel
 			processingWg.Add(1)
 			processTxs <- tx
 		}
 
+		// Close processTxs to signal the processing goroutine to exit,
+		// then wait for all in-flight work and errors to drain
+		close(processTxs)
 		processingWg.Wait()
+		close(processErrors)
 		processingErrorWg.Wait()
 
-		close(processTxs)
-		close(processErrors)
+		if earlyExitMsg != "" {
+			return c.String(http.StatusBadRequest, earlyExitMsg)
+		}
 
-		if errStr != "" {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+errStr)
+		if len(errMsgs) > 0 {
+			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -641,12 +761,22 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 	ps.httpServer.Debug = false
 	ps.httpServer.HideBanner = true
 
+	// Ban list middleware - reject requests from banned IPs early
+	if ps.banList != nil {
+		ps.httpServer.Use(banlist.CreateEchoMiddleware(ps.banList))
+	}
+
 	// Configure middleware and timeouts
 	if ps.settings.Propagation.HTTPRateLimit > 0 {
 		ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
 	}
 
+	if ps.settings.Propagation.HTTPBodyLimit != "" {
+		ps.httpServer.Use(middleware.BodyLimit(ps.settings.Propagation.HTTPBodyLimit))
+	}
+
 	ps.httpServer.Server.ReadTimeout = 30 * time.Second
+	ps.httpServer.Server.ReadHeaderTimeout = 10 * time.Second
 	ps.httpServer.Server.WriteTimeout = 30 * time.Second
 	ps.httpServer.Server.IdleTimeout = 120 * time.Second
 
@@ -741,19 +871,15 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 //   - *propagation_api.EmptyMessage: Empty response on successful processing
 //   - error: Error with specific details if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	// Debug: Check if span context was received from client
-	spanCtx := trace.SpanContextFromContext(ctx)
-	if spanCtx.IsValid() {
-		ps.logger.Infof("[ProcessTransaction] Server received span context: TraceID=%s, SpanID=%s",
-			spanCtx.TraceID().String(), spanCtx.SpanID().String())
-	} else {
-		ps.logger.Warnf("[ProcessTransaction] Server received INVALID span context")
-	}
+	// Use context-aware logger for automatic trace correlation
+	ctxLogger := ps.logger.WithTraceContext(ctx)
+
+	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
 	if err := ps.processTransaction(ctx, req); err != nil {
-		ps.logger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return &propagation_api.EmptyMessage{}, nil
@@ -815,8 +941,9 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				e := errors.Wrap(err)
-				ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
+				e := errors.WrapPublic(err)
+				// Use context-aware logger for trace correlation
+				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
 
 				response.Errors[idx] = e
 			} else {
@@ -828,9 +955,9 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	if err := g.Wait(); err != nil {
-		ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
+		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
 
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return response, nil
@@ -853,6 +980,18 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	defer endSpan()
 
 	timeStart := time.Now()
+	txSize := len(req.Tx)
+
+	// Check transaction size BEFORE parsing to avoid wasting CPU on oversized transactions
+	if ps.settings != nil && ps.settings.Policy != nil {
+		maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
+		if maxTxSize > 0 && txSize > maxTxSize {
+			prometheusInvalidTransactions.Inc()
+			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
+			span.RecordError(err)
+			return err
+		}
+	}
 
 	var btTx *bt.Tx
 	var err error
@@ -860,7 +999,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		defer func() {
 			if r := recover(); r != nil {
 				err = errors.NewProcessingError("transaction parsing panic: %v", r)
-				ps.logger.Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
+				ps.logger.WithTraceContext(ctx).Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
 			}
 		}()
 		btTx, err = bt.NewTxFromBytes(req.Tx)
@@ -880,7 +1019,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return err
 	}
 
-	prometheusTransactionSize.Observe(float64(len(req.Tx)))
+	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
@@ -943,7 +1082,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// For normal-sized transactions, continue with Kafka
 		return ps.validateTransactionViaKafka(btTx)
 	} else {
-		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
+		ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
@@ -966,6 +1105,43 @@ func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {
 		return errors.NewTxInvalidError("[ProcessTransaction][%s] received transaction with no outputs", btTx.TxID())
 	}
 
+	// Check for duplicate inputs (same prevTxID and vout)
+	if err := ps.checkDuplicateInputs(btTx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkDuplicateInputs verifies that a transaction doesn't spend the same output twice.
+// Optimized to avoid allocations for the common case of no duplicates.
+func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
+	numInputs := len(btTx.Inputs)
+
+	// Fast path: single input can't have duplicates
+	if numInputs <= 1 {
+		return nil
+	}
+
+	// Use a map with pre-allocated capacity
+	// Key format: 32 bytes prevTxID + 4 bytes vout = 36 bytes, use [36]byte as key to avoid string alloc
+	type inputKey struct {
+		prevTxID [32]byte
+		vout     uint32
+	}
+
+	seen := make(map[inputKey]struct{}, numInputs)
+	for _, input := range btTx.Inputs {
+		var key inputKey
+		copy(key.prevTxID[:], input.PreviousTxID())
+		key.vout = input.PreviousTxOutIndex
+
+		if _, exists := seen[key]; exists {
+			prometheusInvalidTransactions.Inc()
+			return errors.NewTxInvalidError("[ProcessTransaction][%s] duplicate input found: %x:%d", btTx.TxID(), key.prevTxID, key.vout)
+		}
+		seen[key] = struct{}{}
+	}
 	return nil
 }
 
@@ -993,7 +1169,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 			btTx.TxID(), txSize, maxKafkaMessageSize)
 	}
 
-	ps.logger.Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
+	ps.logger.WithTraceContext(ctx).Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
 		btTx.TxID(), txSize, maxKafkaMessageSize)
 
 	// Create an HTTP client with a timeout
@@ -1028,7 +1204,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 			btTx.TxID(), resp.StatusCode, string(body))
 	}
 
-	ps.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
+	ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
 
 	return nil
 }

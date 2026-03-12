@@ -92,6 +92,17 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	defer cancel()
 
 	const q = `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, 1 AS depth
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, cb.depth + 1
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND cb.depth < $2
+		)
 		SELECT
 			 b.version
 			,b.block_time
@@ -112,24 +123,9 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.invalid
 			,b.processed_at
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-				LIMIT $2
-			)
-		)
-		ORDER BY height DESC
+		JOIN ChainBlocks cb ON b.id = cb.id
+		ORDER BY b.height DESC
+		LIMIT $2
 	`
 
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)

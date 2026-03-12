@@ -58,6 +58,7 @@ const (
 	BlockchainAPI_RevalidateBlock_FullMethodName                      = "/blockchain_api.BlockchainAPI/RevalidateBlock"
 	BlockchainAPI_Subscribe_FullMethodName                            = "/blockchain_api.BlockchainAPI/Subscribe"
 	BlockchainAPI_SendNotification_FullMethodName                     = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetSubscribers_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetSubscribers"
 	BlockchainAPI_GetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/GetState"
 	BlockchainAPI_SetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/SetState"
 	BlockchainAPI_GetBlockIsMined_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
@@ -81,6 +82,15 @@ const (
 	BlockchainAPI_GetBlockLocator_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockLocator"
 	BlockchainAPI_LocateBlockHeaders_FullMethodName                   = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
 	BlockchainAPI_GetBestHeightAndTime_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
+	BlockchainAPI_ScheduleBlobDeletion_FullMethodName                 = "/blockchain_api.BlockchainAPI/ScheduleBlobDeletion"
+	BlockchainAPI_CancelBlobDeletion_FullMethodName                   = "/blockchain_api.BlockchainAPI/CancelBlobDeletion"
+	BlockchainAPI_ListScheduledDeletions_FullMethodName               = "/blockchain_api.BlockchainAPI/ListScheduledDeletions"
+	BlockchainAPI_GetPendingBlobDeletions_FullMethodName              = "/blockchain_api.BlockchainAPI/GetPendingBlobDeletions"
+	BlockchainAPI_RemoveBlobDeletion_FullMethodName                   = "/blockchain_api.BlockchainAPI/RemoveBlobDeletion"
+	BlockchainAPI_IncrementBlobDeletionRetry_FullMethodName           = "/blockchain_api.BlockchainAPI/IncrementBlobDeletionRetry"
+	BlockchainAPI_CompleteBlobDeletions_FullMethodName                = "/blockchain_api.BlockchainAPI/CompleteBlobDeletions"
+	BlockchainAPI_AcquireBlobDeletionBatch_FullMethodName             = "/blockchain_api.BlockchainAPI/AcquireBlobDeletionBatch"
+	BlockchainAPI_CompleteBlobDeletionBatch_FullMethodName            = "/blockchain_api.BlockchainAPI/CompleteBlobDeletionBatch"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -161,6 +171,8 @@ type BlockchainAPIClient interface {
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error)
 	// SendNotification broadcasts a notification to subscribers.
 	SendNotification(ctx context.Context, in *Notification, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetSubscribers returns the list of currently active subscriber source strings.
+	GetSubscribers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetSubscribersResponse, error)
 	// GetState retrieves state data by key.
 	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error)
 	// SetState stores state data with a key.
@@ -207,6 +219,27 @@ type BlockchainAPIClient interface {
 	LocateBlockHeaders(ctx context.Context, in *LocateBlockHeadersRequest, opts ...grpc.CallOption) (*LocateBlockHeadersResponse, error)
 	// GetBestHeightAndTime retrieves the current best height and median time.
 	GetBestHeightAndTime(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBestHeightAndTimeResponse, error)
+	// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+	ScheduleBlobDeletion(ctx context.Context, in *ScheduleBlobDeletionRequest, opts ...grpc.CallOption) (*ScheduleBlobDeletionResponse, error)
+	// CancelBlobDeletion cancels a previously scheduled blob deletion.
+	CancelBlobDeletion(ctx context.Context, in *CancelBlobDeletionRequest, opts ...grpc.CallOption) (*CancelBlobDeletionResponse, error)
+	// ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+	ListScheduledDeletions(ctx context.Context, in *ListScheduledDeletionsRequest, opts ...grpc.CallOption) (*ListScheduledDeletionsResponse, error)
+	// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+	GetPendingBlobDeletions(ctx context.Context, in *GetPendingBlobDeletionsRequest, opts ...grpc.CallOption) (*GetPendingBlobDeletionsResponse, error)
+	// RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+	RemoveBlobDeletion(ctx context.Context, in *RemoveBlobDeletionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+	IncrementBlobDeletionRetry(ctx context.Context, in *IncrementBlobDeletionRetryRequest, opts ...grpc.CallOption) (*IncrementBlobDeletionRetryResponse, error)
+	// CompleteBlobDeletions completes multiple blob deletions in a single call (batch API).
+	// This is more efficient than calling RemoveBlobDeletion multiple times.
+	CompleteBlobDeletions(ctx context.Context, in *CompleteBlobDeletionsRequest, opts ...grpc.CallOption) (*CompleteBlobDeletionsResponse, error)
+	// AcquireBlobDeletionBatch acquires a batch of deletions with locking for processing.
+	// This uses SELECT...FOR UPDATE SKIP LOCKED to ensure only one pruner processes each batch.
+	AcquireBlobDeletionBatch(ctx context.Context, in *AcquireBlobDeletionBatchRequest, opts ...grpc.CallOption) (*AcquireBlobDeletionBatchResponse, error)
+	// CompleteBlobDeletionBatch completes a previously acquired batch in a single call.
+	// This reports all results (successes and failures) for the batch.
+	CompleteBlobDeletionBatch(ctx context.Context, in *CompleteBlobDeletionBatchRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type blockchainAPIClient struct {
@@ -576,6 +609,16 @@ func (c *blockchainAPIClient) SendNotification(ctx context.Context, in *Notifica
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetSubscribers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetSubscribersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSubscribersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetSubscribers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StateResponse)
@@ -806,6 +849,96 @@ func (c *blockchainAPIClient) GetBestHeightAndTime(ctx context.Context, in *empt
 	return out, nil
 }
 
+func (c *blockchainAPIClient) ScheduleBlobDeletion(ctx context.Context, in *ScheduleBlobDeletionRequest, opts ...grpc.CallOption) (*ScheduleBlobDeletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScheduleBlobDeletionResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_ScheduleBlobDeletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) CancelBlobDeletion(ctx context.Context, in *CancelBlobDeletionRequest, opts ...grpc.CallOption) (*CancelBlobDeletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelBlobDeletionResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_CancelBlobDeletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) ListScheduledDeletions(ctx context.Context, in *ListScheduledDeletionsRequest, opts ...grpc.CallOption) (*ListScheduledDeletionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListScheduledDeletionsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_ListScheduledDeletions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetPendingBlobDeletions(ctx context.Context, in *GetPendingBlobDeletionsRequest, opts ...grpc.CallOption) (*GetPendingBlobDeletionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPendingBlobDeletionsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetPendingBlobDeletions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) RemoveBlobDeletion(ctx context.Context, in *RemoveBlobDeletionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_RemoveBlobDeletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) IncrementBlobDeletionRetry(ctx context.Context, in *IncrementBlobDeletionRetryRequest, opts ...grpc.CallOption) (*IncrementBlobDeletionRetryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IncrementBlobDeletionRetryResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_IncrementBlobDeletionRetry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) CompleteBlobDeletions(ctx context.Context, in *CompleteBlobDeletionsRequest, opts ...grpc.CallOption) (*CompleteBlobDeletionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteBlobDeletionsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_CompleteBlobDeletions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) AcquireBlobDeletionBatch(ctx context.Context, in *AcquireBlobDeletionBatchRequest, opts ...grpc.CallOption) (*AcquireBlobDeletionBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireBlobDeletionBatchResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_AcquireBlobDeletionBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) CompleteBlobDeletionBatch(ctx context.Context, in *CompleteBlobDeletionBatchRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_CompleteBlobDeletionBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility.
@@ -884,6 +1017,8 @@ type BlockchainAPIServer interface {
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Notification]) error
 	// SendNotification broadcasts a notification to subscribers.
 	SendNotification(context.Context, *Notification) (*emptypb.Empty, error)
+	// GetSubscribers returns the list of currently active subscriber source strings.
+	GetSubscribers(context.Context, *emptypb.Empty) (*GetSubscribersResponse, error)
 	// GetState retrieves state data by key.
 	GetState(context.Context, *GetStateRequest) (*StateResponse, error)
 	// SetState stores state data with a key.
@@ -930,6 +1065,27 @@ type BlockchainAPIServer interface {
 	LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error)
 	// GetBestHeightAndTime retrieves the current best height and median time.
 	GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error)
+	// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+	ScheduleBlobDeletion(context.Context, *ScheduleBlobDeletionRequest) (*ScheduleBlobDeletionResponse, error)
+	// CancelBlobDeletion cancels a previously scheduled blob deletion.
+	CancelBlobDeletion(context.Context, *CancelBlobDeletionRequest) (*CancelBlobDeletionResponse, error)
+	// ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+	ListScheduledDeletions(context.Context, *ListScheduledDeletionsRequest) (*ListScheduledDeletionsResponse, error)
+	// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+	GetPendingBlobDeletions(context.Context, *GetPendingBlobDeletionsRequest) (*GetPendingBlobDeletionsResponse, error)
+	// RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+	RemoveBlobDeletion(context.Context, *RemoveBlobDeletionRequest) (*emptypb.Empty, error)
+	// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+	IncrementBlobDeletionRetry(context.Context, *IncrementBlobDeletionRetryRequest) (*IncrementBlobDeletionRetryResponse, error)
+	// CompleteBlobDeletions completes multiple blob deletions in a single call (batch API).
+	// This is more efficient than calling RemoveBlobDeletion multiple times.
+	CompleteBlobDeletions(context.Context, *CompleteBlobDeletionsRequest) (*CompleteBlobDeletionsResponse, error)
+	// AcquireBlobDeletionBatch acquires a batch of deletions with locking for processing.
+	// This uses SELECT...FOR UPDATE SKIP LOCKED to ensure only one pruner processes each batch.
+	AcquireBlobDeletionBatch(context.Context, *AcquireBlobDeletionBatchRequest) (*AcquireBlobDeletionBatchResponse, error)
+	// CompleteBlobDeletionBatch completes a previously acquired batch in a single call.
+	// This reports all results (successes and failures) for the batch.
+	CompleteBlobDeletionBatch(context.Context, *CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -1045,6 +1201,9 @@ func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, grpc.Server
 func (UnimplementedBlockchainAPIServer) SendNotification(context.Context, *Notification) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendNotification not implemented")
 }
+func (UnimplementedBlockchainAPIServer) GetSubscribers(context.Context, *emptypb.Empty) (*GetSubscribersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSubscribers not implemented")
+}
 func (UnimplementedBlockchainAPIServer) GetState(context.Context, *GetStateRequest) (*StateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetState not implemented")
 }
@@ -1113,6 +1272,33 @@ func (UnimplementedBlockchainAPIServer) LocateBlockHeaders(context.Context, *Loc
 }
 func (UnimplementedBlockchainAPIServer) GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBestHeightAndTime not implemented")
+}
+func (UnimplementedBlockchainAPIServer) ScheduleBlobDeletion(context.Context, *ScheduleBlobDeletionRequest) (*ScheduleBlobDeletionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ScheduleBlobDeletion not implemented")
+}
+func (UnimplementedBlockchainAPIServer) CancelBlobDeletion(context.Context, *CancelBlobDeletionRequest) (*CancelBlobDeletionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelBlobDeletion not implemented")
+}
+func (UnimplementedBlockchainAPIServer) ListScheduledDeletions(context.Context, *ListScheduledDeletionsRequest) (*ListScheduledDeletionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListScheduledDeletions not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetPendingBlobDeletions(context.Context, *GetPendingBlobDeletionsRequest) (*GetPendingBlobDeletionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPendingBlobDeletions not implemented")
+}
+func (UnimplementedBlockchainAPIServer) RemoveBlobDeletion(context.Context, *RemoveBlobDeletionRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveBlobDeletion not implemented")
+}
+func (UnimplementedBlockchainAPIServer) IncrementBlobDeletionRetry(context.Context, *IncrementBlobDeletionRetryRequest) (*IncrementBlobDeletionRetryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IncrementBlobDeletionRetry not implemented")
+}
+func (UnimplementedBlockchainAPIServer) CompleteBlobDeletions(context.Context, *CompleteBlobDeletionsRequest) (*CompleteBlobDeletionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteBlobDeletions not implemented")
+}
+func (UnimplementedBlockchainAPIServer) AcquireBlobDeletionBatch(context.Context, *AcquireBlobDeletionBatchRequest) (*AcquireBlobDeletionBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireBlobDeletionBatch not implemented")
+}
+func (UnimplementedBlockchainAPIServer) CompleteBlobDeletionBatch(context.Context, *CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteBlobDeletionBatch not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 func (UnimplementedBlockchainAPIServer) testEmbeddedByValue()                       {}
@@ -1758,6 +1944,24 @@ func _BlockchainAPI_SendNotification_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetSubscribers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetSubscribers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetSubscribers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetSubscribers(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStateRequest)
 	if err := dec(in); err != nil {
@@ -2172,6 +2376,168 @@ func _BlockchainAPI_GetBestHeightAndTime_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_ScheduleBlobDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ScheduleBlobDeletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).ScheduleBlobDeletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_ScheduleBlobDeletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).ScheduleBlobDeletion(ctx, req.(*ScheduleBlobDeletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_CancelBlobDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelBlobDeletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).CancelBlobDeletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_CancelBlobDeletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).CancelBlobDeletion(ctx, req.(*CancelBlobDeletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_ListScheduledDeletions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListScheduledDeletionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).ListScheduledDeletions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_ListScheduledDeletions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).ListScheduledDeletions(ctx, req.(*ListScheduledDeletionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetPendingBlobDeletions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPendingBlobDeletionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetPendingBlobDeletions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetPendingBlobDeletions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetPendingBlobDeletions(ctx, req.(*GetPendingBlobDeletionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_RemoveBlobDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveBlobDeletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).RemoveBlobDeletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_RemoveBlobDeletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).RemoveBlobDeletion(ctx, req.(*RemoveBlobDeletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_IncrementBlobDeletionRetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IncrementBlobDeletionRetryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).IncrementBlobDeletionRetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_IncrementBlobDeletionRetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).IncrementBlobDeletionRetry(ctx, req.(*IncrementBlobDeletionRetryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_CompleteBlobDeletions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteBlobDeletionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).CompleteBlobDeletions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_CompleteBlobDeletions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).CompleteBlobDeletions(ctx, req.(*CompleteBlobDeletionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_AcquireBlobDeletionBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireBlobDeletionBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).AcquireBlobDeletionBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_AcquireBlobDeletionBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).AcquireBlobDeletionBatch(ctx, req.(*AcquireBlobDeletionBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_CompleteBlobDeletionBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteBlobDeletionBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).CompleteBlobDeletionBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_CompleteBlobDeletionBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).CompleteBlobDeletionBatch(ctx, req.(*CompleteBlobDeletionBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2316,6 +2682,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_SendNotification_Handler,
 		},
 		{
+			MethodName: "GetSubscribers",
+			Handler:    _BlockchainAPI_GetSubscribers_Handler,
+		},
+		{
 			MethodName: "GetState",
 			Handler:    _BlockchainAPI_GetState_Handler,
 		},
@@ -2406,6 +2776,42 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBestHeightAndTime",
 			Handler:    _BlockchainAPI_GetBestHeightAndTime_Handler,
+		},
+		{
+			MethodName: "ScheduleBlobDeletion",
+			Handler:    _BlockchainAPI_ScheduleBlobDeletion_Handler,
+		},
+		{
+			MethodName: "CancelBlobDeletion",
+			Handler:    _BlockchainAPI_CancelBlobDeletion_Handler,
+		},
+		{
+			MethodName: "ListScheduledDeletions",
+			Handler:    _BlockchainAPI_ListScheduledDeletions_Handler,
+		},
+		{
+			MethodName: "GetPendingBlobDeletions",
+			Handler:    _BlockchainAPI_GetPendingBlobDeletions_Handler,
+		},
+		{
+			MethodName: "RemoveBlobDeletion",
+			Handler:    _BlockchainAPI_RemoveBlobDeletion_Handler,
+		},
+		{
+			MethodName: "IncrementBlobDeletionRetry",
+			Handler:    _BlockchainAPI_IncrementBlobDeletionRetry_Handler,
+		},
+		{
+			MethodName: "CompleteBlobDeletions",
+			Handler:    _BlockchainAPI_CompleteBlobDeletions_Handler,
+		},
+		{
+			MethodName: "AcquireBlobDeletionBatch",
+			Handler:    _BlockchainAPI_AcquireBlobDeletionBatch_Handler,
+		},
+		{
+			MethodName: "CompleteBlobDeletionBatch",
+			Handler:    _BlockchainAPI_CompleteBlobDeletionBatch_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

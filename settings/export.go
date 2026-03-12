@@ -29,6 +29,22 @@ var (
 	metadataCacheOnce sync.Once
 )
 
+// sensitiveKeys contains setting keys whose values must be redacted in exported metadata.
+var sensitiveKeys = map[string]bool{
+	"rpc_pass":                    true,
+	"rpc_limit_pass":              true,
+	"p2p_private_key":             true,
+	"coinbase_p2p_private_key":    true,
+	"alert_p2p_private_key":       true,
+	"coinbase_wallet_private_key": true,
+	"miner_wallet_private_keys":   true,
+	"coinbaseDBUserPwd":           true,
+	"slack_token":                 true,
+	"grpc_admin_api_key":          true,
+}
+
+const redactedValue = "********"
+
 // ExportMetadata exports all settings with their metadata for the settings portal.
 // It uses reflection to extract struct tags on first call (cached), then combines
 // with current runtime values on each subsequent call.
@@ -46,12 +62,17 @@ func (s *Settings) ExportMetadata() *SettingsRegistry {
 		// Get current value using cached field path
 		currentVal := getValueAtPath(val, entry.ValuePath)
 
+		currentValueStr := formatValue(currentVal)
+		if sensitiveKeys[entry.Key] && currentValueStr != "" {
+			currentValueStr = redactedValue
+		}
+
 		settings = append(settings, SettingMetadata{
 			Key:             entry.Key,
 			Name:            entry.Name,
 			Type:            entry.Type,
 			DefaultValue:    entry.DefaultValue,
-			CurrentValue:    formatValue(currentVal),
+			CurrentValue:    currentValueStr,
 			Description:     entry.Description,
 			LongDescription: entry.LongDescription,
 			Category:        entry.Category,

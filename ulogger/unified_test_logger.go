@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -213,4 +214,10 @@ func (l *UnifiedTestLogger) Fatalf(format string, args ...interface{}) {
 	if l.cancelFn != nil {
 		l.cancelFn()
 	}
+}
+
+// WithTraceContext returns the same logger since UnifiedTestLogger is a test logger
+// that doesn't support structured fields.
+func (l *UnifiedTestLogger) WithTraceContext(_ context.Context) Logger {
+	return l
 }

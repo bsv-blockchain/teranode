@@ -11,11 +11,12 @@
 // reduces the number of actual storage operations performed on the underlying store.
 //
 // Note that the batcher only supports write operations (Set). Read operations (Get, Exists)
-// and metadata operations (GetDAH, SetDAH) are passed through to the underlying store.
+// and metadata operations (SetDAH) are passed through to the underlying store.
 package batcher
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
@@ -29,8 +30,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
-	"golang.org/x/exp/rand"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -254,7 +254,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	g.Go(func() error {
 		b.logger.Debugf("flushing batch of %d bytes", len(currentBatch))
 		// we need to reverse the bytes of the key, since this is not a transaction ID
-		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchData, currentBatch); err != nil {
+		if err := b.blobStore.Set(gCtx, util.ReverseSlice(batchKey), fileformat.FileTypeBatchData, currentBatch); err != nil {
 			return errors.NewStorageError("error putting batch", err)
 		}
 
@@ -265,7 +265,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		// flush current batch keys
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
-			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchKeys, batchKeys); err != nil {
+			if err := b.blobStore.Set(gCtx, util.ReverseSlice(batchKey), fileformat.FileTypeBatchKeys, batchKeys); err != nil {
 				return errors.NewStorageError("error putting batch keys", err)
 			}
 
@@ -391,23 +391,6 @@ func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileTy
 //   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	return errors.NewStorageError("SetDAH not supported by batcher")
-}
-
-// GetDAH is not supported by the batcher implementation.
-// The batcher is designed primarily for efficient write operations and does not
-// support metadata operations like retrieving Delete-At-Height values.
-//
-// Parameters:
-//   - ctx: Context for the operation (unused)
-//   - key: The key identifying the blob (unused)
-//   - fileType: The type of the file (unused)
-//   - opts: Optional file options (unused)
-//
-// Returns:
-//   - uint32: Always returns 0
-//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
-func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
-	return 0, errors.NewStorageError("GetDAH not supported by batcher")
 }
 
 // GetIoReader is not supported by the batcher implementation.

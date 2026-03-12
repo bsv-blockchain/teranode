@@ -464,7 +464,7 @@ func (cm *ConnManager) NewConnReq() {
 		cm.pending.Iterate(func(_ uint64, connReq *ConnReq) bool {
 			connReqAddr := connReq.GetAddr()
 			if connReqAddr != nil && connReqAddr.String() == addr.String() {
-				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %s, retries: %d)", addr, connReq.State(), connReq.retryCount.Load())
+				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %d, retries: %d)", addr, connReq.State(), connReq.retryCount.Load())
 
 				existingPendingTx = true
 

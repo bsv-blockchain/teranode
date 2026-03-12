@@ -104,6 +104,21 @@ func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainh
 	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
 	q := `
+		WITH RECURSIVE start_block AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE hash = $1
+		),
+		ChainBlocks AS (
+			SELECT id, parent_id, height FROM start_block
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			CROSS JOIN start_block sb
+			WHERE bb.id != cb.id
+			  AND bb.height >= sb.height - $2
+		)
 		SELECT
 			 b.version
 			,b.block_time
@@ -119,24 +134,9 @@ func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainh
 			,b.block_time
 			,b.inserted_at
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-				LIMIT $2
-			)
-		)
-		ORDER BY height DESC
+		JOIN ChainBlocks cb ON b.id = cb.id
+		ORDER BY b.height DESC
+		LIMIT $2
 	`
 
 	rows, err := s.db.QueryContext(ctx, q, blockHashTill[:], numberOfHeaders)

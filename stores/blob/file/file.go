@@ -41,9 +41,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/debugflags"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/semaphore"
 )
@@ -80,6 +81,10 @@ type File struct {
 	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient longtermStore
+	// blobDeletionScheduler is used to schedule blob deletions via blockchain service
+	blobDeletionScheduler options.BlobDeletionScheduler
+	// storeType identifies which blob store this is
+	storeType storetypes.BlobStoreType
 }
 
 func (s *File) debugEnabled() bool {
@@ -99,7 +104,7 @@ func (s *File) debugf(format string, args ...interface{}) {
 }
 
 func formatKeyHex(key []byte) string {
-	return utils.ReverseAndHexEncodeSlice(key)
+	return util.ReverseAndHexEncodeSlice(key)
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -121,18 +126,16 @@ type longtermStore interface {
 // the write permit is held for the entire streaming write operation.
 type semaphoreReadCloser struct {
 	io.ReadCloser
+	once sync.Once
 }
 
 func (r *semaphoreReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	// Only release the semaphore permit if the underlying close was successful.
-	// This provides natural idempotency: subsequent calls will fail at the OS level
-	// (file already closed) and won't release the permit again, avoiding the
-	// possible overhead of using a sync.Once to ensure the permit is released exactly once.
-	if err == nil {
-		releaseReadPermit()
-	}
-	return err
+	defer r.once.Do(releaseReadPermit)
+	// Always release the semaphore permit exactly once, even if close fails.
+	// The permit represents the right to have an open file, and once we attempt
+	// to close (regardless of success), we're done with that file operation.
+	// Using sync.Once ensures idempotent Close() calls don't double-release.
+	return r.ReadCloser.Close()
 }
 
 // Semaphore configuration constants
@@ -391,7 +394,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	}
 
-	options := options.NewStoreOptions(opts...)
+	storeOpts := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
 		val, err := strconv.ParseInt(hashPrefix, 10, 32)
@@ -399,7 +402,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
 
-		options.HashPrefix = int(val)
+		storeOpts.HashPrefix = int(val)
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
@@ -408,56 +411,58 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
 
-		options.HashPrefix = -int(val)
+		storeOpts.HashPrefix = -int(val)
 	}
 
 	// Parse disableDAH URL parameter
 	// This can be set via URL (?disableDAH=true/false) or via StoreOption (WithDisableDAH(true/false))
 	// URL parameter takes precedence over StoreOption (bidirectional override)
 	if disableDAH := storeURL.Query().Get("disableDAH"); disableDAH != "" {
-		options.DisableDAH = disableDAH == "true"
+		storeOpts.DisableDAH = disableDAH == "true"
 	}
 
-	if len(options.SubDirectory) > 0 {
-		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
+	if len(storeOpts.SubDirectory) > 0 {
+		if err := os.MkdirAll(filepath.Join(path, storeOpts.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
 
 	fileStore := &File{
-		path:          path,
-		logger:        logger,
-		options:       options,
-		persistSubDir: options.PersistSubDir,
+		path:                  path,
+		logger:                logger,
+		options:               storeOpts,
+		persistSubDir:         storeOpts.PersistSubDir,
+		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
+		storeType:             storeOpts.StoreType,
 	}
 
 	// Check if longterm storage options are provided
-	if options.PersistSubDir != "" {
+	if storeOpts.PersistSubDir != "" {
 		// Validate PersistSubDir doesn't contain path traversal sequences
-		if strings.Contains(options.PersistSubDir, "..") {
+		if strings.Contains(storeOpts.PersistSubDir, "..") {
 			return nil, errors.NewInvalidArgumentError("[File] PersistSubDir contains path traversal sequence")
 		}
 
 		// Create persistent subdirectory
-		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(path, storeOpts.PersistSubDir), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)
 		}
 
 		// Initialize longterm storage client if URL is provided
-		if options.LongtermStoreURL != nil {
+		if storeOpts.LongtermStoreURL != nil {
 			var err error
 
-			fileStore.longtermClient, err = newStore(logger, options.LongtermStoreURL)
+			fileStore.longtermClient, err = newStore(logger, storeOpts.LongtermStoreURL)
 			if err != nil {
 				return nil, errors.NewStorageError("[File] failed to create longterm client", err)
 			}
 		}
 	}
 
-	if options.BlockHeightCh != nil {
+	if storeOpts.BlockHeightCh != nil {
 		go func() {
 			for {
-				fileStore.SetCurrentBlockHeight(<-options.BlockHeightCh)
+				fileStore.SetCurrentBlockHeight(<-storeOpts.BlockHeightCh)
 			}
 		}()
 	}
@@ -670,7 +675,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 
 	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", util.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	merged := options.MergeOptions(s.options, opts)
@@ -845,15 +850,17 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	}
 
 	if dah > 0 {
-		dahFilename := fileName + ".dah"
-		// Use _internal variant since this is called from SetFromReader which holds writeSemaphore
-		if err := s.writeDAHToFileInternal(dahFilename, dah); err != nil {
-			return "", err
+		// Schedule deletion via blockchain service
+		if s.blobDeletionScheduler == nil {
+			return "", errors.NewConfigurationError("cannot schedule blob deletion: blob deletion scheduler not configured")
 		}
-	} else {
-		// delete DAH file, if it existed
-		_ = os.Remove(fileName + ".dah")
 
+		// Use background context since SetFromReader might be cancelled
+		// but we still want the deletion to be scheduled
+		bgCtx := context.Background()
+		if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(bgCtx, key, string(fileType), s.storeType, dah); err != nil {
+			return "", errors.NewStorageError("failed to schedule blob deletion", err)
+		}
 	}
 
 	return fileName, nil
@@ -898,14 +905,17 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
-	if newDAH == 0 {
-		// delete the DAH file
-		if err = os.Remove(fileName + ".dah"); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
+	// Blob deletion scheduler is required for DAH operations
+	if s.blobDeletionScheduler == nil {
+		return errors.NewConfigurationError("cannot modify DAH: blob deletion scheduler not configured")
+	}
 
-			return errors.NewStorageError("[File][%s] failed to remove DAH file", fileName, err)
+	if newDAH == 0 {
+		// Cancel scheduled deletion
+		// CRITICAL: This must succeed to prevent data loss - if cancellation fails,
+		// the blob could still be deleted even though we want to persist it forever
+		if _, err := s.blobDeletionScheduler.CancelBlobDeletion(ctx, key, string(fileType), s.storeType); err != nil {
+			return errors.NewStorageError("failed to cancel blob deletion (critical for DAH=0)", err)
 		}
 
 		return nil
@@ -920,50 +930,12 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File][%s] failed to get file info", fileName, err)
 	}
 
-	// write DAH to file
-	// Use _internal variant since we already hold writeSemaphore
-	dahFilename := fileName + ".dah"
-	if err = s.writeDAHToFileInternal(dahFilename, newDAH); err != nil {
-		return err
+	// Schedule deletion via blockchain service
+	if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(ctx, key, string(fileType), s.storeType, newDAH); err != nil {
+		return errors.NewStorageError("failed to schedule blob deletion", err)
 	}
 
 	return nil
-}
-
-func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	keyHex := formatKeyHex(key)
-	s.debugf("[File] GetDAH start key=%s type=%s", keyHex, fileType)
-
-	merged := options.MergeOptions(s.options, opts)
-
-	fileName, err := merged.ConstructFilename(s.path, key, fileType)
-	if err != nil {
-		return 0, err
-	}
-
-	// Check if the file (not the DAH file) exists
-	exists, err := s.Exists(ctx, key, fileType, opts...)
-	if err != nil {
-		return 0, err
-	}
-
-	// If the file doesn't exist, why are we trying to get the DAH?  Return an error
-	if !exists {
-		return 0, errors.ErrNotFound
-	}
-
-	// check whether the DAH file exists, it could have been created by another process
-	dah, err := s.readDAHFromFile(fileName + ".dah")
-	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			return 0, nil
-		}
-
-		return 0, err
-	}
-
-	s.debugf("[File] GetDAH result key=%s type=%s dah=%d", keyHex, fileType, dah)
-	return dah, nil
 }
 
 // GetIoReader retrieves a blob from the file store as a streaming reader.
@@ -1215,25 +1187,39 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
+		s.logger.Debugf("[FILE_DEL] Failed to construct filename: key=%s type=%s error=%v", keyHex, fileType, err)
 		return err
 	}
 
-	// remove DAH file, if exists
-	_ = os.Remove(fileName + ".dah")
+	s.logger.Debugf("[File] Del constructed filename: key=%s type=%s file=%s", keyHex, fileType, fileName)
+	s.logger.Debugf("[FILE_DEL] Attempting deletion: base_path=%s key=%s file=%s", s.path, keyHex, fileName)
 
 	// remove checksum file, if exists
-	_ = os.Remove(fileName + checksumExtension)
+	checksumFile := fileName + checksumExtension
+	if err := os.Remove(checksumFile); err == nil {
+		s.logger.Debugf("[FILE_DEL] Deleted checksum file: %s", checksumFile)
+	}
 
 	if err = os.Remove(fileName); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// If the file does not exist, consider it deleted
+			s.logger.Debugf("[FILE_DEL] File not found (already deleted): %s - treating as success", fileName)
 			s.debugf("[File] Del skipped key=%s type=%s reason=file_missing", keyHex, fileType)
 			return nil
 		}
 
+		s.logger.Debugf("[FILE_DEL] Failed to remove file: %s error=%v", fileName, err)
 		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
 	}
 
+	// Try to remove the hash prefix directory if now empty (best-effort, ignore errors).
+	// os.Remove on a non-empty directory returns an error, so this is safe.
+	// Only attempt if the parent is a subdirectory of the store root (i.e. a hash prefix dir).
+	if dir := filepath.Dir(fileName); dir != s.path && len(filepath.Base(dir)) <= 2 {
+		_ = os.Remove(dir)
+	}
+
+	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)
 	s.debugf("[File] Del completed key=%s type=%s", keyHex, fileType)
 	return nil
 }

@@ -16,7 +16,7 @@ var (
 	// for the transaction metadata cache to help with monitoring and tuning
 
 	// Current number of entries in the cache; monitors utilization and capacity
-	prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
+	// prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
 	// Total count of cache insertions since startup; tracks write throughput
 	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	// Count of successful cache retrievals (cache hits); indicates cache effectiveness
@@ -35,6 +35,12 @@ var (
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
 	// Count of hits for transactions that were deemed too old to use; monitors expiration policy
 	prometheusBlockValidationTxMetaCacheHitOldTx prometheus.Gauge
+	// Number of valid (readable) entries; equals current_gen_entries + previous_gen_entries
+	prometheusBlockValidationTxMetaCacheValidEntriesCount prometheus.Gauge
+	// Count of entries written in the current ring generation
+	prometheusBlockValidationTxMetaCacheCurrentGenEntries prometheus.Gauge
+	// Count of valid entries from the previous generation not yet overwritten
+	prometheusBlockValidationTxMetaCachePreviousGenEntries prometheus.Gauge
 )
 
 var (
@@ -75,17 +81,17 @@ func initPrometheusMetrics() {
 //   - evictions: Number of entries removed from the cache due to memory constraints
 //   - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
-	// Size metric tracks the current number of entries in the transaction metadata cache.
-	// This is a point-in-time measurement that indicates cache utilization level and
-	// helps identify potential capacity issues or unexpected cache clearing events.
-	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_meta_cache",
-			Name:      "size",
-			Help:      "Number of items in the tx meta cache",
-		},
-	)
+	// // Size metric tracks the current number of entries in the transaction metadata cache.
+	// // This is a point-in-time measurement that indicates cache utilization level and
+	// // helps identify potential capacity issues or unexpected cache clearing events.
+	// prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
+	// 	prometheus.GaugeOpts{
+	// 		Namespace: "teranode",
+	// 		Subsystem: "tx_meta_cache",
+	// 		Name:      "size",
+	// 		Help:      "Number of items in the tx meta cache",
+	// 	},
+	// )
 
 	// Insertions metric tracks the total number of items added to the transaction metadata cache.
 	// This counter increases monotonically and helps track write load on the cache,
@@ -190,6 +196,36 @@ func _initPrometheusMetrics() {
 			Subsystem: "tx_meta_cache",
 			Name:      "hit_old_tx",
 			Help:      "Number of hits on old txs in the tx meta cache",
+		},
+	)
+
+	// ValidEntriesCount is the number of valid (readable) entries in the cache
+	prometheusBlockValidationTxMetaCacheValidEntriesCount = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "valid_entries_count",
+			Help:      "Number of valid (readable) entries in the tx meta cache",
+		},
+	)
+
+	// CurrentGenEntries is the count of entries in the current ring generation
+	prometheusBlockValidationTxMetaCacheCurrentGenEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "current_gen_entries",
+			Help:      "Number of entries in the current generation of the tx meta cache",
+		},
+	)
+
+	// PreviousGenEntries is the count of valid entries from the previous generation
+	prometheusBlockValidationTxMetaCachePreviousGenEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "previous_gen_entries",
+			Help:      "Number of valid entries from the previous generation in the tx meta cache",
 		},
 	)
 }

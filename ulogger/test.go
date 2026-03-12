@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"runtime"
@@ -43,4 +44,9 @@ func (l TestLogger) Fatalf(format string, args ...interface{}) {
 	prefix := fmt.Sprintf("%s:%d: ERR_LEVEL %s ", file, line, format)
 
 	log.Printf(prefix, args...)
+}
+
+// WithTraceContext returns the same logger since TestLogger is a no-op test logger.
+func (l TestLogger) WithTraceContext(_ context.Context) Logger {
+	return l
 }

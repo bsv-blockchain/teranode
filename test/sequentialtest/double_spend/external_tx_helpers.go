@@ -90,6 +90,7 @@ func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOff
 	// propagate
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err)
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parentTx, externalBlockWait))
 
 	// generate a block to include parentTx
 	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})

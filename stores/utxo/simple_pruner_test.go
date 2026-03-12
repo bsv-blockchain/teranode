@@ -22,12 +22,12 @@ func TestPreserveParentsOfOldUnminedTransactions_EarlyReturn(t *testing.T) {
 	mockStore := new(MockUtxostore)
 
 	// Test early return when block height is less than retention
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 5, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 5, "<test-hash>", settings, logger)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
 	// Should not call any store methods due to early return
-	mockStore.AssertNotCalled(t, "GetUnminedTxIterator")
+	mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator")
 }
 
 // Test the cutoff calculation logic
@@ -38,14 +38,14 @@ func TestCleanupCutoffCalculation(t *testing.T) {
 	settings.UtxoStore.UnminedTxRetention = 5
 
 	mockStore := new(MockUtxostore)
-	// Mock GetUnminedTxIterator to return empty iterator
+	// Mock GetPrunableUnminedTxIterator to return empty iterator
 	// Block height 15 - retention 5 = cutoff 10
 	mockIter := &MockUnminedTxIterator{}
 	mockIter.On("Next", mock.Anything).Return(([]*UnminedTransaction)(nil), nil).Once()
 	mockIter.On("Close").Return(nil)
-	mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)
+	mockStore.On("GetPrunableUnminedTxIterator", uint32(10)).Return(mockIter, nil)
 
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 15, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 15, "<test-hash>", settings, logger)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
@@ -60,11 +60,12 @@ func TestPreserveParentsOfOldUnminedTransactions_StorageError(t *testing.T) {
 	settings.UtxoStore.UnminedTxRetention = 5
 
 	mockStore := new(MockUtxostore)
-	// Mock a storage error when getting iterator
-	mockStore.On("GetUnminedTxIterator").
+	// Mock a storage error when getting prunable iterator
+	// cutoff = blockHeight(10) - retention(5) = 5
+	mockStore.On("GetPrunableUnminedTxIterator", uint32(5)).
 		Return((*MockUnminedTxIterator)(nil), errors.NewStorageError("storage error"))
 
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", settings, logger)
 
 	assert.Error(t, err)
 	assert.Equal(t, 0, count)

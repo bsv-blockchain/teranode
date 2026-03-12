@@ -494,6 +494,7 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 #### Issue: Sync Stalled
 
 **Symptoms:**
+
 - Block height not increasing
 - No new blocks being processed
 - Peer connections established but inactive
@@ -514,6 +515,7 @@ docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 #### Issue: Database Connection Errors
 
 **Symptoms:**
+
 - Connection timeouts to PostgreSQL/Aerospike
 - "Database unavailable" errors in logs
 
@@ -533,6 +535,7 @@ docker compose restart postgres aerospike
 #### Issue: Storage Space Exhausted
 
 **Symptoms:**
+
 - "No space left on device" errors
 - Containers crashing
 
@@ -627,7 +630,7 @@ docker exec -it aerospike asinfo -v "statistics" | grep "objects"
 # Verify FSM is in correct state
 docker exec -it blockchain teranode-cli getfsmstate
 
-# Should show "running" or "synced" for a fully synchronized node
+# Should show "RUNNING" for a fully synchronized node
 ```
 
 ### Ongoing Monitoring

@@ -41,6 +41,8 @@ type MockStore struct {
 	BestBlock *model.Block
 	// BlockChainWork maps block hashes to their cumulative chain work (for difficulty calculations)
 	BlockChainWork map[chainhash.Hash][]byte
+	// BlockIsMined maps block hashes to their mined status for mined status checks
+	BlockIsMined map[chainhash.Hash]bool
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// mu provides thread-safe access to all MockStore fields
@@ -58,6 +60,7 @@ func NewMockStore() *MockStore {
 		BlockExists:    map[chainhash.Hash]bool{},
 		BlockByHeight:  map[uint32]*model.Block{},
 		BlockChainWork: map[chainhash.Hash][]byte{},
+		BlockIsMined:   map[chainhash.Hash]bool{},
 		state:          "IDLE",
 	}
 }
@@ -152,9 +155,51 @@ func (m *MockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model
 
 // GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash.
 func (m *MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, hash *chainhash.Hash) (*model.Block, bool, error) {
-	block, err := m.GetBlockByHeight(ctx, height)
-	if err != nil {
-		return nil, false, err
+	if hash == nil {
+		block, err := m.GetBlockByHeight(ctx, height)
+		if err != nil {
+			return nil, false, err
+		}
+		return block, false, nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	block, ok := m.Blocks[*hash]
+	if !ok {
+		return nil, false, errors.ErrBlockNotFound
+	}
+
+	// for tests that build chains where blocks are not linked by HashPrevBlock
+	// (e.g. every block points to the zero hash). In that case, use the height index.
+	if block.Header == nil || block.Header.HashPrevBlock == nil || block.Header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+		blockAtHeight, ok := m.BlockByHeight[height]
+		if !ok {
+			return nil, false, errors.ErrBlockNotFound
+		}
+		return blockAtHeight, false, nil
+	}
+
+	if block.Height < height {
+		return nil, false, errors.ErrBlockNotFound
+	}
+
+	for block.Height > height {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		if block.Header == nil || block.Header.HashPrevBlock == nil {
+			return nil, false, errors.ErrBlockNotFound
+		}
+
+		parent, parentOK := m.Blocks[*block.Header.HashPrevBlock]
+		if !parentOK {
+			return nil, false, errors.ErrBlockNotFound
+		}
+
+		block = parent
 	}
 
 	return block, false, nil
@@ -565,8 +610,21 @@ func (m *MockStore) SetState(ctx context.Context, key string, data []byte) error
 	panic(implementMe)
 }
 
-func (m *MockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	panic("implement me")
+func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if blockHash == nil {
+		return false, nil
+	}
+	isMined, exists := m.BlockIsMined[*blockHash]
+	if !exists {
+		// Default to true for blocks that exist, false otherwise
+		if m.BlockExists[*blockHash] {
+			return true, nil
+		}
+		return false, nil
+	}
+	return isMined, nil
 }
 
 func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

@@ -213,6 +213,7 @@ message StateMessage {
 // Response containing the current difficulty of the blockchain.
 message GetCurrentDifficultyResponse {
   double difficulty = 1; // the current difficulty of the blockchain
+  bytes blockHash = 2; // the hash of the block at which the difficulty is measured
 }
 
 // Request for generating a block.

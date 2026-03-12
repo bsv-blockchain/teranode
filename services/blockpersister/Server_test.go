@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -731,6 +732,9 @@ func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash 
 func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	return nil, nil
 }
+func (m *MockBlockchainClient) GetSubscribers(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
 func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }
@@ -829,6 +833,43 @@ func (m *MockBlockchainClient) SetBlockPersistedAt(ctx context.Context, blockHas
 	return nil
 }
 
+// Blob deletion methods (no-op implementations for interface compliance)
+func (m *MockBlockchainClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, false, nil
+}
+
+func (m *MockBlockchainClient) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	return false, nil
+}
+
+func (m *MockBlockchainClient) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	return nil, 0, nil
+}
+
+func (m *MockBlockchainClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	return nil, nil
+}
+
+func (m *MockBlockchainClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	return nil
+}
+
+func (m *MockBlockchainClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	return false, 0, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	return 0, 0, nil
+}
+
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	return "", nil, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	return nil
+}
+
 // MockStore implements basic store interfaces for testing
 type MockBlobStore struct {
 	data      map[string][]byte
@@ -880,9 +921,7 @@ func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType 
 func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...bloboptions.FileOption) error {
 	return nil
 }
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (uint32, error) {
-	return 0, nil
-}
+
 func (m *MockBlobStore) GetPartial(ctx context.Context, key []byte, fileType fileformat.FileType, offset, length int64, opts ...bloboptions.FileOption) ([]byte, error) {
 	return nil, nil
 }
@@ -939,6 +978,9 @@ func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 	return nil, nil
 }
 func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }

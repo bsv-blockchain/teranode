@@ -1,4 +1,3 @@
-// Package p2p provides peer-to-peer networking functionality for the Teranode system.
 package p2p
 
 import (
@@ -10,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -22,8 +22,7 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	banListInstance = nil
-	banListOnce = sync.Once{}
+	ResetBanListSingleton()
 
 	// Create a new in-memory SQLite database for testing
 	storeURL, err := url.Parse("sqlitememory://")
@@ -34,26 +33,15 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
-	banList := &BanList{
-		db:          store.GetDB(),
-		engine:      util.SqliteMemory,
-		logger:      ulogger.TestLogger{},
-		bannedPeers: make(map[string]BanInfo),
-		subscribers: make(map[chan BanEvent]struct{}),
-	}
+	bl := banlist.New(store.GetDB(), util.SqliteMemory, ulogger.TestLogger{})
 
-	err = banList.Init(ctx)
+	err = bl.Init(ctx)
 	require.NoError(t, err)
 
-	banListInstance = banList
-	eventChan := banList.Subscribe()
+	eventChan := bl.Subscribe()
 
-	return banList, eventChan, nil
+	return bl, eventChan, nil
 }
-
-// func teardown(t *testing.T, banList *BanList) {
-// 	banList.Clear()
-// }
 
 func TestHandleSetBanAdd(t *testing.T) {
 	banTime := int64(3600)
@@ -98,7 +86,7 @@ func TestHandleSetBanAdd(t *testing.T) {
 			expected: "127.0.0.0/32",
 		},
 	}
-	banList, eventChan, err := setupBanList(t)
+	bl, eventChan, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Create a WaitGroup to track notification goroutines
@@ -106,7 +94,7 @@ func TestHandleSetBanAdd(t *testing.T) {
 
 	t.Cleanup(func() {
 		// First unsubscribe to prevent new notifications
-		banList.Unsubscribe(eventChan)
+		bl.Unsubscribe(eventChan)
 		// Wait for any pending notifications
 		wg.Wait()
 		// Now safe to close the channel
@@ -120,7 +108,7 @@ func TestHandleSetBanAdd(t *testing.T) {
 
 			// Add to WaitGroup before potential notification
 			wg.Add(1)
-			err := banList.Add(ctx, tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
+			err := bl.Add(ctx, tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
 
 			// Wait for notification to be processed
@@ -133,7 +121,8 @@ func TestHandleSetBanAdd(t *testing.T) {
 
 			t.Logf("IP or Subnet: %s\n", tt.args.IPOrSubnet)
 
-			banInfo, exists := banList.bannedPeers[tt.args.IPOrSubnet]
+			bannedPeers := bl.BannedPeers()
+			banInfo, exists := bannedPeers[tt.args.IPOrSubnet]
 			require.True(t, exists)
 
 			expectedExpiration := time.Now().Add(time.Duration(*tt.args.BanTime) * time.Second)
@@ -152,14 +141,14 @@ func TestHandleSetBanAdd(t *testing.T) {
 }
 
 func TestIsBanned(t *testing.T) {
-	banList, _, err := setupBanList(t)
+	bl, _, err := setupBanList(t)
 	require.NoError(t, err)
 	// Add a banned IP
-	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
+	err = bl.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	// Add a banned subnet
-	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
+	err = bl.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -181,22 +170,22 @@ func TestIsBanned(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := banList.IsBanned(tt.ip)
+			result := bl.IsBanned(tt.ip)
 			require.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 func TestRemoveBan(t *testing.T) {
-	banList, _, err := setupBanList(t)
+	bl, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Add a banned IP
-	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
+	err = bl.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	// Add a banned subnet
-	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
+	err = bl.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -212,10 +201,11 @@ func TestRemoveBan(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := banList.Remove(context.Background(), tt.ipOrSubnet)
+			err := bl.Remove(context.Background(), tt.ipOrSubnet)
 			require.NoError(t, err)
 
-			_, exists := banList.bannedPeers[tt.ipOrSubnet]
+			bannedPeers := bl.BannedPeers()
+			_, exists := bannedPeers[tt.ipOrSubnet]
 			require.False(t, exists)
 		})
 	}
@@ -225,16 +215,18 @@ func TestBanListChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	ResetBanListSingleton()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockChain.StoreURL, _ = url.Parse("sqlitememory://")
 
-	banList, eventChan, err := GetBanList(ctx, ulogger.TestLogger{}, tSettings)
+	bl, eventChan, err := GetBanList(ctx, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
-	require.NotNil(t, banList)
+	require.NotNil(t, bl)
 	require.NotNil(t, eventChan)
 
 	// Ensure we clean up the subscription at the end of the test
-	defer banList.Unsubscribe(eventChan)
+	defer bl.Unsubscribe(eventChan)
 
 	// Create a channel to signal when we're done receiving events
 	done := make(chan bool)
@@ -286,15 +278,15 @@ func TestBanListChannel(t *testing.T) {
 	}()
 
 	// Add an IP address ban
-	err = banList.Add(ctx, "192.168.1.1", time.Now().Add(time.Hour))
+	err = bl.Add(ctx, "192.168.1.1", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Add a subnet ban
-	err = banList.Add(ctx, "10.0.0.0/24", time.Now().Add(time.Hour))
+	err = bl.Add(ctx, "10.0.0.0/24", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Remove the IP address ban
-	err = banList.Remove(ctx, "192.168.1.1")
+	err = bl.Remove(ctx, "192.168.1.1")
 	require.NoError(t, err)
 
 	// Wait for all events or timeout
@@ -307,49 +299,49 @@ func TestBanListChannel(t *testing.T) {
 }
 
 func TestClearBanlist(t *testing.T) {
-	banList, _, err := setupBanList(t)
+	bl, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Add an IP
-	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
+	err = bl.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Add a subnet
-	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
+	err = bl.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Clear the ban list
-	banList.Clear()
+	bl.Clear()
 
 	// Check that the ban list is empty
-	bannedPeers := banList.bannedPeers
+	bannedPeers := bl.BannedPeers()
 	require.Empty(t, bannedPeers)
 }
 
 func TestLoadFromDatabase(t *testing.T) {
-	banList, _, err := setupBanList(t)
+	bl, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Add an IP
-	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
+	err = bl.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Add a subnet
-	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
+	err = bl.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	// Load from database
-	err = banList.loadFromDatabase(context.Background())
+	err = bl.LoadFromDatabase(context.Background())
 	require.NoError(t, err)
 
 	// Check that the ban list is loaded
-	bannedPeers := banList.bannedPeers
+	bannedPeers := bl.BannedPeers()
 	require.Equal(t, 2, len(bannedPeers))
 }
 
 // TestIPv6Compatibility tests that the ban list correctly handles IPv6 addresses with ports
 func TestIPv6Compatibility(t *testing.T) {
-	banList, _, err := setupBanList(t)
+	bl, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Test IPv6 addresses with and without ports
@@ -394,17 +386,99 @@ func TestIPv6Compatibility(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Clear ban list
-			banList.Clear()
+			bl.Clear()
 
 			// Add the ban
-			err := banList.Add(context.Background(), tc.banIP, time.Now().Add(time.Hour))
+			err := bl.Add(context.Background(), tc.banIP, time.Now().Add(time.Hour))
 			require.NoError(t, err)
 
 			// Test if the IP is banned
-			result := banList.IsBanned(tc.testIP)
+			result := bl.IsBanned(tc.testIP)
 			require.Equal(t, tc.expected, result,
 				"Expected IsBanned(%s) to be %v when %s is banned",
 				tc.testIP, tc.expected, tc.banIP)
 		})
 	}
+}
+
+// TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition is a proof of concept test
+// that verifies the fix for the panic-prone send on possibly closed channel issue.
+func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T) {
+	bl, _, err := setupBanList(t)
+	require.NoError(t, err)
+
+	const (
+		numSubscribers = 10
+		numIterations  = 1000
+	)
+
+	var operationsWg sync.WaitGroup
+	var cleanupWg sync.WaitGroup
+
+	// Create multiple subscribers
+	subscribers := make([]chan BanEvent, numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		ch := bl.Subscribe()
+		subscribers[i] = ch
+	}
+
+	// Channel to coordinate test completion
+	done := make(chan struct{})
+
+	// Goroutine to rapidly unsubscribe and close channels
+	cleanupWg.Add(1)
+	go func() {
+		defer cleanupWg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				for i := 0; i < numSubscribers; i++ {
+					if subscribers[i] != nil {
+						bl.Unsubscribe(subscribers[i])
+						subscribers[i] = nil
+					}
+				}
+				// Re-subscribe to keep the race condition possible
+				for i := 0; i < numSubscribers; i++ {
+					if subscribers[i] == nil {
+						subscribers[i] = bl.Subscribe()
+					}
+				}
+				time.Sleep(time.Microsecond)
+			}
+		}
+	}()
+
+	// Goroutine to rapidly trigger Add/Remove operations
+	operationsWg.Add(1)
+	go func() {
+		defer operationsWg.Done()
+
+		for i := 0; i < numIterations; i++ {
+			ip := fmt.Sprintf("192.168.1.%d", i%255)
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+
+			_ = bl.Add(ctx, ip, time.Now().Add(time.Hour))
+
+			time.Sleep(time.Nanosecond)
+
+			_ = bl.Remove(ctx, ip)
+
+			cancel()
+		}
+	}()
+
+	// Wait for all Add/Remove operations to complete
+	operationsWg.Wait()
+
+	// Signal cleanup goroutine to stop
+	close(done)
+	cleanupWg.Wait()
+
+	// Give time for any remaining async notification goroutines to complete
+	time.Sleep(100 * time.Millisecond)
+
+	t.Log("Test PASSED: No panics detected during race condition test")
 }

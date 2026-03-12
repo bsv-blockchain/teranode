@@ -1,6 +1,7 @@
 package util_test
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,15 +21,16 @@ import (
 // mockLogger implements ulogger.Logger for testing
 type mockLogger struct{}
 
-func (m *mockLogger) LogLevel() int                                { return 0 }
-func (m *mockLogger) SetLogLevel(string)                           {}
-func (m *mockLogger) Debugf(string, ...interface{})                {}
-func (m *mockLogger) Infof(string, ...interface{})                 {}
-func (m *mockLogger) Warnf(string, ...interface{})                 {}
-func (m *mockLogger) Errorf(string, ...interface{})                {}
-func (m *mockLogger) Fatalf(string, ...interface{})                {}
-func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger { return m }
-func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger   { return m }
+func (m *mockLogger) LogLevel() int                                   { return 0 }
+func (m *mockLogger) SetLogLevel(string)                              {}
+func (m *mockLogger) Debugf(string, ...interface{})                   {}
+func (m *mockLogger) Infof(string, ...interface{})                    {}
+func (m *mockLogger) Warnf(string, ...interface{})                    {}
+func (m *mockLogger) Errorf(string, ...interface{})                   {}
+func (m *mockLogger) Fatalf(string, ...interface{})                   {}
+func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger    { return m }
+func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger      { return m }
+func (m *mockLogger) WithTraceContext(context.Context) ulogger.Logger { return m }
 
 // createTestSettings creates a test settings object with default values
 func createTestSettings() *settings.Settings {
@@ -54,8 +56,7 @@ func TestInitSQLDB(t *testing.T) {
 		{
 			name:    "valid postgres scheme",
 			url:     "postgres://user:pass@localhost:5432/testdb",
-			wantErr: true, // Will fail because we don't have a real postgres connection
-			errType: "service error",
+			wantErr: false, // sql.Open doesn't actually connect, just validates driver
 		},
 		{
 			name:    "valid sqlite scheme",
@@ -119,29 +120,24 @@ func TestInitPostgresDB(t *testing.T) {
 	testSettings := createTestSettings()
 
 	tests := []struct {
-		name    string
-		url     string
-		wantErr bool
+		name string
+		url  string
 	}{
 		{
-			name:    "postgres with credentials and sslmode",
-			url:     "postgres://testuser:testpass@localhost:5432/testdb?sslmode=require",
-			wantErr: true, // Will fail without real postgres
+			name: "postgres with credentials and sslmode",
+			url:  "postgres://testuser:testpass@localhost:5432/testdb?sslmode=require",
 		},
 		{
-			name:    "postgres without credentials",
-			url:     "postgres://localhost:5432/testdb",
-			wantErr: true, // Will fail without real postgres
+			name: "postgres without credentials",
+			url:  "postgres://localhost:5432/testdb",
 		},
 		{
-			name:    "postgres with default sslmode",
-			url:     "postgres://user:pass@localhost:5432/testdb",
-			wantErr: true, // Will fail without real postgres
+			name: "postgres with default sslmode",
+			url:  "postgres://user:pass@localhost:5432/testdb",
 		},
 		{
-			name:    "postgres with multiple sslmode values",
-			url:     "postgres://user:pass@localhost:5432/testdb?sslmode=disable&sslmode=require",
-			wantErr: true, // Will fail without real postgres
+			name: "postgres with multiple sslmode values",
+			url:  "postgres://user:pass@localhost:5432/testdb?sslmode=disable&sslmode=require",
 		},
 	}
 
@@ -152,15 +148,12 @@ func TestInitPostgresDB(t *testing.T) {
 
 			db, err := util.InitPostgresDB(logger, storeURL, testSettings, nil)
 
-			// Since we don't have a real postgres instance, we expect connection errors
-			// but we can still test the URL parsing logic
-			assert.Error(t, err)
-			assert.Nil(t, db)
-
-			// Verify it's a service error (connection failure)
-			var teranodeErr *errors.Error
-			if assert.ErrorAs(t, err, &teranodeErr) {
-				assert.Contains(t, err.Error(), "failed to open postgres DB")
+			// sql.Open doesn't actually connect, it just validates the driver.
+			// Connection only happens on first query/ping.
+			assert.NoError(t, err)
+			assert.NotNil(t, db)
+			if db != nil {
+				db.Close()
 			}
 		})
 	}
@@ -633,7 +626,7 @@ func TestInitSQLDB_WithServicePoolSettings(t *testing.T) {
 			name:                "postgres with nil service settings",
 			url:                 "postgres://user:pass@localhost:5432/testdb",
 			servicePoolSettings: nil,
-			wantErr:             true, // Connection will fail
+			wantErr:             false,
 			description:         "Should use global defaults when service settings are nil",
 		},
 		{
@@ -642,7 +635,7 @@ func TestInitSQLDB_WithServicePoolSettings(t *testing.T) {
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns: 80,
 			},
-			wantErr:     true, // Connection will fail
+			wantErr:     false,
 			description: "Should merge service settings with global defaults",
 		},
 		{

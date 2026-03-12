@@ -55,6 +55,9 @@ func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 		return nil, errors.NewStorageError("failed to get best block header", err)
 	}
 
+	// Optimized query: Use LEFT JOIN anti-pattern instead of NOT EXISTS
+	// This allows better use of idx_parent_id index and avoids correlated subquery
+	// A block is a chain tip if no other block references it as parent
 	q := `
 		SELECT
 			b.hash,
@@ -64,10 +67,8 @@ func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 			b.subtrees_set,
 			b.processed_at IS NOT NULL as fully_processed
 		FROM blocks b
-		WHERE NOT EXISTS (
-			SELECT 1 FROM blocks children 
-			WHERE children.parent_id = b.id AND children.id != b.id
-		)
+		LEFT JOIN blocks children ON children.parent_id = b.id AND children.id != b.id
+		WHERE children.id IS NULL
 		ORDER BY b.chain_work DESC, b.id ASC
 	`
 

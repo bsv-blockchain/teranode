@@ -17,7 +17,7 @@ x-teranode-coinbase-base: &teranode-coinbase-base
     - kafka-shared
 
 x-aerospike-base: &aerospike-base
-  image: aerospike:ce-7.2.0.3_1
+  image: aerospike/aerospike-server:8.0
   networks:
     - teranode-network
   command: --config-file /etc/aerospike.conf
@@ -97,6 +97,8 @@ services:
     container_name: svnode1-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
+    profiles:
+      - svnode1
     ports:
       - "18332:18332"
     expose:

@@ -70,6 +70,8 @@ Valid states you can issue are:
 
 - `running` - Normal operation mode (processes transactions and creates blocks)
 - `idle` - Idle mode (default startup state)
+- `catchingblocks` - Catching up on blocks from the network
+- `legacysyncing` - Syncing via legacy peer connections
 
 Example to switch to RUNNING state:
 
@@ -161,6 +163,7 @@ Options:
 - `--hash` - Hash of the UTXO set / headers to process (required)
 - `--skipHeaders` - Skip processing headers
 - `--skipUTXOs` - Skip processing UTXOs
+- `--force` - Force processing even if `lastProcessed.dat` exists
 
 ### Block Data Import/Export
 
@@ -176,13 +179,150 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli export-blocks --file=<file-pa
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli import-blocks --file=<file-path>
 ```
 
-### Block Template Verification
+### Block Operations
+
+#### Check Block Template
 
 Check if the current block template is valid:
 
 ```bash
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli checkblocktemplate
 ```
+
+#### Check Block
+
+Fetch and validate a specific block by its hash:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli checkblock <blockhash>
+```
+
+#### Reconsider Block
+
+Re-validate a block that was previously marked as invalid:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli reconsiderblock <blockhash>
+```
+
+#### Reset Block Assembly
+
+Reset block assembly state, useful for clearing stuck transactions or resetting mining state:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli resetblockassembly [--full-reset]
+```
+
+Options:
+
+- `--full-reset` - Perform a full reset including clearing mempool and unmined transactions
+
+### Aerospike Kafka Connector
+
+Read Aerospike CDC (Change Data Capture) from Kafka, optionally filtering by transaction ID:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli aerospikekafkaconnector --kafka-url=<kafka-url> [options]
+```
+
+Options:
+
+- `--kafka-url` - Kafka broker URL (required, e.g., `kafka://localhost:9092/aerospike-cdc`)
+- `--txid` - Filter by 64-character hex transaction ID
+- `--namespace` - Filter by Aerospike namespace
+- `--set` - Filter by Aerospike set (default: `txmeta`)
+- `--stats-interval` - Statistics logging interval in seconds (default: 30)
+
+### UTXO Set Validation
+
+Validate a UTXO set file for integrity and correctness:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
+```
+
+Options:
+
+- `--verbose` - Enable verbose output showing individual UTXOs
+
+### Database Maintenance
+
+#### Fix Chainwork
+
+Fix incorrect chainwork values in the blockchain database:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli fix-chainwork --db-url=<database-url> [options]
+```
+
+Options:
+
+- `--db-url` - Database URL, e.g. `postgres://...` or `sqlite://...` (required)
+- `--dry-run` - Preview changes without updating database (default: true)
+- `--batch-size` - Number of updates to batch in a transaction (default: 1000)
+- `--start-height` - Starting block height (default: 650286)
+- `--end-height` - Ending block height, 0 for current tip (default: 0)
+
+**Warning**: Always run with `--dry-run=true` first to preview changes.
+
+### Benchmarking Tools
+
+Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk.
+
+#### Subtree Benchmark
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli subtreebench [options]
+```
+
+Options:
+
+- `--subtree-size` - Size of subtree (default: 1048576)
+- `--producers` - Number of producer goroutines (default: 16)
+- `--iterations` - Number of transactions to process (default: 10000000)
+- `--duration` - Duration in seconds, 0 for iteration-based (default: 0)
+- `--cpu-profile` - CPU profile output file (default: `cpu.prof`)
+- `--mem-profile` - Memory profile output file (default: `mem.prof`)
+
+#### Load Unmined Benchmark
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli loadunminedbench [options]
+```
+
+Options:
+
+- `--tx-count` - Number of transactions (default: 1000000)
+- `--full-scan` - Use full scan mode
+- `--aerospike-url` - Aerospike URL (empty uses testcontainer)
+- `--cpu-profile` - CPU profile output file (default: `loadunmined_cpu.prof`)
+- `--mem-profile` - Memory profile output file (default: `loadunmined_mem.prof`)
+
+#### Transaction Map Benchmark
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli txmapbench [options]
+```
+
+Options:
+
+- `--subtrees` - Number of subtrees (default: 100)
+- `--txs-per-subtree` - Transactions per subtree (default: 1048576)
+- `--cpu-profile` - CPU profile output file (default: `createtransactionmap_cpu.prof`)
+- `--mem-profile` - Memory profile output file (default: `createtransactionmap_mem.prof`)
+
+#### Remainder Benchmark
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli remainderbench [options]
+```
+
+Options:
+
+- `--subtrees` - Number of subtrees (default: 100)
+- `--txs-per-subtree` - Transactions per subtree (default: 1048576)
+- `--cpu-profile` - CPU profile output file (default: `processremaindertxanddequeue_cpu.prof`)
+- `--mem-profile` - Memory profile output file (default: `processremaindertxanddequeue_mem.prof`)
 
 ### Interactive Monitoring Tools
 

@@ -360,7 +360,7 @@ type SubtreeStore interface {
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings) (bool, error) {
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
@@ -496,9 +496,20 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
 	if subtreeStore != nil {
 		// this creates the txMap for the block that is also used in the validOrderAndBlessed check
-		err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency)
+		err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
 		if err != nil {
 			return false, err
+		}
+
+		// flush disk-backed txMap so all writes are readable before phase 2
+		if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
+			if flushErr := flusher.Flush(); flushErr != nil {
+				return false, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
+			}
+		}
+
+		if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
+			ReportTxMapStats(diskMap.Stats())
 		}
 	}
 
@@ -511,14 +522,22 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			currentChain:          currentChain,
 			currentBlockHeaderIDs: currentBlockHeaderIDs,
 			oldBlockIDsMap:        oldBlockIDsMap,
+			metaRegenerator:       metaRegenerator,
 		}
-		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency)
+		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs)
 		if err != nil {
 			return false, err
 		}
 	}
 
-	// reset the txMap and release the memory
+	// close and release the txMap
+	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
+		ReportTxMapStats(diskMap.Stats())
+		_ = diskMap.Close()
+		ClearTxMapStats()
+	} else if closer, ok := b.txMap.(io.Closer); ok {
+		_ = closer.Close()
+	}
 	b.txMap = nil
 
 	return true, nil
@@ -566,7 +585,7 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
 //
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
-func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.Logger, checkDuplicateTransactionsConcurrency int) error {
+func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.Logger, checkDuplicateTransactionsConcurrency int, diskMapDirs []string) error {
 	_, _, deferFn := tracing.Tracer("block").Start(ctx, "checkDuplicateTransactions",
 		tracing.WithLogMessage(logger, "[checkDuplicateTransactions][%s] called", b.String()),
 	)
@@ -591,7 +610,19 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		subtreeSize = b.SubtreeSlices[0].Size()
 	}
 
-	b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
+	if len(diskMapDirs) > 0 {
+		diskMap, diskErr := NewDiskTxMapUint64(DiskTxMapUint64Options{
+			BasePaths:      diskMapDirs,
+			Prefix:         "bv-txmap",
+			FilterCapacity: uint(b.TransactionCount),
+		})
+		if diskErr != nil {
+			return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to create disk tx map", b.String(), diskErr)
+		}
+		b.txMap = diskMap
+	} else {
+		b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
+	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
@@ -663,9 +694,10 @@ type validationDependencies struct {
 	currentChain          []*BlockHeader
 	currentBlockHeaderIDs []uint32
 	oldBlockIDsMap        *txmap.SyncedMap[chainhash.Hash, []uint32]
+	metaRegenerator       SubtreeMetaRegeneratorI // optional: nil means no regeneration
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int, diskMapDirs []string) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed",
 		tracing.WithLogMessage(logger, "[validOrderAndBlessed][%s] called", b.String()),
 	)
@@ -675,10 +707,30 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
+	var psMap ParentSpendsMap
+	if len(diskMapDirs) > 0 {
+		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
+			BasePaths:      diskMapDirs,
+			Prefix:         "bv-parentspends",
+			FilterCapacity: uint(b.TransactionCount * 3),
+		})
+		if diskErr != nil {
+			return errors.NewProcessingError("[validOrderAndBlessed][%s] failed to create disk parent spends map", b.String(), diskErr)
+		}
+		psMap = diskMap
+		defer func() {
+			ReportParentSpendsMapStats(diskMap.Stats())
+			_ = diskMap.Close()
+			ClearParentSpendsMapStats()
+		}()
+	} else {
+		psMap = NewSplitSyncedParentMap(4096, b.TransactionCount*3)
+	}
+
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: b.buildBlockHeaderHashesMap(deps.currentChain),
 		currentBlockHeaderIDsMap:    b.buildBlockHeaderIDsMap(deps.currentBlockHeaderIDs),
-		parentSpendsMap:             NewSplitSyncedParentMap(4096),
+		parentSpendsMap:             psMap,
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
@@ -708,13 +760,21 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	var (
 		subtreeMetaSlice    *subtreepkg.Meta
 		subtreeHash         = subtree.RootHash()
-		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
+		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		err                 error
 	)
 
-	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.Meta, error) {
-		return b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
-	}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
+	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
+
+	// Attempt regeneration if meta not found and regenerator is available
+	if err != nil && deps.metaRegenerator != nil {
+		logger.Warnf("[validateSubtree][%s][%s:%d] subtree meta not found, attempting regeneration", b.String(), subtreeHash.String(), sIdx)
+
+		subtreeMetaSlice, err = deps.metaRegenerator.RegenerateMeta(ctx, subtreeHash, subtree)
+		if err == nil {
+			logger.Warnf("[validateSubtree][%s][%s:%d] successfully regenerated subtree meta", b.String(), subtreeHash.String(), sIdx)
+		}
+	}
 
 	// a subtreeMetaSlice is required for further block validation, so if we cannot get it, we return an error
 	if err != nil {
@@ -784,7 +844,7 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 type validationContext struct {
 	currentBlockHeaderHashesMap map[chainhash.Hash]struct{}
 	currentBlockHeaderIDsMap    map[uint32]struct{}
-	parentSpendsMap             *SplitSyncedParentMap
+	parentSpendsMap             ParentSpendsMap
 }
 
 func (b *Block) buildBlockHeaderHashesMap(currentChain []*BlockHeader) map[chainhash.Hash]struct{} {
@@ -1166,6 +1226,33 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// TODO something with conflicts
 
 	return nil
+}
+
+// SubtreesLoaded checks if subtrees are loaded and valid.
+// This method is safe for concurrent use.
+func (b *Block) SubtreesLoaded() bool {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+
+	if len(b.SubtreeSlices) != len(b.Subtrees) || len(b.SubtreeSlices) == 0 {
+		return false
+	}
+
+	for _, subtree := range b.SubtreeSlices {
+		if subtree == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// GetSubtreeSlicesCount returns the number of loaded subtree slices.
+// This method is safe for concurrent use.
+func (b *Block) GetSubtreeSlicesCount() int {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+	return len(b.SubtreeSlices)
 }
 
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {

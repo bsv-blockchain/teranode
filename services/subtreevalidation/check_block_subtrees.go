@@ -124,9 +124,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	} else if block.TransactionCount > 0 && len(block.Subtrees) > 0 {
 		// Calculate exact txs per subtree using block metadata
 		txsPerSubtree := int(block.TransactionCount / uint64(len(block.Subtrees)))
-		subtreesBatchSize = txBatchSize / txsPerSubtree
-		if subtreesBatchSize == 0 {
-			subtreesBatchSize = 1 // Minimum 1 subtree per batch
+		if txsPerSubtree == 0 {
+			subtreesBatchSize = 1
+		} else {
+			subtreesBatchSize = txBatchSize / txsPerSubtree
+			if subtreesBatchSize == 0 {
+				subtreesBatchSize = 1 // Minimum 1 subtree per batch
+			}
 		}
 	} else {
 		// Fallback if metadata not available (shouldn't happen)
@@ -261,7 +265,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					}
 
 					// Process transactions directly from the stream while storing to disk
-					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx])
+					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah)
 					_ = countingBody.Close()
 
 					// Track bytes downloaded from peer after stream is consumed
@@ -362,7 +366,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				validator.WithIgnoreLocked(true),
 			)
 			if err != nil {
-				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
+				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
 				revalidateSubtreesMutex.Lock()
 				revalidateSubtrees = append(revalidateSubtrees, subtreeHash)
 				revalidateSubtreesMutex.Unlock()
@@ -463,7 +467,7 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *sub
 // processSubtreeDataStream downloads subtreeData and simultaneously stores to disk while parsing transactions.
 // PHASE 1: Concurrent streaming - eliminates storage read-back by writing to disk while parsing.
 func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreepkg.Subtree,
-	body io.ReadCloser, allTransactions *[]*bt.Tx) error {
+	body io.ReadCloser, allTransactions *[]*bt.Tx, dah uint32) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processSubtreeDataStream",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[processSubtreeDataStream] called for subtree %s", subtree.RootHash().String()),
@@ -478,7 +482,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 
 	// Goroutine to write to storage concurrently
 	go func() {
-		err := u.subtreeStore.SetFromReader(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, pr)
+		err := u.subtreeStore.SetFromReader(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, pr, options.WithDeleteAt(dah))
 		storeDone <- err
 		// If storage failed, close pipe writer to unblock any pending writes
 		// This prevents deadlock when SetFromReader returns an error without fully draining the pipe reader

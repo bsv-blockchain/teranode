@@ -14,7 +14,8 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // Options represents the complete set of configuration options for blob operations.
@@ -52,6 +53,11 @@ type Options struct {
 	// When true, the store will never create .dah files or participate in DAH-based cleanup
 	// This is useful for external stores where lifecycle management is handled by other systems
 	DisableDAH bool
+	// BlobDeletionScheduler is used to schedule blob deletions via blockchain service (StoreOption)
+	BlobDeletionScheduler BlobDeletionScheduler
+	// StoreType identifies which blob store this is (StoreOption)
+	// Used by blockchain service to identify which store this is in the deletion queue
+	StoreType storetypes.BlobStoreType
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -134,6 +140,22 @@ func WithHashPrefix(length int) StoreOption {
 func WithDisableDAH(disable bool) StoreOption {
 	return func(s *Options) {
 		s.DisableDAH = disable
+	}
+}
+
+// WithBlobDeletionScheduler sets the blob deletion scheduler (typically a blockchain client).
+func WithBlobDeletionScheduler(scheduler BlobDeletionScheduler) StoreOption {
+	return func(s *Options) {
+		s.BlobDeletionScheduler = scheduler
+	}
+}
+
+// WithStoreType sets the blob store type enum value for pruner scheduling.
+// The store type (0=TXSTORE, 1=SUBTREESTORE, etc.) allows the pruner to look up
+// the blob store URL from settings, enabling distributed deployments.
+func WithStoreType(storeType storetypes.BlobStoreType) StoreOption {
+	return func(s *Options) {
+		s.StoreType = storeType
 	}
 }
 
@@ -344,7 +366,7 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	if len(o.Filename) > 0 {
 		filename = o.Filename
 	} else {
-		filename = utils.ReverseAndHexEncodeSlice(key)
+		filename = util.ReverseAndHexEncodeSlice(key)
 	}
 
 	// For negative HashPrefix, take characters from the end

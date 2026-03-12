@@ -203,6 +203,14 @@ type MessageListeners struct {
 	// message.
 	OnSendHeaders func(p *Peer, msg *wire.MsgSendHeaders)
 
+	// OnCreateStream is invoked when a peer receives a createstream message
+	// as the first message on a new inbound connection.
+	OnCreateStream func(p *Peer, msg *wire.MsgCreateStream)
+
+	// OnStreamAck is invoked when a peer receives a streamack message
+	// confirming a stream was accepted.
+	OnStreamAck func(p *Peer, msg *wire.MsgStreamAck)
+
 	// OnRead is invoked when a peer receives a bitcoin message.  It
 	// consists of the number of bytes read, the message, and whether or not
 	// an error in the read occurred.  Typically, callers will opt to use
@@ -521,6 +529,11 @@ type Peer struct {
 	// teranode specific fields
 	logger   ulogger.Logger
 	settings *settings.Settings
+
+	// multistream fields (protected by flagsMtx)
+	associationID []byte
+	association   *Association
+	streamType    wire.StreamType
 }
 
 // String returns the peer's address and directionality as a human-readable
@@ -686,6 +699,58 @@ func (p *Peer) UserAgent() string {
 	p.flagsMtx.Unlock()
 
 	return userAgent
+}
+
+// AssociationID returns the multistream association ID for this peer.
+func (p *Peer) AssociationID() []byte {
+	p.flagsMtx.Lock()
+	id := p.associationID
+	p.flagsMtx.Unlock()
+	return id
+}
+
+// SetAssociationID sets the multistream association ID for this peer.
+func (p *Peer) SetAssociationID(id []byte) {
+	p.flagsMtx.Lock()
+	p.associationID = id
+	p.flagsMtx.Unlock()
+}
+
+// AssociationRef returns the Association this peer belongs to, or nil.
+func (p *Peer) AssociationRef() *Association {
+	p.flagsMtx.Lock()
+	a := p.association
+	p.flagsMtx.Unlock()
+	return a
+}
+
+// SetAssociation sets the Association this peer belongs to.
+func (p *Peer) SetAssociation(a *Association) {
+	p.flagsMtx.Lock()
+	p.association = a
+	p.flagsMtx.Unlock()
+}
+
+// StreamType returns the stream type for this peer within its association.
+func (p *Peer) StreamType() wire.StreamType {
+	p.flagsMtx.Lock()
+	st := p.streamType
+	p.flagsMtx.Unlock()
+	return st
+}
+
+// SetStreamType sets the stream type for this peer within its association.
+func (p *Peer) SetStreamType(st wire.StreamType) {
+	p.flagsMtx.Lock()
+	p.streamType = st
+	p.flagsMtx.Unlock()
+}
+
+// IsStreamPeer returns true if this peer is a secondary stream peer
+// (not the primary GENERAL stream).
+func (p *Peer) IsStreamPeer() bool {
+	st := p.StreamType()
+	return st != wire.StreamTypeUnknown && st != wire.StreamTypeGeneral
 }
 
 // LastAnnouncedBlock returns the last announced block of the remote peer.
@@ -1454,7 +1519,18 @@ cleanup:
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
-	idleTimer := time.AfterFunc(p.settings.Legacy.PeerIdleTimeout, func() {
+	var idleTimer *time.Timer
+	idleTimer = time.AfterFunc(p.settings.Legacy.PeerIdleTimeout, func() {
+		// For multistream associations, check if any other stream has
+		// recent activity. With BlockPriority, SV routes pings to DATA1,
+		// so the GENERAL stream may be idle even when the association is
+		// alive.
+		if assoc := p.AssociationRef(); assoc != nil {
+			if assoc.HasRecentActivity(p.settings.Legacy.PeerIdleTimeout) {
+				idleTimer.Reset(p.settings.Legacy.PeerIdleTimeout)
+				return
+			}
+		}
 		reason := fmt.Sprintf("No answer from peer for %s", p.settings.Legacy.PeerIdleTimeout)
 		p.DisconnectWithInfo(reason)
 	})
@@ -1508,7 +1584,7 @@ out:
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
-					p.logger.Errorf(errMsg)
+					p.logger.Errorf("%s", errMsg)
 				}
 
 				// Push a reject message for the malformed message and disconnect
@@ -1667,6 +1743,16 @@ out:
 
 		case *wire.MsgAuthch:
 			p.handleAuthChMsg(msg)
+
+		case *wire.MsgCreateStream:
+			if p.cfg.Listeners.OnCreateStream != nil {
+				p.cfg.Listeners.OnCreateStream(p, msg)
+			}
+
+		case *wire.MsgStreamAck:
+			if p.cfg.Listeners.OnStreamAck != nil {
+				p.cfg.Listeners.OnStreamAck(p, msg)
+			}
 
 		default:
 			p.logger.Debugf("Received unhandled message of type %v from %v", rmsg.Command(), p)
@@ -1900,7 +1986,6 @@ out:
 
 			err := p.writeMessage(msg.msg, msg.encoding)
 			if err != nil {
-				// p.Disconnect("write error")
 				if p.shouldLogWriteError(err) {
 					p.logger.Errorf("Failed to send message to "+
 						"%s: %v", p, err)
@@ -1963,7 +2048,26 @@ out:
 				p.logger.Errorf("Not sending ping to %s: %v", p, err)
 				continue
 			}
-			p.QueueMessage(wire.NewMsgPing(nonce), nil)
+			msg := wire.NewMsgPing(nonce)
+
+			// With multistream associations, the stream policy determines
+			// which stream carries pings. If the policy routes pings to a
+			// different stream (e.g. DATA1 for BlockPriority) and that
+			// stream is active, skip sending here - that stream's own
+			// pingHandler will handle it. If the target stream is down,
+			// fall through so this stream sends pings as a fallback.
+			if assoc := p.AssociationRef(); assoc != nil && assoc.Policy() != "" {
+				policy := PolicyForName(assoc.Policy())
+				targetType := policy.StreamForMessage(msg)
+				if targetType != p.StreamType() {
+					stream := assoc.Stream(targetType)
+					if stream != nil && stream.Peer != nil {
+						continue
+					}
+				}
+			}
+
+			p.QueueMessage(msg, nil)
 
 		case <-p.quit:
 			break out
@@ -2080,74 +2184,14 @@ func (p *Peer) readRemoteVersionMsg() error {
 	msg, ok := remoteMsg.(*wire.MsgVersion)
 	if !ok {
 		reason := "a version message must precede all others"
-		rejectMsg := wire.NewMsgReject(msg.Command(), wire.RejectMalformed,
+		rejectMsg := wire.NewMsgReject(remoteMsg.Command(), wire.RejectMalformed,
 			reason)
 		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
 
 		return errors.NewProcessingError(reason)
 	}
 
-	// Detect self connections.
-	if !p.cfg.TstAllowSelfConnection && sentNonces.Exists(msg.Nonce) {
-		return errors.NewProcessingError("disconnecting peer connected to self")
-	}
-
-	// Negotiate the protocol version and set the services to what the remote
-	// peer advertised.
-	p.flagsMtx.Lock()
-	p.advertisedProtoVer = uint32(msg.ProtocolVersion)
-	p.protocolVersion = minUint32(p.protocolVersion, p.advertisedProtoVer)
-	p.versionKnown = true
-	p.services = msg.Services
-	p.flagsMtx.Unlock()
-	p.logger.Debugf("Negotiated protocol version %d for peer %s",
-		p.protocolVersion, p)
-
-	// Updating a bunch of stats including block based stats, and the
-	// peer's time offset.
-	p.statsMtx.Lock()
-	p.lastBlock = msg.LastBlock
-	p.startingHeight = msg.LastBlock
-	p.timeOffset = msg.Timestamp.Unix() - time.Now().Unix()
-	p.statsMtx.Unlock()
-
-	// Set the peer's ID, user agent, and potentially the flag which
-	// specifies the witness support is enabled.
-	p.flagsMtx.Lock()
-	p.id = atomic.AddInt32(&nodeCount, 1)
-	p.userAgent = msg.UserAgent
-
-	p.flagsMtx.Unlock()
-
-	// Invoke the callback if specified.
-	if p.cfg.Listeners.OnVersion != nil {
-		rejectMsg := p.cfg.Listeners.OnVersion(p, msg)
-		if rejectMsg != nil {
-			_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
-			return errors.NewProcessingError(rejectMsg.Reason)
-		}
-	}
-
-	// Notify and disconnect clients that have a protocol version that is
-	// too old.
-	//
-	// NOTE: If minAcceptableProtocolVersion is raised to be higher than
-	// wire.RejectVersion, this should send a reject packet before
-	// disconnecting.
-	if uint32(msg.ProtocolVersion) < MinAcceptableProtocolVersion {
-		// Send a reject message indicating the protocol version is
-		// obsolete and wait for the message to be sent before
-		// disconnecting.
-		reason := fmt.Sprintf("protocol version must be %d or greater",
-			MinAcceptableProtocolVersion)
-		rejectMsg := wire.NewMsgReject(msg.Command(), wire.RejectObsolete,
-			reason)
-		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
-
-		return errors.NewProcessingError(reason)
-	}
-
-	return nil
+	return p.handleVersionMsg(msg)
 }
 
 // localVersionMsg creates a version message that can be used to send to the
@@ -2231,6 +2275,14 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// Advertise if inv messages for transactions are desired.
 	msg.DisableRelayTx = p.cfg.DisableRelayTx
 
+	// Include AssociationID when multistreams is enabled.
+	if p.cfg.AllowBlockPriority {
+		assocID := p.AssociationID()
+		if len(assocID) > 0 {
+			msg.AssociationID = assocID
+		}
+	}
+
 	return msg, nil
 }
 
@@ -2245,14 +2297,95 @@ func (p *Peer) writeLocalVersionMsg() error {
 }
 
 // negotiateInboundProtocol waits to receive a version message from the peer
-// then sends our version message. If the events do not occur in that order then
-// it returns an error.
+// then sends our version message. If the first message is a CREATESTREAM
+// instead of VERSION, this is a new stream connection joining an existing
+// association - the callback is invoked and protocol negotiation is skipped.
 func (p *Peer) negotiateInboundProtocol() error {
-	if err := p.readRemoteVersionMsg(); err != nil {
+	// Read the first message - could be VERSION or CREATESTREAM.
+	remoteMsg, _, err := p.readMessage(wire.LatestEncoding)
+	if err != nil {
 		return err
 	}
 
-	return p.writeLocalVersionMsg()
+	switch msg := remoteMsg.(type) {
+	case *wire.MsgCreateStream:
+		// This is a stream connection. Invoke the callback and skip
+		// version negotiation entirely.
+		if p.cfg.Listeners.OnCreateStream != nil {
+			p.cfg.Listeners.OnCreateStream(p, msg)
+		}
+		return nil
+
+	case *wire.MsgVersion:
+		// Normal version handshake - process the version message inline
+		// (same logic as readRemoteVersionMsg but we already have the message).
+		if err := p.handleVersionMsg(msg); err != nil {
+			return err
+		}
+		return p.writeLocalVersionMsg()
+
+	default:
+		reason := "a version message must precede all others"
+		rejectMsg := wire.NewMsgReject(remoteMsg.Command(), wire.RejectMalformed, reason)
+		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
+		return errors.NewProcessingError(reason)
+	}
+}
+
+// handleVersionMsg processes a received version message. This is extracted from
+// readRemoteVersionMsg so it can be used by negotiateInboundProtocol when we
+// already have the message read.
+func (p *Peer) handleVersionMsg(msg *wire.MsgVersion) error {
+	// Detect self connections.
+	if !p.cfg.TstAllowSelfConnection && sentNonces.Exists(msg.Nonce) {
+		return errors.NewProcessingError("disconnecting peer connected to self")
+	}
+
+	// Negotiate the protocol version and set the services.
+	p.flagsMtx.Lock()
+	p.advertisedProtoVer = uint32(msg.ProtocolVersion)
+	p.protocolVersion = minUint32(p.protocolVersion, p.advertisedProtoVer)
+	p.versionKnown = true
+	p.services = msg.Services
+	p.flagsMtx.Unlock()
+	p.logger.Debugf("Negotiated protocol version %d for peer %s",
+		p.protocolVersion, p)
+
+	// Update stats.
+	p.statsMtx.Lock()
+	p.lastBlock = msg.LastBlock
+	p.startingHeight = msg.LastBlock
+	p.timeOffset = msg.Timestamp.Unix() - time.Now().Unix()
+	p.statsMtx.Unlock()
+
+	// Set peer ID, user agent, and association ID.
+	p.flagsMtx.Lock()
+	p.id = atomic.AddInt32(&nodeCount, 1)
+	p.userAgent = msg.UserAgent
+	if len(msg.AssociationID) > 0 {
+		p.associationID = msg.AssociationID
+	}
+	p.flagsMtx.Unlock()
+
+	// Invoke the callback if specified.
+	if p.cfg.Listeners.OnVersion != nil {
+		rejectMsg := p.cfg.Listeners.OnVersion(p, msg)
+		if rejectMsg != nil {
+			_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
+			return errors.NewProcessingError(rejectMsg.Reason)
+		}
+	}
+
+	// Check minimum protocol version.
+	if uint32(msg.ProtocolVersion) < MinAcceptableProtocolVersion {
+		reason := fmt.Sprintf("protocol version must be %d or greater",
+			MinAcceptableProtocolVersion)
+		rejectMsg := wire.NewMsgReject(msg.Command(), wire.RejectObsolete, reason)
+		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
+		return errors.NewProcessingError(reason)
+	}
+
+	return nil
 }
 
 // negotiateOutboundProtocol sends our version message then waits to receive a
@@ -2281,6 +2414,22 @@ func (p *Peer) negotiateOutboundProtocol() error {
 func (p *Peer) start() error {
 	p.logger.Debugf("Starting peer %s", p)
 
+	// Stream peers have already completed their protocol exchange
+	// (CREATESTREAM/STREAMACK) before AssociateConnection was called,
+	// so skip version negotiation and go straight to message handling.
+	if p.IsStreamPeer() {
+		p.flagsMtx.Lock()
+		p.versionKnown = true
+		p.flagsMtx.Unlock()
+
+		go p.stallHandler()
+		go p.inHandler()
+		go p.queueHandler()
+		go p.outHandler()
+		go p.pingHandler()
+		return nil
+	}
+
 	negotiateErr := make(chan error, 1)
 
 	go func() {
@@ -2306,6 +2455,23 @@ func (p *Peer) start() error {
 
 		return errors.NewProcessingError(reason)
 	}
+
+	// If the peer became a stream peer during negotiation (inbound
+	// CREATESTREAM), skip VERACK/PROTOCONF and go straight to message
+	// handling - stream peers don't do a version handshake.
+	if p.IsStreamPeer() {
+		p.flagsMtx.Lock()
+		p.versionKnown = true
+		p.flagsMtx.Unlock()
+
+		go p.stallHandler()
+		go p.inHandler()
+		go p.queueHandler()
+		go p.outHandler()
+		go p.pingHandler()
+		return nil
+	}
+
 	p.logger.Debugf("Connected to %s", p.Addr())
 
 	// The protocol has been negotiated successfully so start processing input
@@ -2470,6 +2636,15 @@ func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *C
 		p.na = na
 	} else {
 		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), portUint16, 0)
+	}
+
+	// Generate association ID for outbound peers when multistreams is enabled.
+	if cfg.AllowBlockPriority {
+		assocID, err := GenerateAssociationID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate association ID: %w", err)
+		}
+		p.associationID = assocID
 	}
 
 	return p, nil

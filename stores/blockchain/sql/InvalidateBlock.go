@@ -70,6 +70,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		// Block doesn't exist - this is not an error, just log it and return success
 		// This makes InvalidateBlock idempotent
 		s.logger.Warnf("InvalidateBlock: block %s does not exist, nothing to invalidate", blockHash.String())
+
 		return []chainhash.Hash{}, nil
 	}
 

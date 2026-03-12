@@ -320,11 +320,10 @@ func TestS3_TTL(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 
-	t.Run("GetDAH always returns 0", func(t *testing.T) {
-		dah, err := s3Store.GetDAH(ctx, key, fileformat.FileTypeTesting)
-
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(0), dah)
+	t.Run("GetDAH removed", func(t *testing.T) {
+		// GetDAH has been removed from the blob.Store interface
+		// DAH functionality is now centralized in the pruner service
+		t.Skip("GetDAH removed from interface - see e2e pruner tests")
 	})
 
 	t.Run("SetTTL is no-op", func(t *testing.T) {
@@ -332,10 +331,7 @@ func TestS3_TTL(t *testing.T) {
 
 		assert.NoError(t, err)
 
-		// Verify GetDAH still returns 0
-		dah, err := s3Store.GetDAH(ctx, key, fileformat.FileTypeTesting)
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(0), dah)
+		// DAH verification now done via pruner service in e2e tests
 	})
 }
 

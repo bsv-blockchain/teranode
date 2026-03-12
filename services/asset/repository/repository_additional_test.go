@@ -753,10 +753,6 @@ func (m *mockUnhealthyStore) GetIoReader(ctx context.Context, key []byte, fileTy
 	return nil, errors.NewStorageError("store is unhealthy")
 }
 
-func (m *mockUnhealthyStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, errors.NewStorageError("store is unhealthy")
-}
-
 func (m *mockUnhealthyStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	return errors.NewStorageError("store is unhealthy")
 }
@@ -821,10 +817,6 @@ func (m *mockStoreWithFailingReader) Get(ctx context.Context, key []byte, fileTy
 
 func (m *mockStoreWithFailingReader) GetReader(ctx context.Context, key []byte, fileType fileformat.FileType) (io.ReadCloser, error) {
 	return &failingReadCloser{data: []byte("test data")}, nil
-}
-
-func (m *mockStoreWithFailingReader) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, nil
 }
 
 func (m *mockStoreWithFailingReader) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
@@ -900,10 +892,6 @@ func (m *mockStoreWithShortReader) Get(ctx context.Context, key []byte, fileType
 
 func (m *mockStoreWithShortReader) GetReader(ctx context.Context, key []byte, fileType fileformat.FileType) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("not implemented")
-}
-
-func (m *mockStoreWithShortReader) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, errors.NewStorageError("not implemented")
 }
 
 func (m *mockStoreWithShortReader) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {

@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -101,11 +102,6 @@ func (s *MockTxStore) Fetch(ctx context.Context, key []byte, fileType fileformat
 // GetIoReader implements a mock method for blob.Store interface
 func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader([]byte{})), nil
-}
-
-// GetDAH implements a mock method for blob.Store interface
-func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, nil
 }
 
 // Health implements a mock method for blob.Store interface
@@ -217,6 +213,7 @@ func setupPropagationServer(t *testing.T, mockValidator validator.Interface, sto
 			blockchainClient: mockBlockchainClient,
 			txStore:          mockStore,
 			stats:            stats,
+			settings:         &settings.Settings{Policy: &settings.PolicySettings{}},
 		},
 	}
 
@@ -424,11 +421,11 @@ func TestHTTPIntegration(t *testing.T) {
 	// Create a minimal PropagationServer with just the dependencies needed for the test
 	ps := &MockPropagationServer{
 		PropagationServer: PropagationServer{
-			logger:    ulogger.New("test-logger"),
-			validator: mockValidator,
-			txStore:   mockStore,
-			// blockchainClient: &CustomMockBlockchainClient{},
+			logger:           ulogger.New("test-logger"),
+			validator:        mockValidator,
+			txStore:          mockStore,
 			blockchainClient: &blockchain.Mock{},
+			settings:         &settings.Settings{Policy: &settings.PolicySettings{}},
 		},
 	}
 

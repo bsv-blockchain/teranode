@@ -221,10 +221,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file does not have a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah)
+		// DAH is now managed centrally by pruner service, not by blob stores
 	})
 
 	t.Run("TestStore_StoreTransactionExternally - no utxos", func(t *testing.T) {
@@ -259,10 +256,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file does NOT have a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah) // DAH should be 0 as we did not set it when storing external txs
+		// DAH is now managed centrally by pruner service, not by blob stores
 	})
 }
 

@@ -149,7 +149,7 @@ func TestUnminedTransactionCleanup(t *testing.T) {
 	// Manually trigger cleanup using PreserveParentsOfOldUnminedTransactions
 	// This is the key function that actually performs the cleanup
 	t.Logf("Triggering cleanup manually with current height %d", parentPreservationCutoffHeight)
-	cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(td.Ctx, td.UtxoStore, parentPreservationCutoffHeight, td.Settings, td.Logger)
+	cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(td.Ctx, td.UtxoStore, parentPreservationCutoffHeight, "<test-hash>", td.Settings, td.Logger)
 	require.NoError(t, err)
 	t.Logf("Cleanup completed: processed %d old unmined transactions", cleanupCount)
 
@@ -407,7 +407,7 @@ func TestUnminedTransactionCleanupAerospike(t *testing.T) {
 	// Manually trigger cleanup using PreserveParentsOfOldUnminedTransactions
 	// This is the key function that actually performs the cleanup
 	t.Logf("Triggering cleanup manually with current height %d", parentPreservationCutoffHeight)
-	cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(td.Ctx, td.UtxoStore, parentPreservationCutoffHeight, td.Settings, td.Logger)
+	cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(td.Ctx, td.UtxoStore, parentPreservationCutoffHeight, "<test-hash>", td.Settings, td.Logger)
 	require.NoError(t, err)
 	t.Logf("Cleanup completed: processed %d old unmined transactions", cleanupCount)
 

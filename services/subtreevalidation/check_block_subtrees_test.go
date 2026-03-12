@@ -535,7 +535,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
 		require.NoError(t, err)
 
 		// Verify transactions were collected
@@ -556,7 +556,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 		server.subtreeStore = mockBlobStore
 
 		// Set up the mock to return an error when storing (SetFromReader is now used)
-		mockBlobStore.On("SetFromReader", mock.Anything, mock.Anything, fileformat.FileTypeSubtreeData, mock.Anything).
+		mockBlobStore.On("SetFromReader", mock.Anything, mock.Anything, fileformat.FileTypeSubtreeData, mock.Anything, mock.Anything).
 			Return(errors.NewStorageError("failed to write to storage"))
 
 		// Create test transaction
@@ -579,7 +579,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to store subtree data")
 		// With streaming approach, if storage fails, no transactions are collected
@@ -607,7 +607,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error reading transaction")
 	})
@@ -1379,11 +1379,6 @@ func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType 
 func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	args := m.Called(ctx, key, fileType, dah)
 	return args.Error(0)
-}
-
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	args := m.Called(ctx, key, fileType)
-	return args.Get(0).(uint32), args.Error(1)
 }
 
 func (m *MockBlobStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {

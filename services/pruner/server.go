@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -27,6 +28,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -35,6 +38,18 @@ import (
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 )
+
+// pruneSignal carries the block height and hash to prune up to.
+type pruneSignal struct {
+	blockHeight uint32
+	blockHash   chainhash.Hash
+}
+
+// BlobDeletionObserver is an optional callback interface for testing.
+// It allows tests to be notified when blob deletion processing completes.
+type BlobDeletionObserver interface {
+	OnBlobDeletionComplete(height uint32, successCount, failCount int64)
+}
 
 // Server implements the Pruner service which handles periodic pruner operations
 // for the UTXO store. It uses event-driven triggers: BlockPersisted notifications (primary)
@@ -54,8 +69,13 @@ type Server struct {
 	prunerService       pruner.Service
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
-	prunerCh            chan uint32
+	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
+
+	// Blob deletion
+	blobStores           map[storetypes.BlobStoreType]blob.Store
+	blobNotify           chan pruneSignal
+	blobDeletionObserver BlobDeletionObserver
 }
 
 // New creates a new Pruner server instance with the provided dependencies.
@@ -76,6 +96,9 @@ func New(
 		utxoStore:           utxoStore,
 		blockchainClient:    blockchainClient,
 		blockAssemblyClient: blockAssemblyClient,
+		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
+		pruneNotify:         make(chan pruneSignal, 1),
+		blobNotify:          make(chan pruneSignal, 1),
 		stats:               gocore.NewStat("pruner"),
 	}
 }
@@ -104,9 +127,6 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewServiceError("pruner service not available from UTXO store")
 	}
 
-	// Set persisted height getter for block persister coordination
-	s.prunerService.SetPersistedHeightGetter(s.GetLastPersistedHeight)
-
 	// Validate block trigger mode
 	blockTrigger := s.settings.Pruner.BlockTrigger
 	if blockTrigger != settings.PrunerBlockTriggerOnBlockPersisted && blockTrigger != settings.PrunerBlockTriggerOnBlockMined {
@@ -114,11 +134,13 @@ func (s *Server) Init(ctx context.Context) error {
 			settings.PrunerBlockTriggerOnBlockPersisted, settings.PrunerBlockTriggerOnBlockMined, blockTrigger)
 	}
 
+	// Blob deletion is now managed by blockchain service - no local DB needed
+
 	// Subscribe to blockchain notifications for event-driven pruning:
 	// - BlockPersisted: Triggers pruning when block persister completes (primary)
 	// - Block: Waits for mined_set=true and triggers if persister not running (fallback)
 	// Also tracks persisted height for coordination with store-level pruner safety checks
-	subscriptionCh, err := s.blockchainClient.Subscribe(ctx, "Pruner")
+	subscriptionCh, err := s.blockchainClient.Subscribe(ctx, blockchain.SubscriberPruner)
 	if err != nil {
 		return errors.NewServiceError("failed to subscribe to blockchain notifications", err)
 	}
@@ -126,6 +148,10 @@ func (s *Server) Init(ctx context.Context) error {
 	// Start a goroutine to handle blockchain notifications
 	go func() {
 		for notification := range subscriptionCh {
+			if notification == nil {
+				continue
+			}
+
 			switch notification.Type {
 			case model.NotificationType_BlockPersisted:
 				// Skip BlockPersisted notifications if using OnBlockMined trigger mode
@@ -137,43 +163,48 @@ func (s *Server) Init(ctx context.Context) error {
 				// Track persisted height for coordination with block persister
 				if notification.Metadata != nil && notification.Metadata.Metadata != nil {
 					if heightStr, ok := notification.Metadata.Metadata["height"]; ok {
-						if height, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
-							height32 := uint32(height)
-							oldHeight := s.lastPersistedHeight.Swap(height32)
+						if parsedHeight, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
+							height := uint32(parsedHeight)
+							oldHeight := s.lastPersistedHeight.Swap(height)
 
 							// Log at INFO level when Block Persister first becomes active (transition from 0)
-							if oldHeight == 0 && height32 > 0 {
-								s.logger.Infof("Block Persister is now active, pruner will follow BlockPersisted notifications (persisted height: %d)", height32)
+							if oldHeight == 0 && height > 0 {
+								s.logger.Infof("[pruner] block persister is now active (persisted height: %d)", height)
 							} else {
-								s.logger.Debugf("Updated persisted height to %d", height32)
+								s.logger.Debugf("[pruner] updated persisted height to %d", height)
 							}
 
-							// Trigger pruning when block persister completes a block
-							if height32 > s.lastProcessedHeight.Load() {
-								// Try to queue pruning (non-blocking - channel has buffer of 1)
-								select {
-								case s.prunerCh <- height32:
-									s.logger.Infof("Queued pruning for height %d from BlockPersisted notification", height32)
-								default:
-									s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", height32)
+							// Send signal to wake worker with latest height
+							if height > s.lastProcessedHeight.Load() {
+								blockHash, err := chainhash.NewHash(notification.Hash)
+								if err != nil {
+									s.logger.Warnf("Failed to parse block hash from BlockPersisted notification: %v", err)
+									continue
 								}
+
+								sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
+
+								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
+
+								// Drain old signal (if any) and replace with latest
+								select {
+								case <-s.pruneNotify:
+								default:
+								}
+								s.pruneNotify <- sig
 							}
 						}
 					}
 				}
 
 			case model.NotificationType_Block:
-				// Fallback trigger: if block persister is not running, wait for block to have mined_set=true
-				// Check if we should ignore block persister height
-				persistedHeight := s.lastPersistedHeight.Load()
-
-				// Skip Block notifications if using OnBlockPersisted trigger mode AND persister is running
+				// Skip if using OnBlockPersisted trigger mode
 				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
-					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger (persisted height: %d)", persistedHeight)
+					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger")
 					continue
 				}
 
-				// Block persister not running - wait for block to have mined_set=true before triggering
+				// Extract block hash (required for mined_set wait in processor)
 				if notification.Hash == nil {
 					s.logger.Debugf("Block notification missing hash, skipping")
 					continue
@@ -185,26 +216,31 @@ func (s *Server) Init(ctx context.Context) error {
 					continue
 				}
 
-				// Wait for block to have mined_set=true (block validation completed)
-				if !s.waitForBlockMinedStatus(ctx, blockHash) {
-					continue
-				}
-
-				// Block has mined_set=true, get its height and trigger pruning
-				state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx)
+				// Get height from blockchain client using the block hash
+				// This is the authoritative source and avoids race conditions with Block Assembly state updates
+				header, meta, err := s.blockchainClient.GetBlockHeader(ctx, blockHash)
 				if err != nil {
-					s.logger.Debugf("Failed to get block assembly state on Block notification: %v", err)
+					s.logger.Debugf("Failed to get block header for Block notification hash %s: %v", blockHash, err)
 					continue
 				}
+				if header == nil || meta == nil {
+					s.logger.Debugf("Block notification for hash %s has no header/meta", blockHash)
+					continue
+				}
+				height := meta.Height
 
-				if state.CurrentHeight > s.lastProcessedHeight.Load() {
-					// Try to queue pruning (non-blocking - channel has buffer of 1)
+				// Send signal to wake worker - processor will wait for mined_set if block assembly is running
+				if height > s.lastProcessedHeight.Load() {
+					sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
+
+					s.logger.Infof("[pruner][%s:%d] notified from Block notification", blockHash.String(), height)
+
+					// Drain old signal (if any) and replace with latest
 					select {
-					case s.prunerCh <- state.CurrentHeight:
-						s.logger.Infof("Queued pruning for height %d from Block notification (mined_set=true)", state.CurrentHeight)
+					case <-s.pruneNotify:
 					default:
-						s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", state.CurrentHeight)
 					}
+					s.pruneNotify <- sig
 				}
 			}
 		}
@@ -233,9 +269,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	// Initialize pruner channel (buffer of 1 to prevent blocking while ensuring only one pruner)
-	s.prunerCh = make(chan uint32, 1)
-
 	// Start the pruner service (Aerospike or SQL)
 	if s.prunerService != nil {
 		s.prunerService.Start(ctx)
@@ -243,6 +276,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start pruner processor goroutine
 	go s.prunerProcessor(ctx)
+
+	// Trigger initial pruning if there's work to do
+	// This ensures the pruner starts working immediately on startup
+	// rather than waiting for the next block notification
+	go s.triggerInitialPruning(ctx)
+
+	// Start blob deletion worker
+	go s.blobDeletionWorker()
+
+	// Start blob deletion metrics updater
+	go s.updateBlobDeletionMetrics()
 
 	// Note: Polling worker not needed - pruning is triggered by:
 	// 1. BlockPersisted notifications (when block persister is running)
@@ -259,6 +303,46 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	return nil
+}
+
+// triggerInitialPruning sends an initial pruning signal on startup if there's work to do.
+func (s *Server) triggerInitialPruning(ctx context.Context) {
+	var currentHeight uint32
+	var blockHash chainhash.Hash
+
+	blockTrigger := s.settings.Pruner.BlockTrigger
+
+	switch blockTrigger {
+	case settings.PrunerBlockTriggerOnBlockPersisted:
+		currentHeight = s.lastPersistedHeight.Load()
+	case settings.PrunerBlockTriggerOnBlockMined:
+		tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil || tipHeader == nil || tipMeta == nil {
+			s.logger.Warnf("[pruner] failed to get best block header for initial pruning: %v", err)
+			return
+		}
+		currentHeight = tipMeta.Height
+		blockHash = *tipHeader.Hash()
+	}
+
+	if currentHeight == 0 {
+		s.logger.Infof("[pruner] no initial pruning needed (current height: 0)")
+		return
+	}
+
+	if currentHeight <= s.lastProcessedHeight.Load() {
+		s.logger.Debugf("[pruner] no initial pruning needed (current height: %d, last processed: %d)", currentHeight, s.lastProcessedHeight.Load())
+		return
+	}
+
+	sig := pruneSignal{blockHeight: currentHeight, blockHash: blockHash}
+	select {
+	case s.pruneNotify <- sig:
+		s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", blockHash.String(), currentHeight, blockTrigger)
+	case <-time.After(5 * time.Second):
+		s.logger.Warnf("[pruner] failed to queue initial pruning request (timeout)")
+	case <-ctx.Done():
+	}
 }
 
 // Stop gracefully shuts down the pruner service. Context cancellation will stop
@@ -350,9 +434,8 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *pruner_api.EmptyMessage) (*p
 	}, errors.WrapGRPC(err)
 }
 
-// GetLastPersistedHeight returns the last known block height that has been persisted
-// by the block persister service. This is used to coordinate cleanup operations to
-// avoid deleting data that the block persister still needs.
-func (s *Server) GetLastPersistedHeight() uint32 {
-	return s.lastPersistedHeight.Load()
+// SetBlobDeletionObserver sets an optional observer for blob deletion completion events.
+// This is primarily used for testing to synchronize test execution with deletion processing.
+func (s *Server) SetBlobDeletionObserver(observer BlobDeletionObserver) {
+	s.blobDeletionObserver = observer
 }

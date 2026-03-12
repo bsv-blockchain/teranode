@@ -16,11 +16,11 @@ func TestNewSplitSyncedParentMap(t *testing.T) {
 
 		require.NotNil(t, m)
 		require.Equal(t, buckets, m.nrOfBuckets)
-		require.Len(t, m.m, int(buckets))
+		require.Len(t, m.buckets, int(buckets))
 
 		// Verify all buckets are initialized
 		for i := uint16(0); i < buckets; i++ {
-			require.NotNil(t, m.m[i])
+			require.NotNil(t, m.buckets[i].m)
 		}
 	})
 
@@ -29,7 +29,7 @@ func TestNewSplitSyncedParentMap(t *testing.T) {
 
 		require.NotNil(t, m)
 		require.Equal(t, uint16(1), m.nrOfBuckets)
-		require.Len(t, m.m, 1)
+		require.Len(t, m.buckets, 1)
 	})
 
 	t.Run("creates map with 256 buckets", func(t *testing.T) {
@@ -37,7 +37,15 @@ func TestNewSplitSyncedParentMap(t *testing.T) {
 
 		require.NotNil(t, m)
 		require.Equal(t, uint16(256), m.nrOfBuckets)
-		require.Len(t, m.m, 256)
+		require.Len(t, m.buckets, 256)
+	})
+
+	t.Run("creates map with pre-allocated capacity", func(t *testing.T) {
+		m := NewSplitSyncedParentMap(16, 1600)
+
+		require.NotNil(t, m)
+		require.Equal(t, uint16(16), m.nrOfBuckets)
+		require.Len(t, m.buckets, 16)
 	})
 }
 
@@ -262,12 +270,7 @@ func TestSplitSyncedParentMap_BucketDistribution(t *testing.T) {
 		// Check that multiple buckets have entries (not all in one bucket)
 		bucketsWithEntries := 0
 		for i := uint16(0); i < numBuckets; i++ {
-			count := 0
-			m.m[i].Range(func(_, _ interface{}) bool {
-				count++
-				return true
-			})
-			if count > 0 {
+			if m.buckets[i].m.Count() > 0 {
 				bucketsWithEntries++
 			}
 		}

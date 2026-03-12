@@ -260,7 +260,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		currentBlockHeaderIDs := []uint32{}
 
 		// This should hit many validation paths
-		valid, err := block.Valid(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, currentChain, currentBlockHeaderIDs, settings)
+		valid, err := block.Valid(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, currentChain, currentBlockHeaderIDs, settings, nil)
 		// May pass or fail, but we're testing coverage
 		_ = valid
 		_ = err
@@ -292,7 +292,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should fail validation (may hit difficulty or timestamp validation)
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 		assert.False(t, valid)
 		assert.Error(t, err) // Just verify it fails - the specific error depends on validation order
 	})
@@ -316,7 +316,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should hit the nil coinbase validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 		assert.False(t, valid)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no coinbase tx")
@@ -349,7 +349,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should hit the median timestamp validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), currentChain, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), currentChain, []uint32{}, tSettings, nil)
 		// May pass or fail, but we're testing the median timestamp code path
 		_ = valid
 		_ = err
@@ -374,7 +374,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should hit the coinbase height validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 		// Will likely fail due to height mismatch, but we're testing the code path
 		_ = valid
 		_ = err
@@ -402,7 +402,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		subtreeStore := &mockSubtreeStore{shouldError: true} // Empty store
 
 		// This should hit the subtree validation path
-		valid, err := block.Valid(ctx, logger, subtreeStore, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, subtreeStore, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 		// Will likely fail due to missing subtree, but we're testing the code path
 		_ = valid
 		_ = err
@@ -425,7 +425,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should skip median timestamp validation due to empty chain
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 		// Should hit the empty chain path
 		_ = valid
 		_ = err
@@ -1176,7 +1176,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, settings)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, currentChain, currentChainIDs, settings, nil)
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -1248,7 +1248,7 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 		123, 0, 0)
 	require.NoError(t, err)
 
-	err = b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, tSettings.Block.CheckDuplicateTransactionsConcurrency)
+	err = b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, tSettings.Block.CheckDuplicateTransactionsConcurrency, nil)
 	_ = err // To stop lint warning
 }
 
@@ -1786,7 +1786,7 @@ func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "txMap is nil")
 	})
@@ -1820,7 +1820,7 @@ func TestBlock_ValidOrderAndBlessed_WithSubtrees(t *testing.T) {
 			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
 		require.NoError(t, err) // Should succeed with empty subtrees
 	})
 }
@@ -2063,7 +2063,7 @@ func TestBlock_Valid_MoreCoverage(t *testing.T) {
 
 		// Call with txMetaStore to trigger validOrderAndBlessed path
 		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 
 		// This might error due to missing subtrees, but we're testing the path
 		_ = valid
@@ -2296,7 +2296,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with nil subtreeStore to skip the subtree check
 		valid, err := block.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 
 		// Should succeed because we're skipping most validation
 		require.NoError(t, err)
@@ -2304,7 +2304,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with subtreeStore but no txMetaStore to test different paths
 		valid, err = block.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 
 		// This will error due to missing subtrees but tests the path
 		_ = valid
@@ -2312,7 +2312,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with txMetaStore to trigger validOrderAndBlessed
 		valid, err = block.Valid(ctx, logger, nil, txMetaStore, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 
 		_ = valid
 		_ = err
@@ -2419,14 +2419,14 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		// Test with only subtreeStore
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 		_, err = block.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		// Will error but exercises the subtree validation path
 		_ = err
 
 		// Test checkBlockRewardAndFees path with height > 0
 		block.Height = 100
 		_, err = block.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		// Will error but exercises checkBlockRewardAndFees path
 		_ = err
 	})
@@ -2485,7 +2485,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should now trigger validateSubtree function
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
 		// Will likely error due to missing metadata but exercises the validateSubtree path
 		_ = err
 	})
@@ -2546,7 +2546,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This exercises more complex validation paths
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
 		// Will error but exercises multiple validation functions
 		_ = err
 	})
@@ -2582,7 +2582,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 
 		block1.SubtreeSlices = []*subtreepkg.Subtree{subtree}
 		_, err = block1.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		_ = err // Exercises checkBlockRewardAndFees path safely
 
 		// Test path 2: GetAndValidateSubtrees path
@@ -2594,7 +2594,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
 		_, err = block2.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		_ = err // Exercises GetAndValidateSubtrees path
 
 		// Test path 3: validOrderAndBlessed path with txMetaStore
@@ -2602,7 +2602,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		require.NoError(t, err)
 		txMetaStore := createTestUTXOStore(t)
 		_, err = block3.Valid(ctx, logger, nil, txMetaStore, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		_ = err // Exercises validOrderAndBlessed path
 
 		// Test path 4: CheckMerkleRoot path
@@ -2617,7 +2617,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 
 		block4.SubtreeSlices = []*subtreepkg.Subtree{subtree2}
 		_, err = block4.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			[]*BlockHeader{}, []uint32{}, tSettings)
+			[]*BlockHeader{}, []uint32{}, tSettings, nil)
 		_ = err // Exercises CheckMerkleRoot path
 	})
 
@@ -2678,7 +2678,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		// This should exercise deep validation paths including:
 		// - validateSubtree with multiple nodes
 		// - validateTransaction for each transaction
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
 		_ = err // Will error but exercises many code paths
 	})
 
@@ -2708,7 +2708,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		block.SubtreeSlices = []*subtreepkg.Subtree{subtree1, subtree2}
 
 		// Test checkDuplicateTransactions
-		err = block.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, tSettings.Block.CheckDuplicateTransactionsConcurrency)
+		err = block.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, tSettings.Block.CheckDuplicateTransactionsConcurrency, nil)
 		assert.Error(t, err) // Should detect duplicates
 		assert.Contains(t, err.Error(), "duplicate transaction")
 	})
@@ -4091,7 +4091,7 @@ func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
 		}
 
 		// This should pass validation - coinbase placeholder is in correct position
-		err = block.validOrderAndBlessed(ctx, logger, deps, 1)
+		err = block.validOrderAndBlessed(ctx, logger, deps, 1, nil)
 		// Note: this will likely fail on other validation checks, but it should pass the coinbase placeholder check
 		_ = err
 	})
@@ -4134,7 +4134,7 @@ func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
 
 		// This should fail the coinbase placeholder check
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings, nil)
 		require.Error(t, err)
 		require.False(t, valid)
 		assert.Contains(t, err.Error(), "first transaction in first subtree is not a coinbase placeholder")
@@ -4184,7 +4184,7 @@ func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
 
 		// This should fail validation - coinbase placeholder must be in first subtree, first position
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings, nil)
 		require.Error(t, err)
 		require.False(t, valid)
 		assert.Contains(t, err.Error(), "first transaction in first subtree is not a coinbase placeholder")
@@ -4216,7 +4216,7 @@ func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
 		// With empty subtree slices, the validation should pass this check
 		// (it will fail on other validations)
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings)
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockHeader{}, []uint32{}, tSettings, nil)
 		_ = valid
 		_ = err
 		// The coinbase placeholder check should be skipped for empty subtrees

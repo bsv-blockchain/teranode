@@ -26,7 +26,7 @@ import (
 //
 // This ensures parent transactions remain available for future resubmissions of the unmined transactions.
 // Returns the number of transactions whose parents were processed and any error encountered.
-func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, blockHeight uint32, settings *settings.Settings, logger ulogger.Logger) (int, error) {
+func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, blockHeight uint32, blockHashStr string, settings *settings.Settings, logger ulogger.Logger) (int, error) {
 	// Input validation
 	if s == nil {
 		return 0, errors.NewProcessingError("store cannot be nil")
@@ -48,22 +48,20 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 	// Calculate cutoff block height
 	cutoffBlockHeight := blockHeight - settings.UtxoStore.UnminedTxRetention
 
-	logger.Infof("[PreserveParents] Starting preservation of parents for unmined transactions older than block height %d (current height %d - %d blocks retention)",
-		cutoffBlockHeight, blockHeight, settings.UtxoStore.UnminedTxRetention)
+	logger.Infof("[pruner][%s:%d] phase 1: starting parent preservation (cutoff: %d)", blockHashStr, blockHeight, cutoffBlockHeight)
 
-	// OPTIMIZATION: Use parallel partition iterator instead of sequential QueryOldUnminedTransactions
-	// This reuses the optimized GetUnminedTxIterator which already has:
-	// - Parallel partition queries (16 workers × 10 chunks = 160 concurrent operations)
-	// - TxInpoints already populated (no individual Get() calls needed!)
-	// - Batch processing (16K records per batch)
-	// Result: 100-1000x faster than sequential Get() calls
-	iterator, err := s.GetUnminedTxIterator(false)
+	// OPTIMIZATION: Use pruner-specific lightweight iterator that:
+	// - Filters server-side: only unmined txs with unminedSince in [1, cutoffBlockHeight]
+	// - Fetches minimal bins: txID, unminedSince, external, inputs (4 bins vs 9-11)
+	// - Uses parallel partition queries for throughput
+	// Result: 90-99%+ bandwidth reduction vs full iterator when mempool is large
+	iterator, err := s.GetPrunableUnminedTxIterator(cutoffBlockHeight)
 	if err != nil {
 		return 0, errors.NewStorageError("failed to get unmined tx iterator", err)
 	}
 	defer func() {
 		if closeErr := iterator.Close(); closeErr != nil {
-			logger.Warnf("[PreserveParents] Failed to close iterator: %v", closeErr)
+			logger.Warnf("[pruner][%s:%d] phase 1: failed to close iterator: %v", blockHashStr, blockHeight, closeErr)
 		}
 	}()
 
@@ -82,27 +80,24 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		}
 
 		// Process each transaction in the batch
+		// Server-side filter already ensures UnminedSince is in [1, cutoffBlockHeight]
 		for _, unminedTx := range unminedBatch {
-			// Skip special markers
 			if unminedTx.Skip {
 				continue
 			}
 
-			// Filter for old unmined transactions (UnminedSince <= cutoffBlockHeight)
-			if unminedTx.UnminedSince > 0 && unminedTx.UnminedSince <= int(cutoffBlockHeight) {
-				// TxInpoints already available - no Get() call needed!
-				if len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
-					for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
-						allParents[parentHash] = struct{}{}
-					}
-					processedCount++
+			// TxInpoints already available from the iterator
+			if unminedTx.TxInpoints != nil && len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
+				for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
+					allParents[parentHash] = struct{}{}
 				}
+				processedCount++
 			}
 		}
 	}
 
-	logger.Debugf("[PreserveParents] Found %d old unmined transactions with %d unique parent hashes to preserve",
-		processedCount, len(allParents))
+	logger.Debugf("[pruner][%s:%d] phase 1: scanned %d unmined transactions, found %d unique parents",
+		blockHashStr, blockHeight, processedCount, len(allParents))
 
 	// Preserve all parents in single batch operation
 	if len(allParents) > 0 {
@@ -116,10 +111,10 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 			return 0, errors.NewStorageError("failed to preserve parent transactions", err)
 		}
 
-		logger.Infof("[PreserveParents] Completed parent preservation: preserved %d unique parents for %d old unmined transactions (cutoff block height %d)",
-			len(parentSlice), processedCount, cutoffBlockHeight)
+		logger.Infof("[pruner][%s:%d] phase 1: preserved %d unique parents for %d old unmined transactions",
+			blockHashStr, blockHeight, len(parentSlice), processedCount)
 	} else {
-		logger.Infof("[PreserveParents] No parents to preserve for old unmined transactions (cutoff block height %d)", cutoffBlockHeight)
+		logger.Infof("[pruner][%s:%d] phase 1: no parents to preserve", blockHashStr, blockHeight)
 	}
 
 	return processedCount, nil

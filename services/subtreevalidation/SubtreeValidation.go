@@ -369,13 +369,11 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	txMeta, err = u.validatorClient.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
+	if err != nil && !errors.Is(err, errors.ErrTxConflicting) {
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
+	}
 	if err != nil {
-		if errors.Is(err, errors.ErrTxConflicting) {
-			// conflicting transaction, which has been saved, but not spent
-			u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
-		} else {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
-		}
+		u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// Not recoverable, returning processing error
@@ -634,7 +632,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
-		u.logger.Debugf(logMsg)
+		u.logger.Debugf("%s", logMsg)
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
