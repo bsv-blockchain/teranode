@@ -2498,9 +2498,10 @@ func BenchmarkCatchupWithHeaderCache(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(&testing.T{})
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(&testing.T{})
 
 		// Setup minimal mocks for benchmark
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(0)).Maybe()
 		blocks := testhelpers.CreateTestBlockChain(&testing.T{}, 100) // Smaller chain for benchmark
 		targetBlock := blocks[99]
 
