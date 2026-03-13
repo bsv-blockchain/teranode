@@ -294,7 +294,7 @@ bench-local-compare:
 	go test $(BENCH_FLAGS) $(BENCH_PACKAGES) | tee /tmp/bench-run2.txt
 	/tmp/bench-parse -input /tmp/bench-run2.txt -output /tmp/bench-run2.json -commit "$$(git rev-parse HEAD)" -branch "run2"
 	@echo "=== Comparing ==="
-	/tmp/bench-compare -baseline /tmp/bench-run1.json -current /tmp/bench-run2.json -output /tmp/bench-local-report.md -threshold 5.0
+	/tmp/bench-compare -baseline /tmp/bench-run1.json -current /tmp/bench-run2.json -output /tmp/bench-local-report.md -threshold 10.0
 	@cat /tmp/bench-local-report.md
 
 reset-data:

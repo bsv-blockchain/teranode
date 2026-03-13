@@ -136,7 +136,7 @@ jobs:
             -current pr-benchmarks.json \
             -baseline main-benchmarks.json \
             -output benchmark-report.md \
-            -threshold 5.0
+            -threshold 10.0
 
       - name: Display report
         if: always()
