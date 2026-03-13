@@ -133,6 +133,7 @@ jobs:
             [Show progress with checkboxes while working:]
             - [x] Reading PR changes
             - [ ] Analyzing code quality
+            - [ ] Reviewing documentation accuracy
             - [ ] Checking inline comments
 
             ---
@@ -171,11 +172,33 @@ jobs:
             - Logic errors or incorrect implementations
             - Performance problems with measurable impact
             - Missing error handling for likely failure cases
+            - Documentation accuracy (see Documentation Review below)
 
             **De-prioritize:**
             - Style preferences unless they violate project conventions in CLAUDE.md
             - Hypothetical edge cases without evidence they'll occur
             - Micro-optimizations without performance justification
+
+            **Documentation Review:**
+            Apply the methodology from `.claude/agents/review-docs.md` scoped to PR changes.
+
+            When the PR modifies documentation files (README.md, docs/*, CONTRIBUTING.md, ARCHITECTURE.md,
+            DESIGN.md, CHANGELOG.md, OpenAPI/Swagger specs, or significant inline doc comments/godoc):
+            - Verify factual accuracy against current code — do documented behaviors match the actual implementation?
+            - Check that code examples and snippets match actual function signatures and behavior
+            - Look for completeness gaps: missing options, edge cases, warnings, or error conditions
+            - CRITICAL: Flag cases where documentation reads well and looks correct, but the underlying code
+              behaves differently (buggy, incomplete, or different logic). These are [Critical] or [Major] severity
+              because they build false confidence. Use inline comments with the label:
+              "Documentation appears correct but misleads — implementation differs"
+
+            When the PR modifies code but NOT its related documentation:
+            - Check if existing docs (README, godoc, API specs, docs/ files) describe the changed behavior
+            - If docs exist and now contradict the code changes, flag as [Major]: "Code changed but docs not updated"
+            - If the change adds new public APIs, exported functions, or config options with no docs, flag as [Minor]
+
+            Quote exact lines from both docs and code when reporting mismatches.
+            Use severity levels: [Critical] [Major] [Minor] [Missing]
 
             Use CLAUDE.md for project conventions. Be direct, factual, and respectful
 

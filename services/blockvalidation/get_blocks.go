@@ -156,16 +156,10 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] expected %d blocks, got %d", blockUpTo.Hash().String(), len(batchHeaders), len(blocks))
 		}
 
-		// reverse the blocks to match the order of headers
-		for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
-			blocks[j], blocks[k] = blocks[k], blocks[j]
-		}
+		reverseBlocks(blocks)
 
-		// Verify each fetched block matches the expected header
-		for j, block := range blocks {
-			if block.Hash().String() != batchHeaders[j].Hash().String() {
-				return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s", blockUpTo.Hash().String(), j, batchHeaders[j].Hash().String(), block.Hash().String())
-			}
+		if err := verifyBlockHeaders(blocks, batchHeaders, blockUpTo); err != nil {
+			return err
 		}
 
 		// Immediately distribute blocks to workers
@@ -807,4 +801,22 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	// }
 
 	return block, nil
+}
+
+// reverseBlocks reverses a slice of blocks in place.
+func reverseBlocks(blocks []*model.Block) {
+	for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
+		blocks[j], blocks[k] = blocks[k], blocks[j]
+	}
+}
+
+// verifyBlockHeaders checks that each fetched block's hash matches the expected header.
+func verifyBlockHeaders(blocks []*model.Block, headers []*model.BlockHeader, blockUpTo *model.Block) error {
+	for j, block := range blocks {
+		if block.Hash().String() != headers[j].Hash().String() {
+			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s",
+				blockUpTo.Hash().String(), j, headers[j].Hash().String(), block.Hash().String())
+		}
+	}
+	return nil
 }

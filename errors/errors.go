@@ -725,7 +725,11 @@ func PublicError(err error) *Error {
 	}
 }
 
-// WrapGRPCPublic wraps an error for gRPC without exposing internal details.
+// WrapGRPCPublic wraps an error for gRPC without exposing internal structured details.
+// It includes a sanitized TError detail (code + message only) so that UnwrapGRPC
+// can reconstruct the correct application error code on the client side.
+// Structured metadata such as file paths, line numbers, function names, wrapped error
+// chains, and error data is omitted; the error message itself is preserved (UTF-8 sanitized).
 func WrapGRPCPublic(err error) error {
 	if err == nil {
 		return nil
@@ -736,7 +740,24 @@ func WrapGRPCPublic(err error) error {
 		return nil
 	}
 
-	st := status.New(ErrorCodeToGRPCCode(publicErr.code), publicErr.message)
+	// Sanitize message for valid UTF-8 to prevent gRPC/protobuf marshaling failures
+	sanitizedMsg := RemoveInvalidUTF8(publicErr.message)
+
+	st := status.New(ErrorCodeToGRPCCode(publicErr.code), sanitizedMsg)
+
+	// Attach a sanitized TError detail so clients can recover the application error code.
+	// After UTF-8 sanitization this cannot practically fail, but if it does we fall
+	// through and return the bare status (same as pre-fix behavior).
+	detail, pbErr := anypb.New(&TError{
+		Code:    publicErr.code,
+		Message: sanitizedMsg,
+	})
+	if pbErr == nil {
+		if newSt, detailsErr := st.WithDetails(detail); detailsErr == nil {
+			st = newSt
+		}
+	}
+
 	return st.Err()
 }
 

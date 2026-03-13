@@ -240,29 +240,7 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		errFn := errors.NewServiceError
-		if resp.StatusCode == http.StatusNotFound {
-			errFn = errors.NewNotFoundError
-		}
-
-		if resp.Body != nil {
-			defer func() {
-				if bodyCloseErr := resp.Body.Close(); bodyCloseErr != nil {
-					// Log the error but don't override the main return value
-				}
-			}()
-
-			b, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
-			}
-
-			if b != nil {
-				return nil, cancelFn, errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
-			}
-		}
-
-		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode)
+		return nil, cancelFn, buildHTTPError(resp, rawURL)
 	}
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
@@ -272,4 +250,29 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	}
 
 	return resp.Body, cancelFn, nil
+}
+
+// buildHTTPError constructs an appropriate error from a non-OK HTTP response.
+func buildHTTPError(resp *http.Response, rawURL string) error {
+	errFn := errors.NewServiceError
+	if resp.StatusCode == http.StatusNotFound {
+		errFn = errors.NewNotFoundError
+	}
+
+	if resp.Body != nil {
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
+		}
+
+		if b != nil {
+			return errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
+		}
+	}
+
+	return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode)
 }

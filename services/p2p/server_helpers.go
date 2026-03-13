@@ -48,18 +48,14 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Check that fromID matches the block peer ID
 	if fromID != blockMessage.PeerID {
 		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
-		if s.banManager != nil {
-			s.banManager.AddScore(fromID, ReasonProtocolViolation)
-		}
+		s.addProtocolViolation(fromID)
 		return
 	}
 
 	// Validate DataHubURL to prevent SSRF attacks
 	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
 		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		if s.banManager != nil {
-			s.banManager.AddScore(fromID, ReasonProtocolViolation)
-		}
+		s.addProtocolViolation(fromID)
 		return
 	}
 
@@ -167,18 +163,14 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	// Check that fromID matches the subtree peer ID
 	if fromID != subtreeMessage.PeerID {
 		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
-		if s.banManager != nil {
-			s.banManager.AddScore(fromID, ReasonProtocolViolation)
-		}
+		s.addProtocolViolation(fromID)
 		return
 	}
 
 	// Validate DataHubURL to prevent SSRF attacks
 	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
 		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
-		if s.banManager != nil {
-			s.banManager.AddScore(fromID, ReasonProtocolViolation)
-		}
+		s.addProtocolViolation(fromID)
 		return
 	}
 
@@ -254,6 +246,13 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 			Key:   []byte(hash.String()),
 			Value: value,
 		})
+	}
+}
+
+// addProtocolViolation records a protocol violation against a peer if the ban manager is available.
+func (s *Server) addProtocolViolation(peerID string) {
+	if s.banManager != nil {
+		s.banManager.AddScore(peerID, ReasonProtocolViolation)
 	}
 }
 
@@ -387,9 +386,7 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
-		if s.banManager != nil {
-			s.banManager.AddScore(fromID, ReasonProtocolViolation)
-		}
+		s.addProtocolViolation(fromID)
 		return
 	}
 
