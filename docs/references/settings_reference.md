@@ -33,11 +33,14 @@ Settings are stored in two files:
 
 ### Configuration System
 
-The configuration system uses a layered approach with the following priority:
+The configuration system uses a layered approach with the following priority (highest to lowest):
 
-1. `SETTING_NAME.context_name`: Context-specific override (highest priority)
-2. `SETTING_NAME.base`: General override
-3. `SETTING_NAME`: Base setting (lowest priority)
+1. Environment variable (exact setting key name, e.g., `asset_httpListenAddress=:8090`)
+2. `SETTING_NAME.full_context` (e.g., `SETTING_NAME.docker.m` — longest matching context chain wins)
+3. Progressively shorter context suffixes (e.g., `SETTING_NAME.docker` if `SETTING_NAME.docker.m` is not set)
+4. `SETTING_NAME`: Base setting (lowest priority)
+
+Context resolution strips suffixes from right to left until a match is found. There is no special `.base` suffix — the plain key name is the final fallback.
 
 ### Context Names and Suffixes
 
@@ -62,11 +65,7 @@ Suffixes are combined with base contexts using dots, e.g., `docker.m` means "mul
 
 ### Environment Variables
 
-Most settings can be configured via environment variables using the pattern:
-
-```text
-TERANODE_<SERVICE>_<SETTING_NAME>
-```
+Settings can be configured as environment variables using the exact setting key name (e.g., `asset_httpListenAddress=:8090`, `blockchain_grpcAddress=localhost:8087`). The environment variable name matches the key exactly as it appears in `settings.conf` and the settings structs. Environment variables take the highest priority and override any value in the settings files.
 
 ---
 
@@ -88,3 +87,5 @@ For detailed service-specific configuration documentation, see:
 - **[Subtree Validation](settings/services/subtreevalidation_settings.md)** - Subtree validation configuration
 - **[UTXO Persister](settings/services/utxopersister_settings.md)** - UTXO set persistence configuration
 - **[Validator](settings/services/validator_settings.md)** - Transaction validation configuration
+- **[Coinbase](settings/services/coinbase_settings.md)** - Coinbase transaction and mining reward configuration
+- **[Faucet](settings/services/faucet_settings.md)** - Test Bitcoin faucet service configuration

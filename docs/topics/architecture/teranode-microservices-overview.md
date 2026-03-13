@@ -403,7 +403,7 @@ The RPC Service provides compatibility with the Bitcoin RPC interface, allowing 
 
 **Supported RPC Commands:**
 
-- createrawtransaction, generate, getbestblockhash, getblock, sendrawtransaction, stop, version, getminingcandidate, submitminingsolution, getblockchaininfo, getinfo, getpeerinfo
+- clearbanned, createrawtransaction, generate, generatetoaddress, getbestblockhash, getblock, getblockbyheight, getblockchaininfo, getblockhash, getblockheader, getchaintips, getdifficulty, getinfo, getminingcandidate, getmininginfo, getpeerinfo, getrawmempool, getrawtransaction, help, invalidateblock, isbanned, listbanned, reconsiderblock, sendrawtransaction, setban, stop, submitminingsolution, version
 
 **Key Processes:**
 
@@ -436,13 +436,11 @@ The Blob Server is a generic datastore used for storing transactions (extended t
 
 **Supported Storage Backends:**
 
-- File System
-- Google Cloud Storage (GCS)
-- Amazon S3
-- MinIO
-- SeaweedFS
-- SQL (PostgreSQL)
-- In-memory storage
+- File System (`file://`)
+- Amazon S3 and S3-compatible services such as MinIO and SeaweedFS (`s3://`)
+- HTTP (`http://`)
+- In-memory storage (`memory://`)
+- Null/no-op (`null://`)
 
 **Key Interactions:**
 
@@ -508,7 +506,6 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 **Key Topics and Use Cases:**
 
 - `kafka_validatortxsConfig`: Used for transmitting new transaction notifications from Propagation to Validator
-- `kafka_txsConfig`: Used for forwarding valid transactions from Validator to Block Assembly
 - `kafka_txmetaConfig`: Used for sending new UTXO metadata from Validator to Subtree Validation
 - `kafka_rejectedTxConfig`: Used for notifying P2P about rejected transactions
 - `kafka_blocksConfig`: Used for propagating new blocks from P2P to Block Validation

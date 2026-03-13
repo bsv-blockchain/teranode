@@ -116,7 +116,7 @@ Teranode consists of multiple specialized services communicating via gRPC and Ka
 **Data Stores:**
 - **UTXO Store** (`stores/utxo/`): Manages unspent transaction outputs (supports Aerospike, SQL, and null backends)
 - **Blob Store** (`stores/blob/`): Stores transactions and subtrees (S3/filesystem)
-- **Blockchain Store** (`stores/blockchain/`): Block header and chain state (PostgreSQL)
+- **Blockchain Store** (`stores/blockchain/`): Block header and chain state (PostgreSQL, SQLite)
 
 ### Communication Patterns
 - **gRPC**: Service-to-service synchronous communication
