@@ -28,6 +28,8 @@ different validation scenarios from development to high-volume production enviro
 package validator
 
 import (
+	"math"
+
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/bscript/interpreter"
@@ -404,8 +406,14 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// Evaluate the calculated locks against the block being validated
 	// The transaction can only be included if both height and time requirements are met
 
-	// Check height requirement: minimum required height must be less than current block height
-	if minHeight >= int32(blockHeight) {
+	// Check height requirement: minimum required height must be less than current block height.
+	// blockHeight is uint32 but int32 conversion would wrap for values > math.MaxInt32; reject
+	// such heights as invalid since no realistic block will ever reach that range.
+	if blockHeight > math.MaxInt32 {
+		return errors.NewTxInvalidError("block height %d exceeds maximum safe int32 value", blockHeight)
+	}
+	blockHeightInt32 := int32(blockHeight)
+	if minHeight >= blockHeightInt32 {
 		return errors.NewTxInvalidError("transaction sequence lock height not satisfied: required %d, current %d", minHeight, blockHeight)
 	}
 

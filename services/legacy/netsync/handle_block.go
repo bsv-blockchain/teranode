@@ -618,16 +618,6 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 		return err
 	}
 
-	// Use a detached context that inherits cancellation from parent but not tracing values
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	defer bgCancel()
-	stop := context.AfterFunc(ctx, bgCancel)
-	defer stop()
-
-	// validate all the transactions in parallel
-	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
-	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
-
 	// These transactions arrive as part of a block, so they should be treated as valid
 	// transactions that all need to be processed. If one fails (e.g. transient Aerospike
 	// DEVICE_OVERLOAD), rolling back or cancelling all other independent transactions

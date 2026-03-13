@@ -646,5 +646,16 @@ func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, to
 		result[meta.Height-fromHeight] = meta.MedianTimePast
 	}
 
+	// If the top height is not in the database (block not yet persisted), compute its MTP
+	// on the fly from the block_time values of the preceding 11 blocks already in metas.
+	topMissing := len(metas) == 0 || metas[len(metas)-1].Height < toHeight
+	if topMissing && toHeight >= uint32(MedianTimeBlocks) {
+		computed, err := computeMTPForMissingHeight(metas, toHeight)
+		if err != nil {
+			return nil, err
+		}
+		result[toHeight-fromHeight] = computed
+	}
+
 	return result, nil
 }

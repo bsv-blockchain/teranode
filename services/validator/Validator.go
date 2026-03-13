@@ -1154,10 +1154,11 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 		return nil
 	}
 
-	// The highest MTP index we ever need is (blockHeight - 1):
+	// The highest MTP index we ever need is blockHeight:
 	//   - utxoHeights are always < blockHeight (a UTXO must exist before the spending block)
-	//   - blockMTPHeight = blockHeight - 1 (see validateTransaction for the full derivation)
-	needed := blockHeight - 1
+	//   - blockMTPHeight = blockHeight: GetMedianTimePastRange computes stored_mtp(N)
+	//     on the fly for the not-yet-persisted block N from block_time values [N-11, N-1].
+	needed := blockHeight
 
 	// Fast path: store already covers the needed height.
 	currentLen := uint32(len(v.mtpStore))
@@ -1173,6 +1174,9 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	if currentLen > mtpReorgOverlap {
 		fromHeight = currentLen - mtpReorgOverlap
 	}
+
+	isInitialLoad := currentLen == 0
+	start := time.Now()
 
 	fetched, err := v.blockchainClient.GetMedianTimePastRange(ctx, fromHeight, needed)
 	if err != nil {
@@ -1193,6 +1197,13 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 
 	// Append the new tail beyond the previously loaded range.
 	v.mtpStore = append(v.mtpStore, fetched[currentLen-fromHeight:]...)
+
+	if isInitialLoad {
+		v.logger.Infof("[Validator][EnsureMTPLoaded] initial MTP store loaded: %d entries (heights 0..%d) in %s", len(v.mtpStore), needed, time.Since(start))
+	} else {
+		v.logger.Debugf("[Validator][EnsureMTPLoaded] extended MTP store to height %d (+%d entries) in %s", needed, needed-currentLen+1, time.Since(start))
+	}
+
 	return nil
 }
 
@@ -1237,8 +1248,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// Build utxoMTPs and blockMTP from the pre-loaded mtpStore (populated by EnsureMTPLoaded).
 	//
 	// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
-	// BSV's GetMedianTimePast() at block H = median of [H-10, H] (includes H itself),
-	// so BSV MTP(H) == Teranode stored_mtp(H+1).
+	// BSV's GetMedianTimePast() at block H = median of [H-11, H-1] (per BIP113, block H
+	// itself is never included), so BSV MTP(H) == Teranode stored_mtp(H).
 	//
 	// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
 	//   = median of [nCoinHeight-11, nCoinHeight-1]
@@ -1246,14 +1257,11 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	//
 	// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
 	//   = median of [blockHeight-11, blockHeight-1]
-	//   = Teranode stored_mtp(blockHeight). However, block N's MTP is only stored
-	//   AFTER block N is persisted, so during validation stored_mtp(blockHeight) is
-	//   unavailable (returns 0). We use stored_mtp(blockHeight-1) instead, which
-	//   covers [blockHeight-12, blockHeight-2] — a 1-block-shifted approximation.
+	//   = Teranode stored_mtp(blockHeight). Block N is not yet persisted during
+	//   validation, so stored_mtp(N) is not in the DB; GetMedianTimePastRange
+	//   computes it on the fly from the block_time values of [N-11, N-1] which
+	//   ARE in the DB, and EnsureMTPLoaded stores the result at mtpStore[blockHeight].
 	blockMTPHeight := blockHeight
-	if blockHeight > 0 {
-		blockMTPHeight = blockHeight - 1
-	}
 
 	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
 	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.

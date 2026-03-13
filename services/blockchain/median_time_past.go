@@ -2,13 +2,45 @@ package blockchain
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 )
 
 // MedianTimeBlocks is the number of previous blocks used to calculate MTP (BIP113).
 // MTP is the median of the timestamps of the last 11 blocks.
 const MedianTimeBlocks = 11
+
+// computeMTPForMissingHeight computes stored_mtp(targetHeight) = median([targetHeight-11, targetHeight-1])
+// from the block_time values already present in metas, for a block that is not yet persisted to the DB.
+// This resolves the off-by-one in BIP68 block-time MTP: stored_mtp(N) is only written when block N is
+// inserted, but all predecessor blocks [N-11, N-1] are already in the database and in metas.
+// Returns 0 without error when there is insufficient data (e.g. targetHeight < 11).
+func computeMTPForMissingHeight(metas []*model.BlockHeaderMeta, targetHeight uint32) (uint32, error) {
+	if targetHeight < uint32(MedianTimeBlocks) {
+		return 0, nil
+	}
+
+	startHeight := targetHeight - uint32(MedianTimeBlocks)
+	times := make([]time.Time, 0, MedianTimeBlocks)
+	for _, meta := range metas {
+		if meta.Height >= startHeight && meta.Height < targetHeight {
+			times = append(times, time.Unix(int64(meta.BlockTime), 0))
+		}
+	}
+
+	if len(times) != MedianTimeBlocks {
+		return 0, nil
+	}
+
+	medianTime, err := model.CalculateMedianTimestamp(times)
+	if err != nil {
+		return 0, errors.NewProcessingError("failed to compute MTP for missing height %d", targetHeight, err)
+	}
+
+	return uint32(medianTime.Unix()), nil
+}
 
 // GetMedianTimePastForHeights returns the MTP for one or more block heights.
 // MTP values are read from pre-stored block metadata rather than recomputed on demand.
@@ -48,6 +80,16 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		mtpByHeight[meta.Height] = meta.MedianTimePast
 	}
 
+	// If the highest requested height is not in the database (block not yet persisted),
+	// compute its MTP on the fly from the block_time values already fetched.
+	if _, ok := mtpByHeight[maxHeight]; !ok && maxHeight >= uint32(MedianTimeBlocks) {
+		computed, err := computeMTPForMissingHeight(metas, maxHeight)
+		if err != nil {
+			return nil, err
+		}
+		mtpByHeight[maxHeight] = computed
+	}
+
 	mtps := make([]uint32, len(heights))
 	for i, height := range heights {
 		mtps[i] = mtpByHeight[height]
@@ -72,6 +114,17 @@ func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toH
 	result := make([]uint32, toHeight-fromHeight+1)
 	for _, meta := range metas {
 		result[meta.Height-fromHeight] = meta.MedianTimePast
+	}
+
+	// If the top height is not in the database (block not yet persisted), compute its MTP
+	// on the fly from the block_time values of the preceding 11 blocks already in metas.
+	topMissing := len(metas) == 0 || metas[len(metas)-1].Height < toHeight
+	if topMissing && toHeight >= uint32(MedianTimeBlocks) {
+		computed, err := computeMTPForMissingHeight(metas, toHeight)
+		if err != nil {
+			return nil, err
+		}
+		result[toHeight-fromHeight] = computed
 	}
 
 	return result, nil
