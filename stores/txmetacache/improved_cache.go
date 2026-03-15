@@ -626,7 +626,7 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 }
 
 // bucketNative implements a cache bucket with on-demand memory allocation.
-// Uses SplitSwissLockFreeMapUint64 with shard count equal to BucketsCount (compile-time constant).
+// Uses NativeSplitLockFreeMapUint64 (Go-native Swiss Tables, Go 1.24+) with shard count equal to BucketsCount.
 type bucketNative struct {
 	mu sync.RWMutex
 
@@ -635,7 +635,7 @@ type bucketNative struct {
 	chunks [][]byte
 
 	// m maps hash(k) to idx of (k, v) pair in chunks. Shard count equals BucketsCount.
-	m *swiss.SplitSwissLockFreeMapUint64
+	m *swiss.NativeSplitLockFreeMapUint64
 
 	// idx points to chunks for writing the next (k, v) pair.
 	idx uint64
@@ -674,7 +674,7 @@ func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	b.chunks = make([][]byte, maxChunksInt)
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 
 	b.Reset()
 
@@ -692,7 +692,7 @@ func (b *bucketNative) Reset() {
 
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -708,29 +708,26 @@ func (b *bucketNative) cleanLockedMap() {
 	bm := b.m
 	newItems := 0
 
-	for _, shard := range bm.Map() {
-		shard.Map().Iter(func(k uint64, v uint64) (stop bool) {
+	bm.IterAll(func(k, v uint64) (stop bool) {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
+			newItems++
+		}
+		return false
+	})
+
+	if newItems < bm.Length() {
+		bmNew := swiss.NewNativeSplitLockFreeMapUint64(newItems, uint64(BucketsCount))
+
+		bm.IterAll(func(k, v uint64) (stop bool) {
 			gen := v >> bucketSizeBits
 			idx := v & ((1 << bucketSizeBits) - 1)
-			if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
-				newItems++
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+				_ = bmNew.Put(k, v)
 			}
 			return false
 		})
-	}
-
-	if newItems < bm.Length() {
-		bmNew := swiss.NewSplitSwissLockFreeMapUint64(newItems, uint64(BucketsCount))
-		for _, shard := range bm.Map() {
-			shard.Map().Iter(func(k uint64, v uint64) (stop bool) {
-				gen := v >> bucketSizeBits
-				idx := v & ((1 << bucketSizeBits) - 1)
-				if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-					_ = bmNew.Put(k, v)
-				}
-				return false
-			})
-		}
 
 		b.m = bmNew
 	}
@@ -999,7 +996,7 @@ func (b *bucketNative) putChunk(chunk []byte) {
 func (b *bucketNative) Del(h uint64) {
 	b.mu.Lock()
 	shardIdx := h % uint64(BucketsCount)
-	b.m.Map()[shardIdx].Map().Delete(h)
+	delete(b.m.Map()[shardIdx].Map(), h)
 	b.mu.Unlock()
 }
 

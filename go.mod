@@ -188,7 +188,7 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.10
 	github.com/bsv-blockchain/go-safe-conversion v1.1.2
-	github.com/bsv-blockchain/go-tx-map v1.3.2
+	github.com/bsv-blockchain/go-tx-map v1.3.3
 	github.com/bsv-blockchain/go-wire v1.2.1
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
