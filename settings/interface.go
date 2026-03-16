@@ -11,6 +11,7 @@ import (
 const (
 	ListenModeFull       = "full"
 	ListenModeListenOnly = "listen_only"
+	ListenModeSilent     = "silent"
 )
 
 // Settings is the main configuration structure containing all Teranode settings.

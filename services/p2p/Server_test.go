@@ -1689,7 +1689,7 @@ func TestNewServer_ConfigValidation(t *testing.T) {
 			modify: func(s *settings.Settings) {
 				s.P2P.ListenMode = "invalid_mode"
 			},
-			wantErrMsg: "listen_mode must be either",
+			wantErrMsg: "listen_mode must be one of",
 		},
 	}
 
@@ -3769,6 +3769,226 @@ func TestP2PNodeConnectedEnhanced(t *testing.T) {
 */
 
 // NOTE: TestOnPeerBannedEnhanced was removed because onPeerBanned is deprecated in the new architecture.
+
+// TestSilentModeConfigValidation verifies that "silent" is accepted as a valid listen_mode
+// and that an invalid mode still produces the updated error message.
+func TestSilentModeConfigValidation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+
+	baseSettings := func() *settings.Settings {
+		return &settings.Settings{
+			Version: "1.0.0",
+			P2P: settings.P2PSettings{
+				ListenAddresses: []string{"/ip4/127.0.0.1/tcp/1234"},
+				Port:            1234,
+				BlockTopic:      "block",
+				SubtreeTopic:    "subtree",
+				RejectedTxTopic: "rejected",
+				ListenMode:      settings.ListenModeFull,
+				PrivateKey:      "privkey",
+				EnableNAT:       false,
+			},
+			ChainCfgParams: &chaincfg.Params{
+				TopicPrefix: "prefix",
+			},
+			Kafka: settings.KafkaSettings{
+				InvalidBlocks:   "invalidBlocks",
+				InvalidSubtrees: "invalidSubtrees",
+			},
+		}
+	}
+
+	t.Run("silent mode is accepted", func(t *testing.T) {
+		s := baseSettings()
+		s.P2P.ListenMode = settings.ListenModeSilent
+
+		// NewServer proceeds past validation; failure happens later at p2p client creation
+		// (invalid "privkey" hex). We only care that validation itself does not reject silent.
+		_, err := NewServer(ctx, logger, s,
+			nil, nil, nil, nil, nil, nil, nil,
+		)
+		// The error must NOT be a configuration error about listen_mode
+		if err != nil {
+			require.NotContains(t, err.Error(), "listen_mode must be one of",
+				"'silent' should pass listen_mode validation")
+		}
+	})
+
+	t.Run("invalid mode still produces updated error message", func(t *testing.T) {
+		s := baseSettings()
+		s.P2P.ListenMode = "stealth" // unknown value
+
+		_, err := NewServer(ctx, logger, s,
+			nil, nil, nil, nil, nil, nil, nil,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "listen_mode must be one of")
+		require.Contains(t, err.Error(), settings.ListenModeSilent)
+	})
+}
+
+// TestSilentModeRejectedTxHandler verifies that rejectedTxHandler returns immediately
+// in silent mode without publishing anything to the P2P network.
+func TestSilentModeRejectedTxHandler(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	s := &Server{
+		settings:            testSettings,
+		logger:              logger,
+		P2PClient:           mockP2P,
+		rejectedTxTopicName: "rejected-topic",
+	}
+
+	h := s.rejectedTxHandler(ctx)
+	err := h(&kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{Value: []byte("anything")},
+	})
+	require.NoError(t, err)
+
+	// P2P publish must never be called in silent mode
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeBlockNotification verifies that handleBlockNotification returns immediately
+// in silent mode without publishing a block announcement.
+func TestSilentModeBlockNotification(t *testing.T) {
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x1}
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:       testSettings,
+		P2PClient:      mockP2P,
+		blockTopicName: "block-topic",
+		logger:         ulogger.New("test"),
+	}
+
+	err := server.handleBlockNotification(ctx, hash)
+	require.NoError(t, err)
+
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeSubtreeNotification verifies that handleSubtreeNotification returns
+// immediately in silent mode without publishing a subtree announcement.
+func TestSilentModeSubtreeNotification(t *testing.T) {
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x2}
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:         testSettings,
+		P2PClient:        mockP2P,
+		subtreeTopicName: "subtree-topic",
+		logger:           ulogger.New("test"),
+	}
+
+	err := server.handleSubtreeNotification(ctx, hash)
+	require.NoError(t, err)
+
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeNodeStatusNotification verifies that handleNodeStatusNotification skips
+// the P2P publish in silent mode but still delivers the message to local WebSocket clients.
+func TestSilentModeNodeStatusNotification(t *testing.T) {
+	ctx := context.Background()
+	fsmState := blockchain.FSMStateRUNNING
+
+	mockBC := new(blockchain.Mock)
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, model.GenesisBlockHeaderMeta, nil).Maybe()
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	blockPersisterData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockPersisterData, 0)
+	mockBC.On("GetState", mock.Anything, "BlockPersisterHeight").Return(blockPersisterData, nil).Maybe()
+	mockBC.On("GetBlockAssemblyState", mock.Anything).Return(nil, nil).Maybe()
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.On("GetID").Return(peer.ID("silent-peer")).Maybe()
+	// Publish must NOT be called in silent mode
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	notificationCh := make(chan *notificationMsg, 1)
+	server := &Server{
+		settings:            testSettings,
+		P2PClient:           mockP2P,
+		blockchainClient:    mockBC,
+		logger:              ulogger.New("test"),
+		nodeStatusTopicName: "node-status-topic",
+		notificationCh:      notificationCh,
+		peerRegistry:        NewPeerRegistry(),
+		startTime:           time.Now(),
+	}
+
+	err := server.handleNodeStatusNotification(ctx)
+	require.NoError(t, err)
+
+	// P2P publish must not be called
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+
+	// But the notification should still be forwarded to local WebSocket clients
+	select {
+	case msg := <-notificationCh:
+		require.NotNil(t, msg, "node_status should be forwarded to WebSocket channel in silent mode")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected node_status to be forwarded to WebSocket channel but channel was empty")
+	}
+}
+
+// TestSilentModeGetNodeStatusMessageURLsSuppressed verifies that getNodeStatusMessage
+// returns empty BaseURL and PropagationURL in silent mode so the node cannot be
+// selected as a sync source by remote peers.
+func TestSilentModeGetNodeStatusMessageURLsSuppressed(t *testing.T) {
+	ctx := context.Background()
+	fsmState := blockchain.FSMStateRUNNING
+
+	mockBC := new(blockchain.Mock)
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, model.GenesisBlockHeaderMeta, nil)
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+	blockPersisterData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockPersisterData, 0)
+	mockBC.On("GetState", mock.Anything, "BlockPersisterHeight").Return(blockPersisterData, nil)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.On("GetID").Return(peer.ID("silent-peer")).Maybe()
+	mockP2P.On("GetPeers").Return([]p2pMessageBus.PeerInfo{}).Maybe()
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:            testSettings,
+		P2PClient:           mockP2P,
+		blockchainClient:    mockBC,
+		logger:              ulogger.New("test"),
+		AssetHTTPAddressURL: "https://datahub.example.com",
+		PropagationURL:      "https://propagation.example.com",
+		peerRegistry:        NewPeerRegistry(),
+		startTime:           time.Now(),
+		syncConnectionTimes: sync.Map{},
+	}
+
+	msg := server.getNodeStatusMessage(ctx)
+	require.NotNil(t, msg)
+
+	assert.Empty(t, msg.BaseURL, "BaseURL must be suppressed in silent mode")
+	assert.Empty(t, msg.PropagationURL, "PropagationURL must be suppressed in silent mode")
+	assert.Equal(t, settings.ListenModeSilent, msg.ListenMode)
+}
 
 func TestDisconnectPreExistingBannedPeersEnhanced(t *testing.T) {
 	ctx := context.Background()
