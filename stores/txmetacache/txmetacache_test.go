@@ -70,7 +70,12 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache Native", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Native)
+		nativeStoreURL, err := url.Parse("sqlitememory:///test_native")
+		require.NoError(t, err)
+		nativeUtxoStore, err := sql.New(ctx, logger, tSettings, nativeStoreURL)
+		require.NoError(t, err)
+
+		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, nativeUtxoStore, Native)
 		require.NoError(t, err)
 
 		metaCreated, err := c.Create(ctx, coinbaseTx, 100)

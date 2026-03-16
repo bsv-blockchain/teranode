@@ -639,9 +639,7 @@ func (t *TxMetaCache) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (ut
 // - Error if updating the cache for any transaction fails
 //
 // The method uses an errgroup to manage concurrent updates while properly handling errors.
-func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
-	var txMeta *meta.Data
-
+func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	g := new(errgroup.Group)
 	util.SafeSetLimit(g, 100)
 
@@ -649,7 +647,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 		hash := hash
 
 		g.Go(func() error {
-			txMeta, err = t.Get(ctx, hash)
+			txMeta, err := t.Get(ctx, hash)
 			if err != nil {
 				txMeta, err = t.utxoStore.Get(ctx, hash)
 			}
@@ -670,7 +668,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 		})
 	}
 
-	return nil
+	return g.Wait()
 }
 
 // Delete removes a transaction's metadata from the cache.
