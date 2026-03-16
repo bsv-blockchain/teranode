@@ -382,6 +382,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseLocalValidator:         getBool("useLocalValidator", false, alternativeContext...),
 			TxMetaKafkaBatchSize:      getInt("validator_txmeta_kafka_batchSize", 1024, alternativeContext...),
 			TxMetaKafkaBatchTimeoutMs: getInt("validator_txmeta_kafka_batchTimeoutMs", 5, alternativeContext...),
+			TxLockedMaxRetries:        getInt("validator_txlocked_maxRetries", 3, alternativeContext...),
 		},
 		Region: RegionSettings{
 			Name: getString("regionName", "defaultRegionName", alternativeContext...),
