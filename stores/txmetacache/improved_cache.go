@@ -275,8 +275,7 @@ type ImprovedCache struct {
 // The cache distributes data across multiple buckets to reduce lock contention,
 // with each bucket initialized according to the specified allocation strategy.
 func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
-	LogCacheSize() // log whether we are using small or large cache
-	fmt.Printf("txmetacache: using const config BucketsCount=%d MapInitialCapacity=%d\n", BucketsCount, MapInitialCapacity)
+	LogCacheConfig(BucketsCount, MapInitialCapacity)
 
 	if maxBytes <= 0 {
 		return nil, errors.NewServiceError("maxBytes must be greater than 0; got %d", maxBytes)
@@ -711,7 +710,7 @@ func (b *bucketNative) cleanLockedMap() {
 	bm.IterAll(func(k, v uint64) (stop bool) {
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
-		if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
+		if ((gen+1 == bGen || (gen == maxGen && bGen == 1)) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
 			newItems++
 		}
 		return false
@@ -723,7 +722,7 @@ func (b *bucketNative) cleanLockedMap() {
 		bm.IterAll(func(k, v uint64) (stop bool) {
 			gen := v >> bucketSizeBits
 			idx := v & ((1 << bucketSizeBits) - 1)
-			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+			if ((gen+1 == bGen || (gen == maxGen && bGen == 1)) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
 				_ = bmNew.Put(k, v)
 			}
 			return false
@@ -756,9 +755,7 @@ func (b *bucketNative) UpdateStats(s *Stats) {
 	b.mu.RUnlock()
 }
 
-func (b *bucketNative) listChunks() {
-	fmt.Println("chunks: ", b.chunks)
-}
+func (b *bucketNative) listChunks() {}
 
 func (b *bucketNative) SetMulti(keys [][]byte, values [][]byte) {
 	// we lock here once for the whole SetMulti function
@@ -778,7 +775,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return errors.NewProcessingError("[bucketUnallocated.Set] too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
+		return errors.NewProcessingError("[bucketNative.Set] too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
 	}
 
 	var kvLenBuf [4]byte
@@ -862,7 +859,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	b.currentGenCount++
 
 	// If key exists, skip (don't overwrite)
-	// SplitSwiss LockFree Map does not support overwrite, so we just skip the new value.
+	// NativeSplitLockFreeMapUint64 does not support overwrite, so we just skip the new value.
 	if !b.m.Exists(h) {
 		_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
 	}
@@ -875,8 +872,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	return nil
 }
 
-// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ ...bool) bool {
 	found := false
 	chunks := b.chunks
 
@@ -893,7 +889,7 @@ func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, sk
 		gen := v >> bucketSizeBits
 		idx := v & ((1 << bucketSizeBits) - 1)
 
-		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
+		if (gen == bGen && idx < b.idx) || ((gen+1 == bGen || (gen == maxGen && bGen == 1)) && idx >= b.idx) {
 			chunkIdx := idx / ChunkSize
 			if chunkIdx >= uint64(len(chunks)) {
 				// Corrupted data during the load from file. Just skip it.

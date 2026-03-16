@@ -17,8 +17,9 @@ const MapInitialCapacity = 10_000
 // ChunkSize defines the memory chunk size (maxValueSizeKB * 512 = ~1MB per chunk).
 const ChunkSize = maxValueSizeKB * 512
 
-// LogCacheSize logs which cache configuration is active for diagnostics.
-func LogCacheSize() {
+// LogCacheConfig logs which cache configuration is active and its bucket/capacity constants.
+func LogCacheConfig(bucketsCount, mapInitialCapacity int) {
 	logger := ulogger.NewZeroLogger("improved_cache")
 	logger.Debugf("Using improved_cache_const_small.go")
+	logger.Infof("txmetacache: BucketsCount=%d MapInitialCapacity=%d", bucketsCount, mapInitialCapacity)
 }
