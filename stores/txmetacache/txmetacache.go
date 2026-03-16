@@ -120,6 +120,10 @@ const (
 	// Suitable for long-running services with memory constraints.
 	Trimmed
 
+	// Native uses Go's native map (Swiss Tables in Go 1.24+) for the bucket index
+	// instead of the dolthub Swiss map. Recommended for general-purpose use as it
+	// benefits from Go runtime optimisations and avoids external dependencies.
+	// Offers the best read/write throughput in most workloads.
 	Native
 )
 

@@ -872,15 +872,18 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	return nil
 }
 
-func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ ...bool) bool {
+// Get retrieves a value from the bucket. Pass skipLocking=true when the caller already holds b.mu.
+func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
 	chunks := b.chunks
 
-	b.mu.RLock()
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.RLock()
+		defer b.mu.RUnlock()
+	}
 
 	v, foundInMap := b.m.Get(h)
 	if !foundInMap {
-		b.mu.RUnlock()
 		return found
 	}
 	bGen := b.gen & ((1 << genSizeBits) - 1)
@@ -893,7 +896,7 @@ func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ 
 			chunkIdx := idx / ChunkSize
 			if chunkIdx >= uint64(len(chunks)) {
 				// Corrupted data during the load from file. Just skip it.
-				goto end
+				return found
 			}
 
 			chunk := chunks[chunkIdx]
@@ -901,7 +904,7 @@ func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ 
 
 			if idx+4 >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
-				goto end
+				return found
 			}
 
 			kvLenBuf := chunk[idx : idx+4]
@@ -912,7 +915,7 @@ func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ 
 
 			if idx+keyLen+valLen >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
-				goto end
+				return found
 			}
 
 			if string(key) == string(chunk[idx:idx+keyLen]) {
@@ -925,9 +928,6 @@ func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, _ 
 			}
 		}
 	}
-end:
-
-	b.mu.RUnlock()
 
 	return found
 }
@@ -944,7 +944,7 @@ func (b *bucketNative) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //
 	for _, key := range keys {
 		prevValue = value
 		hash = xxhash.Sum64(key)
-		b.Get(&prevValue, key, hash, true, false)
+		b.Get(&prevValue, key, hash, true, true) // skipLocking=true: caller already holds b.mu write lock
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
 		_ = b.Set(key, prevValue, hash, false)
 	}
@@ -1460,7 +1460,7 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 	b.freeChunks = append(b.freeChunks, p)
 }
 
-// Check if this del startegy for Native current makes more sense?
+// Check if this del strategy for Native current makes more sense?
 func (b *bucketTrimmed) Del(h uint64) {
 	b.mu.Lock()
 	delete(b.m.Map(), h)
