@@ -946,7 +946,7 @@ func (b *bucketNative) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //
 		hash = xxhash.Sum64(key)
 		b.Get(&prevValue, key, hash, true, true) // skipLocking=true: caller already holds b.mu write lock
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
-		_ = b.Set(key, prevValue, hash, false)
+		_ = b.Set(key, prevValue, hash, true) // skipLocking=true: caller already holds b.mu write lock
 	}
 }
 
