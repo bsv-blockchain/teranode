@@ -302,6 +302,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionSubtreesSet: storeBlockOptions.SubtreesSet,
 		OptionInvalid:     storeBlockOptions.Invalid,
 		OptionID:          storeBlockOptions.ID,
+		CoinbaseBump:      block.CoinbaseBUMP,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -454,7 +455,14 @@ func (c *Client) blockFromResponse(resp *blockchain_api.GetBlockResponse) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	block.CoinbaseBUMP = resp.CoinbaseBump
+
+	return block, nil
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.
