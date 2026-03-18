@@ -73,7 +73,7 @@ func (h HexBytes) MarshalJSON() ([]byte, error) {
 
 func (h *HexBytes) UnmarshalJSON(data []byte) error {
 	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
-		return fmt.Errorf("HexBytes must be a JSON string")
+		return errors.NewInvalidArgumentError("HexBytes must be a JSON string")
 	}
 	b, err := hex.DecodeString(string(data[1 : len(data)-1]))
 	if err != nil {

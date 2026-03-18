@@ -63,7 +63,7 @@ func TestStoreBlock_CoinbaseBUMP_NilBackwardCompat(t *testing.T) {
 func TestBlock_CoinbaseBUMP_JSONSerialization(t *testing.T) {
 	t.Run("hex encoded when present", func(t *testing.T) {
 		block := &model.Block{
-			Header: &model.BlockHeader{},
+			Header:       &model.BlockHeader{},
 			CoinbaseBUMP: model.HexBytes{0xDE, 0xAD, 0xBE, 0xEF},
 		}
 
