@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"runtime"
@@ -63,6 +64,25 @@ type OutPoint struct {
 	Index uint32
 }
 
+// HexBytes is a []byte that marshals to/from JSON as a hex-encoded string.
+type HexBytes []byte
+
+func (h HexBytes) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + hex.EncodeToString(h) + `"`), nil
+}
+
+func (h *HexBytes) UnmarshalJSON(data []byte) error {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return fmt.Errorf("HexBytes must be a JSON string")
+	}
+	b, err := hex.DecodeString(string(data[1 : len(data)-1]))
+	if err != nil {
+		return err
+	}
+	*h = b
+	return nil
+}
+
 type Block struct {
 	Header           *BlockHeader          `json:"header"`
 	CoinbaseTx       *bt.Tx                `json:"coinbase_tx"`
@@ -72,6 +92,7 @@ type Block struct {
 	SubtreeSlices    []*subtreepkg.Subtree `json:"-"`
 	Height           uint32                `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 	ID               uint32                `json:"id"`
+	CoinbaseBUMP     HexBytes              `json:"coinbase_bump,omitempty"`
 
 	// local
 	hash            atomic.Pointer[chainhash.Hash]

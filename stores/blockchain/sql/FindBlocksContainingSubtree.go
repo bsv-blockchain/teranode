@@ -68,6 +68,7 @@ func (s *SQL) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chai
 		,b.subtree_count
 		,b.subtrees
 		,b.height
+		,b.coinbase_bump
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id
 		WHERE ` + subtreeSearchClause + `

@@ -311,7 +311,8 @@ INSERT INTO blocks (
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
+	,coinbase_bump
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		} else {
@@ -339,7 +340,8 @@ INSERT INTO blocks (
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+	,coinbase_bump
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
 RETURNING id
 			`
 		}
@@ -370,7 +372,8 @@ INSERT INTO blocks (
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
+	,coinbase_bump
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		} else {
@@ -398,7 +401,8 @@ INSERT INTO blocks (
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+	,coinbase_bump
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
 RETURNING id
 			`
 		}
@@ -441,6 +445,12 @@ RETURNING id
 		}
 	}
 
+	// coinbaseBump is nil for blocks without a proof (e.g., peer-received or pre-migration)
+	var coinbaseBump []byte
+	if len(block.CoinbaseBUMP) > 0 {
+		coinbaseBump = block.CoinbaseBUMP
+	}
+
 	if useCustomID {
 		// When using custom ID, the ID is the first parameter
 		rows, err = s.db.QueryContext(ctx, q,
@@ -466,6 +476,7 @@ RETURNING id
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
+			coinbaseBump,
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
@@ -491,6 +502,7 @@ RETURNING id
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
+			coinbaseBump,
 		)
 	}
 
