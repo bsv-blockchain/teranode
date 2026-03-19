@@ -276,7 +276,7 @@ BENCH_PACKAGES = \
 	./util/servicemanager \
 	./util/usql
 
-BENCH_FLAGS = -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run='^$$' -tags "testtxmetacache"
+BENCH_FLAGS = -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run='^$$' -tags "testtxmetacache"
 
 .PHONY: bench-test
 bench-test:
@@ -284,17 +284,14 @@ bench-test:
 
 .PHONY: bench-local-compare
 bench-local-compare:
-	@echo "=== Building benchmark tools ==="
-	go build -o /tmp/bench-parse ./cmd/parse-benchmarks
+	@command -v benchstat >/dev/null 2>&1 || { echo "Installing benchstat..."; go install golang.org/x/perf/cmd/benchstat@latest; }
 	go build -o /tmp/bench-compare ./cmd/compare-benchmarks
 	@echo "=== Run 1 (baseline) ==="
 	go test $(BENCH_FLAGS) $(BENCH_PACKAGES) | tee /tmp/bench-run1.txt
-	/tmp/bench-parse -input /tmp/bench-run1.txt -output /tmp/bench-run1.json -commit "$$(git rev-parse HEAD)" -branch "run1"
 	@echo "=== Run 2 (current) ==="
 	go test $(BENCH_FLAGS) $(BENCH_PACKAGES) | tee /tmp/bench-run2.txt
-	/tmp/bench-parse -input /tmp/bench-run2.txt -output /tmp/bench-run2.json -commit "$$(git rev-parse HEAD)" -branch "run2"
-	@echo "=== Comparing ==="
-	/tmp/bench-compare -baseline /tmp/bench-run1.json -current /tmp/bench-run2.json -output /tmp/bench-local-report.md -threshold 10.0
+	@echo "=== Comparing (benchstat with p-value) ==="
+	/tmp/bench-compare -baseline /tmp/bench-run1.txt -current /tmp/bench-run2.txt -output /tmp/bench-local-report.md -threshold 10.0 -alpha 0.05
 	@cat /tmp/bench-local-report.md
 
 reset-data:

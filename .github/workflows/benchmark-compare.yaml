@@ -8,7 +8,7 @@ jobs:
   benchmarks:
     name: Benchmark Comparison
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: write
@@ -22,8 +22,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.2'
+          go-version: "1.25.2"
           cache: false
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
 
       - name: Display PR branch info
         run: |
@@ -32,7 +35,7 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
-          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
+          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
             ./model \
@@ -63,30 +66,25 @@ jobs:
             ./util/usql \
             | tee pr-benchmark-output.txt
 
-      - name: Parse PR results
-        run: |
-          go run ./cmd/parse-benchmarks \
-            -input pr-benchmark-output.txt \
-            -output pr-benchmarks.json \
-            -commit "${{ github.sha }}" \
-            -branch "PR-${{ github.event.pull_request.number }}" \
-            -pr "${{ github.event.pull_request.number }}"
-
       - name: Checkout main baseline
         uses: actions/checkout@v4
         with:
           ref: main
           path: main
 
+      - name: Capture baseline SHA
+        id: baseline_sha
+        run: echo "value=$(cd main && git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Display main branch info
         run: |
           echo "Branch: main"
-          echo "Commit: $(cd main && git rev-parse HEAD)"
+          echo "Commit: ${{ steps.baseline_sha.outputs.value }}"
 
       - name: Run main benchmarks
         run: |
           cd main
-          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
+          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
             ./model \
@@ -117,26 +115,19 @@ jobs:
             ./util/usql \
             | tee ../main-benchmark-output.txt
 
-      - name: Capture baseline SHA
-        id: baseline_sha
-        run: echo "value=$(cd main && git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Parse main results
-        run: |
-          go run ./cmd/parse-benchmarks \
-            -input main-benchmark-output.txt \
-            -output main-benchmarks.json \
-            -commit "${{ steps.baseline_sha.outputs.value }}" \
-            -branch "main"
-
       - name: Compare benchmarks
         id: compare
         run: |
           go run ./cmd/compare-benchmarks \
-            -current pr-benchmarks.json \
-            -baseline main-benchmarks.json \
+            -baseline main-benchmark-output.txt \
+            -current pr-benchmark-output.txt \
             -output benchmark-report.md \
-            -threshold 10.0
+            -threshold 10.0 \
+            -alpha 0.05 \
+            -baseline-sha "${{ steps.baseline_sha.outputs.value }}" \
+            -current-sha "${{ github.sha }}" \
+            -baseline-ref "main" \
+            -current-ref "PR-${{ github.event.pull_request.number }}"
 
       - name: Display report
         if: always()
@@ -148,21 +139,21 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            pr-benchmarks.json
-            main-benchmarks.json
+            pr-benchmark-output.txt
+            main-benchmark-output.txt
             benchmark-report.md
           retention-days: 30
 
-      - name: Comment on PR
-        if: always() && github.event.pull_request.number != ''
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const body = fs.readFileSync('benchmark-report.md', 'utf8');
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: context.payload.pull_request.number,
-              body
-            });
+      # - name: Comment on PR
+      #   if: always() && github.event.pull_request.number != ''
+      #   uses: actions/github-script@v7
+      #   with:
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     script: |
+      #       const fs = require('fs');
+      #       const body = fs.readFileSync('benchmark-report.md', 'utf8');
+      #       await github.rest.issues.createComment({
+      #         ...context.repo,
+      #         issue_number: context.payload.pull_request.number,
+      #         body
+      #       });
