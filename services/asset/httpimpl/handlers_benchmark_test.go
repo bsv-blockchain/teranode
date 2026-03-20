@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -17,7 +16,7 @@ func BenchmarkGetTransactionJSON(b *testing.B) {
 	httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 	// Set up mock to return a transaction
-	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 	// Set echo context
 	echoContext.SetPath("/tx/:hash")
@@ -52,7 +51,7 @@ func BenchmarkGetTransactionBinary(b *testing.B) {
 	httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 	// Set up mock to return a transaction
-	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 	// Set echo context
 	echoContext.SetPath("/tx/:hash")
@@ -87,7 +86,7 @@ func BenchmarkGetTransactionHex(b *testing.B) {
 	httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 	// Set up mock to return a transaction
-	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+	mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 	// Set echo context
 	echoContext.SetPath("/tx/:hash")
