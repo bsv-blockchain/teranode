@@ -18,14 +18,22 @@ jobs:
           - group: model
             packages: ./model
           - group: blockassembly
-            packages: >-
-              ./services/blockassembly
-              ./services/blockassembly/mining
-              ./services/blockassembly/subtreeprocessor
+            packages: ./services/blockassembly
+          - group: mining
+            packages: ./services/blockassembly/mining
+          - group: subtreeprocessor-unit
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkDiskTxMap|BenchmarkReorg|BenchmarkQueue|BenchmarkAtomicPointer|BenchmarkTxMap|BenchmarkChannel"
+          - group: subtreeprocessor-subtree
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkDirect|BenchmarkSubtree|BenchmarkParallel|BenchmarkSequential|BenchmarkProcess"
+          - group: subtreeprocessor-heavy
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkBlockAssembler_AddTx|BenchmarkAddNode"
           - group: blockvalidation
-            packages: >-
-              ./services/blockvalidation
-              ./services/subtreevalidation
+            packages: ./services/blockvalidation
+          - group: subtreevalidation
+            packages: ./services/subtreevalidation
           - group: blockchain
             packages: ./services/blockchain/work
           - group: utxo
@@ -70,7 +78,8 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
-          go test -bench=. -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
@@ -84,7 +93,8 @@ jobs:
       - name: Run main benchmarks
         run: |
           cd main
-          go test -bench=. -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee ../main-${{ matrix.group }}.txt
