@@ -276,7 +276,7 @@ BENCH_PACKAGES = \
 	./util/servicemanager \
 	./util/usql
 
-BENCH_FLAGS = -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run='^$$' -tags "testtxmetacache"
+BENCH_FLAGS = -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=2 -run='^$$' -tags "testtxmetacache"
 
 .PHONY: bench-test
 bench-test:

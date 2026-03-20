@@ -35,35 +35,10 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
+          # Testing with blockassembly only; uncomment all packages once validated
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
-            ./errors \
-            ./model \
-            ./services/asset/httpimpl \
             ./services/blockassembly \
-            ./services/blockassembly/mining \
-            ./services/blockassembly/subtreeprocessor \
-            ./services/blockchain/work \
-            ./services/blockpersister \
-            ./services/blockvalidation \
-            ./services/legacy/bsvec \
-            ./services/legacy/bsvutil/hdkeychain \
-            ./services/legacy/netsync \
-            ./services/legacy/peer \
-            ./services/subtreevalidation \
-            ./services/validator \
-            ./stores/blob/null \
-            ./stores/blockchain/options \
-            ./stores/blockchain/sql \
-            ./stores/txmetacache \
-            ./stores/utxo \
-            ./stores/utxo/meta \
-            ./test/consensus \
-            ./ulogger \
-            ./util \
-            ./util/health \
-            ./util/servicemanager \
-            ./util/usql \
             | tee pr-benchmark-output.txt
 
       - name: Checkout main baseline
@@ -86,33 +61,7 @@ jobs:
           cd main
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
-            ./errors \
-            ./model \
-            ./services/asset/httpimpl \
             ./services/blockassembly \
-            ./services/blockassembly/mining \
-            ./services/blockassembly/subtreeprocessor \
-            ./services/blockchain/work \
-            ./services/blockpersister \
-            ./services/blockvalidation \
-            ./services/legacy/bsvec \
-            ./services/legacy/bsvutil/hdkeychain \
-            ./services/legacy/netsync \
-            ./services/legacy/peer \
-            ./services/subtreevalidation \
-            ./services/validator \
-            ./stores/blob/null \
-            ./stores/blockchain/options \
-            ./stores/blockchain/sql \
-            ./stores/txmetacache \
-            ./stores/utxo \
-            ./stores/utxo/meta \
-            ./test/consensus \
-            ./ulogger \
-            ./util \
-            ./util/health \
-            ./util/servicemanager \
-            ./util/usql \
             | tee ../main-benchmark-output.txt
 
       - name: Compare benchmarks
@@ -144,16 +93,39 @@ jobs:
             benchmark-report.md
           retention-days: 30
 
-      # - name: Comment on PR
-      #   if: always() && github.event.pull_request.number != ''
-      #   uses: actions/github-script@v7
-      #   with:
-      #     github-token: ${{ secrets.GITHUB_TOKEN }}
-      #     script: |
-      #       const fs = require('fs');
-      #       const body = fs.readFileSync('benchmark-report.md', 'utf8');
-      #       await github.rest.issues.createComment({
-      #         ...context.repo,
-      #         issue_number: context.payload.pull_request.number,
-      #         body
-      #       });
+      - name: Comment on PR
+        if: always() && github.event.pull_request.number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- benchmark-comparison-report -->';
+            const body = marker + '\n' + fs.readFileSync('benchmark-report.md', 'utf8');
+            const issue_number = context.payload.pull_request.number;
+
+            // Find existing benchmark comment
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log(`Updated existing comment ${existing.id}`);
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number,
+                body,
+              });
+              console.log('Created new comment');
+            }
