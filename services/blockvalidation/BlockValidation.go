@@ -1868,7 +1868,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	defer deferFn()
 
-	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 10_000)
+	// Use the parent block hash because the current block hasn't been committed
+	// to the blockchain store yet (AddBlock runs after checkOldBlockIDs).
+	// Using block.Hash() always returns empty results, defeating the fast-path
+	// map and forcing every entry through individual CheckBlockIsInCurrentChain
+	// gRPC calls — which is catastrophic with the SQL CTE fallback.
+	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, 10_000)
 	if err != nil {
 		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
 	}
