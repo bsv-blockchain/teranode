@@ -519,13 +519,13 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 					continue
 				}
 
-				ps.logger.Infof("read %d bytes into wire message from %s", len(b), src.String())
+				ps.logger.Debugf("read %d bytes into wire message from %s", len(b), src.String())
 				// ps.logger.Infof("wire message type: %v", msg)
 				var ok bool
 
 				msgTx, ok = msg.(*wire.MsgExtendedTx)
 				if ok {
-					ps.logger.Infof("received %d bytes from %s", len(b), src.String())
+					ps.logger.Debugf("received %d bytes from %s", len(b), src.String())
 
 					txBytes := bytes.NewBuffer(nil)
 					if err = msgTx.Serialize(txBytes); err != nil {

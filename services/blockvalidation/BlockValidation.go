@@ -705,7 +705,7 @@ func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup
 			block := block
 
 			g.Go(func() error {
-				u.logger.Infof("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
+				u.logger.Debugf("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
 
 				if err := u.updateSubtreesDAH(ctx, block); err != nil {
 					u.logger.Errorf("[BlockValidation:start] failed to update subtrees DAH: %s", err)
