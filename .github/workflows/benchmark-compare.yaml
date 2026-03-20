@@ -35,10 +35,16 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
-          # Testing with blockassembly only; uncomment all packages once validated
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
+            ./model \
             ./services/blockassembly \
+            ./services/blockassembly/mining \
+            ./services/blockassembly/subtreeprocessor \
+            ./services/blockchain/work \
+            ./services/blockpersister \
+            ./services/blockvalidation \
+            ./services/subtreevalidation \
             | tee pr-benchmark-output.txt
 
       - name: Checkout main baseline
@@ -61,7 +67,14 @@ jobs:
           cd main
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=3 -run=^$ \
             -tags "testtxmetacache" \
+            ./model \
             ./services/blockassembly \
+            ./services/blockassembly/mining \
+            ./services/blockassembly/subtreeprocessor \
+            ./services/blockchain/work \
+            ./services/blockpersister \
+            ./services/blockvalidation \
+            ./services/subtreevalidation \
             | tee ../main-benchmark-output.txt
 
       - name: Compare benchmarks
