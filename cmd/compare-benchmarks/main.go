@@ -111,18 +111,8 @@ func runBenchstat(baselineFile, currentFile string) (string, error) {
 func parseBenchstat(output string, threshold, alpha float64) []comparison {
 	var comparisons []comparison
 
-	// Match lines with benchmark results
-	// Format: Name  value ± x%  value ± x%  change (p=x.xxx n=N)  or  ~ (p=x.xxx n=N)
-	resultRe := regexp.MustCompile(
-		`^(\S+)\s+` + // benchmark name
-			`(\S+)\s+±\s+\S+\s+` + // baseline value ± variance
-			`(\S+)\s+±\s+\S+\s+` + // current value ± variance
-			`(.+)$`, // change + p-value section
-	)
-
-	// Match percentage change with p-value: +1.34% (p=0.043 n=3) or -2.50% (p=0.001 n=3)
+	// Match p-value patterns in benchstat output
 	changeWithPRe := regexp.MustCompile(`([+-]?\d+\.?\d*)%\s+\(p=(\d+\.?\d*)\s+n=\d+\)`)
-	// Match "~" (not significant): ~ (p=0.200 n=3)
 	noChangeRe := regexp.MustCompile(`~\s+\(p=(\d+\.?\d*)\s+n=\d+\)`)
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
@@ -145,16 +135,58 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 			continue
 		}
 
-		// Skip non-data lines
-		matches := resultRe.FindStringSubmatch(line)
-		if matches == nil {
+		// Skip lines without p-value (headers, footnotes, blank lines)
+		if !strings.Contains(line, "(p=") {
 			continue
 		}
 
-		name := matches[1]
-		baseVal := matches[2]
-		currVal := matches[3]
-		changePart := matches[4]
+		// Extract benchmark name (first non-whitespace token)
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		name := fields[0]
+
+		// Skip footnote-only lines or header lines
+		if strings.HasPrefix(name, "│") || strings.HasPrefix(name, "¹") || strings.HasPrefix(name, "²") {
+			continue
+		}
+
+		// Find the two values with ± (baseline and current)
+		var baseVal, currVal string
+		valCount := 0
+		for i, f := range fields[1:] {
+			if i+2 < len(fields) && fields[i+2] == "±" {
+				if valCount == 0 {
+					baseVal = f
+				} else if valCount == 1 {
+					currVal = f
+				}
+				valCount++
+			}
+			_ = f
+		}
+
+		// Simpler approach: find values by looking for unit suffixes (n, µ, m, Ki, Mi)
+		// Values in benchstat look like: 67.49n, 164.0, 3.000
+		if baseVal == "" || currVal == "" {
+			// Find all tokens that look like values (contain digits and optional unit suffix)
+			valueRe := regexp.MustCompile(`^\d+\.?\d*[nµmkKMGTP]?[i]?$`)
+			var values []string
+			for _, f := range fields[1:] {
+				if valueRe.MatchString(f) {
+					values = append(values, f)
+				}
+			}
+			if len(values) >= 2 {
+				baseVal = values[0]
+				currVal = values[1]
+			}
+		}
+
+		if baseVal == "" || currVal == "" {
+			continue
+		}
 
 		comp := comparison{
 			Name:          name,
@@ -163,25 +195,24 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 			Metric:        currentMetric,
 		}
 
-		// Parse change
-		if m := changeWithPRe.FindStringSubmatch(changePart); m != nil {
+		// Parse change from the line
+		if m := changeWithPRe.FindStringSubmatch(line); m != nil {
 			comp.PercentChange, _ = strconv.ParseFloat(m[1], 64)
 			comp.PValue, _ = strconv.ParseFloat(m[2], 64)
 			comp.HasPValue = true
 
-			// Only flag as regression if statistically significant AND above threshold
 			if currentMetric == "sec/op" {
 				comp.Degraded = comp.PValue < alpha && comp.PercentChange > threshold
 				comp.Improved = comp.PValue < alpha && comp.PercentChange < -threshold
 			}
-		} else if m := noChangeRe.FindStringSubmatch(changePart); m != nil {
+		} else if m := noChangeRe.FindStringSubmatch(line); m != nil {
 			comp.PValue, _ = strconv.ParseFloat(m[1], 64)
 			comp.HasPValue = true
 			comp.PercentChange = 0
 		} else {
-			// No p-value available (e.g., count=1), fall back to threshold only
+			// Fallback: look for percentage without p-value
 			pctRe := regexp.MustCompile(`([+-]?\d+\.?\d*)%`)
-			if m := pctRe.FindStringSubmatch(changePart); m != nil {
+			if m := pctRe.FindStringSubmatch(line); m != nil {
 				comp.PercentChange, _ = strconv.ParseFloat(m[1], 64)
 				if currentMetric == "sec/op" {
 					comp.Degraded = math.Abs(comp.PercentChange) > threshold && comp.PercentChange > 0
@@ -190,7 +221,6 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 			}
 		}
 
-		// Only track sec/op for regression detection (allocs/B are informational)
 		comparisons = append(comparisons, comp)
 	}
 
