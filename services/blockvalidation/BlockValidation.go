@@ -1868,11 +1868,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	defer deferFn()
 
-	// Use the parent block hash because the current block hasn't been committed
-	// to the blockchain store yet (AddBlock runs after checkOldBlockIDs).
-	// Using block.Hash() always returns empty results, defeating the fast-path
-	// map and forcing every entry through individual CheckBlockIsInCurrentChain
-	// gRPC calls — which is catastrophic with the SQL CTE fallback.
+	// Use the parent block hash to get the ancestor chain for validation.
+	// - Normal path: block not yet committed (AddBlock runs after checkOldBlockIDs)
+	// - Optimistic path: block already committed (AddBlock at line 1361)
+	// HashPrevBlock works correctly in both cases. The old code used block.Hash()
+	// which returned empty in the normal path, defeating the fast-path map and
+	// forcing every entry through individual CheckBlockIsInCurrentChain gRPC calls.
 	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, 10_000)
 	if err != nil {
 		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
