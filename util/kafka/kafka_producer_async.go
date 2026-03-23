@@ -255,9 +255,6 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					Key:   msgBytes.Key,
 					Value: msgBytes.Value,
 				}
-				if msgBytes.Key != nil {
-					message.Key = sarama.ByteEncoder(msgBytes.Key)
-				}
 
 				if c.closed.Load() {
 					break
