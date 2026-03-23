@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 type comparison struct {
@@ -97,7 +99,9 @@ func runBenchstat(baselineFile, currentFile string) (string, error) {
 		if len(out) > 0 {
 			return string(out), nil
 		}
-		return "", fmt.Errorf("benchstat failed: %w: %s", err, string(out))
+		e := errors.NewUnknownError("benchstat failed: %s", string(out))
+		e.SetWrappedErr(err)
+		return "", e
 	}
 	return string(out), nil
 }
