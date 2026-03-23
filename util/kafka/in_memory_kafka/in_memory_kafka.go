@@ -9,9 +9,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
-var errSessionClosed = errors.NewProcessingError("in-memory session closed")
-var errAlreadyRunning = errors.NewProcessingError("consumer group already running")
-
 // Message represents a Kafka message.
 type Message struct {
 	Topic     string
@@ -326,7 +323,7 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 	mcg.mu.Lock()
 	if mcg.isRunning {
 		mcg.mu.Unlock()
-		return errAlreadyRunning
+		return errors.NewProcessingError("consumer group already running")
 	}
 	mcg.isRunning = true
 	internalCtx, cancel := context.WithCancel(ctx)
