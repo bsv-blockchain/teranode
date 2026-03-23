@@ -23,7 +23,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
-	"github.com/ordishs/go-utils"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
