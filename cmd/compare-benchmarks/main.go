@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -98,7 +97,7 @@ func runBenchstat(baselineFile, currentFile string) (string, error) {
 		if len(out) > 0 {
 			return string(out), nil
 		}
-		return "", errors.Join(errors.New("benchstat failed"), err, errors.New(string(out)))
+		return "", fmt.Errorf("benchstat failed: %w: %s", err, string(out))
 	}
 	return string(out), nil
 }
