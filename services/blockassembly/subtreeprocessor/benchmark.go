@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -137,7 +138,8 @@ func RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree int, cpuProfile
 			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to serialize subtree: %w", err)
 		}
 
-		if err := subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes); err != nil {
+		// DAH = currentBlockHeight + retention. Benchmark runs at height 0, so DAH = retention.
+		if err := subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, options.WithDeleteAt(0+tSettings.GlobalBlockHeightRetention)); err != nil {
 			return CreateTransactionMapBenchmarkResult{}, errors.NewProcessingError("failed to store subtree: %w", err)
 		}
 
