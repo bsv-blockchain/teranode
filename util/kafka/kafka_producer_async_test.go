@@ -6,11 +6,7 @@ import (
 	"testing"
 	"time"
 
-<<<<<<< HEAD
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
-=======
->>>>>>> de1a92074 (feat: franz first iteration)
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
