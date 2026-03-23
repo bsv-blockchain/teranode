@@ -748,3 +748,70 @@ func createSpendingTx(prevTx *bsvutil.Tx, index uint32, scriptSig []byte, addres
 
 	return bsvutil.NewTx(spendTx), nil
 }
+
+func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
+	t.Run("headers-first mode skips last block time violation", func(t *testing.T) {
+		sp := &peer.Peer{} // zero-value peer is sufficient for this test
+		sps := &syncPeerState{
+			lastBlockTime: time.Now().Add(-10 * time.Minute), // way past maxLastBlockTime (3 min)
+			ticks:         1,                                 // non-zero so validNetworkSpeed runs
+		}
+
+		sm := &SyncManager{
+			logger:     ulogger.TestLogger{},
+			peerStates: txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		}
+		sm.storeSyncPeer(sp, sps)
+		sm.headersFirstMode.Store(true)
+		sm.peerStates.Set(sp, &peerSyncState{})
+
+		// Should return early without panicking (no clearRequestedState/updateSyncPeer called)
+		sm.handleCheckSyncPeer()
+
+		// Sync peer should still be set (not replaced)
+		assert.Equal(t, sp, sm.loadSyncPeer())
+	})
+
+	t.Run("headers-first mode skips network speed violation", func(t *testing.T) {
+		sp := &peer.Peer{}
+		sps := &syncPeerState{
+			lastBlockTime: time.Now(), // recent — no time violation
+			ticks:         1,
+			violations:    maxNetworkViolations, // at violation threshold
+		}
+
+		sm := &SyncManager{
+			logger:                  ulogger.TestLogger{},
+			peerStates:              txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+			minSyncPeerNetworkSpeed: 1000, // high threshold to ensure violation
+		}
+		sm.storeSyncPeer(sp, sps)
+		sm.headersFirstMode.Store(true)
+		sm.peerStates.Set(sp, &peerSyncState{})
+
+		sm.handleCheckSyncPeer()
+
+		assert.Equal(t, sp, sm.loadSyncPeer())
+	})
+
+	t.Run("normal mode retains peer when no violations", func(t *testing.T) {
+		sp := &peer.Peer{}
+		sps := &syncPeerState{
+			lastBlockTime: time.Now(), // recent — no violation
+			ticks:         1,
+		}
+
+		sm := &SyncManager{
+			logger:     ulogger.TestLogger{},
+			peerStates: txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		}
+		sm.storeSyncPeer(sp, sps)
+		sm.headersFirstMode.Store(false) // normal mode
+		sm.peerStates.Set(sp, &peerSyncState{})
+
+		sm.handleCheckSyncPeer()
+
+		// No violations, sync peer should still be set
+		assert.Equal(t, sp, sm.loadSyncPeer())
+	})
+}

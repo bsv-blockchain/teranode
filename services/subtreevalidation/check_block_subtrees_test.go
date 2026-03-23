@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -17,6 +18,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -28,6 +31,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -417,6 +422,309 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, response)
 		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+	})
+}
+
+func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
+	testHeaders := testhelpers.CreateTestHeaders(t, 1)
+
+	t.Run("SubtreeExistsViaQuorum", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Set up quorum using the server's subtreeStore as the exister
+		quorumDir := t.TempDir()
+		q, err := NewQuorum(&ulogger.TestLogger{}, server.subtreeStore, quorumDir, WithTimeout(100*time.Millisecond))
+		require.NoError(t, err)
+		server.quorum = q
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+		// Create a subtree hash and store it so it "exists"
+		subtreeHash := chainhash.Hash{}
+		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
+
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		require.NoError(t, err)
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
+		require.NoError(t, err)
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://test.com",
+		}
+
+		// Subtree exists — should return blessed with no missing subtrees
+		response, err := server.CheckBlockSubtrees(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.Blessed)
+	})
+
+	t.Run("SubtreeMissingViaQuorum_LocksAndMarks", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Set up quorum — subtree does NOT exist in store
+		quorumDir := t.TempDir()
+		q, err := NewQuorum(&ulogger.TestLogger{}, server.subtreeStore, quorumDir, WithTimeout(100*time.Millisecond))
+		require.NoError(t, err)
+		server.quorum = q
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+		subtreeHash := chainhash.Hash{}
+		copy(subtreeHash[:], []byte("quorum_test_subtree_missing_"))
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
+		require.NoError(t, err)
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+			mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{1, 2, 3}, nil)
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://127.0.0.1:0",
+		}
+
+		// Subtree is missing — quorum will lock, mark as missing, then try to HTTP-fetch,
+		// from http://127.0.0.1:0, which fails deterministically because nothing listens there. The important thing is it detected missing via quorum.
+		_, err = server.CheckBlockSubtrees(context.Background(), request)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+	})
+
+	t.Run("QuorumTimeout_TreatsAsMissing", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Set up quorum with very short timeout
+		quorumDir := t.TempDir()
+		q, err := NewQuorum(&ulogger.TestLogger{}, server.subtreeStore, quorumDir, WithTimeout(30*time.Millisecond))
+		require.NoError(t, err)
+		server.quorum = q
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+		subtreeHash := chainhash.Hash{}
+		copy(subtreeHash[:], []byte("quorum_test_subtree_timeout_"))
+
+		// Pre-create a lock file and keep it fresh to force timeout
+		lockFilePath := filepath.Join(quorumDir, subtreeHash.String()+".lock")
+		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
+		defer os.Remove(lockFilePath)
+
+		stopRefresh := make(chan struct{})
+		defer close(stopRefresh)
+		go func() {
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopRefresh:
+					return
+				case <-ticker.C:
+					now := time.Now()
+					_ = os.Chtimes(lockFilePath, now, now)
+				}
+			}
+		}()
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
+		require.NoError(t, err)
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+			mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{1, 2, 3}, nil)
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://127.0.0.1:0",
+		}
+
+		// Timeout returns (false, false, noopFunc, nil) — not an error — subtree treated as missing.
+		// The downstream HTTP fetch will fail, but the quorum timeout itself should not error.
+		_, err = server.CheckBlockSubtrees(context.Background(), request)
+		require.Error(t, err)
+		// The error should be from the HTTP fetch, not from quorum timeout
+		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+		assert.NotContains(t, err.Error(), "quorum lock")
+	})
+
+	t.Run("QuorumContextCancelled_ReturnsError", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		quorumDir := t.TempDir()
+		q, err := NewQuorum(&ulogger.TestLogger{}, server.subtreeStore, quorumDir, WithTimeout(5*time.Second))
+		require.NoError(t, err)
+		server.quorum = q
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+		subtreeHash := chainhash.Hash{}
+		copy(subtreeHash[:], []byte("quorum_test_ctx_cancelled__"))
+
+		// Pre-create a lock file and keep it fresh
+		lockFilePath := filepath.Join(quorumDir, subtreeHash.String()+".lock")
+		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
+		defer os.Remove(lockFilePath)
+
+		stopRefresh := make(chan struct{})
+		defer close(stopRefresh)
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopRefresh:
+					return
+				case <-ticker.C:
+					now := time.Now()
+					_ = os.Chtimes(lockFilePath, now, now)
+				}
+			}
+		}()
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
+		require.NoError(t, err)
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://127.0.0.1:0",
+		}
+
+		// Cancel context immediately — should return error
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = server.CheckBlockSubtrees(ctx, request)
+		require.Error(t, err)
+	})
+
+	// Tests the actual race scenario: lock exists (in-flight handler), subtree file appears
+	// before timeout, CheckBlockSubtrees sees exists=true and does NOT mark it missing.
+	t.Run("InFlightHandler_CompletesBeforeTimeout", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		quorumDir := t.TempDir()
+		q, err := NewQuorum(&ulogger.TestLogger{}, server.subtreeStore, quorumDir, WithTimeout(2*time.Second))
+		require.NoError(t, err)
+		server.quorum = q
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+		subtreeHash := chainhash.Hash{}
+		copy(subtreeHash[:], []byte("quorum_test_inflight_race___"))
+
+		// Pre-create lock file to simulate in-flight handler
+		lockFilePath := filepath.Join(quorumDir, subtreeHash.String()+".lock")
+		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
+
+		// Simulate in-flight handler completing: after a short delay, store the subtree
+		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+			os.Remove(lockFilePath)
+		}()
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
+		require.NoError(t, err)
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://127.0.0.1:0",
+		}
+
+		// The in-flight handler completes and stores the subtree before timeout.
+		// CheckBlockSubtrees should see exists=true and return blessed (no missing subtrees).
+		response, err := server.CheckBlockSubtrees(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.Blessed)
 	})
 }
 
@@ -2001,4 +2309,115 @@ func TestBuildParentMetadata(t *testing.T) {
 		assert.True(t, exists)
 		assert.Equal(t, uint32(100), meta.BlockHeight)
 	})
+}
+
+// TestCheckBlockSubtrees_SkipSubtreeDataFetchWhenLocalTxsAvailable verifies that when
+// block assembly has enough transactions locally, the expensive subtree_data fetch
+// from the peer's asset-cache is skipped.
+func TestCheckBlockSubtrees_SkipSubtreeDataFetchWhenLocalTxsAvailable(t *testing.T) {
+	testHeaders := testhelpers.CreateTestHeaders(t, 1)
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Mock blockchain client
+	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+		mock.Anything).
+		Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+	// Set up a mock block assembly client that reports high tx count
+	mockBA := blockassembly.NewMock()
+	mockBA.On("GetBlockAssemblyState", mock.Anything).
+		Return(&blockassembly_api.StateMessage{
+			TxCount: 1000000, // 1M txs available locally
+		}, nil)
+	server.blockAssemblyClient = mockBA
+
+	// Mock GetBlockHeaderIDs (called before subtree processing)
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+		mock.Anything, blockchain.FSMStateRUNNING).
+		Return(true, nil)
+
+	// Build a valid subtree structure and store it so /subtree/ HTTP fetch is bypassed
+	tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), 1, 1))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	subtreeHash := *subtree.RootHash()
+
+	// Store subtree structure (FileTypeSubtreeToCheck) — bypasses /subtree/ fetch
+	err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes)
+	require.NoError(t, err)
+
+	// Do NOT store FileTypeSubtreeData — forces the code into the subtree_data fetch path
+	// where localTxsAvailable should cause it to skip the expensive peer fetch
+
+	// Activate httpmock to track HTTP calls
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	// Register a responder for subtree_data to prevent real HTTP calls
+	subtreeDataURL := fmt.Sprintf("=~.*/subtree_data/%s", subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeDataURL,
+		httpmock.NewBytesResponder(200, []byte("dummy")))
+
+	// Create a block referencing the missing subtree with fewer txs than block assembly has
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 100, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: "http://test-peer.local",
+	}
+
+	// Disable ValidateSubtreeInternal's fallback subtree_data fetch so any
+	// /subtree_data/ request can only originate from CheckBlockSubtrees itself.
+	server.settings.SubtreeValidation.PercentageMissingGetFullData = 101
+
+	// Run CheckBlockSubtrees — will eventually fail during ValidateSubtreeInternal
+	// because we don't have the actual tx data, but the optimization path should be taken.
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+
+	// Verify block assembly state was queried — the optimization was triggered
+	mockBA.AssertCalled(t, "GetBlockAssemblyState", mock.Anything)
+
+	// If there's an error, it should NOT be "failed to get subtree data from" which
+	// comes from CheckBlockSubtrees' fetch path.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "failed to get subtree data from",
+			"CheckBlockSubtrees should skip subtree_data fetch when local txs available")
+	}
+
+	// Assert no subtree_data fetch was performed — with ValidateSubtreeInternal's
+	// fallback disabled, any call here can only come from CheckBlockSubtrees.
+	callCounts := httpmock.GetCallCountInfo()
+	for k, v := range callCounts {
+		if v > 0 {
+			assert.NotContains(t, k, "subtree_data",
+				"subtree_data should NOT be fetched when local txs are available")
+		}
+	}
 }

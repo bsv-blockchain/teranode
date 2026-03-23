@@ -23,8 +23,10 @@ import (
 func TestCatchup_MultiIterationNoDuplicates(t *testing.T) {
 	t.Run("ExactlyTwoIterations_10000Headers", func(t *testing.T) {
 		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 		// Create exactly 10,001 headers (0-10000) to test the boundary
 		// This will require exactly 2 iterations with maxBlockHeadersPerRequest=10000
@@ -152,8 +154,10 @@ func TestCatchup_MultiIterationNoDuplicates(t *testing.T) {
 
 	t.Run("ThreeIterations_25000Headers", func(t *testing.T) {
 		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 		// Create 25,000 headers to test 3 iterations
 		numHeaders := 25_000
@@ -278,8 +282,10 @@ func TestCatchup_MultiIterationNoDuplicates(t *testing.T) {
 	t.Run("SingleHeaderSecondIteration", func(t *testing.T) {
 		// Edge case: second iteration returns only 1 header (which would be a duplicate)
 		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 		numHeaders := 10_001
 		allHeaders := testhelpers.CreateTestHeaders(t, numHeaders)
@@ -365,8 +371,10 @@ func TestCatchup_MultiIterationNoDuplicates(t *testing.T) {
 // correctly handles headers from multi-iteration catchup without duplicates
 func TestCatchup_HeaderChainCacheWithMultiIteration(t *testing.T) {
 	ctx := context.Background()
-	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 	defer cleanup()
+
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 	// Create 15,000 headers to span 2 iterations
 	numHeaders := 15_000

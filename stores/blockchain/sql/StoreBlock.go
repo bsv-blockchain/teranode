@@ -104,13 +104,57 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
+	var preBestHash *chainhash.Hash
+	if s.useInMemoryChainCheck {
+		// Capture the current best block hash before insert for reorg detection.
+		// getBestBlockID is cached, so this is essentially free.
+		var preBestErr error
+		_, preBestHash, preBestErr = s.getBestBlockID(ctx)
+		if preBestErr != nil {
+			s.logger.Warnf("StoreBlock: failed to get pre-insert best block ID: %v", preBestErr)
+		}
+	}
+
 	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
 	if err != nil {
 		return 0, height, err
 	}
 
-	// Reset response cache to invalidate cached block headers and best block
+	// Reset response cache to invalidate cached best block ID and headers
 	s.ResetResponseCache()
+
+	if s.useInMemoryChainCheck {
+		// Track the highest block ID for the maxBlockID upper-bound check.
+		s.updateMaxBlockID(newBlockID)
+
+		// Detect forks and reorgs by comparing the newly inserted block against
+		// the post-insert best block.
+		postBestCtx, postBestCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer postBestCancel()
+		postBestID, _, bestErr := s.getBestBlockID(postBestCtx)
+		if bestErr != nil {
+			s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
+		} else if uint64(postBestID) != newBlockID {
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
+			// Case 2: new block is the best but doesn't extend the old best (reorg),
+			// or preBestHash was unavailable — take the conservative path and rebuild.
+			s.resetChainWalkCache()
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	}
 
 	return newBlockID, height, nil
 }

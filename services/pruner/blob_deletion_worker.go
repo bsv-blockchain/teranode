@@ -16,6 +16,17 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+// deletionResult distinguishes between a file that was actually removed from disk
+// vs one that was already absent. Both are non-errors, but tracking the difference
+// lets us detect misconfiguration (e.g. wrong volume mount) where every file appears
+// "already missing".
+type deletionResult int
+
+const (
+	deletionDeleted  deletionResult = iota // file existed and was removed
+	deletionNotFound                       // file was already absent (idempotent success)
+)
+
 func (s *Server) blobDeletionWorker() {
 	for {
 		select {
@@ -73,7 +84,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	maxRetries := s.settings.Pruner.BlobDeletionMaxRetries
 
 	// Track totals across all batches
-	var totalSuccess, totalFail int64
+	var totalDeleted, totalNotFound, totalFail int64
 	var batchNum int
 	overallStartTime := time.Now()
 
@@ -103,7 +114,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		completedIDs := make([]int64, 0, len(deletions))
 		failedIDs := make([]int64, 0, len(deletions))
 
-		var successCount, failCount int64
+		var deletedCount, notFoundCount, failCount int64
 
 		// Process all deletions in the batch
 		for i, deletion := range deletions {
@@ -112,7 +123,8 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 			s.logger.Debugf("[pruner][%s:%d] blob deletion: processing deletion %s/%s (id=%d, key=%x)",
 				blockHashStr, blockHeight, util.FormatComma(int64(i+1)), util.FormatComma(int64(len(deletions))), deletion.Id, deletion.BlobKey)
 
-			if err := s.processOneDeletion(ctx, deletion, blockHashStr, blockHeight); err != nil {
+			result, err := s.processOneDeletion(ctx, deletion, blockHashStr, blockHeight)
+			if err != nil {
 				s.logger.Warnf("[pruner][%s:%d] blob deletion: failed to delete blob %x from %s (attempt %d/%d): %v",
 					blockHashStr, blockHeight, deletion.BlobKey, storeType.String(),
 					int(deletion.RetryCount)+1, maxRetries, err)
@@ -128,14 +140,41 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 				}
 			} else {
 				completedIDs = append(completedIDs, deletion.Id)
-				successCount++
-				blobDeletionProcessedTotal.Inc()
+				storeID := storetypes.BlobStoreType(deletion.StoreType).String()
+				switch result {
+				case deletionDeleted:
+					deletedCount++
+					blobDeletionProcessedTotal.Inc()
+				case deletionNotFound:
+					notFoundCount++
+					blobDeletionNotFoundTotal.WithLabelValues(storeID).Inc()
+				}
 			}
 		}
 
+		// Warn when an entire batch has no files on disk — strong signal of a
+		// volume mount misconfiguration (e.g. pruner cannot see the real blob store).
+		if notFoundCount > 0 && notFoundCount == int64(len(deletions)) {
+			// Log the store type(s) actually present in this batch, not a hardcoded type.
+			storeTypes := make(map[storetypes.BlobStoreType]struct{})
+			for _, d := range deletions {
+				storeTypes[storetypes.BlobStoreType(d.StoreType)] = struct{}{}
+			}
+			storeInfo := make([]string, 0, len(storeTypes))
+			for st := range storeTypes {
+				urlStr := st.String()
+				if u, err := s.settings.GetBlobStoreURL(int32(st)); err == nil && u != nil {
+					urlStr = st.String() + "=" + u.String()
+				}
+				storeInfo = append(storeInfo, urlStr)
+			}
+			s.logger.Warnf("[pruner][%s:%d] blob deletion: all %d blobs in batch were already missing from disk — verify the pruner pod has the correct volume mount for blob store(s): %v",
+				blockHashStr, blockHeight, len(deletions), storeInfo)
+		}
+
 		// Complete the batch in a single gRPC call
-		s.logger.Infof("[pruner][%s:%d] blob deletion: completing batch %d - %s succeeded, %s failed",
-			blockHashStr, blockHeight, batchNum, util.FormatComma(successCount), util.FormatComma(int64(len(failedIDs))))
+		s.logger.Infof("[pruner][%s:%d] blob deletion: completing batch %d - %s deleted, %s not found, %s failed",
+			blockHashStr, blockHeight, batchNum, util.FormatComma(deletedCount), util.FormatComma(notFoundCount), util.FormatComma(int64(len(failedIDs))))
 
 		err = s.blockchainClient.CompleteBlobDeletionBatch(ctx, batchToken, completedIDs, failedIDs, maxRetries)
 		if err != nil {
@@ -146,40 +185,53 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		}
 
 		duration := time.Since(batchStartTime).Round(time.Second)
-		s.logger.Infof("[pruner][%s:%d] blob deletion: batch %d complete - %s succeeded, %s failed (took %s)",
-			blockHashStr, blockHeight, batchNum, util.FormatComma(successCount), util.FormatComma(failCount), duration)
+		s.logger.Infof("[pruner][%s:%d] blob deletion: batch %d complete - %s deleted, %s not found, %s failed (took %s)",
+			blockHashStr, blockHeight, batchNum, util.FormatComma(deletedCount), util.FormatComma(notFoundCount), util.FormatComma(failCount), duration)
 
 		// Update totals
-		totalSuccess += successCount
+		totalDeleted += deletedCount
+		totalNotFound += notFoundCount
 		totalFail += failCount
 	}
 
 	// Log overall summary if we processed multiple batches
 	if batchNum > 2 {
 		totalDuration := time.Since(overallStartTime).Round(time.Second)
-		s.logger.Infof("[pruner][%s:%d] blob deletion: processed %d batches - %s total succeeded, %s total failed (took %s)",
-			blockHashStr, blockHeight, batchNum-1, util.FormatComma(totalSuccess), util.FormatComma(totalFail), totalDuration)
+		s.logger.Infof("[pruner][%s:%d] blob deletion: processed %d batches - %s total deleted, %s total not found, %s total failed (took %s)",
+			blockHashStr, blockHeight, batchNum-1, util.FormatComma(totalDeleted), util.FormatComma(totalNotFound), util.FormatComma(totalFail), totalDuration)
 	}
 
 	// Notify observer if registered (for testing)
 	if s.blobDeletionObserver != nil {
-		s.blobDeletionObserver.OnBlobDeletionComplete(blockHeight, totalSuccess, totalFail)
+		s.blobDeletionObserver.OnBlobDeletionComplete(blockHeight, totalDeleted+totalNotFound, totalFail)
 	}
 }
 
-func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_api.ScheduledDeletion, blockHashStr string, blockHeight uint32) error {
+func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_api.ScheduledDeletion, blockHashStr string, blockHeight uint32) (deletionResult, error) {
 	storeType := storetypes.BlobStoreType(deletion.StoreType)
 
 	// Get or create blob store for this store type
 	blobStore, err := s.getBlobStore(storeType)
 	if err != nil {
-		return errors.NewNotFoundError("failed to get blob store for %s: %v", storeType.String(), err)
+		return deletionNotFound, errors.NewNotFoundError("failed to get blob store for %s: %v", storeType.String(), err)
 	}
 
 	// Convert file type string to FileType
 	fileType := fileformat.FileType(deletion.FileType)
 
-	// Delete blob
+	// Check existence before deletion so we can distinguish "actually deleted" from
+	// "already absent". The file store's Del() returns nil in both cases, but we need
+	// to tell them apart to detect volume mount misconfigurations where the pruner
+	// cannot see the real blob files.
+	existed, existsErr := blobStore.Exists(ctx, deletion.BlobKey, fileType)
+	if existsErr != nil {
+		s.logger.Debugf("[pruner][%s:%d] blob deletion: exists check failed for key=%x: %v", blockHashStr, blockHeight, deletion.BlobKey, existsErr)
+		// Assume existed so we don't inflate not-found counts due to transient errors.
+		// Fall through to Del which will report the real error if the store is down.
+		existed = true
+	}
+
+	// Delete blob (idempotent — succeeds even if file is already gone)
 	startTime := time.Now()
 	err = blobStore.Del(ctx, deletion.BlobKey, fileType)
 	duration := time.Since(startTime)
@@ -187,18 +239,18 @@ func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_ap
 	blobDeletionDurationSeconds.WithLabelValues(storeType.String()).Observe(duration.Seconds())
 
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			// Already deleted - success (idempotent)
-			s.logger.Debugf("[pruner][%s:%d] blob deletion: blob key=%x already deleted (idempotent success)", blockHashStr, blockHeight, deletion.BlobKey)
-			return nil
-		}
-		return err
+		return deletionNotFound, err
+	}
+
+	if !existed {
+		s.logger.Debugf("[pruner][%s:%d] blob deletion: blob key=%x was already absent from %s", blockHashStr, blockHeight, deletion.BlobKey, storeType.String())
+		return deletionNotFound, nil
 	}
 
 	s.logger.Debugf("[pruner][%s:%d] blob deletion: deleted blob key=%x from %s (took %s)",
 		blockHashStr, blockHeight, deletion.BlobKey, storeType.String(), duration.Round(time.Second))
 
-	return nil
+	return deletionDeleted, nil
 }
 
 // getBlobStore gets or creates a blob store for the given store type enum.
@@ -237,6 +289,8 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create blob store for %s", storeType.String(), err)
 	}
+
+	s.logger.Infof("[pruner] blob deletion: initialized %s store at %s (hashPrefix=%d)", storeType.String(), storeURL.String(), hashPrefix)
 
 	// Cache it (note: map writes in Go are not thread-safe, but this is acceptable
 	// since it's idempotent and only happens once per store type)

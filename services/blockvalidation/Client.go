@@ -63,6 +63,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "blockvalidation",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init block validation service connection for '%s'", source, err)

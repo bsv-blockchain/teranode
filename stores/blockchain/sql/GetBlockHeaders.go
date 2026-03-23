@@ -72,10 +72,17 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	)
 	defer deferFn()
 
-	// Try to get from response cache using derived cache key
-	// Use operation-prefixed key to avoid conflicts with other cached data
+	// Use chain walk cache when in-memory mode is on (survives StoreBlock wipes),
+	// otherwise fall back to response cache (original behavior).
+	cache := s.responseCache
+	cacheTTL := s.cacheTTL
+	if s.useInMemoryChainCheck {
+		cache = s.chainWalkCache
+		cacheTTL = chainWalkCacheTTL
+	}
+
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%s-%d", blockHashFrom.String(), numberOfHeaders)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := cache.Begin(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -144,8 +151,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		return nil, nil, err
 	}
 
-	// Cache the result in response cache
-	cacheOp.Set([2]interface{}{h, m}, s.cacheTTL)
+	cacheOp.Set([2]interface{}{h, m}, cacheTTL)
 
 	return h, m, nil
 }

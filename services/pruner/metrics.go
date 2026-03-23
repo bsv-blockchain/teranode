@@ -22,6 +22,7 @@ var (
 	blobDeletionScheduledTotal  *prometheus.CounterVec
 	blobDeletionCancelledTotal  *prometheus.CounterVec
 	blobDeletionProcessedTotal  prometheus.Counter
+	blobDeletionNotFoundTotal   *prometheus.CounterVec
 	blobDeletionErrorsTotal     *prometheus.CounterVec
 	blobDeletionDurationSeconds *prometheus.HistogramVec
 	blobDeletionPendingGauge    prometheus.Gauge
@@ -116,8 +117,16 @@ func _initPrometheusMetrics() {
 	blobDeletionProcessedTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "pruner_blob_deletion_processed_total",
-			Help: "Total blobs successfully deleted",
+			Help: "Total blobs successfully deleted from disk",
 		},
+	)
+
+	blobDeletionNotFoundTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_blob_deletion_not_found_total",
+			Help: "Total blob deletions where the file was already absent from disk (idempotent success). A sustained high rate may indicate a volume mount misconfiguration.",
+		},
+		[]string{"store_id"},
 	)
 
 	blobDeletionErrorsTotal = promauto.NewCounterVec(
