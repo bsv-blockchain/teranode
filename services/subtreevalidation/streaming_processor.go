@@ -852,7 +852,7 @@ func (sp *streamingProcessor) classifyAndProcessStreaming(
 	// Store total for processBuckets loop limit
 	sp.totalTransactions = txCount
 
-	sp.server.logger.Infof("[classifyAndProcessStreaming] Classified %d transactions: %d at level 0, %d with dependencies (maxDeps=%d). (Level 0 = no block parents, expected for coinbase spenders)",
+	sp.server.logger.Debugf("[classifyAndProcessStreaming] Classified %d transactions: %d at level 0, %d with dependencies (maxDeps=%d). (Level 0 = no block parents, expected for coinbase spenders)",
 		txCount, level0Count, len(sp.waitingOnParent), maxDeps)
 
 	// Now that ALL transactions are classified, process level 0
@@ -866,7 +866,7 @@ func (sp *streamingProcessor) classifyAndProcessStreaming(
 
 	// Process remaining dependency levels via cascade
 	if maxDeps > 0 {
-		sp.server.logger.Infof("[classifyAndProcessStreaming] Processing remaining %d dependency levels", maxDeps)
+		sp.server.logger.Debugf("[classifyAndProcessStreaming] Processing remaining %d dependency levels", maxDeps)
 		if err := sp.processBuckets(ctx, maxDeps); err != nil {
 			return err
 		}

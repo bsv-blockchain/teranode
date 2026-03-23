@@ -100,6 +100,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	conn, err := util.GetGRPCClient(ctx, validatorGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
+		CallerName: "validator",
 	}, tSettings)
 
 	if err != nil {

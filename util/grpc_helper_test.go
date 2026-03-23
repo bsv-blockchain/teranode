@@ -623,7 +623,7 @@ func TestLoadTLSCredentialsNegativeSecurityLevel(t *testing.T) {
 // retryInterceptor Tests
 
 func TestRetryInterceptorSuccess(t *testing.T) {
-	interceptor := retryInterceptor(3, 10*time.Millisecond)
+	interceptor := retryInterceptor(3, 10*time.Millisecond, "test")
 
 	callCount := 0
 	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
@@ -640,7 +640,7 @@ func TestRetryInterceptorSuccess(t *testing.T) {
 
 func TestRetryInterceptorRetryOnUnavailable(t *testing.T) {
 	maxRetries := 3
-	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond)
+	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond, "test")
 
 	callCount := 0
 	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
@@ -660,7 +660,7 @@ func TestRetryInterceptorRetryOnUnavailable(t *testing.T) {
 
 func TestRetryInterceptorRetryOnDeadlineExceeded(t *testing.T) {
 	maxRetries := 2
-	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond)
+	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond, "test")
 
 	callCount := 0
 	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
@@ -679,7 +679,7 @@ func TestRetryInterceptorRetryOnDeadlineExceeded(t *testing.T) {
 }
 
 func TestRetryInterceptorNoRetryOnNonTransientError(t *testing.T) {
-	interceptor := retryInterceptor(3, 1*time.Millisecond)
+	interceptor := retryInterceptor(3, 1*time.Millisecond, "test")
 
 	callCount := 0
 	expectedErr := status.Error(codes.InvalidArgument, "invalid argument")
@@ -698,7 +698,7 @@ func TestRetryInterceptorNoRetryOnNonTransientError(t *testing.T) {
 
 func TestRetryInterceptorMaxRetriesExceeded(t *testing.T) {
 	maxRetries := 2
-	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond)
+	interceptor := retryInterceptor(maxRetries, 1*time.Millisecond, "test")
 
 	callCount := 0
 	expectedErr := status.Error(codes.Unavailable, "always unavailable")
@@ -717,7 +717,7 @@ func TestRetryInterceptorMaxRetriesExceeded(t *testing.T) {
 
 func TestRetryInterceptorBackoffTiming(t *testing.T) {
 	backoff := 50 * time.Millisecond
-	interceptor := retryInterceptor(3, backoff)
+	interceptor := retryInterceptor(3, backoff, "test")
 
 	callCount := 0
 	var callTimes []time.Time
@@ -754,7 +754,7 @@ func TestRetryInterceptorBackoffTiming(t *testing.T) {
 }
 
 func TestRetryInterceptorZeroRetries(t *testing.T) {
-	interceptor := retryInterceptor(0, 1*time.Millisecond)
+	interceptor := retryInterceptor(0, 1*time.Millisecond, "test")
 
 	callCount := 0
 	expectedErr := status.Error(codes.Unavailable, "unavailable")
@@ -788,7 +788,7 @@ func TestRetryInterceptorDifferentErrorCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			interceptor := retryInterceptor(2, 1*time.Millisecond)
+			interceptor := retryInterceptor(2, 1*time.Millisecond, "test")
 
 			callCount := 0
 			expectedErr := status.Error(tt.errorCode, "test error")
@@ -1136,7 +1136,7 @@ func TestGRPCHelperIntegration(t *testing.T) {
 	assert.NotNil(t, tlsCreds)
 
 	// Test that retry interceptor can be created
-	retryInt := retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff)
+	retryInt := retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff, "test")
 	assert.NotNil(t, retryInt)
 
 	// Test that server can be created with these options

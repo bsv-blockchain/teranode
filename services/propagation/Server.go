@@ -54,6 +54,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -127,6 +129,8 @@ type PropagationServer struct {
 	validatorHTTPAddr            *url.URL
 	banList                      banlist.Interface
 	udpWorkerPool                chan struct{} // Semaphore for limiting UDP processing goroutines
+	batchWorkerPool              chan struct{} // Server-wide semaphore limiting concurrent tx-processing goroutines across all ProcessTransactionBatch calls
+	batchHandlerPool             chan struct{} // Non-blocking admission control for in-flight batch/tx handlers; nil when disabled
 	udpConns                     []*net.UDPConn
 	udpConnsMu                   sync.Mutex
 }
@@ -147,6 +151,16 @@ type PropagationServer struct {
 func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
+	var batchPool chan struct{}
+	if limit := tSettings.Propagation.BatchConcurrencyLimit; limit > 0 {
+		batchPool = make(chan struct{}, limit)
+	}
+
+	var batchHandlerPool chan struct{}
+	if limit := tSettings.Propagation.BatchHandlerLimit; limit > 0 {
+		batchHandlerPool = make(chan struct{}, limit)
+	}
+
 	return &PropagationServer{
 		logger:                       logger,
 		settings:                     tSettings,
@@ -158,6 +172,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 		banList:                      banList,
 		udpWorkerPool:                make(chan struct{}, udpWorkerPoolSize),
+		batchWorkerPool:              batchPool,
+		batchHandlerPool:             batchHandlerPool,
 	}
 }
 
@@ -503,13 +519,13 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 					continue
 				}
 
-				ps.logger.Infof("read %d bytes into wire message from %s", len(b), src.String())
+				ps.logger.Debugf("read %d bytes into wire message from %s", len(b), src.String())
 				// ps.logger.Infof("wire message type: %v", msg)
 				var ok bool
 
 				msgTx, ok = msg.(*wire.MsgExtendedTx)
 				if ok {
-					ps.logger.Infof("received %d bytes from %s", len(b), src.String())
+					ps.logger.Debugf("received %d bytes from %s", len(b), src.String())
 
 					txBytes := bytes.NewBuffer(nil)
 					if err = msgTx.Serialize(txBytes); err != nil {
@@ -871,6 +887,17 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 //   - *propagation_api.EmptyMessage: Empty response on successful processing
 //   - error: Error with specific details if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	// Non-blocking admission control: reject immediately if too many handlers are in-flight
+	if ps.batchHandlerPool != nil {
+		select {
+		case ps.batchHandlerPool <- struct{}{}:
+			defer func() { <-ps.batchHandlerPool }()
+		default:
+			prometheusBatchHandlerRejections.Inc()
+			return nil, status.Error(codes.Unavailable, "server at capacity")
+		}
+	}
+
 	// Use context-aware logger for automatic trace correlation
 	ctxLogger := ps.logger.WithTraceContext(ctx)
 
@@ -905,6 +932,17 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 //   - *propagation_api.ProcessTransactionBatchResponse: Response containing per-transaction error status
 //   - error: Error if overall batch processing fails (size limits, context canceled)
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	// Non-blocking admission control: reject immediately if too many handlers are in-flight
+	if ps.batchHandlerPool != nil {
+		select {
+		case ps.batchHandlerPool <- struct{}{}:
+			defer func() { <-ps.batchHandlerPool }()
+		default:
+			prometheusBatchHandlerRejections.Inc()
+			return nil, status.Error(codes.Unavailable, "server at capacity")
+		}
+	}
+
 	ctx, _, endSpan := tracing.Tracer("propagation").Start(
 		ctx,
 		"ProcessTransactionBatch",
@@ -925,7 +963,22 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		idx := idx
 		tx := item.Tx
 
+		// Acquire server-wide semaphore before spawning goroutine to limit
+		// total concurrent tx-processing goroutines across all batch calls.
+		if ps.batchWorkerPool != nil {
+			select {
+			case ps.batchWorkerPool <- struct{}{}:
+			case <-ctx.Done():
+				response.Errors[idx] = errors.WrapPublic(ctx.Err())
+				continue
+			}
+		}
+
 		g.Go(func() error {
+			if ps.batchWorkerPool != nil {
+				defer func() { <-ps.batchWorkerPool }()
+			}
+
 			var txCtx context.Context
 
 			if len(item.TraceContext) > 0 {

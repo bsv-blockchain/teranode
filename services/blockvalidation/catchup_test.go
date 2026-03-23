@@ -1245,28 +1245,38 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		ctx := context.Background()
 		server, mockBlockchainClient, _, _ := createServerWithEnhancedCatchup(t)
 
-		// Create a few test blocks for mocking
-		blocks := testhelpers.CreateTestBlockChain(t, 2)
-		targetBlock := blocks[1]
+		// Create test blocks: 3 blocks so we have distinct headers for tip vs UTXO height
+		blocks := testhelpers.CreateTestBlockChain(t, 3)
+		targetBlock := blocks[2]
 		targetBlock.Height = 150000 // Simulate a large chain
 
-		bestBlock := blocks[0]
+		bestBlock := blocks[1]
 		bestBlock.Height = 10000
+
+		// Distinct block for UTXO height — must differ from bestBlock to catch hash/height mismatches
+		utxoBlock := blocks[0]
+		utxoBlock.Height = 1018
 
 		// Mock GetBlockExists to return false for target and any other blocks
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil)
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-		// Mock GetBestBlockHeader
+		// Mock GetBestBlockHeader — returns blockchain tip at height 10000
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
 			bestBlock.Header,
 			&model.BlockHeaderMeta{Height: bestBlock.Height, ID: 10000},
 			nil,
 		)
 
-		// Mock GetBlockLocator
-		locatorHashes := []*chainhash.Hash{bestBlock.Header.Hash()}
-		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
+		// Mock GetBlockByHeight for locator capping (blockchain height 10000 > UTXO height 1018)
+		// Required (no .Maybe()) — test must fail if capping is removed
+		// Returns utxoBlock (distinct from bestBlock) to catch hash/height mismatches
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1018)).
+			Return(utxoBlock, nil)
+
+		// Mock GetBlockLocator — expect the capped hash and height, not the blockchain tip
+		locatorHashes := []*chainhash.Hash{utxoBlock.Header.Hash()}
+		mockBlockchainClient.On("GetBlockLocator", mock.Anything, utxoBlock.Header.Hash(), uint32(1018)).Return(locatorHashes, nil)
 
 		// Mock GetBlockHeader to return not found for new headers
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
@@ -1671,8 +1681,10 @@ func TestCatchupErrorScenarios(t *testing.T) {
 				MaxHalfOpenRequests: 1,
 			},
 		}
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServerWithConfig(t, config)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServerWithConfig(t, config)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 		blocks := testhelpers.CreateTestBlockChain(t, 5)
 		targetBlock := blocks[4]
@@ -2538,8 +2550,10 @@ func TestCatchup_NoRepeatedHeaderFetching(t *testing.T) {
 	// and doesn't fetch the same headers repeatedly
 
 	ctx := context.Background()
-	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 	defer cleanup()
+
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 	// Create test headers
 	allHeaders := testhelpers.CreateTestHeaders(t, 11) // Need headers 0-10
@@ -3066,6 +3080,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// Permissive default for locator capping (blockchain height > UTXO height fallback)
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
+		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3160,6 +3177,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// Permissive default for locator capping (blockchain height > UTXO height fallback)
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
+		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3643,8 +3663,10 @@ func TestCatchup_MemoryLimitAfterDuplicateRemoval(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test server
-	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 	defer cleanup()
+
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(0))
 
 	// Set memory limit to 10,001 - just enough for 10,000 + 1 new header after duplicate removal
 	// But with the bug, 10,000 + 2 = 10,002 > 10,001 triggers premature truncation
@@ -3754,4 +3776,101 @@ func TestCatchup_MemoryLimitAfterDuplicateRemoval(t *testing.T) {
 		assert.True(t, lastHeader.Hash().IsEqual(expectedLastHeader.Hash()),
 			"Last header should be header 10000 (unique), not a duplicate of header 9999")
 	}
+}
+
+// TestFindCommonAncestor_RejectsHeadersAboveUTXOHeight documents findCommonAncestor's
+// contract: it rejects any block whose height exceeds the UTXO height, even if the
+// block exists in the blockchain store. This is why catchupGetBlockHeaders must cap
+// the locator at UTXO height — without capping, the peer returns headers starting
+// from blockchain height, and findCommonAncestor rejects them all.
+func TestFindCommonAncestor_RejectsHeadersAboveUTXOHeight(t *testing.T) {
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	// Blockchain is at height 200, UTXO is at height 100
+	// This is the divergence scenario that causes the bug
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(100))
+
+	blocks := testhelpers.CreateTestBlockChain(t, 5)
+
+	// Simulate peer headers that all exist in blockchain store but are ABOVE UTXO height
+	// This is what happens when the locator starts from blockchain height (200)
+	// instead of UTXO height (100)
+	peerHeaders := make([]*model.BlockHeader, 3)
+	for i := 0; i < 3; i++ {
+		peerHeaders[i] = blocks[i].Header
+	}
+
+	// All headers exist in blockchain store
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
+
+	// But their heights are all above UTXO height (100) — this is the problem
+	for i, header := range peerHeaders {
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
+			header,
+			&model.BlockHeaderMeta{Height: uint32(150 + i)}, // Heights 150, 151, 152 — all > 100
+			nil,
+		)
+	}
+
+	catchupCtx := &CatchupContext{
+		blockUpTo: blocks[4],
+		headersFetchResult: &catchup.Result{
+			Headers: peerHeaders,
+		},
+	}
+
+	err := server.findCommonAncestor(context.Background(), catchupCtx)
+
+	// Without the locator capping fix, findCommonAncestor rejects all headers
+	// because their heights (150+) exceed UTXO height (100)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no common ancestor found")
+}
+
+// TestFindCommonAncestor_AcceptsHeadersAtOrBelowUTXOHeight documents the complementary
+// contract: findCommonAncestor accepts blocks whose heights are within the UTXO range.
+// This is the normal case when the locator is properly capped.
+func TestFindCommonAncestor_AcceptsHeadersAtOrBelowUTXOHeight(t *testing.T) {
+	server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	// Both stores at height 100 — no divergence
+	mockUTXOStore.On("GetBlockHeight").Return(uint32(100))
+
+	blocks := testhelpers.CreateTestBlockChain(t, 5)
+
+	// Peer headers at or below UTXO height
+	peerHeaders := make([]*model.BlockHeader, 3)
+	for i := 0; i < 3; i++ {
+		peerHeaders[i] = blocks[i].Header
+	}
+
+	// First two headers exist in our chain at heights within UTXO range
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[0].Hash()).Return(true, nil)
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[1].Hash()).Return(true, nil)
+	// Third header doesn't exist — this is where our chain diverges
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[2].Hash()).Return(false, nil)
+
+	// Heights are at or below UTXO height
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[0].Hash()).Return(
+		peerHeaders[0], &model.BlockHeaderMeta{Height: 98}, nil,
+	)
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[1].Hash()).Return(
+		peerHeaders[1], &model.BlockHeaderMeta{Height: 99}, nil,
+	)
+
+	catchupCtx := &CatchupContext{
+		blockUpTo: blocks[4],
+		headersFetchResult: &catchup.Result{
+			Headers: peerHeaders,
+		},
+	}
+
+	err := server.findCommonAncestor(context.Background(), catchupCtx)
+
+	// With aligned heights, findCommonAncestor finds peerHeaders[1] at height 99
+	require.NoError(t, err)
+	assert.Equal(t, 1, catchupCtx.commonAncestorIndex)
+	assert.Equal(t, uint32(99), catchupCtx.commonAncestorMeta.Height)
 }
