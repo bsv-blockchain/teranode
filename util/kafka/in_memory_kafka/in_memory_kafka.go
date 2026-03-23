@@ -3,13 +3,14 @@ package inmemorykafka
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
-var errSessionClosed = fmt.Errorf("in-memory session closed")
-var errAlreadyRunning = fmt.Errorf("consumer group already running")
+var errSessionClosed = errors.NewProcessingError("in-memory session closed")
+var errAlreadyRunning = errors.NewProcessingError("consumer group already running")
 
 // Message represents a Kafka message.
 type Message struct {
@@ -343,7 +344,7 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 	}()
 
 	if len(topics) != 1 {
-		return errors.New("in-memory consumer group mock only supports exactly one topic")
+		return errors.NewConfigurationError("in-memory consumer group mock only supports exactly one topic")
 	}
 
 	topicToConsume := topics[0]
