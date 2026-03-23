@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -273,7 +272,7 @@ func TestSubtreeMessageHandler_BlocksOnly_SkipsProcessing(t *testing.T) {
 	defer cancel()
 
 	handler := server.subtreeMessageHandler(ctx)
-	err = handler(&kafka.KafkaMessage{ConsumerMessage: sarama.ConsumerMessage{Value: msgBytes}})
+	err = handler(&kafka.KafkaMessage{Value: msgBytes})
 	require.NoError(t, err)
 
 	// Give async goroutines time to run if they were scheduled (they shouldn't be)
@@ -341,7 +340,7 @@ func TestSubtreeMessageHandler_BlocksOnlyFalse_ProcessesMessage(t *testing.T) {
 	defer cancel()
 
 	handler := server.subtreeMessageHandler(ctx)
-	err = handler(&kafka.KafkaMessage{ConsumerMessage: sarama.ConsumerMessage{Value: msgBytes}})
+	err = handler(&kafka.KafkaMessage{Value: msgBytes})
 	require.NoError(t, err)
 
 	// When BlocksOnly is false, the handler schedules subtreesHandler via g.Go and returns immediately.
@@ -387,7 +386,7 @@ func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T)
 	defer cancel()
 
 	handler := server.subtreeMessageHandler(ctx)
-	err = handler(&kafka.KafkaMessage{ConsumerMessage: sarama.ConsumerMessage{Value: msgBytes}})
+	err = handler(&kafka.KafkaMessage{Value: msgBytes})
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
