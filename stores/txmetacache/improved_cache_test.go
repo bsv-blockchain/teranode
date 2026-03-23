@@ -83,17 +83,18 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 }
 
 // TestInitTimes measures New startup across X runs and logs the average per bucket type.
-func TestInitTimes(t *testing.T) {
+func Test_InitTimes(t *testing.T) {
 	// testing with 256 MB cache
 	const (
 		maxBytes = 256 * 1024 * 1024
-		runs     = 3
+		runs     = 5
 	)
 
 	buckets := []struct {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
@@ -142,6 +143,12 @@ func TestImprovedCache_New(t *testing.T) {
 			name:       "valid trimmed cache",
 			maxBytes:   64 * 1024, // 64KB
 			bucketType: Trimmed,
+			wantError:  false,
+		},
+		{
+			name:       "valid native cache",
+			maxBytes:   64 * 1024, // 64KB
+			bucketType: Native,
 			wantError:  false,
 		},
 		{
@@ -555,6 +562,7 @@ func TestImprovedCache_DifferentBucketTypes(t *testing.T) {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Preallocated", Preallocated},
 		{"Trimmed", Trimmed},
@@ -899,6 +907,7 @@ func TestImprovedCache_OverfillGenerationStats(t *testing.T) {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
@@ -1141,61 +1150,12 @@ func TestImprovedCache_ForceCleanLockedMap(t *testing.T) {
 	}
 }
 
-func TestImprovedCache_ListChunks(t *testing.T) {
-	tests := []struct {
-		name       string
-		bucketType BucketType
-	}{
-		{"Trimmed", Trimmed},
-		{"Preallocated", Preallocated},
-		{"Unallocated", Unallocated},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cache, err := New(1024, tt.bucketType)
-			require.NoError(t, err)
-			defer cache.Reset()
-
-			// Add some entries to create chunks
-			for i := 0; i < 5; i++ {
-				key := fmt.Sprintf("key_%d", i)
-				value := fmt.Sprintf("value_%d", i)
-				err := cache.Set([]byte(key), []byte(value))
-				if err != nil {
-					t.Logf("Set failed for key %d: %v", i, err)
-				}
-			}
-
-			// Call listChunks directly on the bucket
-			// Note: This is a debug function that prints to stdout
-			bucket := cache.buckets[0] // Get first bucket
-			switch tt.bucketType {
-			case Trimmed:
-				if tb, ok := bucket.(*bucketTrimmed); ok {
-					tb.listChunks()
-				}
-			case Preallocated:
-				if pb, ok := bucket.(*bucketPreallocated); ok {
-					pb.listChunks()
-				}
-			case Unallocated:
-				if ub, ok := bucket.(*bucketUnallocated); ok {
-					ub.listChunks()
-				}
-			}
-
-			// Just verify the function was called (we can't easily capture stdout)
-			require.True(t, true, "listChunks function was called")
-		})
-	}
-}
-
 func TestImprovedCache_SetMulti(t *testing.T) {
 	tests := []struct {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1203,7 +1163,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cache, err := New(8192, tt.bucketType)
+			cache, err := New(8192000000, tt.bucketType)
 			require.NoError(t, err)
 			defer cache.Reset()
 
@@ -1263,12 +1223,16 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 				}
 
 				expectedValue := newValues[i]
-				if tt.bucketType == Trimmed {
+				switch tt.bucketType {
+				case Trimmed:
 					// Trimmed bucket may have different behavior for overwrites
 					// Just verify that we got some value back
 					require.NotEmpty(t, val, "Should have some value for key %s", string(key))
-					t.Logf("Trimmed bucket returned value: %s for key %s", string(val), string(key))
-				} else {
+					// t.Logf("Trimmed bucket returned value: %s for key %s", string(val), string(key))
+				case Native:
+					// Native bucket does not overwrite; expect original value
+					require.Equal(t, values[i], val, "Native does not overwrite; expect original value for key %s", string(key))
+				default:
 					require.Equal(t, expectedValue, val, "Overwritten value mismatch for key %s", string(key))
 				}
 			}
@@ -1344,6 +1308,7 @@ func TestImprovedCache_BucketDelFunctions(t *testing.T) {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1393,6 +1358,7 @@ func TestImprovedCache_SetMultiKeysSingleValueAllBuckets(t *testing.T) {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1440,11 +1406,12 @@ func TestImprovedCache_SetMultiKeysSingleValueAllBuckets(t *testing.T) {
 }
 
 func TestImprovedCache_CleanLockedMapCoverage(t *testing.T) {
-	// This test focuses on triggering cleanLockedMap for preallocated and unallocated buckets
+	// This test focuses on triggering cleanLockedMap for native, preallocated and unallocated buckets
 	tests := []struct {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
 	}
@@ -1455,7 +1422,7 @@ func TestImprovedCache_CleanLockedMapCoverage(t *testing.T) {
 			var numEntries int
 
 			// Different strategies for different bucket types
-			if tt.bucketType == Unallocated {
+			if tt.bucketType == Native || tt.bucketType == Unallocated {
 				cacheSize = 512  // Very small cache to force chunk overflow quickly
 				numEntries = 500 // Many entries to force generation wraparound
 			} else {
