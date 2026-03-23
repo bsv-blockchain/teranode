@@ -518,15 +518,15 @@ func (f *franzLoggerAdapter) Log(level kgo.LogLevel, msg string, keyvals ...inte
 	formatted := fmt.Sprintf("[FRANZ-GO] %s %v", msg, keyvals)
 	switch level {
 	case kgo.LogLevelError:
-		f.logger.Errorf(formatted)
+		f.logger.Errorf("%s", formatted)
 	case kgo.LogLevelWarn:
-		f.logger.Warnf(formatted)
+		f.logger.Warnf("%s", formatted)
 	case kgo.LogLevelInfo:
-		f.logger.Infof(formatted)
+		f.logger.Infof("%s", formatted)
 	case kgo.LogLevelDebug:
-		f.logger.Debugf(formatted)
+		f.logger.Debugf("%s", formatted)
 	default:
-		f.logger.Infof(formatted)
+		f.logger.Infof("%s", formatted)
 	}
 }
 

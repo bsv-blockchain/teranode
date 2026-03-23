@@ -3,13 +3,13 @@ package inmemorykafka
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
-var errSessionClosed = errors.New("in-memory session closed")
-var errAlreadyRunning = errors.New("consumer group already running")
+var errSessionClosed = fmt.Errorf("in-memory session closed")
+var errAlreadyRunning = fmt.Errorf("consumer group already running")
 
 // Message represents a Kafka message.
 type Message struct {
@@ -146,13 +146,13 @@ type ProducerError struct {
 
 // InMemoryAsyncProducer implements an asynchronous producer for testing.
 type InMemoryAsyncProducer struct {
-	broker     *InMemoryBroker
-	input      chan *ProducerMessage
-	successes  chan *ProducerMessage
-	errors     chan *ProducerError
-	close      chan struct{}
-	wg         sync.WaitGroup
-	closeOnce  sync.Once
+	broker    *InMemoryBroker
+	input     chan *ProducerMessage
+	successes chan *ProducerMessage
+	errors    chan *ProducerError
+	close     chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // NewInMemoryAsyncProducer creates a new in-memory async producer.

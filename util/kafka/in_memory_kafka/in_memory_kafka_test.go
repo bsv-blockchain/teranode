@@ -138,8 +138,10 @@ func TestInMemoryAsyncProducerClose(t *testing.T) {
 	producer.Produce("async-test-close", nil, []byte("msg2"))
 	time.Sleep(50 * time.Millisecond)
 	require.NoError(t, producer.Close())
-	for range producer.Successes() {}
-	for range producer.Errors() {}
+	for range producer.Successes() {
+	}
+	for range producer.Errors() {
+	}
 	_, okSuccess := <-producer.Successes()
 	assert.False(t, okSuccess)
 	_, okError := <-producer.Errors()
@@ -213,7 +215,7 @@ func (h *errorSetupHandler) Setup(ConsumerGroupSession) error {
 	h.setupCalled = true
 	return h.setupErr
 }
-func (h *errorSetupHandler) Cleanup(ConsumerGroupSession) error { return nil }
+func (h *errorSetupHandler) Cleanup(ConsumerGroupSession) error                          { return nil }
 func (h *errorSetupHandler) ConsumeClaim(ConsumerGroupSession, ConsumerGroupClaim) error { return nil }
 
 func TestConsumerGroupConsumeCleanupError(t *testing.T) {
@@ -221,8 +223,8 @@ func TestConsumerGroupConsumeCleanupError(t *testing.T) {
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
 	handler := &errorCleanupHandler{
-		consumeErr:   errors.New(errors.ERR_UNKNOWN, "consume done"),
-		cleanupErr:   errors.New(errors.ERR_UNKNOWN, "cleanup failed"),
+		consumeErr: errors.New(errors.ERR_UNKNOWN, "consume done"),
+		cleanupErr: errors.New(errors.ERR_UNKNOWN, "cleanup failed"),
 	}
 	err := cg.Consume(context.Background(), []string{"test-topic"}, handler)
 	assert.Error(t, err)
@@ -236,12 +238,14 @@ type errorCleanupHandler struct {
 	cleanupCalled bool
 }
 
-func (h *errorCleanupHandler) Setup(ConsumerGroupSession) error   { return nil }
+func (h *errorCleanupHandler) Setup(ConsumerGroupSession) error { return nil }
 func (h *errorCleanupHandler) Cleanup(ConsumerGroupSession) error {
 	h.cleanupCalled = true
 	return h.cleanupErr
 }
-func (h *errorCleanupHandler) ConsumeClaim(ConsumerGroupSession, ConsumerGroupClaim) error { return h.consumeErr }
+func (h *errorCleanupHandler) ConsumeClaim(ConsumerGroupSession, ConsumerGroupClaim) error {
+	return h.consumeErr
+}
 
 func TestConsumerGroupConsumeContextCancel(t *testing.T) {
 	broker := NewInMemoryBroker()
