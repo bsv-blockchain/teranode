@@ -53,7 +53,7 @@ The FSM responds to the following **events**:
 
 The diagram below represents the relationships between the states and events in the FSM (as defined in `services/blockchain/fsm.go`):
 
-<img src="img/fsmDiagram.svg" width="500" />
+![Finite state machine diagram](img/fsmDiagram.svg){ width="500" }
 
 The FSM handles the following state **transitions**:
 
