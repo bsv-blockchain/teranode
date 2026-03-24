@@ -561,8 +561,16 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 		if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err == nil {
 			return nil // Success
 		}
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
 		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtreeData for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
 	} else {
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
 		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtree for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
 	}
 
@@ -590,6 +598,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				if err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (aborting peer retry)", subtreeHash.String(), err)
+					}
 					continue
 				}
 
@@ -597,6 +609,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, altPeerID, altBaseURL); err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtreeData %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData %s (aborting peer retry)", subtreeHash.String(), err)
+					}
 					continue
 				}
 

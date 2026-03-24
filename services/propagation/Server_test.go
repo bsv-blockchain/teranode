@@ -35,6 +35,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type panicReadCloser struct{}
@@ -1236,5 +1238,198 @@ func TestIsIPAllowed(t *testing.T) {
 		assert.True(t, isIPAllowed(net.ParseIP("10.0.0.1"), nets))
 		assert.False(t, isIPAllowed(net.ParseIP("10.0.0.2"), nets))
 		assert.False(t, isIPAllowed(net.ParseIP("192.168.2.1"), nets))
+	})
+}
+
+func TestProcessTransaction_BatchHandlerLimit(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	t.Run("rejects with Unavailable when handler pool is full", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		// Create a handler pool of size 1 and fill it
+		handlerPool := make(chan struct{}, 1)
+		handlerPool <- struct{}{} // fill the single slot
+
+		ps := &PropagationServer{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			txStore:          txStore,
+			batchHandlerPool: handlerPool,
+		}
+
+		ctx := context.Background()
+		req := &propagation_api.ProcessTransactionRequest{Tx: []byte{0x00}}
+		resp, err := ps.ProcessTransaction(ctx, req)
+
+		require.Nil(t, resp)
+		require.Error(t, err)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Contains(t, st.Message(), "server at capacity")
+	})
+
+	t.Run("admits request when handler pool has capacity", func(t *testing.T) {
+		ctx := context.Background()
+		validatorInstance, utxoStore := setupRealValidator(t, ctx)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		ps := &PropagationServer{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			txStore:          txStore,
+			validator:        validatorInstance,
+			batchHandlerPool: make(chan struct{}, 1), // capacity of 1, empty
+		}
+
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		_, err := utxoStore.Create(ctx, txs[0], 1)
+		require.NoError(t, err)
+
+		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
+		resp, err := ps.ProcessTransaction(ctx, req)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+	})
+
+	t.Run("no limit when pool is nil", func(t *testing.T) {
+		ctx := context.Background()
+		validatorInstance, utxoStore := setupRealValidator(t, ctx)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		ps := &PropagationServer{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			txStore:          txStore,
+			validator:        validatorInstance,
+			batchHandlerPool: nil, // disabled
+		}
+
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		_, err := utxoStore.Create(ctx, txs[0], 1)
+		require.NoError(t, err)
+
+		req := &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()}
+		resp, err := ps.ProcessTransaction(ctx, req)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+	})
+}
+
+func TestProcessTransactionBatch_BatchHandlerLimit(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	t.Run("rejects batch with Unavailable when handler pool is full", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		handlerPool := make(chan struct{}, 1)
+		handlerPool <- struct{}{} // fill the single slot
+
+		ps := &PropagationServer{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			txStore:          txStore,
+			batchHandlerPool: handlerPool,
+		}
+
+		ctx := context.Background()
+		req := &propagation_api.ProcessTransactionBatchRequest{
+			Items: []*propagation_api.BatchTransactionItem{
+				{Tx: []byte{0x00}},
+			},
+		}
+		resp, err := ps.ProcessTransactionBatch(ctx, req)
+
+		require.Nil(t, resp)
+		require.Error(t, err)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Contains(t, st.Message(), "server at capacity")
+	})
+}
+
+func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	t.Run("limits concurrent tx-processing goroutines", func(t *testing.T) {
+		ctx := context.Background()
+		validatorInstance, utxoStore := setupRealValidator(t, ctx)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		// Concurrency limit of 1 — only one goroutine at a time
+		ps := &PropagationServer{
+			logger:          ulogger.TestLogger{},
+			settings:        tSettings,
+			txStore:         txStore,
+			validator:       validatorInstance,
+			batchWorkerPool: make(chan struct{}, 1),
+		}
+
+		// Create transactions
+		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+		_, err := utxoStore.Create(ctx, txs[0], 1)
+		require.NoError(t, err)
+
+		// Process a batch — should succeed even with concurrency limit of 1
+		req := &propagation_api.ProcessTransactionBatchRequest{
+			Items: []*propagation_api.BatchTransactionItem{
+				{Tx: txs[1].ExtendedBytes()},
+				{Tx: txs[2].ExtendedBytes()},
+			},
+		}
+		resp, err := ps.ProcessTransactionBatch(ctx, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Len(t, resp.Errors, 2)
+	})
+
+	t.Run("no limit when pool is nil", func(t *testing.T) {
+		ctx := context.Background()
+		validatorInstance, utxoStore := setupRealValidator(t, ctx)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		txStore, _ := null.New(ulogger.TestLogger{})
+
+		ps := &PropagationServer{
+			logger:          ulogger.TestLogger{},
+			settings:        tSettings,
+			txStore:         txStore,
+			validator:       validatorInstance,
+			batchWorkerPool: nil, // disabled
+		}
+
+		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+		_, err := utxoStore.Create(ctx, txs[0], 1)
+		require.NoError(t, err)
+
+		req := &propagation_api.ProcessTransactionBatchRequest{
+			Items: []*propagation_api.BatchTransactionItem{
+				{Tx: txs[1].ExtendedBytes()},
+				{Tx: txs[2].ExtendedBytes()},
+			},
+		}
+		resp, err := ps.ProcessTransactionBatch(ctx, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Len(t, resp.Errors, 2)
 	})
 }
