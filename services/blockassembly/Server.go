@@ -39,7 +39,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/bump"
 	"github.com/bsv-blockchain/teranode/util/health"
-	"github.com/bsv-blockchain/teranode/util/merkleproof"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -1516,58 +1515,13 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 // It builds the proof from the coinbase (at subtree index 0, tx index 0) to the block merkle root.
 // Returns nil if any step fails — callers should treat nil as "proof not available".
 func (ba *BlockAssembly) computeCoinbaseBUMP(jobID string, subtreesInJob []*subtreepkg.Subtree, subtreeHashes []chainhash.Hash, blockHeight uint32) []byte {
-	// Get the within-subtree proof: coinbase is at index 0 of subtree 0
-	subtreeProofPtrs, err := subtreesInJob[0].GetMerkleProof(0)
-	if err != nil {
-		ba.logger.Warnf("[BlockAssembly][%s] failed to get subtree merkle proof for coinbase: %v", jobID, err)
-		return nil
-	}
-
-	// Convert subtree hashes to pointer slice for block-level proof
+	// Convert subtree hashes to pointer slice to match bump.ComputeCoinbaseBUMP signature
 	subtreeHashPtrs := make([]*chainhash.Hash, len(subtreeHashes))
 	for i := range subtreeHashes {
 		subtreeHashPtrs[i] = &subtreeHashes[i]
 	}
 
-	// Get the block-level proof: from subtree 0's root to block merkle root
-	blockProofPtrs, _, err := merkleproof.GenerateBlockMerkleProof(subtreeHashPtrs, 0)
-	if err != nil {
-		ba.logger.Warnf("[BlockAssembly][%s] failed to generate block merkle proof for coinbase: %v", jobID, err)
-		return nil
-	}
-
-	// Convert pointer slices to value slices for MerkleProof struct
-	subtreeProof := make([]chainhash.Hash, len(subtreeProofPtrs))
-	for i, h := range subtreeProofPtrs {
-		subtreeProof[i] = *h
-	}
-
-	blockProof := make([]chainhash.Hash, len(blockProofPtrs))
-	for i, h := range blockProofPtrs {
-		blockProof[i] = *h
-	}
-
-	proof := &merkleproof.MerkleProof{
-		BlockHeight:      blockHeight,
-		SubtreeIndex:     0,
-		TxIndexInSubtree: 0,
-		SubtreeProof:     subtreeProof,
-		BlockProof:       blockProof,
-	}
-
-	bumpFormat, err := bump.ConvertToBUMP(proof)
-	if err != nil {
-		ba.logger.Warnf("[BlockAssembly][%s] failed to convert coinbase merkle proof to BUMP: %v", jobID, err)
-		return nil
-	}
-
-	bumpBytes, err := bumpFormat.EncodeBinary()
-	if err != nil {
-		ba.logger.Warnf("[BlockAssembly][%s] failed to encode coinbase BUMP to binary: %v", jobID, err)
-		return nil
-	}
-
-	return bumpBytes
+	return bump.ComputeCoinbaseBUMP(subtreesInJob[0], subtreeHashPtrs, blockHeight)
 }
 
 // SubtreeCount returns the current number of subtrees managed by the block assembler.

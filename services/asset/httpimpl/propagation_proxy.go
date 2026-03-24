@@ -10,15 +10,15 @@ import (
 )
 
 // ProxyPropagationTx creates an Echo handler that reverse-proxies transaction
-// submissions to the propagation service. The request path is rewritten from
-// /api/v1/tx to /tx to match the propagation service's HTTP endpoint.
+// submissions to the propagation service. The backendPath parameter specifies
+// the path on the propagation service to proxy to (e.g. "/tx" or "/txs").
 // The target URL must be pre-validated by the caller.
-func (h *HTTP) ProxyPropagationTx(target *url.URL) echo.HandlerFunc {
+func (h *HTTP) ProxyPropagationTx(target *url.URL, backendPath string) echo.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
-			req.URL.Path = "/tx"
+			req.URL.Path = backendPath
 			req.URL.RawQuery = ""
 			req.Host = target.Host
 		},

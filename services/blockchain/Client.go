@@ -352,7 +352,14 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	block.CoinbaseBUMP = resp.CoinbaseBump
+
+	return block, nil
 }
 
 // GetBlocks retrieves multiple blocks starting from a specific hash.

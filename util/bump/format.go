@@ -10,6 +10,7 @@ import (
 	"errors" //nolint:depguard
 	"fmt"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/util/merkleproof"
 )
 
@@ -59,6 +60,23 @@ const (
 	FlagTxID = 0x02
 )
 
+// hashToDisplayHex returns the hash as a display-order hex string (big-endian / byte-reversed),
+// which is the standard representation used in BRC-74 JSON and the go-bc reference implementation.
+// The binary BUMP format stores hashes in internal (little-endian) order; the conversion from
+// display order to internal order happens in EncodeBinary.
+func hashToDisplayHex(h chainhash.Hash) string {
+	return h.String()
+}
+
+// reverseBytes returns a new byte slice with the bytes in reverse order.
+func reverseBytes(b []byte) []byte {
+	r := make([]byte, len(b))
+	for i := range b {
+		r[i] = b[len(b)-1-i]
+	}
+	return r
+}
+
 // ConvertToBUMP converts a standard merkle proof to BUMP format.
 // This function takes the existing Teranode merkle proof structure and converts
 // it to the standardized BUMP format for compatibility with BSV ecosystem tools.
@@ -85,10 +103,10 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		// Determine sibling offset (adjacent node)
 		siblingOffset := offset ^ 1 // Flip the last bit to get sibling
 
-		// Add the sibling node with its hash
+		// Add the sibling node with its hash in display order (BRC-74 convention)
 		level = append(level, Node{
 			Offset: siblingOffset,
-			Hash:   siblingHash.String(),
+			Hash:   hashToDisplayHex(siblingHash),
 		})
 
 		bump.Path = append(bump.Path, level)
@@ -107,10 +125,10 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		// Determine sibling offset
 		siblingOffset := blockLevelOffset ^ 1
 
-		// Add the sibling node with its hash
+		// Add the sibling node with its hash in display order (BRC-74 convention)
 		level = append(level, Node{
 			Offset: siblingOffset,
-			Hash:   siblingHash.String(),
+			Hash:   hashToDisplayHex(siblingHash),
 		})
 
 		bump.Path = append(bump.Path, level)
@@ -183,7 +201,8 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 					return nil, errors.New(fmt.Sprintf("hash must be 32 bytes at level %d, node %d, got %d bytes", levelIdx, nodeIdx, len(hashBytes)))
 				}
 
-				if _, err := buf.Write(hashBytes); err != nil {
+				// Node.Hash is in display order (big-endian); BRC-74 binary uses internal order (little-endian)
+				if _, err := buf.Write(reverseBytes(hashBytes)); err != nil {
 					return nil, errors.New(fmt.Sprintf("failed to write hash for level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
 				}
 			}
