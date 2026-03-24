@@ -190,7 +190,7 @@ func TestBUMP_KnownMerkleRoot(t *testing.T) {
 	t.Run("corrected BUMP has internal-order bytes parseable by go-bc", func(t *testing.T) {
 		// Build the corrected BUMP binary manually
 		var correctedBump []byte
-		correctedBump = append(correctedBump, 0xfd, 0x71, 0x2e) // block height 11889 as VarInt
+		correctedBump = append(correctedBump, 0xfd, 0x71, 0x2e)  // block height 11889 as VarInt
 		correctedBump = append(correctedBump, 0x01)              // tree height = 1
 		correctedBump = append(correctedBump, 0x01)              // 1 node at level 0
 		correctedBump = append(correctedBump, 0x01)              // offset = 1
