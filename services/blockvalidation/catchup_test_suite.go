@@ -9,6 +9,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
@@ -17,9 +18,9 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,11 @@ func (s *CatchupTestSuite) setupMocks() {
 
 	// Provide a permissive default for Spend to avoid unexpected calls from concurrent validation goroutines.
 	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+
+	// Permissive default for GetBlockByHeight — used by locator capping when
+	// blockchain height > UTXO height. Returns error so capping falls back to blockchain height.
+	s.MockBlockchain.On("GetBlockByHeight", mock.Anything, mock.Anything).
+		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
 }
 
 // createServer creates the Server instance with all dependencies
@@ -165,6 +171,12 @@ func (s *CatchupTestSuite) Cleanup() {
 		case <-time.After(100 * time.Millisecond):
 			// Timeout - cache was likely never started
 		}
+	}
+
+	// Stop expiring map background goroutines
+	if s.Server != nil && s.Server.blockValidation != nil {
+		s.Server.blockValidation.blockExistsCache.Stop()
+		s.Server.blockValidation.lastValidatedBlocks.Stop()
 	}
 
 	// Run cleanup functions in reverse order

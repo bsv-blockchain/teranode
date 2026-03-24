@@ -84,9 +84,13 @@ func TestHandleRejectedTxTopic(t *testing.T) {
 		mockP2P := new(MockServerP2PClient)
 		mockP2P.On("GetID").Return(peer.ID("self-peer"))
 
+		registry := NewPeerRegistry()
+		tSettings := createBaseTestSettings()
+
 		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: mockP2P,
+			logger:     ulogger.New("test"),
+			P2PClient:  mockP2P,
+			banManager: NewPeerBanManager(context.Background(), nil, tSettings, registry),
 		}
 
 		msg := RejectedTxMessage{

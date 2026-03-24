@@ -40,7 +40,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
@@ -51,6 +50,10 @@ import (
 
 const splitMapBuckets = 4 * 1024
 const maxBatchesPerIteration = 64
+
+type cancelHolder struct {
+	f context.CancelFunc
+}
 
 // Job represents a mining job with its associated data.
 // A Job encapsulates all the information needed for a miner to attempt finding a valid
@@ -68,10 +71,12 @@ type Job struct {
 // and the subtree processor, including an error channel for asynchronous result reporting.
 
 type NewSubtreeRequest struct {
-	Subtree          *subtreepkg.Subtree // The subtree to process
-	ParentTxMap      TxInpointsMap       // Map of parent transactions
-	SkipNotification bool                // Whether to skip notification to the network
-	ErrChan          chan error          // Channel for error reporting
+	Subtree           *subtreepkg.Subtree                                     // The subtree to process
+	ParentTxMap       TxInpointsMap                                           // Map of parent transactions
+	DeletedTxs        *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints] // Backup map for deleted transactions
+	SkipNotification  bool                                                    // Whether to skip notification to the network
+	ErrChan           chan error                                              // Channel for error reporting
+	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -222,7 +227,9 @@ type SubtreeProcessor struct {
 	newSubtreeChan chan NewSubtreeRequest
 
 	// chainedSubtrees stores the ordered list of completed subtrees
-	chainedSubtrees []*subtreepkg.Subtree
+	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and closeChainedSubtrees()
+	chainedSubtrees   []*subtreepkg.Subtree
+	chainedSubtreesMu sync.Mutex
 
 	// chainedSubtreeCount tracks the number of chained subtrees atomically
 	chainedSubtreeCount atomic.Int32
@@ -246,6 +253,10 @@ type SubtreeProcessor struct {
 
 	// currentTxMap tracks transactions currently held in the subtree processor
 	currentTxMap TxInpointsMap
+
+	// deletedTxs stores transaction parent info for recently deleted transactions
+	// This provides a backup/fallback for Server when transactions are deleted during async storage
+	deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]
 
 	// removeMap tracks transactions marked for removal
 	removeMap txmap.TxMap
@@ -271,8 +282,7 @@ type SubtreeProcessor struct {
 	// announcementTicker periodically triggers currentSubtree announcements
 	announcementTicker *time.Ticker
 
-	// cancel is the cancel function for the processor context
-	cancel context.CancelFunc
+	cancelPtr atomic.Pointer[cancelHolder]
 
 	// stopOnce ensures Stop() is only executed once
 	stopOnce sync.Once
@@ -424,6 +434,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		chainedSubtreeCount:          atomic.Int32{},
 		queue:                        queue,
 		currentTxMap:                 NewSplitTxInpointsMap(splitMapBuckets),
+		deletedTxs:                   txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](),
 		removeMap:                    txmap.NewSplitSwissMap(256, 16),
 		blockchainClient:             blockchainClient,
 		subtreeStore:                 subtreeStore,
@@ -495,13 +506,14 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 		// Create a child context with cancel for managing the processor lifecycle
 		processorCtx, cancel := context.WithCancel(ctx)
-		stp.cancel = cancel
+		stp.cancelPtr.Store(&cancelHolder{f: cancel})
 
 		stp.setCurrentRunningState(StateRunning)
 
 		go func() {
 			// Recover from panics (e.g., send on closed channel during shutdown)
 			defer func() {
+				stp.stopped.Store(true) // Must be set on any exit so Stop() does not hang
 				if r := recover(); r != nil {
 					logger.Warnf("[SubtreeProcessor] goroutine recovered from panic: %v", r)
 				}
@@ -548,7 +560,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						send := NewSubtreeRequest{
 							Subtree:     incompleteSubtree,
 							ParentTxMap: stp.currentTxMap,
+							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
+							OnStorageComplete: func() {
+								stp.cleanupDeletedTxs(incompleteSubtree)
+							},
 						}
 
 						// Send announcement, respecting context cancellation
@@ -746,7 +762,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						send := NewSubtreeRequest{
 							Subtree:     incompleteSubtree,
 							ParentTxMap: stp.currentTxMap,
+							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
+							OnStorageComplete: func() {
+								stp.cleanupDeletedTxs(incompleteSubtree)
+							},
 						}
 
 						// Send announcement, but respect context cancellation
@@ -970,6 +990,27 @@ func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree,
 	incompleteSubtree.Fees = currentSt.Fees
 
 	return incompleteSubtree, nil
+}
+
+// cleanupDeletedTxs performs actual deletion from currentTxMap for transactions
+// that were previously soft-deleted. Called after subtree storage completes.
+// Only deletes if the transaction is still marked as deleted (not re-added).
+//
+// This function is called via the OnStorageComplete callback to safely remove
+// transactions that were marked for deletion while the subtree was being stored.
+//
+// Parameters:
+//   - subtree: The subtree whose soft-deleted transactions should be cleaned up
+func (stp *SubtreeProcessor) cleanupDeletedTxs(subtree *subtreepkg.Subtree) {
+	if stp.deletedTxs == nil {
+		return
+	}
+	for _, node := range subtree.Nodes {
+		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			// Remove from deletedTxs backup map (transaction data no longer needed after storage)
+			stp.deletedTxs.Delete(node.Hash)
+		}
+	}
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
@@ -1753,8 +1794,12 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	stp.newSubtreeChan <- NewSubtreeRequest{
 		Subtree:          oldSubtree,
 		ParentTxMap:      stp.currentTxMap,
+		DeletedTxs:       stp.deletedTxs,
 		SkipNotification: skipNotification,
 		ErrChan:          errCh,
+		OnStorageComplete: func() {
+			stp.cleanupDeletedTxs(oldSubtree)
+		},
 	}
 
 	// wait for the writing of the subtree to complete in a separate goroutine
@@ -1974,7 +2019,10 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 	}
 
 	if foundIndex >= 0 {
-		// remove tx from the currentTxMap
+		// Save to deleted backup map before removing (for Server fallback during async storage)
+		if txInpoints, found := stp.currentTxMap.Get(hash); found {
+			stp.deletedTxs.Set(hash, *txInpoints)
+		}
 		stp.currentTxMap.Delete(hash)
 
 		// we found the transaction in a subtree
@@ -2043,7 +2091,10 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 		}
 
 		if foundIndex >= 0 {
-			// remove tx from the currentTxMap
+			// Save to deleted backup map before removing (for Server fallback during async storage)
+			if txInpoints, found := stp.currentTxMap.Get(hash); found {
+				stp.deletedTxs.Set(hash, *txInpoints)
+			}
 			stp.currentTxMap.Delete(hash)
 
 			// we found the transaction in a subtree
@@ -2145,13 +2196,22 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
 
-			// Remove from currentTxMap so addNode won't skip it as a duplicate
+			// Save to deleted backup before removing (protects brief window during delete-and-readd)
+			stp.deletedTxs.Set(node.Hash, *parents)
+
+			// Delete from currentTxMap so addNode won't skip it as a duplicate
 			stp.currentTxMap.Delete(node.Hash)
 
-			// Immediately re-add the node
+			// Re-add the node (adds back to currentTxMap)
 			if err = stp.addNode(node, parents, true); err != nil {
+				// Restore to currentTxMap to avoid inconsistent state
+				stp.currentTxMap.Set(node.Hash, parents)
+				stp.deletedTxs.Delete(node.Hash)
 				return errors.NewProcessingError("error adding node to subtree", err)
 			}
+
+			// Clear from deletedTxs (transaction successfully re-added, no longer deleted)
+			stp.deletedTxs.Delete(node.Hash)
 		}
 	}
 
@@ -2398,7 +2458,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return errors.NewProcessingError("you must pass in blocks to move up the chain")
 	}
 
-	stp.logger.Infof("reorgBlocks with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks))
+	// trace the entire reorg process, which can be long-running for large reorgs, to help identify bottlenecks and monitor performance
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "reorgBlocks",
+		tracing.WithAlwaysSample(),
+		tracing.WithParentStat(stp.stats),
+		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reorgBlocks] starting reorg with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
+	)
+	defer deferFn()
 
 	if len(moveForwardBlocks) > 0 && len(moveBackBlocks) == 0 {
 		// wait for the last block to be processed first, mined_set etc.
@@ -2573,8 +2639,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.currentBlockHeader.Store(block.Header)
 	}
 
-	movedBackBlockTxMap = nil // free up memory
-
 	// Build allLosingTxHashes directly from losingTxSet (already deduped, already filtered vs winningTxSet)
 	allLosingTxHashes := getHashSlice(len(losingTxSet))
 	for hash := range losingTxSet {
@@ -2598,8 +2662,17 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
-	// Consolidate all "mark as false" operations into a single call
-	// This includes: losing transactions + all transactions in block assembly (chainedSubtrees + currentSubtree)
+	// Consolidate all "mark as not on longest chain" operations:
+	// 1. Losing conflicting transactions from moveForward blocks
+	// 2. All transactions currently in block assembly (chainedSubtrees + currentSubtree)
+	//
+	// Assembly txs must be included because some may have entered the UTXO store via
+	// block validation of a non-longest-chain block (e.g., competing fork), where they
+	// were inserted with UnminedSince=0 (mined). These need unmined_since set.
+	// For txs that already have unmined_since set (from propagation), this is idempotent.
+	//
+	// MoveBack txs are handled by BlockAssembler.Reset (which calls
+	// MarkTransactionsOnLongestChain before reorgBlocks runs).
 	subtreeNodeCount := 0
 	for _, subtree := range stp.chainedSubtrees {
 		subtreeNodeCount += len(subtree.Nodes)
@@ -2613,7 +2686,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	*allMarkFalse = append(*allMarkFalse, *allLosingTxHashes...)
 	putHashSlice(allLosingTxHashes)
 
-	// Add everything in block assembly (not mined on the longest chain)
+	// Add all transactions in block assembly
 	for _, subtree := range stp.chainedSubtrees {
 		for _, node := range subtree.Nodes {
 			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -2628,9 +2701,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
-	// Make one consolidated call instead of separate calls
 	if len(*allMarkFalse) > 0 {
-		if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, *allMarkFalse); err != nil {
+		if err = stp.markNotOnLongestChain(ctx, *allMarkFalse); err != nil {
 			putHashSlice(allMarkFalse)
 			return err
 		}
@@ -2641,7 +2713,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// this will also store it by the Server in the subtree store
 	for _, subtree := range stp.chainedSubtrees {
 		errCh := make(chan error)
-		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree, ParentTxMap: stp.currentTxMap, ErrChan: errCh}
+		stp.newSubtreeChan <- NewSubtreeRequest{
+			Subtree:     subtree,
+			ParentTxMap: stp.currentTxMap,
+			DeletedTxs:  stp.deletedTxs,
+			ErrChan:     errCh,
+			OnStorageComplete: func() {
+				stp.cleanupDeletedTxs(subtree)
+			},
+		}
 
 		if err = <-errCh; err != nil {
 			return errors.NewProcessingError("[reorgBlocks] error sending subtree to newSubtreeChan", err)
@@ -2672,105 +2752,21 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	return nil
 }
 
-func (stp *SubtreeProcessor) markNotOnLongestChain(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, markNotOnLongestChain []chainhash.Hash) error {
-	if len(moveBackBlocks) == 1 && len(moveForwardBlocks) == 0 {
-		// special case: likely an invalidation; validate whether to update the transactions or not
-		_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, moveBackBlocks[0].Header.Hash())
-		if err != nil {
-			return errors.NewProcessingError("[reorgBlocks] error getting block header meta for block we moved back", err)
-		}
-
-		if blockHeaderMeta.Invalid {
-			// the block we moved back is invalid, so we cannot just mark all transactions as not on the longest chain
-			markNotOnLongestChain, err = stp.checkMarkNotOnLongestChain(ctx, moveBackBlocks[0], markNotOnLongestChain)
-			if err != nil {
-				return errors.NewProcessingError("[reorgBlocks] error checking which transactions to mark as not on longest chain", err)
-			}
-		}
-	}
-
-	// check again if we have any transactions to mark, after the checkMarkNotOnLongestChain
-	if len(markNotOnLongestChain) > 0 {
-		if err := stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
+func (stp *SubtreeProcessor) markNotOnLongestChain(ctx context.Context, txHashes []chainhash.Hash) error {
+	// Mark transactions as not on longest chain (set unmined_since).
+	// Called with the combined set of:
+	// 1. Losing conflicting txs from moveForward blocks
+	// 2. All txs currently in block assembly
+	//
+	// For txs that already have unmined_since set, this is an idempotent write.
+	// MoveBack txs are handled by BlockAssembler.Reset before reorgBlocks runs.
+	if len(txHashes) > 0 {
+		if err := stp.utxoStore.MarkTransactionsOnLongestChain(ctx, txHashes, false); err != nil {
 			return errors.NewProcessingError("[reorgBlocks] error marking transactions as not on longest chain in utxo store", err)
 		}
 	}
 
 	return nil
-}
-
-func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, invalidBlock *model.Block, markNotOnLongestChain []chainhash.Hash) ([]chainhash.Hash, error) {
-	stp.logger.Infof("[reorgBlocks] block %s we moved back is invalid, checking whether to mark transactions as not on longest chain", invalidBlock.String())
-
-	checkMarkNotOnLongestChain := make([]chainhash.Hash, 0, len(markNotOnLongestChain))
-
-	_, lastBlockHeaderMetas, err := stp.blockchainClient.GetBlockHeaders(ctx, invalidBlock.Header.HashPrevBlock, 1000)
-	if err != nil {
-		return nil, errors.NewProcessingError("[reorgBlocks] error getting last block headers", err)
-	}
-
-	lastBlockHeaderIDs := make(map[uint32]bool)
-	for _, header := range lastBlockHeaderMetas {
-		lastBlockHeaderIDs[header.ID] = true
-	}
-
-	txMetas := make([]*meta.Data, len(markNotOnLongestChain))
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(stp.settings.UtxoStore.GetBatcherSize * 2)
-
-	// we need to check each transaction in the block we moved back and see if it is still on the longest chain or not
-	for idx, hash := range markNotOnLongestChain {
-		idx := idx
-		hashRef := &hash
-
-		g.Go(func() error {
-			txMeta, err := stp.utxoStore.Get(gCtx, hashRef, fields.BlockIDs)
-			if err != nil {
-				return errors.NewProcessingError("[reorgBlocks] error getting transaction from utxo store", err)
-			}
-
-			txMetas[idx] = txMeta
-
-			return nil
-		})
-	}
-
-	if err = g.Wait(); err != nil {
-		return nil, err
-	}
-
-	for idx, hash := range markNotOnLongestChain {
-		txMeta := txMetas[idx]
-		if txMeta == nil {
-			// transaction not found, not OK
-			return nil, errors.NewProcessingError("[reorgBlocks] error getting transaction %s from longest chain", hash.String(), err)
-		}
-
-		if len(txMeta.BlockIDs) == 1 && txMeta.BlockIDs[0] == invalidBlock.ID {
-			// the transaction is only in the invalid block, so it is definitely not on the longest chain
-			checkMarkNotOnLongestChain = append(checkMarkNotOnLongestChain, hash)
-		} else {
-			for _, blockID := range txMeta.BlockIDs {
-				if lastBlockHeaderIDs[blockID] {
-					// the transaction is still in one of the last 1000 blocks, so it is still on the longest chain
-					// do not mark it as not on the longest chain
-					continue
-				}
-			}
-
-			// check BlockIDs to see if the transaction is still on the longest chain
-			onLongestChain, err := stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMeta.BlockIDs)
-			if err != nil {
-				return nil, errors.NewProcessingError("[reorgBlocks] error checking if transaction is on longest chain", err)
-			}
-
-			if !onLongestChain {
-				checkMarkNotOnLongestChain = append(checkMarkNotOnLongestChain, hash)
-			}
-		}
-	}
-
-	return checkMarkNotOnLongestChain, nil
 }
 
 // setTxCountFromSubtrees recalculates the total transaction count
@@ -2818,6 +2814,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	}
 
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlock",
+		tracing.WithAlwaysSample(),
 		tracing.WithCounter(prometheusSubtreeProcessorMoveBackBlock),
 		tracing.WithHistogram(prometheusSubtreeProcessorMoveBackBlockDuration),
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock][%s] with %d subtrees", block.String(), len(block.Subtrees)),
@@ -3403,6 +3400,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveForwardBlock",
+		tracing.WithAlwaysSample(),
 		tracing.WithParentStat(stp.stats),
 		tracing.WithCounter(prometheusSubtreeProcessorMoveForwardBlock),
 		tracing.WithHistogram(prometheusSubtreeProcessorMoveForwardBlockDuration),
@@ -4306,11 +4304,26 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16, h
 //   - ctx: Context for the stop operation (currently unused, for future extensibility)
 func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 	stp.stopOnce.Do(func() {
-		if stp.cancel != nil {
-			stp.cancel()
+		h := stp.cancelPtr.Swap(nil)
+		if h != nil && h.f != nil {
+			h.f()
+			// Wait for the main goroutine to exit before cleaning up chainedSubtrees
+			// to avoid data race with closeChainedSubtrees()
+			deadline := time.Now().Add(5 * time.Second)
+			for !stp.stopped.Load() {
+				if time.Now().After(deadline) {
+					stp.logger.Warnf("[SubtreeProcessor] Stop timeout waiting for goroutine to exit")
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 		}
-		// Clean up mmap-backed subtrees
-		for _, st := range stp.chainedSubtrees {
+		// Clean up mmap-backed subtrees (hold mutex to avoid race with closeChainedSubtrees)
+		stp.chainedSubtreesMu.Lock()
+		toClose := stp.chainedSubtrees
+		stp.chainedSubtrees = nil
+		stp.chainedSubtreesMu.Unlock()
+		for _, st := range toClose {
 			st.Close()
 		}
 		if cs := stp.currentSubtree.Load(); cs != nil {
@@ -4341,10 +4354,13 @@ func (stp *SubtreeProcessor) newSubtree(leafCount int) (*subtreepkg.Subtree, err
 
 // closeChainedSubtrees closes all mmap-backed chained subtrees and resets the slice.
 func (stp *SubtreeProcessor) closeChainedSubtrees() {
-	for _, st := range stp.chainedSubtrees {
-		st.Close()
-	}
+	stp.chainedSubtreesMu.Lock()
+	toClose := stp.chainedSubtrees
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 	stp.chainedSubtreesTotalSize.Store(0)
+	stp.chainedSubtreesMu.Unlock()
+	for _, st := range toClose {
+		st.Close()
+	}
 }

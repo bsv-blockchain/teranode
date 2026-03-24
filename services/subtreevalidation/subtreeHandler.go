@@ -59,6 +59,11 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 			return nil
 		}
 
+		// In BlocksOnly mode, skip processing peer-announced subtrees (only process subtrees from blocks)
+		if u.settings.SubtreeValidation.BlocksOnly {
+			return nil
+		}
+
 		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to unmarshal kafka message: %v", err)

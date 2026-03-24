@@ -86,6 +86,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries:   tSettings.BlockValidation.CheckSubtreeFromBlockRetries,
 		RetryBackoff: tSettings.BlockValidation.CheckSubtreeFromBlockRetryBackoffDuration,
+		CallerName:   "subtreevalidation",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init subtree validation service connection for '%s'", source, err)
@@ -141,6 +142,13 @@ func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, pee
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return errors.NewProcessingError("failed to serialize block for subtree validation", err)
+	}
+
+	// Apply timeout to prevent hanging on stale gRPC connections
+	if s.settings.SubtreeValidation.CheckBlockSubtreesTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.settings.SubtreeValidation.CheckBlockSubtreesTimeout)
+		defer cancel()
 	}
 
 	if _, err = s.apiClient.CheckBlockSubtrees(ctx, &subtreevalidation_api.CheckBlockSubtreesRequest{

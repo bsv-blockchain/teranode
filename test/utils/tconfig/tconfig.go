@@ -1,6 +1,7 @@
 package tconfig
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -139,7 +139,7 @@ func (c *TConfig) initViper() {
 				// To make this transformation works for .env file
 				// Note that dotenv does not override the environment variale, so it will
 				// not break the order of priority
-				if err := godotenv.Load(*tconfigFile); err != nil {
+				if err := loadEnvFile(*tconfigFile); err != nil {
 					panic(err)
 				} else {
 					c.Suite.TConfigFile = *tconfigFile
@@ -176,4 +176,41 @@ func (c *TConfig) isEnvFile(f string) bool {
 	}
 
 	return false
+}
+
+// loadEnvFile reads a .env file and sets environment variables.
+// Lines starting with # are comments. Empty lines are skipped.
+// Existing environment variables are not overridden.
+func loadEnvFile(filename string) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		// Remove surrounding quotes
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+		// Don't override existing env vars (same behavior as godotenv)
+		if _, exists := os.LookupEnv(key); !exists {
+			if err := os.Setenv(key, value); err != nil {
+				return err
+			}
+		}
+	}
+
+	return scanner.Err()
 }

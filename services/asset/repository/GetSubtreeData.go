@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -151,9 +152,14 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 		}
 	}
 
+	// Compute DAH before creating FileStorer so it is set atomically during file creation.
+	// This ensures the file always has a finite DAH even if the process crashes after creation.
+	dah := repo.UtxoStore.GetBlockHeight() + repo.settings.GetSubtreeValidationBlockHeightRetention()
+
 	// Create FileStorer (with or without quorum lock)
 	storer, err := filestorer.NewFileStorer(ctx, repo.logger, repo.settings,
-		repo.SubtreeStore, subtreeHash[:], fileformat.FileTypeSubtreeData)
+		repo.SubtreeStore, subtreeHash[:], fileformat.FileTypeSubtreeData,
+		options.WithDeleteAt(dah))
 	if err != nil {
 		if release != nil {
 			release() // Release quorum lock on error
@@ -209,12 +215,6 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			_ = httpWriter.CloseWithError(closeErr)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "close_failed").Inc()
 			return closeErr
-		}
-
-		// Set finite DAH so file expires naturally on pruned nodes
-		dah := repo.UtxoStore.GetBlockHeight() + repo.settings.GetSubtreeValidationBlockHeightRetention()
-		if err := repo.SubtreeStore.SetDAH(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData, dah); err != nil {
-			repo.logger.Warnf("[GetSubtreeDataReader] Error setting DAH for %s: %v", subtreeHash.String(), err)
 		}
 
 		// Success - close HTTP pipe

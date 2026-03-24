@@ -118,11 +118,11 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 			continue
 		}
 
-		u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
+		u.logger.Debugf("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
 
 		altErr := u.catchup(ctx, block, bestPeer.ID, bestPeer.DataHubURL)
 		if altErr == nil {
-			u.logger.Infof("[catchup] Successfully processed block %s from peer %s", blockHash.String(), bestPeer.ID)
+			u.logger.Debugf("[catchup] Successfully processed block %s from peer %s", blockHash.String(), bestPeer.ID)
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
 			return true

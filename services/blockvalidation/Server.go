@@ -44,7 +44,6 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -634,6 +633,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 						// If block is invalid, don't try other peers; continue to next catchup request
 						// Block is expected to be added to the block store as invalid somewhere else
+						// Note: ErrBlockIncomplete intentionally falls through to retry with alternative peers,
+						// since incomplete blocks (e.g. from seeded peers) may be available from other peers
 						if errors.Is(err, errors.ErrBlockInvalid) ||
 							errors.Is(err, errors.ErrTxMissingParent) ||
 							errors.Is(err, errors.ErrTxNotFound) ||
@@ -1066,6 +1067,7 @@ func (u *Server) Stop(_ context.Context) error {
 	// Wait for all background tasks in BlockValidation to complete
 	if u.blockValidation != nil {
 		u.blockValidation.Wait()
+		u.blockValidation.StopCaches()
 	}
 
 	// close the kafka consumer gracefully
@@ -1094,14 +1096,14 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", util.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
 	)
 	defer deferFn()
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("[BlockFound][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err))
+			errors.NewProcessingError("[BlockFound][%s] failed to create hash from bytes", util.ReverseAndHexEncodeSlice(req.Hash), err))
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
@@ -1112,7 +1114,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", utils.ReverseAndHexEncodeSlice(req.Hash))
+		u.logger.Infof("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
@@ -1147,13 +1149,13 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_api.RevalidateBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[RevalidateBlock][%s] revalidate block called", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithLogMessage(u.logger, "[RevalidateBlock][%s] revalidate block called", util.ReverseAndHexEncodeSlice(request.Hash)),
 	)
 	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[RevalidateBlock][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(request.Hash), err))
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[RevalidateBlock][%s] failed to create hash from bytes", util.ReverseAndHexEncodeSlice(request.Hash), err))
 	}
 
 	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
@@ -1168,8 +1170,8 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 
 	// Ensure all subtree files exist before proceeding with revalidation.
 	// This handles the case where pruner has removed subtree data for old invalid blocks.
+	var baseURL string
 	if u.p2pClient != nil {
-		var baseURL string
 		if peer, err := u.p2pClient.GetPeer(ctx, blockHeaderMeta.PeerID); err != nil {
 			u.logger.Warnf("[RevalidateBlock][%s] failed to get peer %s for DataHubURL, will use fallback peers: %v", block.String(), blockHeaderMeta.PeerID, err)
 		} else if peer != nil {
@@ -1184,9 +1186,10 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: true,
 		IsRevalidation:          true,
+		PeerID:                  blockHeaderMeta.PeerID,
 	}
 
-	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, opts)
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", block.String(), err))
 	}
@@ -1404,6 +1407,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: baseURL == "legacy",
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
+		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)

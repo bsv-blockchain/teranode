@@ -32,6 +32,10 @@ func RunDaemon(progname, version, commit string) {
 	// Initialize settings
 	tSettings := settings.NewSettings()
 
+	// Configure GC tuning (GOMEMLIMIT + GOGC) based on cgroup memory limits.
+	// Must happen early, before services allocate significant memory.
+	daemon.ConfigureGCTuning(tSettings.GCTuning)
+
 	debugflags.Init(debugflags.Flags{
 		All:       tSettings.Debug.All,
 		File:      tSettings.Debug.File,

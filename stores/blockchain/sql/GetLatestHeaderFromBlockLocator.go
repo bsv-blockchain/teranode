@@ -92,6 +92,16 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	var args []interface{}
 
 	baseQuery := `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+		)
 		SELECT
 	   	 b.version
 		,b.block_time
@@ -105,24 +115,8 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		,b.height
 		,b.tx_count
 		,b.chain_work
-		,b.median_time_past
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-			)
-		)`
+		JOIN ChainBlocks cb ON b.id = cb.id`
 
 	if s.engine == util.Postgres {
 		// Convert []chainhash.Hash to [][]byte
@@ -133,7 +127,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 		q = baseQuery + `
 			AND b.hash = ANY($2)
-			ORDER BY height DESC
+			ORDER BY b.height DESC
 			LIMIT 1`
 		args = []interface{}{bestBlockHash[:], pq.Array(hashBytes)}
 	} else {
@@ -149,7 +143,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 		q = baseQuery + fmt.Sprintf(`
 			AND b.hash IN (%s)
-			ORDER BY height DESC
+			ORDER BY b.height DESC
 			LIMIT 1`, strings.Join(placeholders, ","))
 	}
 
@@ -177,7 +171,6 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		&blockHeaderMeta.Height,
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.ChainWork,
-		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
@@ -207,10 +200,10 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to extract miner", err)
+			s.logger.Debugf("failed to extract miner in GetLatestHeaderFromBlockLocator (block may be invalid): %v", err)
+		} else {
+			blockHeaderMeta.Miner = miner
 		}
-
-		blockHeaderMeta.Miner = miner
 	}
 
 	// Cache the result in response cache

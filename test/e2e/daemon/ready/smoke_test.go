@@ -27,7 +27,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2295,7 +2294,7 @@ func TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC(t *testing.T
 
 	// Submit the mining solution via RPC
 	submitMiningSolutionCmd := bsvjson.MiningSolution{
-		ID:       utils.ReverseAndHexEncodeSlice(solution.Id),
+		ID:       util.ReverseAndHexEncodeSlice(solution.Id),
 		Coinbase: hex.EncodeToString(solution.Coinbase),
 		Time:     solution.Time,
 		Nonce:    solution.Nonce,
@@ -2319,7 +2318,7 @@ func TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC(t *testing.T
 	// Build the expected block hash
 	blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 	require.NoError(t, err, "Failed to build block header")
-	expectedBlockHash := utils.ReverseAndHexEncodeSlice(util.Sha256d(blockHeader))
+	expectedBlockHash := util.ReverseAndHexEncodeSlice(util.Sha256d(blockHeader))
 
 	// Verify the block was accepted by checking best block hash
 	resp, err = td.CallRPC(td.Ctx, "getbestblockhash", []any{})

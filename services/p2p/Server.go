@@ -55,11 +55,15 @@ import (
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 
-	// Default values for peer map cleanup
-	defaultPeerMapMaxSize         = 100000           // Maximum entries in peer maps
-	defaultPeerMapTTL             = 30 * time.Minute // Time-to-live for peer map entries
-	defaultPeerMapCleanupInterval = 5 * time.Minute  // Cleanup interval
+	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
+	defaultPeerMapMaxSize         = 10000            // Maximum entries in peer maps (reduced from 100k)
+	defaultPeerMapTTL             = 10 * time.Minute // Time-to-live for peer map entries (reduced from 30min)
+	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
+
+	// maxP2PMessageSize limits P2P message sizes to prevent memory exhaustion attacks.
+	// Messages exceeding this limit are rejected before parsing.
+	maxP2PMessageSize = 10 * 1024 * 1024 // 10MB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -893,6 +897,12 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 }
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxP2PMessageSize {
+		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, peerID)
+		return
+	}
+
 	var nodeStatusMessage NodeStatusMessage
 
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
@@ -903,12 +913,24 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
-	// If sender ID doesn't match node status ID log an error and return
-	// In future, consider banning this peer as they are maliciously spoofing
+	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
-		s.logger.Errorf("[handleNodeStatusTopic] node_status peerID %s does not match message ID %s",
-			peerID, nodeStatusMessage.PeerID)
+		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
+		if s.banManager != nil {
+			s.banManager.AddScore(peerID, ReasonProtocolViolation)
+		}
 		return
+	}
+
+	// Validate BaseURL to prevent SSRF attacks
+	if nodeStatusMessage.BaseURL != "" {
+		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
+			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
+			if s.banManager != nil {
+				s.banManager.AddScore(peerID, ReasonProtocolViolation)
+			}
+			return
+		}
 	}
 
 	// Skip further processing for our own messages (peer height updates, etc.)

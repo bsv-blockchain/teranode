@@ -41,7 +41,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -660,8 +659,16 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			for idx, node := range subtreeRequest.Subtree.Nodes {
 				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 					txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
+					if !found && subtreeRequest.DeletedTxs != nil {
+						// Fallback: check if transaction was deleted during async storage
+						var deletedTxInpoints subtreepkg.TxInpoints
+						deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
+						if found {
+							txInpoints = &deletedTxInpoints
+						}
+					}
 					if !found {
-						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
+						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
 						return
 					}
 
@@ -734,6 +741,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		defer close(allDoneCh)
 		<-subtreeStorageDone
 		<-metaDoneCh
+		// Trigger cleanup of soft-deleted transactions
+		if subtreeRequest.OnStorageComplete != nil {
+			subtreeRequest.OnStorageComplete()
+		}
 	}()
 
 	return subtreeDoneCh, allDoneCh, nil
@@ -845,8 +856,8 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
 		tracing.WithCounter(prometheusBlockAssemblyAddTxCounter),
-		tracing.WithTag("txid", utils.ReverseAndHexEncodeSlice(req.Txid)),
-		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", utils.ReverseAndHexEncodeSlice(req.Txid)),
+		tracing.WithTag("txid", util.ReverseAndHexEncodeSlice(req.Txid)),
+		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 
 	defer func() {
@@ -855,7 +866,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 
 	if len(req.Txid) != 32 {
 		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
+			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), util.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
 	ba.logger.Debugf("[AddTx] added tx %s to block assembler", chainhash.Hash(req.Txid).String())
@@ -909,13 +920,13 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "RemoveTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyRemoveTx),
-		tracing.WithLogMessage(ba.logger, "[RemoveTx][%s] called", utils.ReverseAndHexEncodeSlice(req.Txid)),
+		tracing.WithLogMessage(ba.logger, "[RemoveTx][%s] called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 	defer deferFn()
 
 	if len(req.Txid) != 32 {
 		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
+			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), util.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
 	hash := chainhash.Hash(req.Txid)
@@ -1180,7 +1191,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	}
 
 	ba.logger.Infof("[GetMiningCandidate][%s] returning mining candidate with %d transactions, %d subtrees, total size %d bytes",
-		utils.ReverseAndHexEncodeSlice(miningCandidate.Id),
+		util.ReverseAndHexEncodeSlice(miningCandidate.Id),
 		miningCandidate.NumTxs+1, // +1 for coinbase
 		len(miningCandidate.SubtreeHashes),
 		miningCandidate.SizeWithoutCoinbase,
@@ -1244,7 +1255,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 }
 
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.OKResponse, error) {
-	jobID := utils.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
+	jobID := util.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
 
 	ctx, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "submitMiningSolution",
 		tracing.WithParentStat(ba.stats),

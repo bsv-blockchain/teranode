@@ -35,11 +35,11 @@ var bufioReaderPool = sync.Pool{
 // but the actual I/O can be deferred to a background worker pool.
 type SubtreeWriteJob struct {
 	SubtreeHash   chainhash.Hash
-	SubtreeBytes  []byte
-	BlockHash     string // For logging
-	BlockHeight   uint32 // For DAH calculation
-	SubtreeIdx    int    // For logging
-	AlreadyExists bool   // Skip write if already exists
+	Subtree       *subtreepkg.Subtree // Serialized lazily by write worker to avoid holding bytes in channel
+	BlockHash     string              // For logging
+	BlockHeight   uint32              // For DAH calculation
+	SubtreeIdx    int                 // For logging
+	AlreadyExists bool                // Skip write if already exists
 }
 
 // subtreeWriteWorker processes subtree write jobs from a channel.
@@ -62,12 +62,18 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 				continue
 			}
 
+			// Serialize lazily at write time to avoid holding bytes in the channel buffer
+			subtreeBytes, err := job.Subtree.Serialize()
+			if err != nil {
+				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to serialize subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
+			}
+
 			// Write the subtree file with finite DAH (temporary until block persister confirms)
 			dah := job.BlockHeight + u.subtreeBlockHeightRetention
 			if err := u.subtreeStore.Set(ctx,
 				job.SubtreeHash[:],
 				fileformat.FileTypeSubtree,
-				job.SubtreeBytes,
+				subtreeBytes,
 				bloboptions.WithAllowOverwrite(true),
 				bloboptions.WithDeleteAt(dah),
 			); err != nil {
@@ -146,15 +152,9 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 	// Set on block for merkle validation (synchronous)
 	block.SubtreeSlices[subtreeIdx] = fullSubtree
 
-	// Serialize for async write
-	subtreeBytes, err := fullSubtree.Serialize()
-	if err != nil {
-		return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to serialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
-	}
-
 	return &SubtreeWriteJob{
 		SubtreeHash:   subtreeHash,
-		SubtreeBytes:  subtreeBytes,
+		Subtree:       fullSubtree,
 		BlockHash:     block.Hash().String(),
 		BlockHeight:   block.Height,
 		SubtreeIdx:    subtreeIdx,
@@ -174,12 +174,17 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 //
 // Returns:
 //   - error: If validation fails
-func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, baseURL string) error {
+func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlock][%s] performing quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -210,7 +215,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
@@ -255,12 +260,17 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlockAsync",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -291,7 +301,7 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),

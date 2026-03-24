@@ -364,7 +364,9 @@ func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainh
 				return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] context done during retry delay", hash)
 			}
 			// If ctx.Err() is nil, it means cancelCtx timed out on its own (due to 't').
-			return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] timeout waiting %s for lock to free up during retry delay", hash, t)
+			// Return (false, false) so the caller can treat this as "missing" rather than an error.
+			q.logger.Warnf("[TryLockIfNotExistsWithTimeout][%s] timeout waiting %s for lock — treating as not exists", hash, t)
+			return false, false, noopFunc, nil
 		}
 	}
 }

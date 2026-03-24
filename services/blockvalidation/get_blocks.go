@@ -156,16 +156,10 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] expected %d blocks, got %d", blockUpTo.Hash().String(), len(batchHeaders), len(blocks))
 		}
 
-		// reverse the blocks to match the order of headers
-		for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
-			blocks[j], blocks[k] = blocks[k], blocks[j]
-		}
+		reverseBlocks(blocks)
 
-		// Verify each fetched block matches the expected header
-		for j, block := range blocks {
-			if block.Hash().String() != batchHeaders[j].Hash().String() {
-				return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s", blockUpTo.Hash().String(), j, batchHeaders[j].Hash().String(), block.Hash().String())
-			}
+		if err := verifyBlockHeaders(blocks, batchHeaders, blockUpTo); err != nil {
+			return err
 		}
 
 		// Immediately distribute blocks to workers
@@ -567,8 +561,16 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 		if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err == nil {
 			return nil // Success
 		}
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
 		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtreeData for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
 	} else {
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
 		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtree for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
 	}
 
@@ -596,6 +598,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				if err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (aborting peer retry)", subtreeHash.String(), err)
+					}
 					continue
 				}
 
@@ -603,6 +609,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, altPeerID, altBaseURL); err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtreeData %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData %s (aborting peer retry)", subtreeHash.String(), err)
+					}
 					continue
 				}
 
@@ -807,4 +817,22 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	// }
 
 	return block, nil
+}
+
+// reverseBlocks reverses a slice of blocks in place.
+func reverseBlocks(blocks []*model.Block) {
+	for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
+		blocks[j], blocks[k] = blocks[k], blocks[j]
+	}
+}
+
+// verifyBlockHeaders checks that each fetched block's hash matches the expected header.
+func verifyBlockHeaders(blocks []*model.Block, headers []*model.BlockHeader, blockUpTo *model.Block) error {
+	for j, block := range blocks {
+		if block.Hash().String() != headers[j].Hash().String() {
+			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s",
+				blockUpTo.Hash().String(), j, headers[j].Hash().String(), block.Hash().String())
+		}
+	}
+	return nil
 }

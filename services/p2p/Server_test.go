@@ -580,8 +580,10 @@ func TestHandleBlockTopic(t *testing.T) {
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
 		// Create a mock banManager that returns false for any peer
+		// and expects AddScore to be called for peer ID spoofing
 		mockBanManager := new(MockPeerBanManager)
 		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+		mockBanManager.On("AddScore", mock.Anything, ReasonProtocolViolation).Return(100, false)
 
 		// Create mock kafka producer
 		mockKafkaProducer := new(MockKafkaProducer)
@@ -691,8 +693,10 @@ func TestHandleSubtreeTopic(t *testing.T) {
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
 		// Create a mock banManager that returns false for any peer
+		// and expects AddScore to be called for peer ID spoofing
 		mockBanManager := new(MockPeerBanManager)
 		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+		mockBanManager.On("AddScore", mock.Anything, ReasonProtocolViolation).Return(100, false)
 
 		// Create mock kafka producer
 		mockKafkaProducer := new(MockKafkaProducer)
@@ -1487,8 +1491,9 @@ func TestSelfMessageFiltering(t *testing.T) {
 		msgBytes, err := json.Marshal(blockMsg)
 		require.NoError(t, err)
 
-		// Handle the message (from parameter doesn't matter, we check PeerID)
-		server.handleBlockTopic(context.Background(), msgBytes, "someOtherPeer")
+		// Handle the message with matching fromID to avoid spoofing detection
+		// Self-message filtering checks isOwnMessage which uses both fromID and message.PeerID
+		server.handleBlockTopic(context.Background(), msgBytes, GetID.String())
 
 		// Should NOT publish to Kafka
 		select {
@@ -1530,8 +1535,9 @@ func TestSelfMessageFiltering(t *testing.T) {
 		msgBytes, err := json.Marshal(subtreeMsg)
 		require.NoError(t, err)
 
-		// Handle the message
-		server.handleSubtreeTopic(context.Background(), msgBytes, "someOtherPeer")
+		// Handle the message with matching fromID to avoid spoofing detection
+		// Self-message filtering checks isOwnMessage which uses both fromID and message.PeerID
+		server.handleSubtreeTopic(context.Background(), msgBytes, GetID.String())
 
 		// Should NOT publish to Kafka
 		select {

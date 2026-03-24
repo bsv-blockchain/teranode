@@ -15,7 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // Options represents the complete set of configuration options for blob operations.
@@ -277,6 +277,10 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 	query.Set("fileType", fileType.String())
 
 	if options.DAH > 0 {
+		// NOTE: The "dah" parameter is included for diagnostics/logging only. The receiving
+		// node intentionally does NOT consume this value — each teranode applies its own DAH
+		// based on its local BlockHeightRetention setting, since a peer's DAH is not relevant
+		// to the receiver's retention policy. See QueryToFileOptions for the receiving side.
 		query.Set("dah", strconv.FormatUint(uint64(options.DAH), 10))
 	}
 
@@ -291,10 +295,19 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 	return query
 }
 
-// QueryToFileOptions converts URL query parameters to FileOptions
 // QueryToFileOptions converts URL query parameters to FileOptions.
-// This is the inverse of FileOptionsToQuery and is typically used on the receiving
-// end of an HTTP request to reconstruct the original file options from query parameters.
+// Used on the receiving end of an HTTP request to reconstruct file options from query parameters.
+//
+// NOTE: This intentionally does NOT read the "dah" query parameter sent by FileOptionsToQuery.
+// Each teranode has its own GlobalBlockHeightRetention setting, so when fetching a blob from
+// a peer, the receiver applies its own DAH policy — not the sender's. The receiving node's
+// file store applies DAH automatically via constructFilename() using its local
+// BlockHeightRetention setting (see file.go constructFilename: dah = currentBlockHeight +
+// BlockHeightRetention).
+//
+// The "blockHeightRetention" query key, despite its name, maps to WithDeleteAt() and is
+// treated as an absolute DAH value (not a relative retention window). It is not sent in
+// normal peer-to-peer blob transfers; it exists for explicit override scenarios only.
 //
 // Parameters:
 //   - query: URL query parameters to convert
@@ -366,7 +379,7 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	if len(o.Filename) > 0 {
 		filename = o.Filename
 	} else {
-		filename = utils.ReverseAndHexEncodeSlice(key)
+		filename = util.ReverseAndHexEncodeSlice(key)
 	}
 
 	// For negative HashPrefix, take characters from the end

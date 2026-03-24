@@ -263,32 +263,30 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	tx, err := bt.NewTxFromString(txHex)
 	require.NoError(t, err)
 
-	// Calculate actual input amount
-	inputAmount := tx.Inputs[0].PreviousTxSatoshis
+	// set previous sats to 0, which makes the tx invalid
+	tx.Inputs[0].PreviousTxSatoshis = 0
 
-	// Make the transaction invalid by making output satoshis exceed input satoshis
-	// This will fail the basic sanity check: sum(outputs) must be <= sum(inputs)
-	for _, output := range tx.Outputs {
-		output.Satoshis = inputAmount * 2 // Make total outputs > inputs
-	}
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
-	utxoStore, _ := nullstore.NewNullStore()
-	_ = utxoStore.SetBlockHeight(257727)
-	//nolint:gosec
-	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	initPrometheusMetrics()
-
-	tSettings := settings.NewSettings()
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
 	v := &Validator{
-		logger:                        ulogger.TestLogger{},
+		logger:                        logger,
 		settings:                      tSettings,
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
+		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		stats:                         gocore.NewStat("validator"),
@@ -716,7 +714,7 @@ func (s *MockBlockAssemblyStore) RemoveTx(_ context.Context, hash *chainhash.Has
 }
 
 func Benchmark_validateInternal(b *testing.B) {
-	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9")
 	require.NoError(b, err)
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
@@ -728,11 +726,16 @@ func Benchmark_validateInternal(b *testing.B) {
 		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
+	utxoHeights := make([]uint32, len(tx.Inputs))
+	for i := range utxoHeights {
+		utxoHeights[i] = 740975
+	}
+
 	for i := 0; i < b.N; i++ {
 		err = v.validateTransaction(context.Background(), tx, 740975, nil, &Options{})
 		require.NoError(b, err)
 
-		err = v.validateTransactionScripts(context.Background(), tx, 740975, []uint32{740975}, &Options{SkipPolicyChecks: true})
+		err = v.validateTransactionScripts(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(b, err)
 	}
 }
@@ -1486,4 +1489,84 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T)
 
 	// Verify UTXO store was not called
 	mockUtxoStore.AssertNotCalled(t, "Get")
+}
+
+// CorruptMetaUtxoStore wraps a real UTXO store but corrupts the meta.Data returned
+// by Create() so that MetaBytes() fails during serialization. This simulates a
+// txmeta serialization error in the sendTxMetaToKafka path.
+type CorruptMetaUtxoStore struct {
+	*sql.Store
+}
+
+func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
+	metaData, err := c.Store.Create(ctx, tx, blockHeight, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Corrupt TxInpoints: add an extra parent hash without a corresponding Idxs entry.
+	// This causes TxInpoints.Serialize() to return ErrParentTxHashesMismatch,
+	// which makes MetaBytes() fail inside sendTxMetaToKafka.
+	metaData.TxInpoints.ParentTxHashes = append(metaData.TxInpoints.ParentTxHashes, chainhash.Hash{0xDE, 0xAD})
+	return metaData, nil
+}
+
+func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	realStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	corruptStore := &CorruptMetaUtxoStore{Store: realStore}
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+
+	// Seed parent tx (coinbase) as spendable
+	_, err = realStore.Create(ctx, txs[0], 1, utxostore.WithLocked(false))
+	require.NoError(t, err)
+
+	blockAsmMock := blockassembly.NewMock()
+	kafkaMock := kafka.NewKafkaAsyncProducerMock()
+
+	testSettings := test.CreateBaseTestSettings(t)
+	testSettings.BlockAssembly.Disabled = false
+	testSettings.Validator.TxLockedMaxRetries = 0
+
+	v := &Validator{
+		logger:                    ulogger.TestLogger{},
+		utxoStore:                 corruptStore,
+		blockAssembler:            blockAsmMock,
+		settings:                  testSettings,
+		txValidator:               NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:                     gocore.NewStat("validator"),
+		txmetaKafkaProducerClient: kafkaMock,
+	}
+
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Times(1)
+
+	err = realStore.SetBlockHeight(2)
+	require.NoError(t, err)
+
+	opts := &Options{AddTXToBlockAssembly: true}
+
+	// ValidateWithOptions should succeed despite the txmeta serialization failure
+	// because the 2PC must still complete to unlock the transaction.
+	txMetaData, err := v.ValidateWithOptions(ctx, txs[1], 2, opts)
+	require.NoError(t, err, "ValidateWithOptions should return nil even when txmeta serialization fails")
+	require.NotNil(t, txMetaData)
+
+	// Verify the transaction was unlocked by 2PC
+	storedMeta := &meta.Data{}
+	err = realStore.GetMeta(ctx, txs[1].TxIDChainHash(), storedMeta)
+	require.NoError(t, err)
+	assert.False(t, storedMeta.Locked, "tx should be unlocked after 2PC completes despite txmeta serialization failure")
 }

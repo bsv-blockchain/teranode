@@ -52,10 +52,10 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -292,7 +292,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1535,6 +1535,91 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 	}
 }
 
+func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tests := []struct {
+		name        string
+		coinbaseTx  *bt.Tx
+		expectError string
+	}{
+		{
+			name:        "Nil coinbase tx returns ErrBlockIncomplete",
+			coinbaseTx:  nil,
+			expectError: "coinbase tx is nil or empty",
+		},
+		{
+			name:        "Coinbase with nil inputs returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Inputs: nil},
+			expectError: "coinbase tx is nil or empty",
+		},
+		{
+			name:        "Coinbase with empty inputs returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Inputs: []*bt.Input{}},
+			expectError: "coinbase tx is nil or empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+			defer cleanup()
+
+			tSettings := test.CreateBaseTestSettings(t)
+
+			blockchainStoreURL, err := url.Parse("sqlitememory://")
+			require.NoError(t, err)
+			blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
+			require.NoError(t, err)
+
+			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
+			require.NoError(t, err)
+
+			blockValidator := NewBlockValidation(
+				ctx,
+				ulogger.TestLogger{},
+				tSettings,
+				blockchainClient,
+				subtreeStore,
+				txStore,
+				utxoStore,
+				nil,
+				subtreeValidationClient,
+			)
+
+			nBits, _ := model.NewNBitFromString("2000ffff")
+			hashPrevBlock := chaincfg.RegressionNetParams.GenesisHash
+			merkleRoot := chainhash.Hash{}
+
+			blockHeader := &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  hashPrevBlock,
+				HashMerkleRoot: &merkleRoot,
+				Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+				Bits:           *nBits,
+				Nonce:          0,
+			}
+
+			block := &model.Block{
+				Header:           blockHeader,
+				SizeInBytes:      1000,
+				TransactionCount: 1,
+				CoinbaseTx:       tt.coinbaseTx,
+				Subtrees:         []*chainhash.Hash{},
+			}
+
+			err = blockValidator.ValidateBlock(ctx, block, "test")
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
+			require.Contains(t, err.Error(), tt.expectError)
+		})
+	}
+}
+
 func Test_validateBlockSubtrees(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -2126,6 +2211,12 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 func Test_checkOldBlockIDs(t *testing.T) {
 	initPrometheusMetrics()
 
+	testBlock := func() *model.Block {
+		prevHash := chainhash.HashH([]byte("prev"))
+		merkleRoot := chainhash.HashH([]byte("merkle"))
+		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+	}
+
 	t.Run("empty map", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := &BlockValidation{
@@ -2136,7 +2227,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
 
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
 	})
 
@@ -2155,7 +2246,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
 
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "blockIDs is empty for txID")
 	})
@@ -2180,7 +2271,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(blockIDs, nil).Once()
 
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
 	})
 
@@ -2200,7 +2291,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Once()
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
 
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
 	})
 
@@ -2220,7 +2311,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil).Once()
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
 
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "are not from current chain")
 	})
@@ -2652,6 +2743,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		revalidateBlockChan:           revalidateChan,
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	defer bv.StopCaches()
 
 	// Create a valid coinbase transaction
 	privateKey, _ := bec.NewPrivateKey()
@@ -2753,6 +2845,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		revalidateBlockChan:           make(chan revalidateBlockData, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	t.Cleanup(bv.StopCaches)
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3626,6 +3719,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	defer bv.StopCaches()
 
 	err = bv.ValidateBlock(context.Background(), block, "test")
 	t.Logf("ValidateBlock error type: %T, value: %v", err, err)

@@ -42,7 +42,11 @@ services:
       chmod +x /refresh-collation.sh
       # Run collation refresh in background after postgres starts
       /refresh-collation.sh &
-      exec /usr/local/bin/docker-entrypoint.sh postgres
+      exec /usr/local/bin/docker-entrypoint.sh postgres \
+        -c random_page_cost=1.1 \
+        -c work_mem=16MB \
+        -c shared_preload_libraries=pg_stat_statements \
+        -c pg_stat_statements.track=all
       "
     restart: on-failure
     healthcheck:

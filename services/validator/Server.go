@@ -842,7 +842,13 @@ func (v *Server) startHTTPServer(ctx context.Context, httpAddresses string) erro
 
 	// Configure middleware and timeouts
 	v.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(v.settings.Validator.HTTPRateLimit))))
+
+	if v.settings.Validator.HTTPBodyLimit != "" {
+		v.httpServer.Use(middleware.BodyLimit(v.settings.Validator.HTTPBodyLimit))
+	}
+
 	v.httpServer.Server.ReadTimeout = 5 * time.Second
+	v.httpServer.Server.ReadHeaderTimeout = 5 * time.Second
 	v.httpServer.Server.WriteTimeout = 10 * time.Second
 	v.httpServer.Server.IdleTimeout = 120 * time.Second
 

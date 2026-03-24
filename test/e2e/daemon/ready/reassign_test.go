@@ -78,6 +78,9 @@ func TestShouldAllowReassign(t *testing.T) {
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, aliceToBobTx)
 	require.NoError(t, err)
 
+	// Wait for the transaction to be processed by block assembly before mining
+	td.WaitForBlockAssemblyToProcessTx(t, aliceToBobTx.TxIDChainHash().String())
+
 	// Mine a block and wait for processing
 	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)

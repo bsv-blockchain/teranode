@@ -44,6 +44,9 @@ var (
 
 	// prometheusAssetHTTPGetMerkleProof tracks merkle proof retrievals
 	prometheusAssetHTTPGetMerkleProof *prometheus.CounterVec
+
+	// prometheusAssetHTTPProxyPropagationTx tracks proxied transaction submissions
+	prometheusAssetHTTPProxyPropagationTx *prometheus.CounterVec
 )
 
 // prometheusMetricsInitOnce ensures metrics are initialized exactly once
@@ -221,6 +224,19 @@ func _initPrometheusMetrics() {
 			Subsystem: "asset",
 			Name:      "http_get_merkle_proof",
 			Help:      "Number of Get merkle proof ops",
+		},
+		[]string{
+			"function",  // function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHTTPProxyPropagationTx = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_proxy_propagation_tx",
+			Help:      "Number of proxied transaction submissions to propagation service",
 		},
 		[]string{
 			"function",  // function tracking the operation

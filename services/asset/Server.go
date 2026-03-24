@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/asset/centrifuge_impl"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
@@ -58,6 +59,7 @@ type Server struct {
 	blockchainClient      blockchain.ClientI
 	blockvalidationClient blockvalidation.Interface
 	p2pClient             p2p.ClientI
+	banList               banlist.Interface
 }
 
 // NewServer creates a new Server instance with the provided dependencies.
@@ -81,7 +83,7 @@ type Server struct {
 //   - *Server: A fully initialized Server instance ready for use
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
-	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server {
+	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface) *Server {
 	s := &Server{
 		logger:                logger,
 		settings:              tSettings,
@@ -92,6 +94,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
+		banList:               banList,
 	}
 
 	return s
@@ -195,7 +198,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo)
+	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo, v.banList)
 	if err != nil {
 		return errors.NewServiceError("error creating http server", err)
 	}

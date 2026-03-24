@@ -2,7 +2,6 @@ package subtreevalidation
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -362,13 +361,38 @@ func (u *Server) loadSubtreeTransactions(ctx context.Context, request *subtreeva
 			bytesRead: &bytesRead,
 		}
 
-		// Read transactions and store data
+		// Stream transactions to parser and storage concurrently via io.Pipe
 		txs = make([]*bt.Tx, 0, subtreeToCheck.Length())
-		var buffer bytes.Buffer
-		teeReader := io.TeeReader(countingBody, &buffer)
 
-		txCount, err := u.readTransactionsFromSubtreeDataStreamToSlice(subtreeToCheck, teeReader, &txs)
+		pr, pw := io.Pipe()
+		storeDone := make(chan error, 1)
+		go func() {
+			err := u.subtreeStore.SetFromReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, pr, options.WithDeleteAt(dah))
+			storeDone <- err
+			if err != nil {
+				pw.CloseWithError(err)
+			}
+		}()
+
+		teeReader := io.TeeReader(countingBody, pw)
+
+		bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+		bufferedReader.Reset(teeReader)
+		defer func() {
+			bufferedReader.Reset(nil)
+			bufioReaderPool.Put(bufferedReader)
+		}()
+
+		txCount, parseErr := u.readTransactionsFromSubtreeDataStreamToSlice(subtreeToCheck, bufferedReader, &txs)
 		_ = countingBody.Close()
+
+		if parseErr != nil {
+			pw.CloseWithError(parseErr)
+		} else {
+			pw.Close()
+		}
+
+		storeErr := <-storeDone
 
 		if u.p2pClient != nil && peerID != "" {
 			trackCtx, _, traceDeferFn := tracing.DecoupleTracingSpan(ctx, "subtreevalidation", "recordBytesDownloaded")
@@ -378,17 +402,16 @@ func (u *Server) loadSubtreeTransactions(ctx context.Context, request *subtreeva
 			}
 		}
 
-		if err != nil {
-			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] failed to read transactions", subtreeHash.String(), err)
+		if parseErr != nil {
+			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] failed to read transactions", subtreeHash.String(), parseErr)
+		}
+
+		if storeErr != nil {
+			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] failed to store subtree data", subtreeHash.String(), storeErr)
 		}
 
 		if txCount != subtreeToCheck.Length() {
 			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] transaction count mismatch: expected %d, got %d", subtreeHash.String(), subtreeToCheck.Length(), txCount)
-		}
-
-		// Store the subtree data
-		if err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, buffer.Bytes(), options.WithDeleteAt(dah)); err != nil {
-			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] failed to store subtree data", subtreeHash.String(), err)
 		}
 	} else {
 		// Extract from existing file
@@ -829,7 +852,7 @@ func (sp *streamingProcessor) classifyAndProcessStreaming(
 	// Store total for processBuckets loop limit
 	sp.totalTransactions = txCount
 
-	sp.server.logger.Infof("[classifyAndProcessStreaming] Classified %d transactions: %d at level 0, %d with dependencies (maxDeps=%d). (Level 0 = no block parents, expected for coinbase spenders)",
+	sp.server.logger.Debugf("[classifyAndProcessStreaming] Classified %d transactions: %d at level 0, %d with dependencies (maxDeps=%d). (Level 0 = no block parents, expected for coinbase spenders)",
 		txCount, level0Count, len(sp.waitingOnParent), maxDeps)
 
 	// Now that ALL transactions are classified, process level 0
@@ -843,7 +866,7 @@ func (sp *streamingProcessor) classifyAndProcessStreaming(
 
 	// Process remaining dependency levels via cascade
 	if maxDeps > 0 {
-		sp.server.logger.Infof("[classifyAndProcessStreaming] Processing remaining %d dependency levels", maxDeps)
+		sp.server.logger.Debugf("[classifyAndProcessStreaming] Processing remaining %d dependency levels", maxDeps)
 		if err := sp.processBuckets(ctx, maxDeps); err != nil {
 			return err
 		}

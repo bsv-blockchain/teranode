@@ -362,7 +362,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// Override QuorumPath to ensure it uses the test-specific directory
 	// This prevents tests from sharing the same quorum directory
-	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
+	appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
 
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
@@ -401,6 +401,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	} else if opts.UTXOStoreType != "" {
 		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
 		require.NoError(t, err, "Failed to create container manager")
+
+		// Set test-specific external storage path for Aerospike to avoid conflicts between parallel tests
+		// Use absolute path to ensure files are written to the correct location
+		externalStorePath := filepath.Join(appSettings.DataFolder, "externalStore")
+		absExternalStorePath, err := filepath.Abs(externalStorePath)
+		require.NoError(t, err, "Failed to get absolute path for external storage")
+		containerManager.SetExternalStorePath(absExternalStorePath)
 
 		utxoStoreURL, err := containerManager.Initialize(ctx)
 		require.NoError(t, err, "Failed to initialize container")
@@ -501,6 +508,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+
+	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
+	// Aerospike may accept connections but still reject operations immediately after multiple
+	// services start connecting simultaneously. Combined with retry logic in tests, this ensures
+	// reliability across different environments (local development and resource-constrained CI).
+	if containerManager != nil && containerManager.GetStoreType() == containers.UTXOStoreAerospike {
+		time.Sleep(1 * time.Second)
+	}
 
 	var blockchainClient blockchain.ClientI
 
@@ -1538,6 +1553,14 @@ finished:
 }
 
 func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	// Check if block assembly is already at the expected block before waiting
+	// This prevents missing state changes that occurred before the channel was registered
+	currentHeader, currentHeight := td.BlockAssembler.CurrentBlock()
+	if currentHeader != nil && currentHeader.Hash().IsEqual(expectedBlock.Header.Hash()) {
+		t.Logf("Block assembly already at expected block: Height=%d, Hash=%s", currentHeight, currentHeader.Hash().String())
+		return
+	}
+
 	stateChangeCh := make(chan blockassembly.BestBlockInfo)
 	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
 

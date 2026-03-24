@@ -72,10 +72,17 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	)
 	defer deferFn()
 
-	// Try to get from response cache using derived cache key
-	// Use operation-prefixed key to avoid conflicts with other cached data
+	// Use chain walk cache when in-memory mode is on (survives StoreBlock wipes),
+	// otherwise fall back to response cache (original behavior).
+	cache := s.responseCache
+	cacheTTL := s.cacheTTL
+	if s.useInMemoryChainCheck {
+		cache = s.chainWalkCache
+		cacheTTL = chainWalkCacheTTL
+	}
+
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%s-%d", blockHashFrom.String(), numberOfHeaders)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := cache.Begin(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -92,6 +99,17 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	defer cancel()
 
 	const q = `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, 1 AS depth
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, cb.depth + 1
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND cb.depth < $2
+		)
 		SELECT
 			 b.version
 			,b.block_time
@@ -111,26 +129,10 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.subtrees_set
 			,b.invalid
 			,b.processed_at
-			,b.median_time_past
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-				LIMIT $2
-			)
-		)
-		ORDER BY height DESC
+		JOIN ChainBlocks cb ON b.id = cb.id
+		ORDER BY b.height DESC
+		LIMIT $2
 	`
 
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
@@ -149,8 +151,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		return nil, nil, err
 	}
 
-	// Cache the result in response cache
-	cacheOp.Set([2]interface{}{h, m}, s.cacheTTL)
+	cacheOp.Set([2]interface{}{h, m}, cacheTTL)
 
 	return h, m, nil
 }
@@ -192,7 +193,6 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, ha
 			&blockHeaderMeta.SubtreesSet,
 			&blockHeaderMeta.Invalid,
 			&processedAt,
-			&blockHeaderMeta.MedianTimePast,
 		}
 
 		// Add coinbase_tx if it's in the query

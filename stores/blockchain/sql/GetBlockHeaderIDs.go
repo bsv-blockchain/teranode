@@ -75,10 +75,17 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Try to get from response cache using derived cache key
-	// Use operation-prefixed key to avoid conflicts with other cached data
+	// Use chain walk cache when in-memory mode is on (survives StoreBlock wipes),
+	// otherwise fall back to response cache (original behavior).
+	cache := s.responseCache
+	cacheTTL := s.cacheTTL
+	if s.useInMemoryChainCheck {
+		cache = s.chainWalkCache
+		cacheTTL = chainWalkCacheTTL
+	}
+
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaderIDs-%s-%d", blockHashFrom.String(), numberOfHeaders)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := cache.Begin(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -117,14 +124,15 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 
 	q := `
 		WITH RECURSIVE ChainBlocks AS (
-			SELECT id, parent_id
+			SELECT id, parent_id, 1 AS depth
 			FROM blocks
 			WHERE hash = $1
 			UNION ALL
-			SELECT bb.id, bb.parent_id
+			SELECT bb.id, bb.parent_id, cb.depth + 1
 			FROM blocks bb
 			JOIN ChainBlocks cb ON bb.id = cb.parent_id
 			WHERE bb.id != cb.id
+			  AND cb.depth < $2
 		)
 		SELECT id FROM ChainBlocks
 		LIMIT $2
@@ -152,8 +160,13 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 		ids = append(ids, id)
 	}
 
-	// Cache the result in response cache
-	cacheOp.Set(ids, s.cacheTTL)
+	// Only cache non-empty results. Empty results can occur when GetBlockHeaderIDs
+	// is called for a block hash that hasn't been stored yet (e.g., checkOldBlockIDs
+	// during ValidateBlock runs before AddBlock). Caching empty results in chainWalkCache
+	// causes persistent failures because chainWalkCache survives StoreBlock cache wipes.
+	if len(ids) > 0 {
+		cacheOp.Set(ids, cacheTTL)
+	}
 
 	return ids, nil
 }

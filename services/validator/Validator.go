@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher"
@@ -138,11 +137,6 @@ type Validator struct {
 
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
-
-	// mtpCache caches Median Time Past values keyed by block height.
-	// MTP values are immutable once stored, so entries never need invalidation.
-	// Caching avoids repeated gRPC calls for the same heights across all transactions in a block.
-	mtpCache sync.Map
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -316,38 +310,47 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	ctxLogger := v.logger.WithTraceContext(ctx)
 	ctxLogger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
 
-	// Retry logic for TX_LOCKED errors with exponential backoff
-	// TX_LOCKED occurs when multiple transactions try to spend the same UTXO concurrently
-	// This should resolve quickly once the first transaction completes, so we use short backoff times
-	const maxRetries = 3
+	// Configurable retry for TX_LOCKED errors with exponential backoff.
+	// TX_LOCKED occurs when a parent and child tx arrive nearly simultaneously and the
+	// parent hasn't finished its 2-phase commit (unlock). This is a short-lived race
+	// condition that resolves once the parent's lock clears. Set maxRetries to 0 to
+	// disable and return TX_LOCKED immediately to the caller.
+	maxRetries := v.settings.Validator.TxLockedMaxRetries
+	if maxRetries < 0 {
+		ctxLogger.Errorf("[ValidateWithOptions] invalid TxLockedMaxRetries (%d); clamping to 0", maxRetries)
+		maxRetries = 0
+	}
+	const maxSafeRetries = 10 // cap to prevent excessive backoff (2^10 * 10ms ≈ 10s max single sleep)
+	if maxRetries > maxSafeRetries {
+		ctxLogger.Warnf("[ValidateWithOptions] TxLockedMaxRetries (%d) exceeds safe limit; clamping to %d", maxRetries, maxSafeRetries)
+		maxRetries = maxSafeRetries
+	}
 	const baseBackoff = 10 * time.Millisecond
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	// Loop runs maxRetries+1 times: 1 initial attempt + maxRetries retries.
+	// e.g. maxRetries=3 → attempts 0,1,2,3 → 1 initial + 3 retries with 10/20/40ms backoff.
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
 
-		// If no error or not a TX_LOCKED error, return immediately (don't retry)
+		// If no error or not a TX_LOCKED error, break immediately (don't retry)
 		if err == nil || !errors.Is(err, errors.ErrTxLocked) {
 			break
 		}
 
-		// TX_LOCKED error - retry with exponential backoff if not last attempt
-		if attempt < maxRetries-1 {
-			// Exponential backoff: 10ms, 20ms, 40ms
-			backoff := time.Duration(1<<attempt) * baseBackoff
-			if attempt < 2 {
-				ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
-			} else {
-				ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
-			}
+		// TX_LOCKED error on the last attempt — give up
+		if attempt >= maxRetries {
+			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d retries, giving up: %v", tx.TxID(), attempt, err)
+			break
+		}
 
-			select {
-			case <-ctx.Done():
-				return txMetaData, ctx.Err()
-			case <-time.After(backoff):
-				// Continue to next attempt
-			}
-		} else {
-			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+		// Exponential backoff: 10ms, 20ms, 40ms, ...
+		backoff := time.Duration(1<<uint(attempt)) * baseBackoff
+		ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (retry %d/%d): %v", tx.TxID(), backoff, attempt+1, maxRetries, err)
+
+		select {
+		case <-ctx.Done():
+			return txMetaData, ctx.Err()
+		case <-time.After(backoff):
 		}
 	}
 
@@ -510,18 +513,6 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// if the transaction was extended, we still need to get the block heights of the inputs
-	// since that processing did not happen before extending the transaction
-	// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
-	if len(utxoHeights) == 0 {
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-			span.RecordError(err)
-
-			return nil, err
-		}
-	}
-
 	// validate the transaction format, consensus rules etc.
 	// this does not validate the signatures in the transaction yet
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
@@ -529,6 +520,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		span.RecordError(err)
 
 		return nil, err
+	}
+
+	// if the transaction was extended, we still need to get the block heights of the inputs
+	// since that processing did not happen before the validateTransaction step
+	if len(utxoHeights) == 0 {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			span.RecordError(err)
+
+			return nil, err
+		}
 	}
 
 	// validate the transaction scripts and signatures
@@ -692,15 +694,22 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// send the txMetaData over to the subtree validation kafka topic
+	// Serialize and enqueue txmeta for the subtree validation kafka topic.
+	// If this fails (e.g. serialization error), log but continue to the two-phase commit
+	// so the tx doesn't remain locked. A missing txmeta message is recoverable; a stuck
+	// lock is not. We intentionally do NOT return this error to the caller: the tx has
+	// been validated, spent, and created in the UTXO store — returning an error would
+	// cause callers to treat an accepted tx as failed and trigger duplicate retries.
 	if v.txmetaKafkaProducerClient != nil {
-		if err = v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); err != nil {
-			return nil, err
+		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
+			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
 	}
 
 	if txMetaData.Locked {
 		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
+			v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, err)
+
 			return txMetaData, err
 		}
 
@@ -1105,13 +1114,9 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-// validateTransaction performs transaction-level validation checks in two phases:
-//  1. Full transaction validation (structure, scripts, fees) via txValidator.ValidateTransaction.
-//  2. BIP68 sequence-lock validation (block context only) via txValidator.ValidateBIP68.
-//
-// Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
-// This avoids the cost of MTP lookups when a transaction fails normal validation.
-// MTP values are cached in v.mtpCache to avoid repeated gRPC calls for the same heights.
+// validateTransaction performs transaction-level validation checks.
+// Ensures transaction is properly extended and meets all validation rules.
+// Returns error if validation fails.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -1129,88 +1134,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// Phase 1: run the internal tx validation, checking policies, scripts, signatures etc.
-	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		span.RecordError(err)
-		return err
-	}
-
-	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true).
-	// Performed after phase 1 so that MTP lookups are skipped for invalid transactions.
-	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil {
-		return nil
-	}
-
-	// Build the list of distinct heights we need MTPs for, resolving cache hits first.
-	//
-	// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
-	// BSV's GetMedianTimePast() at block H = median of [H-10, H] (includes H itself),
-	// so BSV MTP(H) == Teranode stored_mtp(H+1).
-	//
-	// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
-	//   = median of [nCoinHeight-11, nCoinHeight-1]
-	//   = Teranode stored_mtp(nCoinHeight) → use utxoHeight directly.
-	//
-	// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
-	//   = median of [blockHeight-11, blockHeight-1]
-	//   = Teranode stored_mtp(blockHeight). However, block N's MTP is only stored
-	//   AFTER block N is persisted, so during validation stored_mtp(blockHeight) is
-	//   unavailable (returns 0). We use stored_mtp(blockHeight-1) instead, which
-	//   covers [blockHeight-12, blockHeight-2] — a 1-block-shifted approximation.
-	blockMTPHeight := blockHeight
-	if blockHeight > 0 {
-		blockMTPHeight = blockHeight - 1
-	}
-
-	// Gather all required heights (utxo heights + block MTP height).
-	allHeights := make([]uint32, 0, len(utxoHeights)+1)
-	allHeights = append(allHeights, utxoHeights...)
-	allHeights = append(allHeights, blockMTPHeight)
-
-	// Resolve from cache; collect uncached heights for batch fetch.
-	resolved := make(map[uint32]uint32, len(allHeights))
-	uncached := make([]uint32, 0, len(allHeights))
-	for _, h := range allHeights {
-		if val, ok := v.mtpCache.Load(h); ok {
-			resolved[h] = val.(uint32)
-		} else {
-			uncached = append(uncached, h)
-		}
-	}
-
-	// Deduplicate uncached heights before the gRPC call.
-	seen := make(map[uint32]struct{}, len(uncached))
-	deduped := uncached[:0]
-	for _, h := range uncached {
-		if _, exists := seen[h]; !exists {
-			seen[h] = struct{}{}
-			deduped = append(deduped, h)
-		}
-	}
-
-	if len(deduped) > 0 {
-		fetched, err := v.blockchainClient.GetMedianTimePastForHeights(ctx, deduped)
-		if err != nil {
-			span.RecordError(err)
-			return errors.NewProcessingError("[Validator][validateTransaction] failed to fetch MTPs for BIP68 validation", err)
-		}
-		if len(fetched) != len(deduped) {
-			return errors.NewProcessingError("[Validator][validateTransaction] MTP count mismatch: expected %d, got %d", len(deduped), len(fetched))
-		}
-		for i, h := range deduped {
-			v.mtpCache.Store(h, fetched[i])
-			resolved[h] = fetched[i]
-		}
-	}
-
-	// Build utxoMTPs and blockMTP from the resolved map.
-	utxoMTPs := make([]uint32, len(utxoHeights))
-	for i, h := range utxoHeights {
-		utxoMTPs[i] = resolved[h]
-	}
-	blockMTP := resolved[blockMTPHeight]
-
-	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
+	// run the internal tx validation, checking policies, scripts, signatures etc.
+	return v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
 }
 
 // validateTransactionScripts performs script validation for a transaction

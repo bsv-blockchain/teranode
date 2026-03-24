@@ -63,20 +63,20 @@ func Test_queueWithTime(t *testing.T) {
 
 	enqueueBatches(t, q, 1, 10)
 
-	validFromMillis := time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis := time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found := q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	batches := 0
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 
 	for {
 		batch, found := q.dequeueBatch(validFromMillis)
@@ -93,20 +93,20 @@ func Test_queueWithTime(t *testing.T) {
 
 	enqueueBatches(t, q, 1, 10)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	batches = 0
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 
 	for {
 		batch, found := q.dequeueBatch(validFromMillis)

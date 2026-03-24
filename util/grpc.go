@@ -24,6 +24,10 @@ type AuthOptions struct {
 
 	// Map of method names that require authentication
 	ProtectedMethods map[string]bool
+
+	// ExtraUnaryInterceptors are additional unary interceptors to chain
+	// alongside the auth interceptor (e.g., ban list checking).
+	ExtraUnaryInterceptors []grpc.UnaryServerInterceptor
 }
 
 // StartGRPCServer starts a gRPC server with the specified configuration and registration function.
@@ -56,10 +60,18 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 	// Create server options
 	var serverOptions []grpc.ServerOption
 
-	// Add authentication interceptor if auth options are provided
-	if authOptions != nil && authOptions.APIKey != "" {
-		authInterceptor := CreateAuthInterceptor(authOptions.APIKey, authOptions.ProtectedMethods)
-		serverOptions = append(serverOptions, grpc.UnaryInterceptor(authInterceptor))
+	// Collect unary interceptors: auth + extras
+	var unaryInterceptors []grpc.UnaryServerInterceptor
+
+	if authOptions != nil {
+		if authOptions.APIKey != "" {
+			unaryInterceptors = append(unaryInterceptors, CreateAuthInterceptor(authOptions.APIKey, authOptions.ProtectedMethods))
+		}
+		unaryInterceptors = append(unaryInterceptors, authOptions.ExtraUnaryInterceptors...)
+	}
+
+	if len(unaryInterceptors) > 0 {
+		serverOptions = append(serverOptions, grpc.ChainUnaryInterceptor(unaryInterceptors...))
 	}
 
 	connectionOptions := &ConnectionOptions{

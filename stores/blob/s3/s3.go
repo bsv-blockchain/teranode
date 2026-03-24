@@ -12,9 +12,10 @@
 // settings, and optional subdirectory organization. It handles proper file formatting with
 // headers and provides efficient streaming operations for large blobs.
 //
-// Note: While the S3 implementation supports most blob.Store interface methods, the
-// Delete-At-Height (DAH) functionality is currently managed through S3's native TTL
-// mechanisms rather than blockchain height.
+// Note: S3 is used exclusively as permanent storage in Teranode. Delete-At-Height (DAH)
+// is intentionally not implemented — only the block persister promotes blobs to S3, and
+// those blobs are already permanent (DAH=0). Temporary blobs with finite DAH are stored
+// on the local file-based blob store where the pruner service manages their lifecycle.
 package s3
 
 import (
@@ -38,9 +39,9 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/expiringmap"
 )
 
 // S3 implements the blob.Store interface using Amazon S3 or compatible object storage services.
@@ -207,6 +208,8 @@ func (g *S3) Close(_ context.Context) error {
 	_, _, endTrace := tracing.Tracer("s3").Start(context.Background(), "Close")
 	defer endTrace()
 
+	cache.Stop()
+
 	return nil
 }
 
@@ -266,11 +269,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 		Body:   bytes.NewReader(buf.Bytes()),
 	}
 
-	// if merged.BlockHeightRetention > 0 {
-	// TODO DAH
-	// expires := time.Now().Add(time.Duration(*merged.BlockHeightRetention))
-	// uploadInput.Expires = &expires
-	// }
+	// DAH is intentionally not implemented for S3. S3 is used as permanent storage only —
+	// blobs are promoted here by the block persister with DAH=0. Temporary blobs with finite
+	// DAH are stored on local file-based blob stores where the pruner manages their lifecycle.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
@@ -322,13 +323,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		Body:   bytes.NewReader(content),
 	}
 
-	// Expires
-
-	// if merged.BlockHeightRetention > 0 {
-	// TODO DAH
-	// expires := merged.BlockHeightRetention))
-	// uploadInput.Expires = &expires
-	// }
+	// DAH is intentionally not implemented for S3. See package doc and SetFromReader for rationale.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
@@ -339,11 +334,19 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	return nil
 }
 
+// SetDAH is intentionally a no-op for S3. S3 is used exclusively as permanent storage —
+// only the block persister promotes blobs to S3 with DAH=0 (permanent). Blobs in S3
+// are never scheduled for automatic deletion by block height.
+// A non-zero DAH is logged as a warning to surface accidental attempts to apply finite
+// retention to S3, which would otherwise be silently ignored.
 func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:SetDAH")
 	defer endSpan()
 
-	// TODO implement
+	if dah != 0 {
+		g.logger.Warnf("[S3][SetDAH] non-zero DAH (%d) requested for key=%x — S3 is permanent storage, DAH is not applied", dah, key)
+	}
+
 	return nil
 }
 
@@ -389,7 +392,7 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	objectKey := g.getObjectKey(key, fileType, merged)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", util.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -532,7 +535,7 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 	if o.Filename != "" {
 		key = o.Filename
 	} else {
-		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
+		key = fmt.Sprintf("%s%s", util.ReverseAndHexEncodeSlice(hash), ext)
 
 		prefix = o.CalculatePrefix(key)
 	}

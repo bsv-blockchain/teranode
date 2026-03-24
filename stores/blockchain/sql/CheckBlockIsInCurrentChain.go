@@ -1,15 +1,3 @@
-// Package sql implements the blockchain.Store interface using SQL database backends.
-// It provides concrete SQL-based implementations for all blockchain operations
-// defined in the interface, with support for different SQL engines.
-//
-// This file implements the CheckBlockIsInCurrentChain method, which determines whether
-// specified blocks are part of the current main blockchain. In blockchain systems like
-// Teranode that support multiple competing chains (forks), it's critical to efficiently
-// determine which blocks belong to the main chain (the chain with the highest cumulative
-// proof-of-work). The implementation uses a recursive Common Table Expression (CTE) in SQL
-// to efficiently traverse the blockchain structure from the current tip backward, checking
-// if the specified blocks are part of this path. This functionality is essential for
-// transaction validation, chain reorganization, and ensuring consensus across the network.
 package sql
 
 import (
@@ -22,27 +10,11 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
-// CheckBlockIsInCurrentChain determines if specified blocks are part of the current main chain.
-// This implements a specialized blockchain validation method not directly defined in the Store interface.
+// CheckBlockIsInCurrentChain determines if any of the specified blocks are on the current
+// main chain. When useInMemoryChainCheck is true, uses a pure in-memory O(1) lookup via
+// the off-chain set. When false, falls back to the original SQL recursive CTE.
 //
-// In blockchain systems, it's critical to determine whether specific blocks are part of the
-// current main chain (the chain with the highest cumulative proof-of-work) or if they belong
-// to a fork chain. This method efficiently checks multiple block IDs in a single database query,
-// which is important for Teranode's high-throughput architecture where chain membership checks
-// are common during transaction validation and block processing.
-//
-// The implementation uses a recursive SQL query to efficiently traverse the blockchain structure
-// from the current tip backward, checking if the specified blocks are part of this path. It handles
-// database engine differences (PostgreSQL vs SQLite) with appropriate SQL syntax adjustments.
-//
-// Parameters:
-//   - ctx: Context for the database operation, allowing for cancellation and timeouts
-//   - blockIDs: Array of internal database IDs for the blocks to check
-//
-// Returns:
-//   - bool: True if all specified blocks are part of the current main chain, false otherwise
-//   - error: Any error encountered during the check, specifically:
-//   - StorageError for database errors or processing failures
+// Returns true as soon as any block ID passes all checks (ANY-of semantics).
 func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("SyncManager").Start(ctx, "sql:CheckIfBlockIsInCurrentChain",
 		tracing.WithDebugLogMessage(s.logger, "[CheckIfBlockIsInCurrentChain] checking if blocks (%v) are in current chain", blockIDs),
@@ -53,18 +25,44 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 		return false, nil
 	}
 
-	// Get current best block header
+	if !s.useInMemoryChainCheck {
+		return s.checkBlockIsInCurrentChainSQL(ctx, blockIDs)
+	}
+
+	maxID := uint32(s.maxBlockID.Load())
+
+	s.offChainBlockIDsMu.RLock()
+	offChain := s.offChainBlockIDs
+	s.offChainBlockIDsMu.RUnlock()
+
+	// ANY-of semantics: return true if at least one block is on the main chain.
+	// This matches the old CTE behavior and is required by callers like
+	// BlockValidation.checkOldBlockIDs which passes candidate block IDs for a
+	// transaction across forks and needs true if any candidate is on-chain.
+	for _, id := range blockIDs {
+		// IDs above the highest known block cannot exist in the database.
+		if id > maxID {
+			continue
+		}
+		if _, isOffChain := offChain[id]; !isOffChain {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// checkBlockIsInCurrentChainSQL is the original SQL recursive CTE implementation.
+// Used when useInMemoryChainCheck is false.
+func (s *SQL) checkBlockIsInCurrentChainSQL(ctx context.Context, blockIDs []uint32) (bool, error) {
 	_, bestBlockMeta, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return false, errors.NewStorageError("failed to get best block header", err)
 	}
 
-	// Prepare the arguments and the CTE for block_ids
-	args := make([]interface{}, 0, len(blockIDs)+2) // blockIDs + bestBlockID + recursionDepth
+	args := make([]interface{}, 0, len(blockIDs)+2)
 
-	// Generate placeholders for blockIDs
 	blockIDPlaceholders := make([]string, len(blockIDs))
-
 	for i, id := range blockIDs {
 		placeholder := fmt.Sprintf("$%d", i+1)
 		if s.engine == "sqlite" || s.engine == "sqlitememory" {
@@ -72,17 +70,14 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 		} else {
 			blockIDPlaceholders[i] = fmt.Sprintf("SELECT %s::INTEGER AS id", placeholder)
 		}
-
 		args = append(args, id)
 	}
 
 	blockIDsCTE := strings.Join(blockIDPlaceholders, " UNION ALL ")
 
-	// Append the bestBlockID and recursionDepth to the arguments
 	bestBlockID := bestBlockMeta.ID
 
-	// get the lowest block id
-	lowestBlockID := blockIDs[0] //nolint:gosec // length is checked on line 52
+	lowestBlockID := blockIDs[0] //nolint:gosec // length is checked above
 	for _, id := range blockIDs {
 		if id < lowestBlockID {
 			lowestBlockID = id
@@ -94,9 +89,8 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 		recursionDepthBlockID = 0
 	}
 
-	args = append(args, bestBlockID, recursionDepthBlockID) // bestBlockID and recursionDepth
+	args = append(args, bestBlockID, recursionDepthBlockID)
 
-	// Calculate the positions for the placeholders
 	bestBlockIDPlaceholder := fmt.Sprintf("$%d", len(blockIDs)+1)
 	recursionDepthPlaceholder := fmt.Sprintf("$%d", len(blockIDs)+2)
 
@@ -118,7 +112,7 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
             FROM blocks bb
             INNER JOIN ChainBlocks cb ON bb.id = cb.parent_id
             WHERE
-                NOT cb.found_match -- Stop recursion if a match has been found
+                NOT cb.found_match
                 AND cb.depth <= %s
         )
         SELECT CASE
@@ -128,15 +122,12 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
         END AS is_in_current_chain;
     `, blockIDsCTE, bestBlockIDPlaceholder, recursionDepthPlaceholder)
 
-	// Execute the query
 	var result bool
-
 	err = s.db.QueryRowContext(ctx, q, args...).Scan(&result)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
-
 		return false, errors.NewStorageError("failed to check if given blocks are part of the current chain", err)
 	}
 

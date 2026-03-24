@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -398,11 +399,6 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	})
 
 	g.Go(func() error {
-		subtreeDataBytes, err := subtreeData.Serialize()
-		if err != nil {
-			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
-		}
-
 		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
 
 		storer, err := filestorer.NewFileStorer(
@@ -432,8 +428,11 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 
 		// TODO Write header extra - , *subtreeData.RootHash(), uint32(block.Height())
 
-		if _, err := storer.Write(subtreeDataBytes); err != nil {
-			return errors.NewStorageError("error writing subtree data to disk", err)
+		// Stream transactions directly to the file storer instead of serializing
+		// into a single large buffer. This eliminates the ~10.9 GB intermediate
+		// allocation that Serialize() creates for large blocks.
+		if err := subtreeData.WriteTransactionsToWriter(storer, 0, subtreeData.Subtree.Length()); err != nil {
+			return errors.NewStorageError("error streaming subtree data to disk", err)
 		}
 
 		if err = storer.Close(ctx); err != nil {
@@ -554,7 +553,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	storeBatcherSize := sm.settings.Legacy.StoreBatcherSize
 	storeBatcherConcurrency := sm.settings.Legacy.StoreBatcherConcurrency
 
-	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
+	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
@@ -611,41 +610,105 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 
 	spendBatcherSize := sm.settings.Legacy.SpendBatcherSize
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
+	concurrencyLimit := spendBatcherSize * spendBatcherConcurrency
 
-	// validate all the transactions in parallel
-	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
-	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	// These transactions arrive as part of a block, so they should be treated as valid
+	// transactions that all need to be processed. If one fails (e.g. transient Aerospike
+	// DEVICE_OVERLOAD), rolling back or cancelling all other independent transactions
+	// in the block makes no sense. We retry failed transactions with backoff to adapt
+	// to whatever throughput the storage backend can handle.
+	const maxRetries = 10
+	const retryBackoff = 2 * time.Second
 
-	// validate all the transactions in parallel
-	for _, txHash := range txMap.Keys() {
-		txHash := txHash
+	pendingTxHashes := txMap.Keys()
+	totalTxCount := txMap.Length()
 
-		g.Go(func() (err error) {
-			timeStart := time.Now()
-			defer func() {
-				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
-			}()
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if ctx.Err() != nil {
+			return errors.NewProcessingError("[PreValidateTransactions] context cancelled")
+		}
 
-			txWrapper, ok := txMap.Get(txHash)
-			if !ok {
-				return errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+		if attempt > 0 {
+			sm.logger.Infof("[PreValidateTransactions] retry %d/%d: %d of %d transactions remaining",
+				attempt, maxRetries, len(pendingTxHashes), totalTxCount)
+			time.Sleep(retryBackoff)
+		}
+
+		g, _ := errgroup.WithContext(ctx)
+		util.SafeSetLimit(g, concurrencyLimit)
+
+		var (
+			mu           sync.Mutex
+			retryableTxs []chainhash.Hash
+			lastErr      error
+			hardFail     error
+		)
+
+		for _, txHash := range pendingTxHashes {
+			txHash := txHash
+
+			g.Go(func() (err error) {
+				timeStart := time.Now()
+				defer func() {
+					prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+				}()
+
+				txWrapper, ok := txMap.Get(txHash)
+				if !ok {
+					// Not found in txMap — non-recoverable, fail immediately
+					mu.Lock()
+					hardFail = errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+					mu.Unlock()
+					return nil
+				}
+
+				if _, validateErr := sm.validationClient.Validate(ctx,
+					txWrapper.Tx,
+					blockHeight,
+					validator.WithSkipUtxoCreation(true),
+					validator.WithAddTXToBlockAssembly(false),
+					validator.WithSkipPolicyChecks(true),
+				); validateErr != nil {
+					if errors.IsRetryableError(validateErr) {
+						mu.Lock()
+						retryableTxs = append(retryableTxs, txHash)
+						lastErr = validateErr
+						mu.Unlock()
+					} else {
+						mu.Lock()
+						hardFail = validateErr
+						mu.Unlock()
+					}
+				}
+
+				return nil
+			})
+		}
+
+		_ = g.Wait()
+
+		if hardFail != nil {
+			return errors.NewProcessingError("[PreValidateTransactions] non-retryable error", hardFail)
+		}
+
+		if len(retryableTxs) == 0 {
+			if attempt > 0 {
+				sm.logger.Infof("[PreValidateTransactions] all transactions succeeded after %d retries", attempt)
 			}
+			return nil
+		}
 
-			// call the validator to validate the transaction, but skip the utxo creation
-			_, err = sm.validationClient.Validate(gCtx,
-				txWrapper.Tx,
-				blockHeight,
-				validator.WithSkipUtxoCreation(true),
-				validator.WithAddTXToBlockAssembly(false),
-				validator.WithSkipPolicyChecks(true),
-			)
+		// No progress since last attempt — stop retrying
+		if attempt > 0 && len(retryableTxs) >= len(pendingTxHashes) {
+			return errors.NewProcessingError("[PreValidateTransactions] %d of %d transactions failed with no progress, giving up",
+				len(retryableTxs), totalTxCount, lastErr)
+		}
 
-			return err
-		})
+		pendingTxHashes = retryableTxs
 	}
 
-	// wait for all the transactions to be validated
-	return g.Wait()
+	return errors.NewProcessingError("[PreValidateTransactions] %d of %d transactions still failing after %d retries",
+		len(pendingTxHashes), totalTxCount, maxRetries)
 }
 
 // validateTransactions validates all the transactions in the block in parallel
@@ -693,7 +756,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			sm.validationClient.TriggerBatcher()
 		} else {
 			// process all the transactions on a certain level in parallel
-			g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
+			g, gCtx := errgroup.WithContext(ctx)
 			util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {

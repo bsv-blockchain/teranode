@@ -45,7 +45,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/looplab/fsm"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -696,29 +695,7 @@ func (b *Blockchain) startSubscriptions() {
 
 			// Send initial notification to let the subscriber know the subscription is ready
 			// and provide the current blockchain state
-			go func(sub subscriber) {
-				chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
-				var initialNotification *blockchain_api.Notification
-				if err != nil {
-					// If no best block exists yet (e.g., empty blockchain), send notification with genesis hash
-					b.logger.Warnf("[Blockchain][startSubscriptions] No best block header available for initial notification to %s: %v", sub.source, err)
-					initialNotification = &blockchain_api.Notification{
-						Type: model.NotificationType_Block,
-						Hash: b.settings.ChainCfgParams.GenesisHash.CloneBytes(),
-					}
-				} else {
-					initialNotification = &blockchain_api.Notification{
-						Type: model.NotificationType_Block,
-						Hash: chainTip.Hash().CloneBytes(),
-					}
-				}
-
-				b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
-				if err := sub.subscription.Send(initialNotification); err != nil {
-					b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
-					b.deadSubscriptions <- sub
-				}
-			}(s)
+			go b.sendInitialNotification(s)
 
 		case s := <-b.deadSubscriptions:
 			b.subscribersMu.Lock()
@@ -728,6 +705,30 @@ func (b *Blockchain) startSubscriptions() {
 			safeClose(s.done)
 			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
+	}
+}
+
+// sendInitialNotification sends the current chain tip (or genesis) to a new subscriber.
+func (b *Blockchain) sendInitialNotification(sub subscriber) {
+	chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
+	var initialNotification *blockchain_api.Notification
+	if err != nil {
+		b.logger.Warnf("[Blockchain][startSubscriptions] No best block header available for initial notification to %s: %v", sub.source, err)
+		initialNotification = &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: b.settings.ChainCfgParams.GenesisHash.CloneBytes(),
+		}
+	} else {
+		initialNotification = &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: chainTip.Hash().CloneBytes(),
+		}
+	}
+
+	b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
+	if err := sub.subscription.Send(initialNotification); err != nil {
+		b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
+		b.deadSubscriptions <- sub
 	}
 }
 
@@ -923,7 +924,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", util.ReverseAndHexEncodeSlice(request.Hash)),
 	)
 	defer deferFn()
 
@@ -963,7 +964,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", utils.ReverseAndHexEncodeSlice(req.Hash)),
+		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
 	)
 	defer deferFn()
 
@@ -1243,15 +1244,14 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		ChainWork:      meta.ChainWork,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: blockHeader.Bytes(),
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		ChainWork:   meta.ChainWork,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
 	}, nil
 }
 
@@ -1331,15 +1331,14 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    chainTip.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		ChainWork:      meta.ChainWork,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: chainTip.Bytes(),
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
+		ChainWork:   meta.ChainWork,
 	}, nil
 }
 
@@ -1427,21 +1426,20 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Id:             meta.ID,
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		PeerId:         meta.PeerID,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MinedSet:       meta.MinedSet,
-		ChainWork:      meta.ChainWork,
-		SubtreesSet:    meta.SubtreesSet,
-		Invalid:        meta.Invalid,
-		ProcessedAt:    processedAt,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: blockHeader.Bytes(),
+		Id:          meta.ID,
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		PeerId:      meta.PeerID,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
+		MinedSet:    meta.MinedSet,
+		ChainWork:   meta.ChainWork,
+		SubtreesSet: meta.SubtreesSet,
+		Invalid:     meta.Invalid,
+		ProcessedAt: processedAt,
 	}, nil
 }
 
@@ -1617,34 +1615,6 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	return &blockchain_api.GetBlockHeadersByHeightResponse{
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
-	}, nil
-}
-
-// GetMedianTimePastByHeights retrieves MTP values for multiple block heights in batch.
-// This method implements the gRPC service endpoint for efficiently fetching Median Time Past
-// values for a list of block heights. This is useful for BIP68 relative locktime validation
-// where the validator needs MTP values for multiple blocks.
-//
-// Parameters:
-//   - ctx: Request context for timeout and cancellation
-//   - req: GetMedianTimePastByHeightsRequest containing array of heights
-//
-// Returns:
-//   - GetMedianTimePastByHeightsResponse containing MTP values (0 for height < 11)
-//   - error: Any error encountered during MTP calculation
-func (b *Blockchain) GetMedianTimePastByHeights(ctx context.Context, req *blockchain_api.GetMedianTimePastByHeightsRequest) (*blockchain_api.GetMedianTimePastByHeightsResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetMedianTimePastByHeights",
-		tracing.WithParentStat(b.stats),
-	)
-	defer deferFn()
-
-	mtps, err := b.GetMedianTimePastForHeights(ctx, req.Heights)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetMedianTimePastByHeightsResponse{
-		MedianTimePast: mtps,
 	}, nil
 }
 
@@ -2024,7 +1994,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainInvalidateBlock),
-		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", utils.ReverseAndHexEncodeSlice(request.BlockHash)),
+		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", util.ReverseAndHexEncodeSlice(request.BlockHash)),
 	)
 	defer deferFn()
 
@@ -2201,7 +2171,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
+		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 

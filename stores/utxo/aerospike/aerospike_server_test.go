@@ -1284,13 +1284,13 @@ func TestIncrementSpentRecords(t *testing.T) {
 	assert.Equal(t, 0, totalExtraRecs)
 
 	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
-	require.NoError(t, err) // IncrementSpentRecords doesn't return error directly
+	require.NoError(t, err)
 
-	// Parse the response to check for error
+	// Lua now clamps spentExtraRecs to [0, totalExtraRecs] instead of erroring.
+	// With totalExtraRecs=0, incrementing by 1 should clamp to 0 and return OK.
 	parsedRes, err := store.ParseLuaMapResponse(res)
 	require.NoError(t, err)
-	assert.Equal(t, teranode_aerospike.LuaStatusError, parsedRes.Status)
-	assert.Contains(t, parsedRes.Message, "spentExtraRecs cannot be greater than totalExtraRecs")
+	assert.Equal(t, teranode_aerospike.LuaStatusOK, parsedRes.Status)
 }
 
 func TestStoreDecorate(t *testing.T) {
