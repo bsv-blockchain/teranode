@@ -144,6 +144,13 @@ func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, pee
 		return errors.NewProcessingError("failed to serialize block for subtree validation", err)
 	}
 
+	// Apply timeout to prevent hanging on stale gRPC connections
+	if s.settings.SubtreeValidation.CheckBlockSubtreesTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.settings.SubtreeValidation.CheckBlockSubtreesTimeout)
+		defer cancel()
+	}
+
 	if _, err = s.apiClient.CheckBlockSubtrees(ctx, &subtreevalidation_api.CheckBlockSubtreesRequest{
 		Block:   blockBytes,
 		BaseUrl: baseURL,

@@ -548,6 +548,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxBatchSize:                               getInt("subtreevalidation_check_block_subtrees_tx_batch_size", 1048576, alternativeContext...),
 			UseOrderedLevelAlgorithm:                  getBool("subtreevalidation_useOrderedLevelAlgorithm", true, alternativeContext...),
 			BlocksOnly:                                getBool("subtreevalidation_blocks_only", false, alternativeContext...),
+			CheckBlockSubtreesTimeout:                 getDuration("subtreevalidation_check_block_subtrees_timeout", 30*time.Minute, alternativeContext...),
 		},
 		Legacy: LegacySettings{
 			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),
