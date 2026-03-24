@@ -12,9 +12,10 @@
 // settings, and optional subdirectory organization. It handles proper file formatting with
 // headers and provides efficient streaming operations for large blobs.
 //
-// Note: While the S3 implementation supports most blob.Store interface methods, the
-// Delete-At-Height (DAH) functionality is currently managed through S3's native TTL
-// mechanisms rather than blockchain height.
+// Note: S3 is used exclusively as permanent storage in Teranode. Delete-At-Height (DAH)
+// is intentionally not implemented — only the block persister promotes blobs to S3, and
+// those blobs are already permanent (DAH=0). Temporary blobs with finite DAH are stored
+// on the local file-based blob store where the pruner service manages their lifecycle.
 package s3
 
 import (
@@ -268,11 +269,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 		Body:   bytes.NewReader(buf.Bytes()),
 	}
 
-	// if merged.BlockHeightRetention > 0 {
-	// TODO DAH
-	// expires := time.Now().Add(time.Duration(*merged.BlockHeightRetention))
-	// uploadInput.Expires = &expires
-	// }
+	// DAH is intentionally not implemented for S3. S3 is used as permanent storage only —
+	// blobs are promoted here by the block persister with DAH=0. Temporary blobs with finite
+	// DAH are stored on local file-based blob stores where the pruner manages their lifecycle.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
@@ -324,13 +323,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		Body:   bytes.NewReader(content),
 	}
 
-	// Expires
-
-	// if merged.BlockHeightRetention > 0 {
-	// TODO DAH
-	// expires := merged.BlockHeightRetention))
-	// uploadInput.Expires = &expires
-	// }
+	// DAH is intentionally not implemented for S3. See package doc and SetFromReader for rationale.
 
 	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
@@ -341,11 +334,19 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	return nil
 }
 
+// SetDAH is intentionally a no-op for S3. S3 is used exclusively as permanent storage —
+// only the block persister promotes blobs to S3 with DAH=0 (permanent). Blobs in S3
+// are never scheduled for automatic deletion by block height.
+// A non-zero DAH is logged as a warning to surface accidental attempts to apply finite
+// retention to S3, which would otherwise be silently ignored.
 func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:SetDAH")
 	defer endSpan()
 
-	// TODO implement
+	if dah != 0 {
+		g.logger.Warnf("[S3][SetDAH] non-zero DAH (%d) requested for key=%x — S3 is permanent storage, DAH is not applied", dah, key)
+	}
+
 	return nil
 }
 

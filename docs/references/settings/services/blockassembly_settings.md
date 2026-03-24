@@ -42,7 +42,7 @@
 | UnminedTxDiskSortEnabled | bool | false | blockassembly_unminedTxDiskSortEnabled | Enable disk-based sorting for large mempools |
 | UnminedLoadingBatchSize | int | 10485760 | blockassembly_unminedLoadingBatchSize | Batch size for loading unmined transactions |
 | ParallelSetIfNotExistsThreshold | int | 10000 | blockassembly_parallelSetIfNotExistsThreshold | Threshold for parallelizing conditional writes |
-| StoreTxInpointsForSubtreeMeta | bool | false | blockassembly_storeTxInpointsForSubtreeMeta | Store transaction input points in subtree metadata |
+| StoreTxInpointsForSubtreeMeta | bool | true | blockassembly_storeTxInpointsForSubtreeMeta | Store transaction input points in subtree metadata (required for checkblocktemplate) |
 | IdleSleepDuration | time.Duration | 10ms | blockassembly_idle_sleep_duration | Sleep duration when subtree processor queue is empty |
 
 ## Hardcoded Settings (Not Configurable)
@@ -64,6 +64,7 @@
 - All other settings become irrelevant when service is disabled
 
 ### Channel Buffer Management
+
 - `NewSubtreeChanBuffer` and `SubtreeRetryChanBuffer` must accommodate concurrent processing loads
 - Buffer sizes affect pipeline performance and memory usage
 
@@ -74,6 +75,7 @@
 - Significantly affects mining pool integration behavior
 
 ### Reorganization Handling
+
 - `MaxGetReorgHashes` prevents excessive memory usage during large reorganizations
 - Works with `MaxBlockReorgCatchup`, `MaxBlockReorgRollback`, `MoveBackBlockConcurrency`
 

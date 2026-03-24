@@ -249,6 +249,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessRemainderTxHashesConcurrency:  getInt("blockassembly_processRemainderTxHashesConcurrency", 375, alternativeContext...),
 			SendBatchSize:                        getInt("blockassembly_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:                     getInt("blockassembly_sendBatchTimeout", 2, alternativeContext...),
+			SendBatchMaxConcurrent:               getInt("blockassembly_sendBatchMaxConcurrent", 0, alternativeContext...),
 			SubtreeProcessorBatcherSize:          getInt("blockassembly_subtreeProcessorBatcherSize", 1000, alternativeContext...),
 			SubtreeProcessorConcurrentReads:      getInt("blockassembly_subtreeProcessorConcurrentReads", 375, alternativeContext...),
 			NewSubtreeChanBuffer:                 getInt("blockassembly_newSubtreeChanBuffer", 1_000, alternativeContext...),
@@ -273,7 +274,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UnminedLoadingBatchSize:              getInt("blockassembly_unminedLoadingBatchSize", 1024*1024*10, alternativeContext...), // 10 million
 			SubtreeAnnouncementInterval:          getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
 			ParallelSetIfNotExistsThreshold:      getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
-			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", false, alternativeContext...), // memory optimization
+			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", true, alternativeContext...),
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 		},
 
@@ -289,6 +290,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			StoreDBTimeoutMillis:  getInt("blockchain_store_dbTimeoutMillis", 5000, alternativeContext...),
 			InitializeNodeInState: getString("blockchain_initializeNodeInState", "", alternativeContext...),
 			PostgresPool:          getPostgresPoolSettings("blockchain", alternativeContext...),
+			UseInMemoryChainCheck: getBool("blockchain_use_in_memory_chain_check", false, alternativeContext...),
+			SubscriptionTimeout:   getDuration("blockchain_subscription_timeout", 30*time.Second, alternativeContext...),
 			HeartbeatInterval:     getDuration("blockchain_heartbeat_interval", 10*time.Second, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
@@ -492,6 +495,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DistributorFailureTolerance: getInt("distributor_failure_tolerance", 0, alternativeContext...),
 			DistributorTimeout:          getDuration("distributor_timeout", 30*time.Second, alternativeContext...),
 		},
+		GCTuning: GCTuningSettings{
+			Enabled:  getBool("gc_tuning_enabled", true, alternativeContext...),
+			Ratio:    getFloat64("gc_tuning_ratio", 0.9, alternativeContext...),
+			GCTarget: getInt("gc_tuning_gogc", 100, alternativeContext...),
+		},
 		Pruner: PrunerSettings{
 			GRPCAddress:                    getString("pruner_grpcAddress", "localhost:8096", alternativeContext...),
 			GRPCListenAddress:              getString("pruner_grpcListenAddress", ":8096", alternativeContext...),
@@ -540,6 +548,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxBatchSize:                               getInt("subtreevalidation_check_block_subtrees_tx_batch_size", 1048576, alternativeContext...),
 			UseOrderedLevelAlgorithm:                  getBool("subtreevalidation_useOrderedLevelAlgorithm", true, alternativeContext...),
 			BlocksOnly:                                getBool("subtreevalidation_blocks_only", false, alternativeContext...),
+			CheckBlockSubtreesTimeout:                 getDuration("subtreevalidation_check_block_subtrees_timeout", 30*time.Minute, alternativeContext...),
 		},
 		Legacy: LegacySettings{
 			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),
@@ -563,19 +572,21 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 		},
 		Propagation: PropagationSettings{
-			IPv6Addresses:        getString("ipv6_addresses", "", alternativeContext...),
-			IPv6Interface:        getString("ipv6_interface", "", alternativeContext...),
-			IPv6AllowedSources:   getMultiString("propagation_ipv6_allowed_sources", "|", []string{}, alternativeContext...),
-			GRPCMaxConnectionAge: getDuration("propagation_grpcMaxConnectionAge", 90*time.Second, alternativeContext...),
-			HTTPListenAddress:    getString("propagation_httpListenAddress", "", alternativeContext...),
-			HTTPAddresses:        getMultiString("propagation_httpAddresses", "|", []string{}, alternativeContext...),
-			HTTPRateLimit:        getInt("propagation_httpRateLimit", 1024, alternativeContext...),
-			AlwaysUseHTTP:        getBool("propagation_alwaysUseHTTP", false, alternativeContext...),
-			SendBatchSize:        getInt("propagation_sendBatchSize", 100, alternativeContext...),
-			SendBatchTimeout:     getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
-			GRPCAddresses:        getMultiString("propagation_grpcAddresses", "|", []string{}, alternativeContext...),
-			GRPCListenAddress:    getString("propagation_grpcListenAddress", "", alternativeContext...),
-			HTTPBodyLimit:        getString("propagation_httpBodyLimit", "100MB", alternativeContext...),
+			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),
+			IPv6Interface:         getString("ipv6_interface", "", alternativeContext...),
+			IPv6AllowedSources:    getMultiString("propagation_ipv6_allowed_sources", "|", []string{}, alternativeContext...),
+			GRPCMaxConnectionAge:  getDuration("propagation_grpcMaxConnectionAge", 90*time.Second, alternativeContext...),
+			HTTPListenAddress:     getString("propagation_httpListenAddress", "", alternativeContext...),
+			HTTPAddresses:         getMultiString("propagation_httpAddresses", "|", []string{}, alternativeContext...),
+			HTTPRateLimit:         getInt("propagation_httpRateLimit", 1024, alternativeContext...),
+			AlwaysUseHTTP:         getBool("propagation_alwaysUseHTTP", false, alternativeContext...),
+			SendBatchSize:         getInt("propagation_sendBatchSize", 100, alternativeContext...),
+			SendBatchTimeout:      getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
+			GRPCAddresses:         getMultiString("propagation_grpcAddresses", "|", []string{}, alternativeContext...),
+			GRPCListenAddress:     getString("propagation_grpcListenAddress", "", alternativeContext...),
+			HTTPBodyLimit:         getString("propagation_httpBodyLimit", "100MB", alternativeContext...),
+			BatchConcurrencyLimit: getInt("propagation_batchConcurrencyLimit", 0, alternativeContext...),
+			BatchHandlerLimit:     getInt("propagation_batchHandlerLimit", 0, alternativeContext...),
 		},
 		RPC: RPCSettings{
 			RPCUser:           getString("rpc_user", "", alternativeContext...),

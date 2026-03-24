@@ -44,6 +44,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
 		APIKey:       apiKey, // Add the API key to the connection options
+		CallerName:   "legacy",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init peer service connection ", err)

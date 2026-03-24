@@ -614,8 +614,10 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		defer cancel()
 
 		config := testhelpers.DefaultTestServerConfig()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServerWithConfig(t, config)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServerWithConfig(t, config)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
 		targetBlock := &model.Block{
 			Header: &model.BlockHeader{

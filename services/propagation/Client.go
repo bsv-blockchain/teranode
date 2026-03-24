@@ -549,6 +549,7 @@ func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSett
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "propagation",
 	}, tSettings)
 	if err != nil {
 		return nil, err

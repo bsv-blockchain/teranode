@@ -217,6 +217,34 @@ func IsContextError(err error) bool {
 	return false
 }
 
+// IsLocalError checks if an error is a local resource error (not peer-related).
+// Local errors include context cancellation, semaphore exhaustion, and storage errors
+// that are caused by local resource constraints rather than peer failures.
+// These errors should not trigger peer failover since trying another peer won't help.
+//
+// Parameters:
+//   - err: Error to check
+//
+// Returns:
+//   - bool: true if error is a local resource error
+func IsLocalError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Context errors are local (includes semaphore wait timeouts)
+	if IsContextError(err) {
+		return true
+	}
+
+	// Storage errors indicate local resource issues
+	if Is(err, ErrStorageError) {
+		return true
+	}
+
+	return false
+}
+
 // GetErrorCategory returns a string representing the category of the error.
 // This is useful for logging and metrics.
 //

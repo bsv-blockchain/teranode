@@ -47,8 +47,8 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 }
 
 // SetState stores or updates a value in the state key-value store.
-// The method automatically determines whether to perform an insert or update operation
-// by first checking if the key already exists.
+// Uses an UPSERT (INSERT ... ON CONFLICT DO UPDATE) to atomically insert or update
+// in a single query, avoiding the previous two-query pattern of SELECT then INSERT/UPDATE.
 //
 // Parameters:
 //   - ctx: Context for the database operation, allows for cancellation and timeouts
@@ -58,27 +58,19 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 // Returns:
 //   - error: Any error encountered during the storage operation
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
-	ctx, _, deferFn := tracing.Tracer("	blockchain").Start(ctx, "sql:SetState")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:SetState")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var q string
-
-	currentState, _ := s.GetState(ctx, key)
-	if currentState != nil {
-		q = `
-		UPDATE state
-		SET data = $2, updated_at = CURRENT_TIMESTAMP
-		WHERE key = $1
-	`
-	} else {
-		q = `
+	q := `
 		INSERT INTO state (key, data)
 		VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET
+			data = EXCLUDED.data,
+			updated_at = CURRENT_TIMESTAMP
 	`
-	}
 
 	if _, err := s.db.ExecContext(ctx, q, key, data); err != nil {
 		return err

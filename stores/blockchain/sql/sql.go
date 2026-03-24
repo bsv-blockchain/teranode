@@ -27,6 +27,8 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -38,8 +40,20 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	_ "github.com/lib/pq"
+	"golang.org/x/sync/singleflight"
 	_ "modernc.org/sqlite"
 )
+
+// chainWalkCacheTTL is the time-to-live for chain walk cache entries (GetBlockHeaderIDs,
+// GetBlockHeaders). Set to 10 minutes because block validation in production can take
+// several minutes, and the cached results (parent_id walks) are immutable.
+const chainWalkCacheTTL = 10 * time.Minute
+
+// rebuildOffChainSetTimeout bounds the duration of rebuildOffChainSet calls made with
+// context.Background() (in InvalidateBlock, RevalidateBlock). This prevents the rebuild
+// from blocking indefinitely if the DB is slow/unhealthy while still surviving caller
+// context cancellation.
+const rebuildOffChainSetTimeout = 30 * time.Second
 
 // SQL implements the blockchain.Store interface using SQL database backends.
 // It provides a complete implementation of blockchain data storage and retrieval
@@ -59,6 +73,39 @@ type SQL struct {
 	cacheTTL time.Duration
 	// chainParams contains the blockchain network parameters (mainnet, testnet, etc.)
 	chainParams *chaincfg.Params
+	// offChainBlockIDs holds the set of block IDs known to NOT be on the main chain
+	// (fork/orphan blocks). This set is tiny (a few hundred entries on all of mainnet)
+	// and allows CheckBlockIsInCurrentChain to answer with a pure in-memory lookup
+	// instead of an expensive recursive CTE.
+	// Rebuilt via rebuildOffChainSet() on fork detection, invalidation, or revalidation.
+	offChainBlockIDs   map[uint32]struct{}
+	offChainBlockIDsMu sync.RWMutex
+	// maxBlockID tracks the highest block ID ever stored. Any requested block ID above
+	// this value cannot exist in the database, so CheckBlockIsInCurrentChain returns
+	// false without consulting the off-chain set. This prevents non-existent/garbage
+	// block IDs from being incorrectly treated as on-chain.
+	maxBlockID atomic.Uint64
+	// chainWalkCache is a dedicated cache for chain-walking queries (GetBlockHeaderIDs,
+	// GetBlockHeaders) that follow parent_id links. Unlike responseCache, this is only
+	// invalidated on chain reorganizations (InvalidateBlock/RevalidateBlock), because
+	// parent_id links are immutable once stored. This prevents the cache-thrashing
+	// problem where responseCache is wiped 5+ times per block by StoreBlock and
+	// SetBlock* operations during sync.
+	chainWalkCache *GenerationalCache
+	// rebuildGroup deduplicates concurrent rebuildOffChainSet calls using singleflight.
+	// When multiple StoreBlock calls detect forks simultaneously, only one rebuild
+	// executes and the others wait for its result. This prevents race conditions where
+	// concurrent rebuilds could produce inconsistent off-chain sets.
+	rebuildGroup singleflight.Group
+	// lastSuccessfulRebuild records the unix timestamp of the last successful
+	// rebuildOffChainSet call, used for staleness detection and observability.
+	lastSuccessfulRebuild atomic.Int64
+	// backgroundDone signals the background refresh goroutine to stop.
+	backgroundDone chan struct{}
+	// useInMemoryChainCheck controls whether CheckBlockIsInCurrentChain uses the
+	// in-memory off-chain set (true) or the original SQL recursive CTE (false).
+	// Read once at construction from settings; not changed at runtime.
+	useInMemoryChainCheck bool
 }
 
 // New creates and initializes a new SQL blockchain store instance.
@@ -139,18 +186,46 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("unknown database engine: %s", storeURL.Scheme)
 	}
 
+	useInMemory := tSettings.BlockChain.UseInMemoryChainCheck
+
 	s := &SQL{
-		db:            db,
-		engine:        util.SQLEngine(storeURL.Scheme),
-		logger:        logger,
-		responseCache: NewGenerationalCache(),
-		cacheTTL:      2 * time.Minute,
-		chainParams:   tSettings.ChainCfgParams,
+		db:                    db,
+		engine:                util.SQLEngine(storeURL.Scheme),
+		logger:                logger,
+		responseCache:         NewGenerationalCache(),
+		cacheTTL:              2 * time.Minute,
+		chainParams:           tSettings.ChainCfgParams,
+		useInMemoryChainCheck: useInMemory,
+	}
+
+	if useInMemory {
+		s.chainWalkCache = NewGenerationalCache()
+		s.offChainBlockIDs = make(map[uint32]struct{})
+		s.backgroundDone = make(chan struct{})
 	}
 
 	err = s.insertGenesisTransaction(logger)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
+	}
+
+	if useInMemory {
+		// Rebuild the off-chain set using a CTE walk of the main chain so that
+		// CheckBlockIsInCurrentChain works correctly after a process restart.
+		// This is fatal because the in-memory lookup has no DB fallback — if the
+		// off-chain set is empty, fork/orphan blocks would incorrectly return true.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer rebuildCancel()
+		if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			s.Close()
+			return nil, errors.NewStorageError("failed to seed off-chain set during startup", rebuildErr)
+		}
+		s.lastSuccessfulRebuild.Store(time.Now().Unix())
+
+		// Start periodic background refresh of the off-chain set as a safety net.
+		// This catches any missed rebuilds (e.g. due to transient DB errors during
+		// event-driven rebuilds) without requiring a process restart.
+		go s.backgroundRefreshLoop()
 	}
 
 	return s, nil
@@ -175,6 +250,19 @@ func (s *SQL) GetDBEngine() util.SQLEngine {
 }
 
 func (s *SQL) Close() error {
+	// Signal the background refresh goroutine to stop.
+	if s.backgroundDone != nil {
+		select {
+		case <-s.backgroundDone:
+			// Already closed
+		default:
+			close(s.backgroundDone)
+		}
+	}
+	s.responseCache.Stop()
+	if s.chainWalkCache != nil {
+		s.chainWalkCache.Stop()
+	}
 	return s.db.Close()
 }
 
@@ -683,6 +771,139 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 // could overwrite fresh cache entries with stale data.
 func (s *SQL) ResetResponseCache() {
 	s.responseCache.DeleteAll()
+}
+
+// resetChainWalkCache clears the dedicated cache for chain-walking queries
+// (GetBlockHeaderIDs, GetBlockHeaders). These queries follow parent_id links
+// which are immutable, so the cache only needs clearing on reorgs where the
+// "invalid" status of blocks may change, affecting which blocks are walked.
+// Unlike responseCache, this is NOT cleared on StoreBlock or SetBlock* calls.
+func (s *SQL) resetChainWalkCache() {
+	if s.chainWalkCache != nil {
+		s.chainWalkCache.DeleteAll()
+	}
+}
+
+// triggerRebuildOffChainSet deduplicates concurrent rebuild requests using singleflight.
+// When multiple goroutines (e.g. concurrent StoreBlock calls detecting forks) trigger
+// a rebuild simultaneously, only one actually executes and the others wait for its result.
+// This prevents race conditions where concurrent rebuilds could see different DB states.
+func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
+	_, err, _ := s.rebuildGroup.Do("rebuild", func() (interface{}, error) {
+		return nil, s.rebuildOffChainSet(ctx)
+	})
+	return err
+}
+
+// rebuildOffChainSet rebuilds the set of block IDs that are NOT on the main chain.
+// It uses a recursive CTE to walk the main chain from the best block backward via
+// parent_id, then finds all block IDs NOT on that path. This correctly handles all
+// chain topologies including nested forks (fork-of-a-fork).
+//
+// This is called when:
+//   - A fork is detected in StoreBlock (new block is not the best block after insert)
+//   - A block is invalidated (InvalidateBlock)
+//   - A block is revalidated (RevalidateBlock)
+//   - At startup to seed the off-chain set from existing data
+//   - Periodically by backgroundRefreshLoop as a safety net
+//
+// The off-chain set is typically tiny (a few hundred blocks on all of mainnet history)
+// so this operation is fast even when it runs. The CTE walks the full main chain once
+// (O(chain_depth)), which is acceptable since rebuilds are infrequent.
+func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
+	bestBlockID, _, bestErr := s.getBestBlockID(ctx)
+	if bestErr != nil {
+		return errors.NewStorageError("rebuildOffChainSet: failed to get best block ID", bestErr)
+	}
+
+	// Walk the main chain from bestBlockID backward to genesis via parent_id,
+	// then find all block IDs NOT on that path. This is provably correct for all
+	// chain topologies (including nested forks) because any block not reachable
+	// from the best block via parent_id links is by definition off-chain.
+	// The "b.id != m.id" condition prevents infinite recursion at the genesis
+	// block which has parent_id = id (self-referencing).
+	q := `
+		WITH RECURSIVE main_chain AS (
+			SELECT id, parent_id FROM blocks WHERE id = $1
+			UNION ALL
+			SELECT b.id, b.parent_id FROM blocks b INNER JOIN main_chain m ON b.id = m.parent_id WHERE b.id != m.id
+		)
+		SELECT b.id FROM blocks b LEFT JOIN main_chain m ON b.id = m.id WHERE m.id IS NULL
+	`
+	rows, err := s.db.QueryContext(ctx, q, bestBlockID)
+	if err != nil {
+		return errors.NewStorageError("rebuildOffChainSet: failed to query off-chain blocks", err)
+	}
+	defer rows.Close()
+
+	offChain := make(map[uint32]struct{})
+	for rows.Next() {
+		var id uint32
+		if err = rows.Scan(&id); err != nil {
+			return errors.NewStorageError("rebuildOffChainSet: failed to scan off-chain block ID", err)
+		}
+		offChain[id] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return errors.NewStorageError("rebuildOffChainSet: error iterating off-chain blocks", err)
+	}
+
+	s.offChainBlockIDsMu.Lock()
+	s.offChainBlockIDs = offChain
+	s.offChainBlockIDsMu.Unlock()
+
+	// Update maxBlockID from the database. This is the authoritative upper bound
+	// for block IDs — any ID above this cannot exist and should not be treated as
+	// on-chain by CheckBlockIsInCurrentChain.
+	var maxID uint32
+	if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM blocks`).Scan(&maxID); err != nil {
+		return errors.NewStorageError("rebuildOffChainSet: failed to query max block ID", err)
+	}
+	s.updateMaxBlockID(uint64(maxID))
+
+	if len(offChain) > 0 {
+		s.logger.Infof("rebuildOffChainSet: %d off-chain block IDs, maxBlockID=%d", len(offChain), maxID)
+	}
+
+	return nil
+}
+
+// updateMaxBlockID atomically updates maxBlockID to newID if newID is larger
+// than the current value. This is safe for concurrent callers.
+func (s *SQL) updateMaxBlockID(newID uint64) {
+	for {
+		current := s.maxBlockID.Load()
+		if newID <= current {
+			return
+		}
+		if s.maxBlockID.CompareAndSwap(current, newID) {
+			return
+		}
+	}
+}
+
+// backgroundRefreshLoop periodically rebuilds the off-chain set as a safety net.
+// This catches cases where an event-driven rebuild failed (DB timeout, transient error)
+// and the off-chain set became stale. The interval is 2 minutes — cheap because the
+// rebuild is deduplicated via singleflight and the off-chain set is tiny.
+func (s *SQL) backgroundRefreshLoop() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.backgroundDone:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			if err := s.triggerRebuildOffChainSet(ctx); err != nil {
+				s.logger.Errorf("background rebuildOffChainSet: %v", err)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+			cancel()
+		}
+	}
 }
 
 // ExportBlockchainCSV exports the blockchain data to a CSV file for analysis or backup purposes.

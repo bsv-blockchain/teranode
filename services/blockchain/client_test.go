@@ -184,7 +184,7 @@ func TestClientHealth(t *testing.T) {
 		code, msg, err := c.Health(context.Background(), false)
 		require.Error(t, err)
 		assert.Equal(t, http.StatusFailedDependency, code)
-		assert.Contains(t, msg, "not ready")
+		assert.Contains(t, msg, "grpc error")
 	})
 
 	t.Run("readiness check returns OK", func(t *testing.T) {
@@ -201,6 +201,70 @@ func TestClientHealth(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, code)
 		assert.Equal(t, "all good", msg)
+	})
+}
+
+func TestCheckSubscriptionHealth(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("createdAt zero skips check (mock client)", func(t *testing.T) {
+		c := &Client{
+			settings:  tSettings,
+			createdAt: 0, // struct literal, no constructor
+		}
+
+		code, msg := c.checkSubscriptionHealth()
+		assert.Equal(t, http.StatusOK, code)
+		assert.Contains(t, msg, "skipped")
+	})
+
+	t.Run("recent heartbeat returns OK", func(t *testing.T) {
+		c := &Client{
+			settings:  tSettings,
+			createdAt: time.Now().Add(-time.Minute).UnixNano(),
+		}
+		c.lastHeartbeat.Store(time.Now().UnixNano())
+
+		code, msg := c.checkSubscriptionHealth()
+		assert.Equal(t, http.StatusOK, code)
+		assert.Contains(t, msg, "healthy")
+	})
+
+	t.Run("stale heartbeat returns 503", func(t *testing.T) {
+		c := &Client{
+			settings:  tSettings,
+			createdAt: time.Now().Add(-time.Minute).UnixNano(),
+		}
+		// Heartbeat older than 3x heartbeat interval
+		c.lastHeartbeat.Store(time.Now().Add(-5 * time.Minute).UnixNano())
+
+		code, msg := c.checkSubscriptionHealth()
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+		assert.Contains(t, msg, "stale")
+	})
+
+	t.Run("no heartbeat within grace period returns OK", func(t *testing.T) {
+		c := &Client{
+			settings:  tSettings,
+			createdAt: time.Now().UnixNano(), // just created
+		}
+		// lastHeartbeat is zero (no heartbeat yet)
+
+		code, msg := c.checkSubscriptionHealth()
+		assert.Equal(t, http.StatusOK, code)
+		assert.Contains(t, msg, "waiting")
+	})
+
+	t.Run("no heartbeat past grace period returns 503", func(t *testing.T) {
+		c := &Client{
+			settings:  tSettings,
+			createdAt: time.Now().Add(-5 * time.Minute).UnixNano(), // created long ago
+		}
+		// lastHeartbeat is zero (no heartbeat received)
+
+		code, msg := c.checkSubscriptionHealth()
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+		assert.Contains(t, msg, "no heartbeat")
 	})
 }
 
