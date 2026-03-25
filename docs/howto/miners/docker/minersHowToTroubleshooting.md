@@ -110,7 +110,7 @@ For Docker Compose, replace `[service_name]` with the appropriate service or pod
 - Prometheus (service name: `prometheus`)               [*Only in Docker*]
 - Grafana  (service name: `grafana`)                    [*Only in Docker*]
 
-> **Note:** The Propagation and P2P services are not deployed as separate Docker containers in the standard testnet/mainnet configurations. Their functionality runs embedded within the main Teranode binary.
+> **Note:** The Propagation (`propagation`) and P2P (`peer`) services are available as separate Docker containers (defined in `deploy/docker/base/docker-teranode.yml`) but are not included in the standard testnet/mainnet configurations by default. They can be added to your `docker-compose.yml` if needed.
 
 ##### Redirecting Logs to a File
 
