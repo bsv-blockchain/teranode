@@ -21,6 +21,8 @@ services/<service_name>/<service_name>_api/<service_name>_api.proto
 
 For example, the file `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` defines the RPC services and message types for the subtree validation service.
 
+> Note: The following `proto` snippet is a **simplified example** intended only to illustrate how `.proto` files are structured for code generation. It does **not** show all fields or exact types used in the real `CheckSubtreeFromBlockRequest`. For the authoritative schema, always refer directly to `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` in the repository.
+
 ```proto
 syntax = "proto3";
 
@@ -28,6 +30,8 @@ option go_package = "./;subtreevalidation_api";
 
 package subtreevalidation_api;
 
+// Simplified example - refer to the real subtreevalidation_api.proto
+// for the complete and accurate message definitions (fields, types, etc.).
 service SubtreeValidationAPI {
   rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {}
 }
