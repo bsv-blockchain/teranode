@@ -189,10 +189,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
 				catchupCtx.blockUpTo.Hash().String(), err)
 		} else {
+			var clearErrors, notifyErrors int
 			for _, header := range headers {
 				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
-					u.logger.Errorf("[catchup][%s] Failed to clear mined_set for block %s: %v",
-						catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+					clearErrors++
 				} else {
 					// Send BlockMinedUnset notification to trigger immediate transaction status update
 					// This ensures BlockValidation processes the block immediately instead of waiting
@@ -201,10 +201,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 						Type: model.NotificationType_BlockMinedUnset,
 						Hash: header.Hash().CloneBytes(),
 					}); err != nil {
-						u.logger.Errorf("[catchup][%s] Failed to send BlockMinedUnset notification for %s: %v",
-							catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+						notifyErrors++
 					}
 				}
+			}
+			if clearErrors > 0 || notifyErrors > 0 {
+				u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
+					catchupCtx.blockUpTo.Hash().String(), clearErrors, len(headers), notifyErrors)
 			}
 			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 				catchupCtx.blockUpTo.Hash().String(), len(headers))
