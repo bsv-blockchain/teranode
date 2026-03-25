@@ -131,6 +131,18 @@ func TestNewBlockParentNotMinedError(t *testing.T) {
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }
 
+// TestNewBlockIncompleteError tests the NewBlockIncompleteError function to ensure it creates an error with the correct code and message.
+func TestNewBlockIncompleteError(t *testing.T) {
+	message := "test block incomplete error %s %d"
+	params := []interface{}{"param1", 42}
+	err := NewBlockIncompleteError(message, params...)
+
+	assert.Equal(t, ERR_BLOCK_INCOMPLETE, err.Code(), "error code should be ERR_BLOCK_INCOMPLETE")
+	assert.Equal(t, "test block incomplete error param1 42", err.Message(), "error message should match")
+
+	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
+}
+
 // TestNewBlockInvalidError tests the NewBlockInvalidError function to ensure it creates an error with the correct code and message.
 func TestNewBlockInvalidError(t *testing.T) {
 	message := "test block invalid error %s %d"

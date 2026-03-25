@@ -409,7 +409,9 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 		return
 	}
 
-	// Use SetFromReader to handle streaming data
+	// The opts from QueryToFileOptions intentionally do not include DAH from the sender.
+	// Each teranode applies its own DAH via its local file store's BlockHeightRetention
+	// setting in constructFilename(). A peer's DAH is irrelevant to our retention policy.
 	err = s.store.SetFromReader(r.Context(), key, fileType, r.Body, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {

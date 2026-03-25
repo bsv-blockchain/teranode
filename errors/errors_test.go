@@ -2215,7 +2215,7 @@ func TestWrapGRPCPublic(t *testing.T) {
 		require.Nil(t, result)
 	})
 
-	t.Run("returns gRPC status error without internal details", func(t *testing.T) {
+	t.Run("returns gRPC status error with sanitized detail", func(t *testing.T) {
 		innerErr := New(ERR_STORAGE_ERROR, "internal db error")
 		outerErr := New(ERR_SERVICE_ERROR, "service unavailable", innerErr)
 
@@ -2233,8 +2233,19 @@ func TestWrapGRPCPublic(t *testing.T) {
 		// Message should be the top-level message only
 		require.Equal(t, "service unavailable", st.Message())
 
-		// Should not have detailed error information in status details
-		require.Empty(t, st.Details())
+		// Should have exactly one sanitized TError detail (code + message only)
+		require.Len(t, st.Details(), 1)
+
+		// Verify the detail contains only code and message, no internal info
+		unwrapped := UnwrapGRPC(result)
+		require.NotNil(t, unwrapped)
+		require.Equal(t, ERR_SERVICE_ERROR, unwrapped.code)
+		require.Equal(t, "service unavailable", unwrapped.message)
+		require.Empty(t, unwrapped.file)
+		require.Zero(t, unwrapped.line)
+		require.Empty(t, unwrapped.function)
+		require.Nil(t, unwrapped.wrappedErr)
+		require.Nil(t, unwrapped.data)
 	})
 
 	t.Run("maps error codes to gRPC codes correctly", func(t *testing.T) {
@@ -2296,6 +2307,66 @@ func TestWrapGRPCPublic(t *testing.T) {
 		require.NotContains(t, errStr, "password")
 		require.NotContains(t, errStr, "secret123")
 		require.NotContains(t, errStr, "admin")
+	})
+
+	t.Run("preserves error code through WrapGRPCPublic and UnwrapGRPC round-trip", func(t *testing.T) {
+		// This test verifies that clients (e.g. tx-blaster) can detect specific error
+		// types after WrapGRPCPublic sanitization via errors.Is() code matching.
+		tests := []struct {
+			name     string
+			err      *Error
+			sentinel *Error
+		}{
+			{"TX_LOCKED", NewTxLockedError("transaction is locked"), ErrTxLocked},
+			{"TX_EXISTS", NewTxExistsError("tx already exists"), ErrTxExists},
+			{"TX_INVALID", NewTxInvalidError("invalid transaction"), ErrTxInvalid},
+			{"SERVICE_ERROR", NewServiceError("service unavailable"), ErrServiceError},
+			{"NOT_FOUND", New(ERR_NOT_FOUND, "resource not found"), ErrNotFound},
+			{"PROCESSING", NewProcessingError("processing failed"), ErrProcessing},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				// Simulate server-side: wrap with WrapGRPCPublic
+				grpcErr := WrapGRPCPublic(tc.err)
+				require.NotNil(t, grpcErr)
+
+				// Simulate client-side: the package-level Is() handles gRPC-wrapped errors
+				// by calling UnwrapGRPC internally before comparing error codes
+				require.True(t, Is(grpcErr, tc.sentinel),
+					"Is(grpcErr, sentinel) should match %s after WrapGRPCPublic, got %v",
+					tc.sentinel.code.String(), grpcErr)
+
+				// Also verify direct UnwrapGRPC + Is works (what propagation.Client does)
+				unwrapped := UnwrapGRPC(grpcErr)
+				require.NotNil(t, unwrapped)
+				require.True(t, Is(unwrapped, tc.sentinel),
+					"Is(unwrapped, sentinel) should match %s after UnwrapGRPC, got code %s",
+					tc.sentinel.code.String(), unwrapped.code.String())
+			})
+		}
+	})
+
+	t.Run("does not expose wrapped error chain through round-trip", func(t *testing.T) {
+		// A nested error chain should not survive the sanitization
+		deepErr := New(ERR_STORAGE_ERROR, "secret database connection string")
+		midErr := New(ERR_SERVICE_ERROR, "internal path /var/secrets", deepErr)
+		topErr := New(ERR_PROCESSING, "processing failed", midErr)
+
+		grpcErr := WrapGRPCPublic(topErr)
+		unwrapped := UnwrapGRPC(grpcErr)
+
+		// Should have the top-level code and message
+		require.Equal(t, ERR_PROCESSING, unwrapped.code)
+		require.Equal(t, "processing failed", unwrapped.message)
+
+		// Should not have any wrapped error chain
+		require.Nil(t, unwrapped.wrappedErr)
+
+		// Should not leak internal details in the error string
+		errStr := unwrapped.Error()
+		require.NotContains(t, errStr, "secret database")
+		require.NotContains(t, errStr, "/var/secrets")
 	})
 }
 

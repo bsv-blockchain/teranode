@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -376,6 +377,34 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to update mined info")
+	})
+}
+
+func TestQuickValidateBlock_IncompleteBlockNilCoinbase(t *testing.T) {
+	t.Run("nil coinbase returns ErrBlockIncomplete", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.CoinbaseTx = nil
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
+		assert.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
+	})
+
+	t.Run("empty inputs returns ErrBlockIncomplete", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.CoinbaseTx = &bt.Tx{Inputs: []*bt.Input{}}
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
+		assert.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
 	})
 }
 

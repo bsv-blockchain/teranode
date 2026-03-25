@@ -553,13 +553,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	storeBatcherSize := sm.settings.Legacy.StoreBatcherSize
 	storeBatcherConcurrency := sm.settings.Legacy.StoreBatcherConcurrency
 
-	// Use a detached context that inherits cancellation from parent but not tracing values
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	defer bgCancel()
-	stop := context.AfterFunc(ctx, bgCancel)
-	defer stop()
-
-	g, gCtx := errgroup.WithContext(bgCtx)
+	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
@@ -618,12 +612,6 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 	concurrencyLimit := spendBatcherSize * spendBatcherConcurrency
 
-	// Use a detached context that inherits cancellation from parent but not tracing values
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	defer bgCancel()
-	stop := context.AfterFunc(ctx, bgCancel)
-	defer stop()
-
 	// These transactions arrive as part of a block, so they should be treated as valid
 	// transactions that all need to be processed. If one fails (e.g. transient Aerospike
 	// DEVICE_OVERLOAD), rolling back or cancelling all other independent transactions
@@ -636,7 +624,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 	totalTxCount := txMap.Length()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if ctx.Err() != nil || bgCtx.Err() != nil {
+		if ctx.Err() != nil {
 			return errors.NewProcessingError("[PreValidateTransactions] context cancelled")
 		}
 
@@ -646,7 +634,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 			time.Sleep(retryBackoff)
 		}
 
-		g, _ := errgroup.WithContext(bgCtx)
+		g, _ := errgroup.WithContext(ctx)
 		util.SafeSetLimit(g, concurrencyLimit)
 
 		var (
@@ -674,7 +662,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					return nil
 				}
 
-				if _, validateErr := sm.validationClient.Validate(bgCtx,
+				if _, validateErr := sm.validationClient.Validate(ctx,
 					txWrapper.Tx,
 					blockHeight,
 					validator.WithSkipUtxoCreation(true),
@@ -767,14 +755,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 			sm.validationClient.TriggerBatcher()
 		} else {
-			// Use a detached context that inherits cancellation from parent but not tracing values
-			bgCtx, bgCancel := context.WithCancel(context.Background())
-			defer bgCancel()
-			stopFn := context.AfterFunc(ctx, bgCancel)
-			defer stopFn()
-
 			// process all the transactions on a certain level in parallel
-			g, gCtx := errgroup.WithContext(bgCtx)
+			g, gCtx := errgroup.WithContext(ctx)
 			util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {

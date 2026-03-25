@@ -633,6 +633,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 						// If block is invalid, don't try other peers; continue to next catchup request
 						// Block is expected to be added to the block store as invalid somewhere else
+						// Note: ErrBlockIncomplete intentionally falls through to retry with alternative peers,
+						// since incomplete blocks (e.g. from seeded peers) may be available from other peers
 						if errors.Is(err, errors.ErrBlockInvalid) ||
 							errors.Is(err, errors.ErrTxMissingParent) ||
 							errors.Is(err, errors.ErrTxNotFound) ||

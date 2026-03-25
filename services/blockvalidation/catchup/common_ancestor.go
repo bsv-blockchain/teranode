@@ -41,27 +41,8 @@ func (caf *CommonAncestorFinder) FindCommonAncestor(locatorHashes []*chainhash.H
 
 	// If no direct match, walk back through the chain from each locator
 	for _, hash := range locatorHashes {
-		currentHash := hash
-		// Walk back through the chain up to a reasonable depth
-		for depth := 0; depth < 1000; depth++ {
-			// Check if current hash is in remote headers
-			if idx, exists := remoteMap[*currentHash]; exists {
-				return remoteHeaders[idx], idx, nil
-			}
-
-			// Get the header for this hash
-			header, exists := caf.LocalChainLookup(currentHash)
-			if !exists {
-				// Can't continue walking back from this point
-				break
-			}
-
-			// Move to the previous block
-			if header.HashPrevBlock == nil || header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
-				// Reached genesis
-				break
-			}
-			currentHash = header.HashPrevBlock
+		if idx := caf.walkBackToAncestor(hash, remoteMap); idx >= 0 {
+			return remoteHeaders[idx], idx, nil
 		}
 	}
 
@@ -210,4 +191,26 @@ func (caf *CommonAncestorFinder) FindBestCommonAncestor(
 	}
 
 	return nil, ErrNoCommonAncestor
+}
+
+// walkBackToAncestor walks back through the local chain from startHash looking for a match in remoteMap.
+// Returns the index in remoteMap if found, or -1 if not.
+func (caf *CommonAncestorFinder) walkBackToAncestor(startHash *chainhash.Hash, remoteMap map[chainhash.Hash]int) int {
+	currentHash := startHash
+	for depth := 0; depth < 1000; depth++ {
+		if idx, exists := remoteMap[*currentHash]; exists {
+			return idx
+		}
+
+		header, exists := caf.LocalChainLookup(currentHash)
+		if !exists {
+			return -1
+		}
+
+		if header.HashPrevBlock == nil || header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			return -1
+		}
+		currentHash = header.HashPrevBlock
+	}
+	return -1
 }

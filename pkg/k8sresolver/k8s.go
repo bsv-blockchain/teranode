@@ -8,7 +8,6 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	discovery "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -94,28 +93,43 @@ func (s *serviceClient) Watch(ctx context.Context, host string) (<-chan watch.Ev
 	ev := make(chan watch.Event)
 	stop := make(chan struct{})
 
-	watchList := cache.NewListWatchFromClient(s.k8s.DiscoveryV1().RESTClient(), "endpointslices", s.namespace, fields.OneTermEqualSelector(discovery.LabelServiceName, host))
-	_, controller := cache.NewInformer(watchList, &discovery.EndpointSlice{}, time.Second*5, cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			select {
-			case ev <- watch.Event{Type: watch.Added, Object: obj.(runtime.Object)}:
-			case <-ctx.Done():
-			case <-stop:
-			}
+	labelSelector := discovery.LabelServiceName + "=" + host
+	watchList := &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+			options.LabelSelector = labelSelector
+			return s.k8s.DiscoveryV1().EndpointSlices(s.namespace).List(ctx, options)
 		},
-		DeleteFunc: func(obj interface{}) {
-			select {
-			case ev <- watch.Event{Type: watch.Deleted, Object: obj.(runtime.Object)}:
-			case <-ctx.Done():
-			case <-stop:
-			}
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
+			options.LabelSelector = labelSelector
+			return s.k8s.DiscoveryV1().EndpointSlices(s.namespace).Watch(ctx, options)
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			select {
-			case ev <- watch.Event{Type: watch.Modified, Object: newObj.(runtime.Object)}:
-			case <-ctx.Done():
-			case <-stop:
-			}
+	}
+	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
+		ListerWatcher: watchList,
+		ObjectType:    &discovery.EndpointSlice{},
+		ResyncPeriod:  time.Second * 5,
+		Handler: cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				select {
+				case ev <- watch.Event{Type: watch.Added, Object: obj.(runtime.Object)}:
+				case <-ctx.Done():
+				case <-stop:
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				select {
+				case ev <- watch.Event{Type: watch.Deleted, Object: obj.(runtime.Object)}:
+				case <-ctx.Done():
+				case <-stop:
+				}
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				select {
+				case ev <- watch.Event{Type: watch.Modified, Object: newObj.(runtime.Object)}:
+				case <-ctx.Done():
+				case <-stop:
+				}
+			},
 		},
 	})
 

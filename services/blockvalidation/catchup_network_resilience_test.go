@@ -309,6 +309,8 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		suite := NewCatchupTestSuiteWithConfig(t, config)
 		defer suite.Cleanup()
 
+		suite.MockUTXOStore.On("GetBlockHeight").Return(uint32(1000)).Maybe()
+
 		testHeaders := testhelpers.GetMainnetHeadersRange(t, 0, 10)
 		targetBlock := &model.Block{
 			Header: testHeaders[9],
@@ -477,8 +479,8 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
 
-		// Mock UTXO store block height
-		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
+		// Mock UTXO store block height (matches blockchain height to avoid locator capping)
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1003))
 
 		// Note: peerMetrics field has been removed from Server struct
 

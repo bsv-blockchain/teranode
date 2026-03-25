@@ -21,6 +21,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -106,8 +107,18 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
-		// Invalidate response cache to ensure cached blocks reflect updated invalid field
+		// Invalidate caches to ensure cached blocks reflect updated invalid field
 		s.ResetResponseCache()
+		if s.useInMemoryChainCheck {
+			s.resetChainWalkCache()
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("InvalidateBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
 	}()
 
 	for rows.Next() {

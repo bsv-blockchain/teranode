@@ -62,6 +62,11 @@ func (m *MockServerP2PClient) GetID() string {
 	return args.Get(0).(peer.ID).String()
 }
 
+func (m *MockServerP2PClient) Connect(ctx context.Context, peerMultiaddr string) error {
+	args := m.Called(ctx, peerMultiaddr)
+	return args.Error(0)
+}
+
 func (m *MockServerP2PClient) GetPeers() []p2pMessageBus.PeerInfo {
 	peers := []p2pMessageBus.PeerInfo{}
 	peers = append(peers, p2pMessageBus.PeerInfo{})

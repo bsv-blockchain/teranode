@@ -339,6 +339,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// Service unavailable errors are local system issues, not peer errors
 			errorType = "local_service_unavailable"
 			isPeerError = false
+		case errors.Is(*err, errors.ErrBlockIncomplete):
+			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			errorType = "block_incomplete"
+			isPeerError = false
 		}
 
 		u.previousCatchupAttempt = &PreviousAttempt{
@@ -1039,12 +1043,14 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
-					// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
-					// Just log and record metrics
-					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
+					// Block was NOT stored as invalid, so another peer can provide the full version
+					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					if errors.Is(err, errors.ErrBlockIncomplete) {
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
-
-						// Mark peer as malicious for providing invalid block
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 
@@ -1105,7 +1111,17 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 	// Quick validation: create UTXOs for the block and validate transactions in parallel
 	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
 		if prometheusCatchupErrors != nil {
-			prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+			prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
+		}
+
+		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
+		// Keep subtree files — they contain valid data that the next peer's validation can reuse
+		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		if errors.Is(err, errors.ErrBlockIncomplete) {
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			return false, err
 		}
 
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",

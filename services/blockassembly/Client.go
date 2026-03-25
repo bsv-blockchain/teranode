@@ -87,6 +87,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		&util.ConnectionOptions{
 			MaxRetries:   maxRetries,
 			RetryBackoff: retryBackoff,
+			CallerName:   "blockassembly",
 		}, tSettings,
 	)
 	if err != nil {
@@ -117,6 +118,10 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
 	}
+	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
+		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
+		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
+	}
 	client.batcher = b
 
 	return client, nil
@@ -137,6 +142,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "blockassembly",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)
@@ -165,6 +171,10 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	b := batcher.New(batchSize, duration, sendBatch, !tSettings.BatcherDrainMode)
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
+	}
+	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
+		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
+		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
 	}
 	client.batcher = b
 

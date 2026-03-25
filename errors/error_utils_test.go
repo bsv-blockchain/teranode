@@ -242,6 +242,62 @@ func TestIsContextError(t *testing.T) {
 	}
 }
 
+func TestIsLocalError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "context canceled",
+			err:      context.Canceled,
+			expected: true,
+		},
+		{
+			name:     "context deadline exceeded",
+			err:      context.DeadlineExceeded,
+			expected: true,
+		},
+		{
+			name:     "wrapped context canceled",
+			err:      NewContextCanceledError("test"),
+			expected: true,
+		},
+		{
+			name:     "storage error",
+			err:      NewStorageError("test"),
+			expected: true,
+		},
+		{
+			name:     "network error - should retry with other peers",
+			err:      NewNetworkTimeoutError("test"),
+			expected: false,
+		},
+		{
+			name:     "service error - should retry with other peers",
+			err:      NewServiceError("test"),
+			expected: false,
+		},
+		{
+			name:     "processing error - should retry with other peers",
+			err:      NewProcessingError("test"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsLocalError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestGetErrorCategory(t *testing.T) {
 	tests := []struct {
 		name     string

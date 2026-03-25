@@ -36,6 +36,7 @@ func CheckGRPCServerWithSettings(address string, tSettings *settings.Settings, h
 		conn, err := util.GetGRPCClient(healthCtx, address, &util.ConnectionOptions{
 			MaxRetries:   0, // Don't retry for health checks
 			RetryBackoff: 0,
+			CallerName:   "health",
 		}, tSettings)
 		if err != nil {
 			return http.StatusServiceUnavailable, fmt.Sprintf("gRPC server at %s not accepting connections", address), err

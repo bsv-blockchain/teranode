@@ -30,10 +30,10 @@ RUN echo "Building Git SHA: ${GIT_SHA}"
 
 # Build with $BUILD_JOBS parallel jobs
 RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
-      CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
-    else \
-      CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
-    fi
+  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+  else \
+  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+  fi
 
 # Build teranode-cli
 RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build-teranode-cli
@@ -61,7 +61,9 @@ ENV PATH=/app:$PATH
 # Set GOGC=200 to reduce GC aggressiveness (default is 100)
 # Higher values trade memory for less frequent GC pauses
 # Can be overridden at deployment time via docker-compose or Kubernetes
-ENV GOGC=200
+# ENV GOGC=200
+# with GOGC=200 there is a risk of OOM issues without specifying memory limit GOMEMLIMIT
+# which varies from service to service so a global GOGC=200 is not safe
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./teranode.run"]

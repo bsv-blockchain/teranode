@@ -13,6 +13,7 @@ var (
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
@@ -125,6 +126,11 @@ func NewBlockNotFoundError(message string, params ...interface{}) *Error {
 // NewBlockParentNotMinedError creates a new error with the block parent not mined error code.
 func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_PARENT_NOT_MINED, message, params...)
+}
+
+// NewBlockIncompleteError creates a new error for blocks with missing data (e.g. no coinbase from seeded peers).
+func NewBlockIncompleteError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_INCOMPLETE, message, params...)
 }
 
 // NewBlockInvalidError creates a new error with the block invalid error code.

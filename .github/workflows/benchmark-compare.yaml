@@ -1,0 +1,190 @@
+name: Benchmark Comparison
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  bench:
+    name: Bench ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: model
+            packages: ./model
+          - group: blockassembly
+            packages: ./services/blockassembly
+          - group: mining
+            packages: ./services/blockassembly/mining
+          - group: subtreeprocessor-unit
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkDiskTxMap|BenchmarkReorg|BenchmarkQueue|BenchmarkAtomicPointer|BenchmarkTxMap|BenchmarkChannel"
+          - group: subtreeprocessor-subtree
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkDirect|BenchmarkSubtree|BenchmarkParallel|BenchmarkSequential|BenchmarkProcess"
+          - group: subtreeprocessor-heavy
+            packages: ./services/blockassembly/subtreeprocessor
+            bench_filter: "BenchmarkBlockAssembler_AddTx|BenchmarkAddNode"
+          - group: blockvalidation
+            packages: ./services/blockvalidation
+          - group: subtreevalidation-buffer
+            packages: ./services/subtreevalidation
+            bench_filter: "Benchmark_Buffer|Benchmark_Subtree|Benchmark_Pool|Benchmark_Memory"
+          - group: subtreevalidation-cache
+            packages: ./services/subtreevalidation
+            bench_filter: "BenchmarkProcessTxMeta|Benchmark_prepareTxs"
+          - group: subtreevalidation-sizing
+            packages: ./services/subtreevalidation
+            bench_filter: "BenchmarkSubtreeSizes|BenchmarkBlockSizeScaling|BenchmarkSubtreeAllocations|BenchmarkSubtreeProcessor|BenchmarkStreamingProcessor"
+          - group: blockchain
+            packages: ./services/blockchain/work
+          - group: utxo
+            packages: >-
+              ./stores/utxo
+              ./stores/utxo/meta
+          # - group: stores
+          #   packages: >-
+          #     ./stores/blob/null
+          #     ./stores/blockchain/options
+          #     ./stores/blockchain/sql
+          #     ./stores/txmetacache
+          # - group: services
+          #   packages: >-
+          #     ./services/blockpersister
+          #     ./services/legacy/bsvec
+          #     ./services/legacy/bsvutil/hdkeychain
+          #     ./services/legacy/netsync
+          #     ./services/legacy/peer
+          #     ./services/validator
+          #     ./services/asset/httpimpl
+          # - group: core
+          #   packages: >-
+          #     ./errors
+          #     ./ulogger
+          #     ./util
+          #     ./util/health
+          #     ./util/servicemanager
+          #     ./util/usql
+          #     ./test/consensus
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.2"
+          cache: false
+
+      - name: Run PR benchmarks
+        run: |
+          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+            -tags "testtxmetacache" \
+            ${{ matrix.packages }} \
+            | tee pr-${{ matrix.group }}.txt
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      - name: Run main benchmarks
+        run: |
+          cd main
+          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+            -tags "testtxmetacache" \
+            ${{ matrix.packages }} \
+            | tee ../main-${{ matrix.group }}.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.group }}
+          path: |
+            pr-${{ matrix.group }}.txt
+            main-${{ matrix.group }}.txt
+          retention-days: 30
+
+  report:
+    name: Benchmark Report
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.2"
+          cache: false
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          merge-multiple: true
+
+      - name: Merge benchmark outputs
+        run: |
+          cat pr-*.txt > pr-benchmark-output.txt
+          cat main-*.txt > main-benchmark-output.txt
+          echo "PR benchmarks: $(grep -c '^Benchmark' pr-benchmark-output.txt) results"
+          echo "Main benchmarks: $(grep -c '^Benchmark' main-benchmark-output.txt) results"
+
+      - name: Capture baseline SHA
+        id: baseline_sha
+        run: |
+          SHA=$(git log --format='%H' origin/main -1 2>/dev/null || echo "unknown")
+          echo "value=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Compare benchmarks
+        id: compare
+        run: |
+          go run ./cmd/compare-benchmarks \
+            -baseline main-benchmark-output.txt \
+            -current pr-benchmark-output.txt \
+            -output benchmark-report.md \
+            -threshold 10.0 \
+            -alpha 0.05 \
+            -baseline-sha "${{ steps.baseline_sha.outputs.value }}" \
+            -current-sha "${{ github.sha }}" \
+            -baseline-ref "main" \
+            -current-ref "PR-${{ github.event.pull_request.number }}"
+
+      - name: Display report
+        if: always()
+        run: cat benchmark-report.md
+
+      - name: Add to job summary
+        if: always()
+        run: cat benchmark-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: |
+            pr-benchmark-output.txt
+            main-benchmark-output.txt
+            benchmark-report.md
+          retention-days: 30

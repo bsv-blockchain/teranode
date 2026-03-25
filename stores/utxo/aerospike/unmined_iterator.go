@@ -137,10 +137,7 @@ func launchPartitionIterator(store *Store, numPartitionQueries int, fullScan, pr
 
 	policy := util.GetAerospikeQueryPolicy(store.settings)
 	policy.IncludeBinData = true
-	policy.RecordQueueSize = (10 * 1024 * 1024) / numPartitionQueries
-	if policy.RecordQueueSize < 1024 {
-		policy.RecordQueueSize = 1024
-	}
+	policy.RecordQueueSize = 512
 
 	workerCtx, cancel := context.WithCancel(context.Background())
 	resultChanSize := numPartitionQueries * 2

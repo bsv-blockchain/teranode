@@ -97,7 +97,7 @@ func init() {
 	}
 }
 
-func GetMockHTTP(t *testing.T, body io.Reader) (*HTTP, *repository.Mock, echo.Context, *httptest.ResponseRecorder) {
+func GetMockHTTP(t testing.TB, body io.Reader) (*HTTP, *repository.Mock, echo.Context, *httptest.ResponseRecorder) {
 	// Mock repository
 	mockRepo := &repository.Mock{}
 

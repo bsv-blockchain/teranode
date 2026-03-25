@@ -28,8 +28,10 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 	t.Run("RejectMassiveHeaderPayload", func(t *testing.T) {
 		ctx, cancel := testhelpers.CreateTestContext(t, 30*time.Second)
 		defer cancel()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
 		// Track memory before test
 		var memStatsBefore runtime.MemStats
@@ -163,8 +165,10 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 	t.Run("HandleLargeButValidHeaderChain", func(t *testing.T) {
 		ctx, cancel := testhelpers.CreateTestContext(t, 30*time.Second)
 		defer cancel()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
 		// Test with a large but reasonable number of headers (5000)
 		targetBlock := &model.Block{
@@ -638,8 +642,10 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 	t.Run("TrackMemoryDuringNormalOperation", func(t *testing.T) {
 		ctx, cancel := testhelpers.CreateTestContext(t, 30*time.Second)
 		defer cancel()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
 		// Force garbage collection to get baseline
 		runtime.GC()
@@ -809,8 +815,10 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 
 	t.Run("CleanupAfterFailedCatchup", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+		server, mockBlockchainClient, mockUTXOStore, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
+
+		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
 		goroutinesBefore := runtime.NumGoroutine()
 
