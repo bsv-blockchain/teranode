@@ -994,11 +994,10 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				e := errors.WrapPublic(err)
 				// Use context-aware logger for trace correlation
-				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
+				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
 
-				response.Errors[idx] = e
+				response.Errors[idx] = errors.WrapPublic(err)
 			} else {
 				response.Errors[idx] = nil
 			}
