@@ -773,7 +773,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// This creates backpressure so workers don't fetch blocks 2000+ ahead of validation
 	const maxValidationBuffer = 50
 	validationBufferSize := min(int(size.Load()), maxValidationBuffer)
-	validateBlocksChan := make(chan *model.Block, validationBufferSize)
+	validateBlocksChan := make(chan blockForValidation, validationBufferSize)
 
 	// Channel for async subtree file writes (only used by quick validation)
 	var writeJobsChan chan *SubtreeWriteJob
@@ -991,7 +991,7 @@ func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidation, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64, writeJobsChan chan<- *SubtreeWriteJob) error {
 	i := 0
 	blockUpTo := catchupCtx.blockUpTo
 	baseURL := catchupCtx.baseURL
@@ -999,7 +999,8 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
-	for block := range validateBlocksChan {
+	for item := range validateBlocksChan {
+		block := item.block
 		// Check context cancellation before processing each block
 		select {
 		case <-gCtx.Done():
@@ -1060,10 +1061,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 					}
 
 					return err
-
-					// TODO: Consider increasing peer reputation for successful block validations. For now being cautious and only increasing on successful catchup operations.
 				}
 			}
+
+			// Block validated successfully — credit reputation to all peers that contributed data
+			u.reportValidBlockForPeers(gCtx, peerID, block.Hash().String(), item.contributingPeers)
+
 			// Update the remaining block count
 			remaining := size.Add(-1)
 			if remaining%100 == 0 && remaining > 0 {
