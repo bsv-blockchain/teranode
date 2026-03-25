@@ -57,14 +57,19 @@ func TestComputeCoinbaseBUMP_EndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(100), bumpParsed.BlockHeight)
 		require.Equal(t, 1, len(bumpParsed.Path))
-		require.Equal(t, 1, len(bumpParsed.Path[0]))
+		require.Equal(t, 2, len(bumpParsed.Path[0]))
 
-		// go-bc stores hashes in display order; verify the sibling hash matches tx1's display string
-		parsedHash := *bumpParsed.Path[0][0].Hash
-		require.Equal(t, tx1Str, parsedHash, "sibling hash in BUMP should be tx1 display-order txid")
+		// Level 0 should have coinbase txid (offset 0, flag TxID) and sibling (offset 1, flag Data)
+		require.Equal(t, uint64(0), *bumpParsed.Path[0][0].Offset)
+		require.NotNil(t, bumpParsed.Path[0][0].Txid)
+		require.True(t, *bumpParsed.Path[0][0].Txid)
+		require.Equal(t, tx0Str, *bumpParsed.Path[0][0].Hash, "coinbase txid in BUMP should match")
+
+		require.Equal(t, uint64(1), *bumpParsed.Path[0][1].Offset)
+		require.Equal(t, tx1Str, *bumpParsed.Path[0][1].Hash, "sibling hash in BUMP should be tx1 display-order txid")
 
 		// Manually verify merkle root using the BUMP hash (display order → reverse to internal → hash)
-		siblingDisplayBytes, err := hex.DecodeString(parsedHash)
+		siblingDisplayBytes, err := hex.DecodeString(*bumpParsed.Path[0][1].Hash)
 		require.NoError(t, err)
 		siblingInternalBytes := reverseTestBytes(siblingDisplayBytes)
 
@@ -124,8 +129,12 @@ func TestComputeCoinbaseBUMP_EndToEnd(t *testing.T) {
 		require.Equal(t, uint64(200), bumpParsed.BlockHeight)
 		require.Equal(t, 2, len(bumpParsed.Path), "should have 2 levels: subtree + block")
 
-		// Level 0: sibling hash within subtree (tx1's display txid)
-		require.Equal(t, txStrs[1], *bumpParsed.Path[0][0].Hash, "level 0 should be tx1 display txid")
+		// Level 0: coinbase txid (offset 0) + sibling hash (offset 1)
+		require.Equal(t, 2, len(bumpParsed.Path[0]), "level 0 should have coinbase txid + sibling")
+		require.Equal(t, txStrs[0], *bumpParsed.Path[0][0].Hash, "level 0 first should be coinbase txid")
+		require.NotNil(t, bumpParsed.Path[0][0].Txid)
+		require.True(t, *bumpParsed.Path[0][0].Txid)
+		require.Equal(t, txStrs[1], *bumpParsed.Path[0][1].Hash, "level 0 second should be tx1 display txid")
 
 		// Level 1: sibling subtree root hash (display order)
 		require.Equal(t, root1.String(), *bumpParsed.Path[1][0].Hash, "level 1 should be subtree1 root display hash")
@@ -253,14 +262,16 @@ func TestBUMP_KnownMerkleRoot(t *testing.T) {
 		bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, blockHeight)
 		require.NotNil(t, bumpBytes)
 
-		// Parse with go-bc and verify sibling hash
+		// Parse with go-bc and verify level 0 has coinbase txid + sibling
 		bumpParsed, err := bc.NewBUMPFromBytes(bumpBytes)
 		require.NoError(t, err)
-		require.Equal(t, siblingTxid, *bumpParsed.Path[0][0].Hash,
+		require.Equal(t, 2, len(bumpParsed.Path[0]), "level 0 should have coinbase txid + sibling")
+		require.Equal(t, coinbaseTxid, *bumpParsed.Path[0][0].Hash, "coinbase txid in BUMP should match")
+		require.Equal(t, siblingTxid, *bumpParsed.Path[0][1].Hash,
 			"BUMP should contain sibling txid in display order")
 
 		// Verify merkle root computation through the BUMP path
-		siblingDisplayBytes, err := hex.DecodeString(*bumpParsed.Path[0][0].Hash)
+		siblingDisplayBytes, err := hex.DecodeString(*bumpParsed.Path[0][1].Hash)
 		require.NoError(t, err)
 		siblingInternalBytes := reverseTestBytes(siblingDisplayBytes)
 
@@ -294,6 +305,129 @@ func TestBUMP_KnownMerkleRoot(t *testing.T) {
 		require.NotNil(t, expectedRoot)
 		require.Equal(t, expectedMerkleRoot, expectedRoot.String(),
 			"expected merkle root display string should round-trip through chainhash")
+	})
+}
+
+// TestBUMP_RealBlock_12065 verifies a BUMP from a real block (height 12065) on the Galts Gulch testnet.
+// Block hash:  000000003050d0ea0bed2b4c8361599677631824a6dcfa2c6fee03fe9e46321f
+// Merkle root: 6f1400e25fd50b4e791ff6badb967e9c8ef71795a02bd79f553c70d9f0890ba9
+// The block has 22 transactions in 1 subtree, producing a 5-level merkle tree.
+func TestBUMP_RealBlock_12065(t *testing.T) {
+	bumpHex := "fd212f05010100f7d46b7c9b7a865d07d560b8a818c92241117bfe42d6ee9ce5d0b67482a866ea010100652f2bc747c5d07e60643dd0e7b054261b625dc2a58fc471ade24507a8346451010100b2a151670047ea70acbd9d213cf40aad43d2cadbf16bfc4ac2ace5050f5b87f70101005092191ed7ea5d6aa9e0051dfabdf5877f910d7bc0fda0f32cca68b4e8b281890101003ac4ffaec8fb21b61a297ab000b0bfdb9acfd9523ae8bdf5a9de542e1560e771"
+	coinbaseTxID := "e823d6574012e95a7d5529157eb1a48fd483515791b34c0afb0453a05896c2f0"
+	expectedMerkleRoot := "6f1400e25fd50b4e791ff6badb967e9c8ef71795a02bd79f553c70d9f0890ba9"
+
+	bumpBytes, err := hex.DecodeString(bumpHex)
+	require.NoError(t, err)
+
+	coinbaseHash, err := chainhash.NewHashFromStr(coinbaseTxID)
+	require.NoError(t, err)
+
+	expectedRoot, err := chainhash.NewHashFromStr(expectedMerkleRoot)
+	require.NoError(t, err)
+
+	t.Run("go-bc parses BUMP correctly", func(t *testing.T) {
+		bumpParsed, err := bc.NewBUMPFromBytes(bumpBytes)
+		require.NoError(t, err)
+		require.Equal(t, uint64(12065), bumpParsed.BlockHeight)
+		require.Equal(t, 5, len(bumpParsed.Path), "should have 5 merkle levels for 22 txs")
+
+		// All siblings should be at offset 1 (coinbase is always leftmost)
+		for i, level := range bumpParsed.Path {
+			require.Equal(t, 1, len(level), "level %d should have 1 node", i)
+			require.Equal(t, uint64(1), *level[0].Offset, "level %d sibling should be at offset 1", i)
+			require.NotNil(t, level[0].Hash, "level %d should have a hash", i)
+		}
+
+		// Verify go-bc round-trip
+		reEncoded, err := bumpParsed.Bytes()
+		require.NoError(t, err)
+		require.Equal(t, bumpBytes, reEncoded, "go-bc round-trip should produce identical binary")
+	})
+
+	t.Run("BUMP verifies to correct merkle root", func(t *testing.T) {
+		bumpParsed, err := bc.NewBUMPFromBytes(bumpBytes)
+		require.NoError(t, err)
+
+		// Walk the merkle path from coinbase to root
+		workingHash := coinbaseHash.CloneBytes() // internal byte order
+
+		for i, level := range bumpParsed.Path {
+			leaf := level[0]
+			offset := *leaf.Offset
+
+			// go-bc stores hashes in display order; reverse to internal for hashing
+			leafDisplayBytes, err := hex.DecodeString(*leaf.Hash)
+			require.NoError(t, err)
+			leafInternal := reverseTestBytes(leafDisplayBytes)
+
+			var digest []byte
+			if offset%2 != 0 {
+				// Sibling is on the right side
+				digest = append(workingHash, leafInternal...)
+			} else {
+				// Sibling is on the left side
+				digest = append(leafInternal, workingHash...)
+			}
+
+			workingHash = doubleHashBytes(digest)
+			_ = i
+		}
+
+		computedRoot, err := chainhash.NewHash(workingHash)
+		require.NoError(t, err)
+		require.Equal(t, expectedRoot.String(), computedRoot.String(),
+			"walking BUMP from coinbase should produce the block merkle root")
+	})
+}
+
+// TestBUMP_RealBlock_12069 verifies a BUMP from a real block (height 12069) with 2 transactions.
+// Coinbase: f021589294ef8194648bc5b688637272776f10a45ff2a76bc64b81f7338a133c
+// Sibling:  c1b90e6210a853b4a274b5063d2aa5921e4be5b95af33a9bd0abb3c42c815596
+// Expected merkle root: efea423f3fe0deaacb57a12f656968baad6b696f0cbe845ae0b86ed13927ae4a
+func TestBUMP_RealBlock_12069(t *testing.T) {
+	coinbaseTxid := "f021589294ef8194648bc5b688637272776f10a45ff2a76bc64b81f7338a133c"
+	siblingTxid := "c1b90e6210a853b4a274b5063d2aa5921e4be5b95af33a9bd0abb3c42c815596"
+	expectedMerkleRoot := "efea423f3fe0deaacb57a12f656968baad6b696f0cbe845ae0b86ed13927ae4a"
+	expectedBUMPHex := "fd252f010200023c138a33f7814bc66ba7f25fa4106f7772726388b6c58b649481ef94925821f001009655812cc4b3abd09b3af35ab9e54b1e92a52a3d06b574a2b453a810620eb9c1"
+
+	coinbaseHash, err := chainhash.NewHashFromStr(coinbaseTxid)
+	require.NoError(t, err)
+	siblingHash, err := chainhash.NewHashFromStr(siblingTxid)
+	require.NoError(t, err)
+
+	// Build a 2-tx subtree
+	subtree0, err := subtreepkg.NewTree(1)
+	require.NoError(t, err)
+	subtree0.Nodes = append(subtree0.Nodes, subtreepkg.Node{Hash: *coinbaseHash})
+	subtree0.Nodes = append(subtree0.Nodes, subtreepkg.Node{Hash: *siblingHash, Fee: 1, SizeInBytes: 100})
+
+	// Generate coinbase BUMP
+	subtreeHashes := []*chainhash.Hash{subtree0.RootHash()}
+	bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 12069)
+	require.NotNil(t, bumpBytes)
+
+	t.Run("exact BUMP hex matches expected", func(t *testing.T) {
+		bumpHex := hex.EncodeToString(bumpBytes)
+		require.Equal(t, expectedBUMPHex, bumpHex, "BUMP hex should match expected BRC-74 output")
+	})
+
+	t.Run("go-bc CalculateRootGivenTxid produces correct merkle root", func(t *testing.T) {
+		bumpParsed, err := bc.NewBUMPFromBytes(bumpBytes)
+		require.NoError(t, err)
+
+		root, err := bumpParsed.CalculateRootGivenTxid(coinbaseTxid)
+		require.NoError(t, err)
+		require.Equal(t, expectedMerkleRoot, root,
+			"CalculateRootGivenTxid should produce the expected merkle root")
+	})
+
+	t.Run("go-bc round-trip produces identical binary", func(t *testing.T) {
+		bumpParsed, err := bc.NewBUMPFromBytes(bumpBytes)
+		require.NoError(t, err)
+		reEncoded, err := bumpParsed.Bytes()
+		require.NoError(t, err)
+		require.Equal(t, bumpBytes, reEncoded, "go-bc round-trip should produce identical binary")
 	})
 }
 

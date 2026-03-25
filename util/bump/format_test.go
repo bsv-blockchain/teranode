@@ -60,9 +60,13 @@ func TestConvertToBUMP(t *testing.T) {
 
 		// Verify first subtree level (level 0)
 		level0 := bump.Path[0]
-		assert.Equal(t, 1, len(level0))
+		assert.Equal(t, 2, len(level0))
 		assert.Equal(t, uint32(4), level0[0].Offset)       // 5 XOR 1 = 4 (sibling of index 5)
 		assert.Equal(t, sibling1.String(), level0[0].Hash) // display order (BRC-74)
+		assert.False(t, level0[0].TxID)
+		assert.Equal(t, uint32(5), level0[1].Offset)      // txid at index 5 (odd, appended)
+		assert.Equal(t, txHash.String(), level0[1].Hash)   // display order (BRC-74)
+		assert.True(t, level0[1].TxID)
 
 		// Verify second subtree level (level 1)
 		level1 := bump.Path[1]

@@ -40,6 +40,7 @@ func ComputeCoinbaseBUMP(subtree0 *subtreepkg.Subtree, subtreeHashes []*chainhas
 	}
 
 	proof := &merkleproof.MerkleProof{
+		TxID:             subtree0.Nodes[0].Hash,
 		BlockHeight:      blockHeight,
 		SubtreeIndex:     0,
 		TxIndexInSubtree: 0,

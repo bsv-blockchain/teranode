@@ -134,6 +134,26 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		bump.Path = append(bump.Path, level)
 	}
 
+	// BRC-74 requires level 0 to include the target txid (flag 0x02) alongside its sibling.
+	// Without this, go-bc's CalculateRootGivenTxid cannot find the starting transaction.
+	var zeroHash chainhash.Hash
+	if proof.TxID != zeroHash && len(bump.Path) > 0 {
+		txidNode := Node{
+			Offset: uint32(proof.TxIndexInSubtree),
+			Hash:   hashToDisplayHex(proof.TxID),
+			TxID:   true,
+		}
+
+		level0 := bump.Path[0]
+		if uint32(proof.TxIndexInSubtree)%2 == 0 {
+			// Even index: txid is on the left, prepend
+			bump.Path[0] = append(Level{txidNode}, level0...)
+		} else {
+			// Odd index: txid is on the right, append
+			bump.Path[0] = append(level0, txidNode)
+		}
+	}
+
 	return bump, nil
 }
 
