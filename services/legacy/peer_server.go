@@ -916,13 +916,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 	sp.AddKnownInventory(iv)
 
-	exists, err := sp.server.blockchainClient.GetBlockExists(sp.ctx, block.Hash())
-	if err != nil {
-		sp.server.logger.Errorf("Block exists check error: %v", err)
-		return
-	}
+	// single round-trip: GetBlockHeader tells us both existence and validity
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, block.Hash())
+	blockIsKnownValid := err == nil && !meta.Invalid
 
-	if !exists {
+	if !blockIsKnownValid {
 		// Queue the block up to be handled by the block
 		// manager and intentionally block further receives
 		// until the bitcoin block is fully processed and known

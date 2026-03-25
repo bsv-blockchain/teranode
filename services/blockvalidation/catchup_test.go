@@ -3084,6 +3084,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
+	// Mock CatchUpBlocks and Run for FSM transitions during catchup
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+	mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3181,6 +3184,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
+	// Mock CatchUpBlocks and Run for FSM transitions during catchup
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(nil).Maybe()
+	mockBlockchainClient.On("Run", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3874,4 +3880,40 @@ func TestFindCommonAncestor_AcceptsHeadersAtOrBelowUTXOHeight(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, catchupCtx.commonAncestorIndex)
 	assert.Equal(t, uint32(99), catchupCtx.commonAncestorMeta.Height)
+}
+
+func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
+	ctx := context.Background()
+	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	// Override the permissive CatchUpBlocks mock to simulate FSM rejection
+	// (e.g. node is in LEGACYSYNCING state, so CATCHUPBLOCKS event is invalid)
+	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
+	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state LEGACYSYNCING"))
+
+	blocks := testhelpers.CreateTestBlockChain(t, 3)
+	catchupCtx := &CatchupContext{
+		blockUpTo: blocks[2],
+		blockHeaders: []*model.BlockHeader{
+			blocks[0].Header,
+			blocks[1].Header,
+		},
+	}
+
+	err := server.fetchAndValidateBlocks(ctx, catchupCtx)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrStateError))
+	assert.Contains(t, err.Error(), "FSM rejected CATCHUPBLOCKS")
+}
+
+// filterMockCalls removes mock expectations matching the given method name.
+func filterMockCalls(calls []*mock.Call, method string) []*mock.Call {
+	filtered := make([]*mock.Call, 0, len(calls))
+	for _, c := range calls {
+		if c.Method != method {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
 }

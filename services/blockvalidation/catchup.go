@@ -189,10 +189,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
 				catchupCtx.blockUpTo.Hash().String(), err)
 		} else {
+			var clearErrors, notifyErrors int
 			for _, header := range headers {
 				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
-					u.logger.Errorf("[catchup][%s] Failed to clear mined_set for block %s: %v",
-						catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+					clearErrors++
 				} else {
 					// Send BlockMinedUnset notification to trigger immediate transaction status update
 					// This ensures BlockValidation processes the block immediately instead of waiting
@@ -201,10 +201,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 						Type: model.NotificationType_BlockMinedUnset,
 						Hash: header.Hash().CloneBytes(),
 					}); err != nil {
-						u.logger.Errorf("[catchup][%s] Failed to send BlockMinedUnset notification for %s: %v",
-							catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+						notifyErrors++
 					}
 				}
+			}
+			if clearErrors > 0 || notifyErrors > 0 {
+				u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
+					catchupCtx.blockUpTo.Hash().String(), clearErrors, len(headers), notifyErrors)
 			}
 			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 				catchupCtx.blockUpTo.Hash().String(), len(headers))
@@ -778,22 +781,13 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Channel for async subtree file writes (only used by quick validation)
 	var writeJobsChan chan *SubtreeWriteJob
 
-	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return errors.NewProcessingError("failed to get best block header", err)
+	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
+	// If the FSM rejects the transition (e.g. node is LEGACYSYNCING), the error propagates
+	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
+	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
+		return err
 	}
-
-	// Check if we need to change FSM state
-	newBlocksOnOurChain := len(catchupCtx.blockHeaders) > 0 && catchupCtx.blockHeaders[0].HashPrevBlock.IsEqual(bestBlockHeader.Hash())
-
-	// Set FSM state if needed
-	if newBlocksOnOurChain {
-		if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
-			return err
-		}
-
-		defer u.restoreFSMState(ctx, catchupCtx)
-	}
+	defer u.restoreFSMState(ctx, catchupCtx)
 
 	// Create error group for concurrent operations
 	errorGroup, gCtx := errgroup.WithContext(ctx)
@@ -828,7 +822,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	})
 
 	// Wait for both operations to complete
-	err = errorGroup.Wait()
+	err := errorGroup.Wait()
 	if err != nil {
 		catchupCtx.catchupError = err
 	}
@@ -951,7 +945,10 @@ func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupCo
 	u.logger.Infof("[catchup][%s] Setting node to CATCHINGBLOCKS state for %d blocks", catchupCtx.blockUpTo.Hash().String(), size.Load())
 
 	if err := u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to send CATCHUPBLOCKS event: %w", catchupCtx.blockUpTo.Hash().String(), err)
+		if errors.Is(err, errors.ErrStateError) {
+			return errors.NewStateError("[catchup][%s] FSM rejected CATCHUPBLOCKS transition", catchupCtx.blockUpTo.Hash().String(), err)
+		}
+		return errors.NewServiceError("[catchup][%s] failed to transition FSM to CATCHINGBLOCKS", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	return nil

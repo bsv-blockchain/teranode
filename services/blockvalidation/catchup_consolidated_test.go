@@ -380,6 +380,10 @@ func TestCatchup_FSMStateManagement(t *testing.T) {
 			blockHeaders: testHeaders[1:],
 		}
 
+		// Clear permissive defaults so .Once() expectations are matched
+		mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
+		mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "Run")
+
 		// Mock FSM state changes
 		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).
 			Return(nil).Once()

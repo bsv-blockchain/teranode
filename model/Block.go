@@ -900,22 +900,17 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	foundInPreviousBlocks, minBlockID := filterCurrentBlockHeaderIDsMap(parentTxMeta, currentBlockHeaderIDsMap)
 
 	if len(foundInPreviousBlocks) == 0 && minBlockID > 0 {
-		var minSetBlockID uint32
-		for blockID := range currentBlockHeaderIDsMap {
-			if minSetBlockID == 0 || blockID < minSetBlockID {
-				minSetBlockID = blockID
-			}
-		}
+		// Parent tx's block ID was not found in our cached set of recent chain block IDs.
+		// This can happen when the parent block is older than the cached range or when
+		// block IDs are non-contiguous (orphan/invalid blocks consume IDs, creating gaps).
+		// In both cases, defer to checkOldBlockIDs in the validator which uses a larger
+		// lookup (10,000 IDs) plus a CheckBlockIsInCurrentChain slow path.
+		logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s block ID %d not in cached %d IDs - checking later in validator", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), minBlockID, len(currentBlockHeaderIDsMap))
 
-		if minBlockID < minSetBlockID {
-			// parent is from a block that is older than the blocks we have in the current chain
-			logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s is over %d blocks ago - checking later in validator", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(currentBlockHeaderIDsMap))
+		// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
+		oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
 
-			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
-			oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
-
-			return oldBlockIDs, nil
-		}
+		return oldBlockIDs, nil
 	}
 
 	if len(foundInPreviousBlocks) != 1 {

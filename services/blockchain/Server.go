@@ -2517,7 +2517,12 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
-		return nil, err
+		switch err.(type) {
+		case fsm.InvalidEventError, fsm.NoTransitionError:
+			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected in state %s", eventReq.Event.String(), priorState, err))
+		default:
+			return nil, errors.WrapGRPC(err)
+		}
 	}
 
 	state := b.finiteStateMachine.Current()
