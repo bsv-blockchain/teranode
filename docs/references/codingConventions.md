@@ -372,11 +372,12 @@ The project uses `golangci-lint` for enforcing code quality. Key [configurations
 - **Filename Conventions**: Checked via CI (separate script).
 - **Enabled Linters**:
 
-  - `depguard`: Prevents importing disallowed packages like `errors` (use standard `errors` instead).
-  - `forbidigo`: Disallows use of `fmt.Errorf` (use `errors.New` instead). **Exception:** disabled for `pkg/` and `errors/` directories.
-  - `gocognit`: Flags functions exceeding complexity threshold (50).
-  - Additional linters for style and imports (`gci`, `goimports`, `misspell`, `asciicheck`, etc.).
-  - Note: `gosec`, `staticcheck`, `goconst`, `gocritic`, `unconvert`, and `whitespace` are listed but currently **disabled** in the active configuration.
+  - `depguard`: Prevents importing disallowed packages such as the standard library `errors` package; use the project's designated error-handling package/utilities instead.
+  - `forbidigo`: Disallows use of `fmt.Errorf`; use the project's preferred error-construction helpers (for example, functions from the project's `errors` package) instead. **Exception:** disabled for `pkg/` and `errors/` directories.
+  - Additional linters for style and correctness (for example, `misspell`, `asciicheck`, etc.).
+
+  - Code formatting (including import ordering) is enforced via formatters configured in `golangci-lint` such as `gci` and `goimports`.
+  - Note: `gosec`, `staticcheck`, `goconst`, `gocritic`, `unconvert`, `whitespace`, and `gocognit` are listed but currently **disabled** in the active configuration.
 
 ###### Exceptions
 
