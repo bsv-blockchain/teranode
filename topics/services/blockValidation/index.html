@@ -7950,11 +7950,17 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p>The block validator is a service that validates blocks. After validating them, it will update the relevant stores and blockchain accordingly.</p>
 <h3 id="21-receiving-blocks-for-validation">2.1. Receiving blocks for validation</h3>
 <p><img alt="block_validation_p2p_block_found.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_found.svg" /></p>
-<ul>
-<li>The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the <code>BlockFound()</code> gRPC endpoint.</li>
-<li>The block validation service will then check if the block is already known. If not, it will start the validation process.</li>
+<p>Block validation receives new blocks through two distinct paths:</p>
+<ol>
+<li><strong>P2P-discovered blocks (primary)</strong>: The P2P service publishes block announcements to a Kafka topic. Block validation consumes this topic via <code>consumerMessageHandler</code>, which calls <code>blockHandler()</code> to queue blocks for processing via <code>blockFoundCh</code>.</li>
+<li>
+<p><strong>Legacy-synced blocks</strong>: The Legacy service's netsync manager calls <code>blockValidation.ProcessBlock()</code> directly when it downloads a complete block from a legacy Bitcoin peer.</p>
+</li>
+<li>
+<p>The block validation service will then check if the block is already known. If not, it will start the validation process.</p>
+</li>
 <li>The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.</li>
-</ul>
+</ol>
 <h3 id="22-validating-blocks">2.2. Validating blocks</h3>
 <h4 id="221-overview">2.2.1. Overview</h4>
 <p><img alt="block_validation_p2p_block_validation.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg" /></p>
@@ -8005,7 +8011,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ol>
 <p><strong>Configuration:</strong></p>
 <ul>
-<li><strong>Setting</strong>: <code>blockvalidation_optimisticMining</code> (default: <code>false</code>)</li>
+<li><strong>Setting</strong>: <code>blockvalidation_optimistic_mining</code> (default: <code>true</code>)</li>
 <li><strong>Runtime Override</strong>: Can be disabled per-block via <code>ValidateBlockOptions.DisableOptimisticMining</code></li>
 <li><strong>Automatic Disable</strong>: Always disabled during catchup mode for better reliability</li>
 </ul>

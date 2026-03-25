@@ -6634,7 +6634,7 @@
 <tr>
 <td>RPCMaxClients</td>
 <td>int</td>
-<td>1</td>
+<td>1 (Code default; settings.conf ships with 3)</td>
 <td>rpc_max_clients</td>
 <td>Maximum concurrent RPC connections</td>
 </tr>
@@ -6672,6 +6672,13 @@
 <td>5s</td>
 <td>rpc_client_call_timeout</td>
 <td><strong>CRITICAL</strong> - Service client call timeout</td>
+</tr>
+<tr>
+<td>RPCMaxRequestSize</td>
+<td>int</td>
+<td>10485760 (10MB)</td>
+<td>rpc_maxRequestSize</td>
+<td>Maximum RPC request body size in bytes (prevents OOM on oversized requests)</td>
 </tr>
 </tbody>
 </table>
@@ -6789,7 +6796,7 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>rpc_listener_url = &quot;http://localhost:8332&quot;
+<div class="highlight"><pre><span></span><code>rpc_listener_url = &quot;http://localhost:9292&quot;
 rpc_max_clients = 10
 </code></pre></div>
 <h3 id="authentication-setup">Authentication Setup</h3>

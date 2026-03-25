@@ -6993,6 +6993,9 @@
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Creates a new <code>Validator</code> instance with the provided configuration. It initializes the validator with the given logger, UTXO store, and Kafka producers. Returns an error if initialization fails.</p>
+<blockquote>
+<p><strong>Note</strong>: The <code>blockAssemblyClient</code> parameter is conditionally assigned to the <code>blockAssembler</code> field. When <code>settings.BlockAssembly.Disabled</code> is <code>true</code>, the field is set to <code>nil</code> and block assembly integration is disabled. When <code>nil</code>, calls to <code>sendToBlockAssembler</code> are skipped.</p>
+</blockquote>
 <h4 id="methods_1">Methods</h4>
 <ul>
 <li><code>Health(ctx context.Context, checkLiveness bool) (int, string, error)</code>: Performs health checks on the validator and its dependencies. When checkLiveness is true, only checks service liveness. When false, performs full readiness check including dependencies.</li>
@@ -7001,7 +7004,7 @@
 <li><code>Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error)</code>: Performs comprehensive validation of a transaction. It checks transaction finality, validates inputs and outputs, updates the UTXO set, and optionally adds the transaction to block assembly.</li>
 <li><code>ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)</code>: Performs comprehensive validation of a transaction with explicit options. This method is the core transaction validation entry point that implements the full Bitcoin validation ruleset.</li>
 <li><code>TriggerBatcher()</code>: Triggers the batcher (currently a no-op).</li>
-<li><code>CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)</code>: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.</li>
+<li><code>CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)</code>: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.</li>
 </ul>
 <h3 id="txvalidator">TxValidator</h3>
 <p>The <code>TxValidator</code> implements transaction validation logic based on Bitcoin SV consensus rules and configurable policy settings.</p>
@@ -7018,7 +7021,7 @@
 <span class="w">    </span><span class="c1">// ValidateTransaction performs comprehensive validation of a transaction.</span>
 <span class="w">    </span><span class="c1">// This method enforces all consensus and policy rules against the transaction,</span>
 <span class="w">    </span><span class="c1">// including format, structure, inputs/outputs, signature verification, and fees.</span>
-<span class="w">    </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<span class="w">    </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 
 <span class="w">    </span><span class="c1">// ValidateTransactionScripts performs script validation for a transaction.</span>
 <span class="w">    </span><span class="c1">// This method specifically handles the script execution and signature verification</span>
@@ -7035,21 +7038,24 @@
 <span class="w">    </span><span class="nx">Interpreter</span><span class="p">()</span><span class="w"> </span><span class="nx">TxInterpreter</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The validator supports multiple script interpreters through a factory pattern:</p>
+<p>The validator supports multiple script interpreter implementations:</p>
 <ul>
 <li><strong>GoBT</strong>: Pure Go implementation from the libsv/go-bt library</li>
 <li><strong>GoSDK</strong>: Bitcoin SV SDK implementation</li>
 <li><strong>GoBDK</strong>: Bitcoin Development Kit implementation</li>
 </ul>
+<blockquote>
+<p><strong>Note</strong>: The script interpreter is hardcoded to <strong>GoBDK</strong> (<code>TxInterpreterGoBDK</code>). Runtime selection via configuration is not supported.</p>
+</blockquote>
 <h2 id="key-functions">Key Functions</h2>
 <h3 id="txvalidator-methods">TxValidator Methods</h3>
 <ul>
-<li><code>ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Performs comprehensive validation checks on a transaction. This includes checking input and output presence, transaction size limits, input values and coinbase restrictions, output values and dust limits, lock time requirements, script operation limits, script validation, and fee requirements.</li>
+<li><code>ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Performs comprehensive validation checks on a transaction. This includes checking input and output presence, transaction size limits, input values and coinbase restrictions, output values and dust limits, lock time requirements, script operation limits, script validation, and fee requirements.</li>
 <li><code>ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Validates transaction scripts using the configured script interpreter.</li>
-<li><code>checkOutputs(tx *bt.Tx, blockHeight uint32) error</code>: Validates transaction outputs, checking for dust values and other output-specific rules.</li>
+<li><code>checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Validates transaction outputs, checking for dust values and other output-specific rules.</li>
 <li><code>checkInputs(tx *bt.Tx, blockHeight uint32) error</code>: Validates transaction inputs, checking for proper formatting and sequence values.</li>
 <li><code>checkTxSize(txSize int) error</code>: Checks if the transaction size is within the allowed policy limit.</li>
-<li><code>checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error</code>: Verifies if the transaction fee is sufficient according to the fee policy.</li>
+<li><code>checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error</code>: Verifies if the transaction fee is sufficient according to the fee policy.</li>
 <li><code>sigOpsCheck(tx *bt.Tx, validationOptions *Options) error</code>: Checks the number of signature operations in the transaction against policy limits.</li>
 <li><code>pushDataCheck(tx *bt.Tx) error</code>: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.</li>
 </ul>
@@ -7058,8 +7064,8 @@
 <li><code>validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)</code>: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.</li>
 <li><code>validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Performs transaction-level validation checks. Ensures transaction is properly extended and meets all validation rules.</li>
 <li><code>validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Performs script validation for a transaction. Returns error if validation fails.</li>
-<li><code>spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error)</code>: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.</li>
-<li><code>sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error</code>: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.</li>
+<li><code>spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error)</code>: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.</li>
+<li><code>sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error</code>: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.</li>
 <li><code>extendTransaction(ctx context.Context, tx *bt.Tx) error</code>: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.</li>
 </ul>
 <h2 id="configuration">Configuration</h2>
@@ -7069,7 +7075,7 @@
 <li><strong>Policy settings</strong>: Transaction validation policy parameters, including fee rates, size limits, and other enforcement rules</li>
 <li><strong>Network parameters</strong>: Mainnet, testnet, or regtest configuration affecting consensus rules</li>
 <li><strong>Block assembly settings</strong>: Configuration for integrating validation with block template generation</li>
-<li><strong>Script interpreter selection</strong>: Choice of script validation engine (GoBT, GoSDK, GoBDK)</li>
+<li><strong>Script interpreter</strong>: Hardcoded to GoBDK; cannot be changed via configuration</li>
 </ul>
 <h2 id="error-handling">Error Handling</h2>
 <p>The service uses custom error types defined in the <code>errors</code> package to provide detailed information about validation failures:</p>

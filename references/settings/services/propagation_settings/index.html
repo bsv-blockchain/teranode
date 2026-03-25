@@ -6702,6 +6702,20 @@
 <td>propagation_grpcListenAddress</td>
 <td><strong>CRITICAL</strong> - gRPC server binding (service skipped if empty)</td>
 </tr>
+<tr>
+<td>IPv6AllowedSources</td>
+<td>[]string</td>
+<td>[]</td>
+<td>propagation_ipv6_allowed_sources</td>
+<td>Restrict UDP sources by IP or CIDR (empty = allow all)</td>
+</tr>
+<tr>
+<td>HTTPBodyLimit</td>
+<td>string</td>
+<td>100MB</td>
+<td>propagation_httpBodyLimit</td>
+<td>Maximum HTTP request body size (prevents OOM on oversized requests)</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
@@ -6795,8 +6809,8 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>propagation_grpcListenAddress = &quot;:9905&quot;
-propagation_httpListenAddress = &quot;:8080&quot;
+<div class="highlight"><pre><span></span><code>propagation_grpcListenAddress = &quot;:8084&quot;
+propagation_httpListenAddress = &quot;:8833&quot;
 </code></pre></div>
 <h3 id="http-rate-limiting">HTTP Rate Limiting</h3>
 <div class="highlight"><pre><span></span><code>propagation_httpRateLimit = 2048

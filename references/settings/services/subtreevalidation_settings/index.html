@@ -6656,14 +6656,14 @@
 <tr>
 <td>GRPCAddress</td>
 <td>string</td>
-<td>"localhost:8089"</td>
+<td>"localhost:8089" (Go default; overridden to <code>localhost:8086</code> by <code>settings.conf</code> via <code>SUBTREE_VALIDATION_GRPC_PORT</code>)</td>
 <td>subtreevalidation_grpcAddress</td>
 <td>gRPC client connections</td>
 </tr>
 <tr>
 <td>GRPCListenAddress</td>
 <td>string</td>
-<td>":8089"</td>
+<td>":8089" (Go default; overridden to <code>:8086</code> by <code>settings.conf</code> via <code>SUBTREE_VALIDATION_GRPC_PORT</code>)</td>
 <td>subtreevalidation_grpcListenAddress</td>
 <td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
 </tr>
@@ -6920,7 +6920,7 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">subtreevalidation_grpcListenAddress</span><span class="o">=</span>:8089
+<div class="highlight"><pre><span></span><code><span class="nv">subtreevalidation_grpcListenAddress</span><span class="o">=</span>:8086
 <span class="nv">subtreestore</span><span class="o">=</span>memory:///
 </code></pre></div>
 <h3 id="performance-tuning">Performance Tuning</h3>

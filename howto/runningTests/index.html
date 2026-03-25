@@ -688,6 +688,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running Tests
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -704,6 +722,91 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unit Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-test-suites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        All Test Suites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#long-running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Long-Running Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smoke Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequential-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequential Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -6226,6 +6329,80 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unit Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-test-suites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        All Test Suites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#long-running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Long-Running Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smoke Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequential-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequential Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -6242,10 +6419,43 @@
 
 
 <h1 id="running-tests">✔️ Running Tests</h1>
-<p>There are 2 commands to run tests:</p>
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># Executes Go tests excluding the playground and PoC directories.</span>
+<h2 id="unit-tests">Unit Tests</h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># Executes unit tests, excluding the test/ directory.</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span>testall<span class="w">  </span><span class="c1"># Executes Go tests excluding the playground and PoC directories.</span>
+<h2 id="all-test-suites">All Test Suites</h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>testall<span class="w">  </span><span class="c1"># Runs all test suites: unit tests (make test), long-running tests (make longtest), and sequential tests (make sequentialtest).</span>
+</code></pre></div>
+<h2 id="long-running-tests">Long-Running Tests</h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>longtest<span class="w">  </span><span class="c1"># Executes long-running tests in test/longtest/ with a 10-minute timeout.</span>
+</code></pre></div>
+<h2 id="smoke-tests">Smoke Tests</h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>smoketest<span class="w">  </span><span class="c1"># Runs E2E smoke tests in test/e2e/daemon/ready/ focused on basic functionality.</span>
+
+<span class="c1"># With retry support (TEST_RETRY_DELAY is seconds between retries):</span>
+make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">5</span>
+
+<span class="c1"># Disable retries:</span>
+make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">1</span>
+</code></pre></div>
+<h2 id="sequential-tests">Sequential Tests</h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>sequentialtest<span class="w">  </span><span class="c1"># Executes tests in test/sequentialtest/ sequentially.</span>
+
+<span class="c1"># With retry support:</span>
+make<span class="w"> </span>sequentialtest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">3</span>
+
+<span class="c1"># Database-backend-specific variants:</span>
+make<span class="w"> </span>sequentialtest-sqlite
+make<span class="w"> </span>sequentialtest-postgres
+make<span class="w"> </span>sequentialtest-aerospike
+
+<span class="c1"># Database variants also support retry flags:</span>
+make<span class="w"> </span>sequentialtest-aerospike<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span>
+make<span class="w"> </span>sequentialtest-postgres<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+make<span class="w"> </span>sequentialtest-sqlite<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+</code></pre></div>
+<h2 id="single-test">Single Test</h2>
+<div class="highlight"><pre><span></span><code>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;testtxmetacache&quot;</span><span class="w"> </span>-run<span class="w"> </span>TestNameHere<span class="w"> </span>./path/to/package
 </code></pre></div>
 
 

@@ -5346,6 +5346,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#context-names-and-suffixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context Names and Suffixes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6424,6 +6435,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#context-names-and-suffixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context Names and Suffixes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6493,16 +6515,72 @@
 <li><code>settings_local.conf</code>: Developer-specific and deployment-specific overrides (not in source control)</li>
 </ul>
 <h3 id="configuration-system">Configuration System</h3>
-<p>The configuration system uses a layered approach with the following priority:</p>
+<p>The configuration system uses a layered approach with the following priority (highest to lowest):</p>
 <ol>
-<li><code>SETTING_NAME.context_name</code>: Context-specific override (highest priority)</li>
-<li><code>SETTING_NAME.base</code>: General override</li>
+<li>Environment variable (exact setting key name, e.g., <code>asset_httpListenAddress=:8090</code>)</li>
+<li><code>SETTING_NAME.full_context</code> (e.g., <code>SETTING_NAME.docker.m</code> — longest matching context chain wins)</li>
+<li>Progressively shorter context suffixes (e.g., <code>SETTING_NAME.docker</code> if <code>SETTING_NAME.docker.m</code> is not set)</li>
 <li><code>SETTING_NAME</code>: Base setting (lowest priority)</li>
 </ol>
+<p>Context resolution strips suffixes from right to left until a match is found. There is no special <code>.base</code> suffix — the plain key name is the final fallback.</p>
+<h3 id="context-names-and-suffixes">Context Names and Suffixes</h3>
+<p>Base contexts:</p>
+<table>
+<thead>
+<tr>
+<th>Context</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dev</code></td>
+<td>Local development</td>
+</tr>
+<tr>
+<td><code>test</code></td>
+<td>Unit/integration test runs</td>
+</tr>
+<tr>
+<td><code>docker</code></td>
+<td>Docker Compose deployments</td>
+</tr>
+<tr>
+<td><code>operator</code></td>
+<td>Kubernetes/production deployments</td>
+</tr>
+</tbody>
+</table>
+<p>Contexts support dot-notation suffixes to target specific deployment sub-configurations:</p>
+<table>
+<thead>
+<tr>
+<th>Suffix</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.m</code></td>
+<td>Multi-node Docker Compose setup</td>
+<td><code>KAFKA_HOSTS.docker.m</code></td>
+</tr>
+<tr>
+<td><code>.ss.teranode1</code></td>
+<td>Single-service deployment, first instance</td>
+<td><code>KAFKA_BLOCKS.docker.ss.teranode1</code></td>
+</tr>
+<tr>
+<td><code>.testrunner</code></td>
+<td>CI test runner environment</td>
+<td><code>DATADIR.docker.context.testrunner</code></td>
+</tr>
+</tbody>
+</table>
+<p>Suffixes are combined with base contexts using dots, e.g., <code>docker.m</code> means "multi-node Docker Compose". Settings are resolved by matching the longest applicable suffix chain.</p>
 <h3 id="environment-variables">Environment Variables</h3>
-<p>Most settings can be configured via environment variables using the pattern:</p>
-<div class="highlight"><pre><span></span><code>TERANODE_&lt;SERVICE&gt;_&lt;SETTING_NAME&gt;
-</code></pre></div>
+<p>Settings can be configured as environment variables using the exact setting key name (e.g., <code>asset_httpListenAddress=:8090</code>, <code>blockchain_grpcAddress=localhost:8087</code>). The environment variable name matches the key exactly as it appears in <code>settings.conf</code> and the settings structs. Environment variables take the highest priority and override any value in the settings files.</p>
 <hr />
 <h2 id="services">Services</h2>
 <p>For detailed service-specific configuration documentation, see:</p>
@@ -6517,9 +6595,12 @@
 <li><strong><a href="../settings/services/p2p_settings/">P2P</a></strong> - Peer-to-peer networking configuration</li>
 <li><strong><a href="../settings/services/propagation_settings/">Propagation</a></strong> - Transaction propagation configuration</li>
 <li><strong><a href="../settings/services/rpc_settings/">RPC</a></strong> - JSON-RPC server configuration</li>
+<li><strong><a href="../settings/services/pruner_settings/">Pruner</a></strong> - UTXO and block data pruning configuration</li>
 <li><strong><a href="../settings/services/subtreevalidation_settings/">Subtree Validation</a></strong> - Subtree validation configuration</li>
 <li><strong><a href="../settings/services/utxopersister_settings/">UTXO Persister</a></strong> - UTXO set persistence configuration</li>
 <li><strong><a href="../settings/services/validator_settings/">Validator</a></strong> - Transaction validation configuration</li>
+<li><strong><a href="../settings/services/coinbase_settings/">Coinbase</a></strong> - Coinbase transaction and mining reward configuration</li>
+<li><strong><a href="../settings/services/faucet_settings/">Faucet</a></strong> - Test Bitcoin faucet service configuration</li>
 </ul>
 
 

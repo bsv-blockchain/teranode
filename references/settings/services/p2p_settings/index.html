@@ -6708,7 +6708,7 @@
 <tr>
 <td>GRPCListenAddress</td>
 <td>string</td>
-<td>":9906"</td>
+<td>":9906" (Go default; overridden to <code>:9904</code> by <code>settings.conf</code> via <code>P2P_GRPC_PORT</code>)</td>
 <td>p2p_grpcListenAddress</td>
 <td><strong>CRITICAL</strong> - gRPC server binding</td>
 </tr>
@@ -6757,7 +6757,7 @@
 <tr>
 <td>Port</td>
 <td>int</td>
-<td>9906</td>
+<td>9906 (Code default; settings.conf ships with 9905 via <code>P2P_PORT</code>)</td>
 <td>p2p_port</td>
 <td>Default P2P communication port</td>
 </tr>
@@ -6963,29 +6963,34 @@
 <td><strong>CRITICAL</strong> - Blockchain operations and block retrieval</td>
 </tr>
 <tr>
-<td>BlockValidationClient</td>
-<td>blockvalidation.Interface</td>
-<td><strong>CRITICAL</strong> - Block validation operations</td>
-</tr>
-<tr>
 <td>BlockAssemblyClient</td>
 <td>blockassembly.ClientI</td>
 <td><strong>CRITICAL</strong> - Block assembly operations</td>
 </tr>
 <tr>
-<td>RejectedTxKafkaProducer</td>
-<td>kafka.KafkaAsyncProducerI</td>
-<td><strong>CRITICAL</strong> - Rejected transaction messaging</td>
+<td>RejectedTxKafkaConsumer</td>
+<td>kafka.KafkaConsumerGroupI</td>
+<td><strong>CRITICAL</strong> - Consuming rejected transaction notifications</td>
+</tr>
+<tr>
+<td>InvalidBlocksKafkaConsumer</td>
+<td>kafka.KafkaConsumerGroupI</td>
+<td><strong>CRITICAL</strong> - Consuming invalid block notifications</td>
+</tr>
+<tr>
+<td>InvalidSubtreeKafkaConsumer</td>
+<td>kafka.KafkaConsumerGroupI</td>
+<td><strong>CRITICAL</strong> - Consuming invalid subtree notifications</td>
 </tr>
 <tr>
 <td>BlocksKafkaProducer</td>
 <td>kafka.KafkaAsyncProducerI</td>
-<td><strong>CRITICAL</strong> - Block messaging</td>
+<td><strong>CRITICAL</strong> - Publishing block announcements</td>
 </tr>
 <tr>
 <td>SubtreeKafkaProducer</td>
 <td>kafka.KafkaAsyncProducerI</td>
-<td><strong>CRITICAL</strong> - Subtree messaging</td>
+<td><strong>CRITICAL</strong> - Publishing subtree announcements</td>
 </tr>
 </tbody>
 </table>
@@ -7034,8 +7039,9 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">p2p_grpcListenAddress</span><span class="o">=</span>:9906
-<span class="nv">p2p_port</span><span class="o">=</span><span class="m">9906</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Note: settings.conf sets P2P_GRPC_PORT=9904, overriding the Go default of :9906</span>
+<span class="nv">p2p_grpcListenAddress</span><span class="o">=</span>:9904
+<span class="nv">p2p_port</span><span class="o">=</span><span class="m">9905</span>
 <span class="nv">listen_mode</span><span class="o">=</span>full
 </code></pre></div>
 <h3 id="forced-sync-configuration">Forced Sync Configuration</h3>

@@ -6386,9 +6386,9 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
 
-<span class="c1"># Run TNB tests</span>
+<span class="c1"># Run TNB tests (no build tag required — see note at bottom of Available Test Tags section)</span>
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnb
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 
 <span class="c1"># Run TEC tests</span>
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/tec
@@ -6703,19 +6703,21 @@ sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span
 <h1 id="available-test-tags">Available Test Tags</h1>
 <p>Teranode uses build tags to control which tests run:</p>
 <ul>
-<li><code>test_tna</code> - TNA test suite</li>
-<li><code>test_tnb</code> - TNB test suite</li>
-<li><code>test_tec</code> - TEC test suite</li>
-<li><code>test_tnd</code> - TND test suite</li>
-<li><code>test_tnf</code> - TNF test suite</li>
-<li><code>test_tnj</code> - TNJ test suite</li>
-<li><code>test_smoke</code> - Smoke tests</li>
-<li><code>test_functional</code> - Functional tests</li>
-<li><code>testtxmetacache</code> - Use small transaction metadata cache</li>
-<li><code>largetxmetacache</code> - Use production-sized cache</li>
+<li><code>test_tna</code> - TNA test suite (<code>test/tna/</code>)</li>
+<li><code>test_tec</code> - TEC test suite (<code>test/tec/</code>)</li>
+<li><code>test_tnd</code> - TND test suite (<code>test/tnd/</code>)</li>
+<li><code>test_tnf</code> - TNF test suite (<code>test/tnf/</code>)</li>
+<li><code>test_smoke</code> - Smoke tests (docker-based e2e)</li>
+<li><code>test_functional</code> - Functional tests (subset of smoke)</li>
+<li><code>test_utxo</code> - UTXO tests (subset of smoke)</li>
+<li><code>test_peer</code> - Peer tests (subset of smoke)</li>
+<li><code>testtxmetacache</code> - Use small transaction metadata cache (for testing)</li>
 <li><code>aerospike</code> - Tests requiring Aerospike</li>
 <li><code>debug</code> - Enable debug mode for tests</li>
 </ul>
+<blockquote>
+<p><strong>Note:</strong> The <code>test/tnb/</code> and <code>test/tnj/</code> test directories do not use build tags; run them directly with <code>go test ./test/tnb/</code> and <code>go test ./test/tnj/</code>.</p>
+</blockquote>
 <h1 id="other-resources">Other Resources</h1>
 <ul>
 <li><a href="../../topics/functionalRequirementTests/">QA Guide &amp; Instructions for Functional Requirement Tests</a></li>

@@ -6741,10 +6741,10 @@
 <li>
 <p><strong>Local Validator</strong>:</p>
 <ul>
-<li>When <code>useLocalValidator=true</code> (recommended for production)</li>
+<li>When <code>useLocalValidator=true</code></li>
 <li>The Validator is instantiated directly within the Propagation service</li>
 <li>Direct method calls are used without network overhead</li>
-<li>This provides the best performance and lowest latency</li>
+<li>Recommended for single-machine deployments or development/testing</li>
 </ul>
 </li>
 <li>
@@ -6752,7 +6752,7 @@
 <ul>
 <li>When <code>useLocalValidator=false</code></li>
 <li>The Propagation service connects to a separate Validator service via gRPC</li>
-<li>Useful for development, testing, or specialized deployment scenarios</li>
+<li>Recommended for production distributed deployments (allows independent scaling)</li>
 <li>Has higher latency due to additional network calls</li>
 </ul>
 </li>
@@ -6825,7 +6825,7 @@
 <p><strong>Peer-to-Peer (P2P) Networking</strong>:</p>
 <ul>
 <li>The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.</li>
-<li><code>bsv-blockchain/go-p2p/wire</code> is used for P2P transaction propagation in the Teranode BSV network.</li>
+<li>Transaction propagation uses gRPC (via protobuf API), HTTP (via Echo framework), and raw UDP for IPv6 multicast propagation.</li>
 </ul>
 </li>
 <li>
@@ -6848,6 +6848,7 @@
 <div class="highlight"><pre><span></span><code>./services/propagation
 │
 ├── Client.go                            - Contains the client-side logic for interacting with the propagation service.
+├── ClientInterface.go                   - Defines the client interface for the propagation service.
 ├── Client_test.go                       - Unit tests for the Client.go functionality.
 ├── Server.go                            - Contains the main server-side implementation for the propagation service.
 ├── Server_test.go                       - Unit tests for the Server.go functionality.
@@ -6863,7 +6864,7 @@
 </code></pre></div>
 <h2 id="7-how-to-run">7. How to run</h2>
 <p>To run the Propagation Service locally, you can execute the following command:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-Propagation<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-propagation<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running the Propagation Service locally.</p>
 <h2 id="8-configuration-options-settings-flags">8. Configuration options (settings flags)</h2>

@@ -6726,9 +6726,16 @@
 <tr>
 <td>UseLocalValidator</td>
 <td>bool</td>
-<td>false</td>
+<td>false (true in settings.conf)</td>
 <td>useLocalValidator</td>
 <td><strong>CRITICAL</strong> - Local vs remote validator deployment mode</td>
+</tr>
+<tr>
+<td>HTTPBodyLimit</td>
+<td>string</td>
+<td>100MB</td>
+<td>validator_httpBodyLimit</td>
+<td>Maximum HTTP request body size (prevents OOM on oversized requests)</td>
 </tr>
 <tr>
 <td>TxMetaKafkaBatchSize</td>
@@ -6845,7 +6852,7 @@
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
 <div class="highlight"><pre><span></span><code>validator_grpcListenAddress = &quot;:8081&quot;
-validator_httpListenAddress = &quot;:8080&quot;
+validator_httpListenAddress = &quot;:8834&quot;
 </code></pre></div>
 <h3 id="performance-tuning">Performance Tuning</h3>
 <div class="highlight"><pre><span></span><code>validator_sendBatchSize = 200

@@ -6793,14 +6793,14 @@ docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"
 </code></pre></div>
 <p>For Docker Compose, replace <code>[service_name]</code> with the appropriate service or pod name:</p>
 <ul>
-<li>Propagation Service (service name: <code>propagation</code>)</li>
 <li>Blockchain Service (service name: <code>blockchain</code>)</li>
 <li>Asset Service (service name: <code>asset</code>)</li>
 <li>Block Validation Service (service name: <code>blockvalidation</code>)</li>
-<li>P2P Service (service name: <code>p2p</code>)</li>
 <li>Block Assembly Service (service name: <code>blockassembly</code>)</li>
 <li>Subtree Validation Service (service name: <code>subtreevalidation</code>)</li>
+<li>Legacy Gateway (service name: <code>legacy</code>)</li>
 <li>RPC Server (service name: <code>rpc</code>)</li>
+<li>Pruner (service name: <code>pruner</code>)</li>
 <li>Postgres Database (service name: <code>postgres</code>)          [<em>Only in Docker</em>]</li>
 <li>Aerospike Database (service name: <code>aerospike</code>)        [<em>Only in Docker</em>]</li>
 <li>Kafka   (service name: <code>kafka-shared</code>)                [<em>Only in Docker</em>]</li>
@@ -6808,6 +6808,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"
 <li>Prometheus (service name: <code>prometheus</code>)               [<em>Only in Docker</em>]</li>
 <li>Grafana  (service name: <code>grafana</code>)                    [<em>Only in Docker</em>]</li>
 </ul>
+<blockquote>
+<p><strong>Note:</strong> The Propagation (<code>propagation</code>) and P2P (<code>peer</code>) services are available as separate Docker containers (defined in <code>deploy/docker/base/docker-teranode.yml</code>) but are not included in the standard testnet/mainnet configurations by default. They can be added to your <code>docker-compose.yml</code> if needed.</p>
+</blockquote>
 <h5 id="redirecting-logs-to-a-file">Redirecting Logs to a File</h5>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>&gt;<span class="w"> </span>teranode_logs.txt
 docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span><span class="o">[</span>service_name<span class="o">]</span><span class="w"> </span>&gt;<span class="w"> </span><span class="o">[</span>service_name<span class="o">]</span>_logs.txt

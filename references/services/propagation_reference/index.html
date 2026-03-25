@@ -7093,12 +7093,16 @@
 <span class="w">    </span><span class="nx">validatorKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="w">    </span><span class="c1">// Kafka producer for async validation</span>
 <span class="w">    </span><span class="nx">httpServer</span><span class="w">                   </span><span class="o">*</span><span class="nx">echo</span><span class="p">.</span><span class="nx">Echo</span><span class="w">                   </span><span class="c1">// HTTP server for REST endpoints</span>
 <span class="w">    </span><span class="nx">validatorHTTPAddr</span><span class="w">            </span><span class="o">*</span><span class="nx">url</span><span class="p">.</span><span class="nx">URL</span><span class="w">                     </span><span class="c1">// Validator HTTP endpoint URL</span>
+<span class="w">    </span><span class="nx">banList</span><span class="w">                      </span><span class="nx">banlist</span><span class="p">.</span><span class="nx">Interface</span><span class="w">            </span><span class="c1">// IP ban list for UDP/gRPC security</span>
+<span class="w">    </span><span class="nx">udpWorkerPool</span><span class="w">                </span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span><span class="w">                 </span><span class="c1">// Semaphore limiting concurrent UDP processing goroutines</span>
+<span class="w">    </span><span class="nx">udpConns</span><span class="w">                     </span><span class="p">[]</span><span class="o">*</span><span class="nx">net</span><span class="p">.</span><span class="nx">UDPConn</span><span class="w">               </span><span class="c1">// Active UDP connections</span>
+<span class="w">    </span><span class="nx">udpConnsMu</span><span class="w">                   </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span><span class="w">                   </span><span class="c1">// Mutex protecting udpConns</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The <code>PropagationServer</code> struct is the main type for the Propagation Server. It contains various components for transaction processing, validation, and distribution.</p>
 <h2 id="functions">Functions</h2>
 <h3 id="new">New</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">PropagationServer</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span><span class="w"> </span><span class="nx">banList</span><span class="w"> </span><span class="nx">banlist</span><span class="p">.</span><span class="nx">Interface</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">PropagationServer</span>
 </code></pre></div>
 <p>Creates a new instance of the Propagation Server with the provided dependencies.</p>
 <h2 id="methods">Methods</h2>
@@ -7184,7 +7188,7 @@
 <h3 id="udp6-multicast-listening">UDP6 Multicast Listening</h3>
 <p>The server listens on multiple IPv6 multicast addresses for incoming transactions. The implementation has the following characteristics:</p>
 <ul>
-<li>Supports configurable UDP datagram size (default: 512 bytes)</li>
+<li>Uses a fixed UDP datagram size of 512 bytes</li>
 <li>Uses the default IPv6 port 9999 for multicast listeners</li>
 <li>Creates independent listeners for each multicast address specified in <code>settings.Propagation.IPv6Addresses</code></li>
 <li>Processes incoming datagrams concurrently through separate goroutines</li>
@@ -7205,16 +7209,17 @@
 <h3 id="propagation-settings">Propagation Settings</h3>
 <ul>
 <li><code>settings.Propagation.IPv6Addresses</code>: Comma-separated list of IPv6 multicast addresses for UDP listeners</li>
-<li><code>settings.Propagation.IPv6Interface</code>: Network interface for IPv6 multicast (default: "en0")</li>
+<li><code>settings.Propagation.IPv6Interface</code>: Network interface for IPv6 multicast (default: empty string, falls back to "en0" at runtime)</li>
 <li><code>settings.Propagation.HTTPListenAddress</code>: HTTP addresses for transaction submission endpoints</li>
 <li><code>settings.Propagation.HTTPAddresses</code>: Array of HTTP addresses for multiple endpoint configurations</li>
 <li><code>settings.Propagation.HTTPRateLimit</code>: HTTP request rate limiting (requests per second)</li>
 <li><code>settings.Propagation.AlwaysUseHTTP</code>: Boolean flag to prefer HTTP over other protocols</li>
 <li><code>settings.Propagation.SendBatchSize</code>: Batch size for sending transactions (default: 100)</li>
-<li><code>settings.Propagation.SendBatchTimeout</code>: Timeout for batch sending operations (default: 5 seconds)</li>
+<li><code>settings.Propagation.SendBatchTimeout</code>: Timeout for batch sending operations in milliseconds (default: 5 milliseconds)</li>
 <li><code>settings.Propagation.GRPCListenAddress</code>: gRPC server address for the Propagation API</li>
 <li><code>settings.Propagation.GRPCAddresses</code>: Array of gRPC addresses for multiple endpoint configurations</li>
 <li><code>settings.Propagation.GRPCMaxConnectionAge</code>: Maximum age for gRPC connections before forced refresh</li>
+<li><code>settings.Propagation.IPv6AllowedSources</code>: List of allowed UDP source IPs or CIDR ranges (empty = allow all sources)</li>
 </ul>
 <h3 id="validator-settings">Validator Settings</h3>
 <ul>

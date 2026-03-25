@@ -6944,6 +6944,9 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 </ul>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
 </code></pre></div>
+<blockquote>
+<p><strong>Note</strong>: The large cache is the default — it is selected by the <em>absence</em> of <code>smalltxmetacache</code> or <code>testtxmetacache</code>. There is no <code>largetxmetacache</code> build tag; passing it has no effect.</p>
+</blockquote>
 <ul>
 <li><strong>Small Cache</strong>: Reduces memory usage with a smaller transaction metadata cache</li>
 </ul>
@@ -6972,10 +6975,12 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 <h3 id="testing-tags">Testing Tags</h3>
 <p>For running various test suites (not typically needed for development):</p>
 <ul>
-<li><code>test_all</code>: Runs all tests</li>
-<li><code>test_smoke_rpc</code>: Runs smoke tests for RPC functionality</li>
-<li><code>test_services</code>: Tests specific to services</li>
-<li><code>test_longlong</code>: For extended duration tests</li>
+<li><code>test_tna</code> - TNA integration test suite (<code>test/tna/</code>)</li>
+<li><code>test_tec</code> - TEC integration test suite (<code>test/tec/</code>)</li>
+<li><code>test_tnd</code> - TND integration test suite (<code>test/tnd/</code>)</li>
+<li><code>test_tnf</code> - TNF integration test suite (<code>test/tnf/</code>)</li>
+<li><code>test_smoke</code> - Smoke tests (docker-based, see <code>test/e2e/docker/</code>)</li>
+<li><code>test_functional</code> - Functional tests (subset of smoke tests)</li>
 </ul>
 <h3 id="component-options">Component Options</h3>
 <p>Launch the node with specific components using command-line options. This allows you to enable only the components you need for your development tasks.</p>

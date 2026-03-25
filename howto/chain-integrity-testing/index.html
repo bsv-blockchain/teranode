@@ -1005,10 +1005,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#integration-with-awkward-cicd" class="md-nav__link">
+  <a href="#integration-with-cicd" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Integration with Awkward CI/CD
+        Integration with CI/CD
       
     </span>
   </a>
@@ -6701,10 +6701,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#integration-with-awkward-cicd" class="md-nav__link">
+  <a href="#integration-with-cicd" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Integration with Awkward CI/CD
+        Integration with CI/CD
       
     </span>
   </a>
@@ -6729,7 +6729,7 @@
 
 
 <h1 id="chain-integrity-testing">Chain Integrity Testing</h1>
-<p>This document explains how to run chain integrity tests locally using the Make jobs that replicate the GitHub workflow workflow.</p>
+<p>This document explains how to run chain integrity tests locally using the Make jobs that replicate the GitHub workflow.</p>
 <h2 id="overview">Overview</h2>
 <p>The chain integrity test verifies that multiple Teranode nodes maintain consistent blockchain state by:</p>
 <ol>
@@ -6769,7 +6769,7 @@
 <h3 id="3-quick-chain-integrity-test">3. Quick Chain Integrity Test</h3>
 <div class="highlight"><pre><span></span><code>make<span class="w"> </span>chain-integrity-test-quick
 </code></pre></div>
-<p>This runs a faster version of the test with shorter 20 minutes:</p>
+<p>This runs a faster version of the test with a shorter maximum wait time of 3 minutes:</p>
 <ul>
 <li>Required block height: 50</li>
 <li>Maximum wait time: 3 minutes (60 attempts × 3 seconds)</li>
@@ -6786,15 +6786,12 @@
 <li>Can be run independently after a test completes</li>
 </ul>
 <h3 id="5-aws-ecr-login">5. AWS ECR Login</h3>
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span>ecr-login
+<p>To pull Docker images from AWS ECR, authenticate manually using the AWS CLI:</p>
+<div class="highlight"><pre><span></span><code>aws<span class="w"> </span>ecr<span class="w"> </span>get-login-password<span class="w"> </span>--region<span class="w"> </span>eu-north-1<span class="w"> </span><span class="p">|</span><span class="w"> </span>docker<span class="w"> </span>login<span class="w"> </span>--username<span class="w"> </span>AWS<span class="w"> </span>--password-stdin<span class="w"> </span>&lt;your-ecr-registry&gt;
 </code></pre></div>
-<p>This logs into AWS ECR to enable pulling required Docker images:</p>
-<ul>
-<li>Authenticates with AWS ECR in eu-north-1 region</li>
-<li>Enables pulling teranode-commands and teranode-coinbase images</li>
-<li>Required before running tests if ECR images are needed</li>
-<li>Automatically handled during chain integrity tests</li>
-</ul>
+<blockquote>
+<p><strong>Note:</strong> There is no <code>make ecr-login</code> target in the Makefile. ECR login must be performed manually using the AWS CLI before running tests that require ECR images.</p>
+</blockquote>
 <h3 id="6-clean-up">6. Clean Up</h3>
 <div class="highlight"><pre><span></span><code>make<span class="w"> </span>clean-chain-integrity
 </code></pre></div>
@@ -6809,7 +6806,7 @@
 <ol>
 <li><strong>Build chainintegrity binary</strong> - Compiles the chain integrity tool</li>
 <li><strong>Clean up old data</strong> - Removes previous test data</li>
-<li><strong>Build teranRM teranode image</strong> - Creates a local Docker image</li>
+<li><strong>Build teranode image</strong> - Creates a local Docker image</li>
 <li><strong>Start Teranode nodes</strong> - Launches 3 nodes with block generators using Docker Compose</li>
 <li><strong>Wait for mining completion</strong> - Monitors all nodes until they reach the required block height</li>
 <li><strong>Stop Teranode nodes</strong> - Gracefully stops the nodes</li>
@@ -6875,7 +6872,7 @@
 <li>Ensure AWS CLI is installed and configured</li>
 <li>Check AWS credentials: <code>aws sts get-caller-identity</code></li>
 <li>Verify ECR access permissions</li>
-<li>Run <code>make ecr-login</code> manually if needed</li>
+<li>Run <code>aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin &lt;your-ecr-registry&gt;</code> manually if needed</li>
 </ul>
 </li>
 <li>
@@ -6921,7 +6918,7 @@ rm<span class="w"> </span>-rf<span class="w"> </span>data
 <li>SSD storage is recommended for faster I/O</li>
 <li>Consider using the quick test for development iterations</li>
 </ul>
-<h2 id="integration-with-awkward-cicd">Integration with Awkward CI/CD</h2>
+<h2 id="integration-with-cicd">Integration with CI/CD</h2>
 <p>The local invokes the same process as the GitHub workflow:</p>
 <ul>
 <li>Uses the same Docker Compose configuration</li>

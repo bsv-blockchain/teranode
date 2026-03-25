@@ -7116,12 +7116,12 @@
 <p>The Validator can be deployed in two distinct ways:</p>
 <ol>
 <li>
-<p><strong>Local Validator (Recommended)</strong>:</p>
+<p><strong>Local Validator</strong>:</p>
 <ul>
 <li>The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)</li>
-<li>This is the recommended approach for production deployments due to better performance</li>
 <li>No additional network calls are needed between services and validator</li>
-<li>Configuration: Set <code>validator.useLocalValidator=true</code> in your settings</li>
+<li>Recommended for single-machine deployments, development, or testing</li>
+<li>Configuration: Set <code>useLocalValidator=true</code> in your settings</li>
 </ul>
 </li>
 <li>
@@ -7129,9 +7129,9 @@
 <ul>
 <li>The Validator runs as an independent service with a gRPC interface</li>
 <li>Other services connect to it remotely via gRPC</li>
+<li>Recommended for production distributed deployments — allows independent scaling</li>
 <li>This approach has higher latency due to additional network calls</li>
-<li>Useful for development, testing, or specialized deployment scenarios</li>
-<li>Configuration: Set <code>validator.useLocalValidator=false</code> and configure validator gRPC endpoint</li>
+<li>Configuration: Set <code>useLocalValidator=false</code> and configure validator gRPC endpoint</li>
 </ul>
 </li>
 </ol>
@@ -7208,11 +7208,9 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li>
 <p><strong><code>NewServer</code> Function</strong>:</p>
 <ol>
-<li>Initialize a new <code>Server</code> instance.</li>
-<li>Create channels for new and dead subscriptions.</li>
-<li>Initialize a map for subscribers.</li>
-<li>Create a context for subscriptions and a corresponding cancellation function.</li>
-<li>Return the newly created <code>Server</code> instance.</li>
+<li>Initialize a new <code>Server</code> instance with all required dependencies (logger, settings, UTXO store, blockchain client, Kafka producers/consumers, block assembly client).</li>
+<li>Initialize Prometheus metrics.</li>
+<li>Return the newly created <code>Server</code> instance (no background processes started yet).</li>
 </ol>
 </li>
 <li>
@@ -7226,8 +7224,11 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li>
 <p><strong><code>Start</code> Function</strong>:</p>
 <ol>
-<li>Start a goroutine to manage new and dead subscriptions.</li>
+<li>Wait for the blockchain FSM to reach RUNNING state.</li>
+<li>Set up Kafka consumer for incoming validation requests (if configured).</li>
+<li>Start the HTTP server for REST endpoints.</li>
 <li>Start the gRPC server and handle any errors.</li>
+<li>Signal readiness by closing the readyCh channel.</li>
 </ol>
 </li>
 </ul>
@@ -7290,7 +7291,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ul>
 </li>
 </ol>
-<p>Transactions are validated by the <code>ValidateTransaction()</code> function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (<code>github.com/bsv-blockchain/go-bt</code>). The implementation uses pluggable script interpreters (GoBT, GoSDK, or GoBDK) for script verification.</p>
+<p>Transactions are validated by the <code>ValidateTransaction()</code> function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (<code>github.com/bsv-blockchain/go-bt</code>). The implementation uses the GoBDK script interpreter for script verification. GoBT and GoSDK implementations exist in the codebase for historical reasons but are not active.</p>
 <p>We can see the exact steps being executed as part of the validation process below:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">tv</span><span class="w"> </span><span class="o">*</span><span class="nx">TxValidator</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="c1">//</span>
@@ -7455,7 +7456,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ul>
 <div class="highlight"><pre><span></span><code><span class="c1">// Example of policy checks being conditionally applied:</span>
 <span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">validationOptions</span><span class="p">.</span><span class="nx">SkipPolicyChecks</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkFees</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">feesToBtFeeQuote</span><span class="p">(</span><span class="nx">tv</span><span class="p">.</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Policy</span><span class="p">.</span><span class="nx">GetMinMiningTxFee</span><span class="p">()));</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkFees</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
@@ -7486,9 +7487,8 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ol>
 <p>This extension process occurs transparently at multiple checkpoints in the validation pipeline:</p>
 <ul>
-<li><code>Validator.Validate()</code> in <code>services/validator/Validator.go</code> - Initial format check before validation</li>
-<li><code>Validator.validateConsensusRules()</code> in <code>services/validator/Validator.go</code> - Before consensus rule checks</li>
-<li><code>Validator.validateScripts()</code> in <code>services/validator/Validator.go</code> - Before script validation</li>
+<li><code>Validator.Validate()</code> in <code>services/validator/Validator.go</code> - Initial format check before validation begins</li>
+<li><code>Validator.validateInternal()</code> in <code>services/validator/Validator.go</code> - Core validation flow that calls extension if needed</li>
 </ul>
 <h4 id="implementation-details">Implementation Details</h4>
 <p><strong>Key Functions:</strong></p>
@@ -7540,20 +7540,18 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ol>
 <p>For more details on transaction format handling across the system, see the <a href="../../datamodel/transaction_data_model/">Transaction Data Model documentation</a>.</p>
 <h3 id="24-script-verification">2.4. Script Verification</h3>
-<p>The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters are supported:</p>
+<p>The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters exist in the codebase:</p>
 <ol>
 <li>
 <p><strong>GoBT Interpreter</strong> (<code>TxInterpreterGoBT</code>):</p>
 <ul>
 <li>Based on the Go-BT library</li>
-<li>Default interpreter for basic script validation</li>
 </ul>
 </li>
 <li>
 <p><strong>GoSDK Interpreter</strong> (<code>TxInterpreterGoSDK</code>):</p>
 <ul>
 <li>Based on the Go-SDK library</li>
-<li>Provides advanced script validation capabilities</li>
 </ul>
 </li>
 <li>
@@ -7565,6 +7563,9 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ul>
 </li>
 </ol>
+<blockquote>
+<p><strong>Note:</strong> The script interpreter is hardcoded to GoBDK (<code>TxInterpreterGoBDK</code>). There is no <code>validator_scriptVerificationLibrary</code> setting; the interpreter cannot be changed via configuration. GoBT and GoSDK exist in the codebase for historical reasons only.</p>
+</blockquote>
 <p>The script verification process:</p>
 <ol>
 <li>
@@ -7577,7 +7578,6 @@ However, the Validator can also be started as a service, allowing to interact wi
 <p>The script verification is context-aware, considering current block height and network parameters</p>
 </li>
 </ol>
-<p>Script verification can be configured using the <code>validator_scriptVerificationLibrary</code> setting, which defaults to "VerificatorGoBT".</p>
 <h3 id="25-error-handling-and-transaction-rejection">2.5. Error Handling and Transaction Rejection</h3>
 <p>The Validator implements a structured error handling system to categorize and report different types of validation failures:</p>
 <ol>
@@ -7668,7 +7668,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li><strong><code>validator_kafkaWorkers</code></strong> (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.</li>
 <li><strong><code>validator_httpRateLimit</code></strong> (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.</li>
 <li><strong><code>validator_verbose_debug</code></strong> (default: false): Enables detailed validation logging for troubleshooting.</li>
-<li><strong><code>validator_useLocalValidator</code></strong> (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.</li>
+<li><strong><code>useLocalValidator</code></strong> (code default: false; <code>settings.conf</code> ships with <code>true</code>): Determines whether to use a local validator instance or connect to a remote validator service via gRPC. Standard deployments using the provided <code>settings.conf</code> will use local validator mode.</li>
 </ul>
 <p><strong>Note:</strong> While these settings are available in the codebase, they are advanced options and may not be listed in the default <code>settings.conf</code> file. For a complete list of all available settings, see the <a href="../../../references/settings/services/validator_settings/">Validator Settings Reference</a>.</p>
 <h3 id="rejected-transaction-handling">Rejected Transaction Handling</h3>
@@ -7721,7 +7721,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li>
 <p><strong>Phase 1 - Transaction Creation with Locked Flag</strong>:</p>
 <ul>
-<li>When a transaction is created, it is initially stored in the UTXO store with an "locked" flag set to <code>true</code>.</li>
+<li>When a transaction is created, it is initially stored in the UTXO store with a "locked" flag set to <code>true</code>.</li>
 <li>This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.</li>
 </ul>
 </li>
@@ -7789,7 +7789,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 <ul>
 <li><code>sync/atomic</code>, <code>strings</code>, <code>strconv</code>, <code>time</code>, <code>io</code>, <code>net/url</code>, <code>os</code>, <code>bytes</code>, and other standard Go packages for various utility functions.</li>
 <li><code>github.com/ordishs/gocore</code> and <code>github.com/ordishs/go-utils/batcher</code>: Utility libraries, used for handling core functionalities and batch processing.</li>
-<li><code>github.com/opentracing/opentracing-go</code>: Used for distributed tracing.</li>
+<li><code>go.opentelemetry.io/otel</code>: Used for distributed tracing.</li>
 </ul>
 </li>
 </ol>
@@ -7797,16 +7797,15 @@ However, the Validator can also be started as a service, allowing to interact wi
 <div class="highlight"><pre><span></span><code>./services/validator
 ├── Client.go                    # Contains client-side logic for interacting with the Validator
 ├── Interface.go                 # Defines interfaces for the Validator
-├── ScriptVerificatorGoBDK.go    # Implements script verification using a Go Bitcoin Development Kit
-├── ScriptVerificatorGoBT.go     # Implements script verification using Go Bitcoin Tools
-├── ScriptVerificatorGoSDK.go    # Implements script verification using a Go Software Development Kit
+├── ScriptVerifierGoBDK.go       # Implements script verification using a Go Bitcoin Development Kit
+├── ScriptVerifierGoBT.go        # Implements script verification using Go Bitcoin Tools
+├── ScriptVerifierGoSDK.go       # Implements script verification using a Go Software Development Kit
 ├── Server.go                    # Implements the server-side logic of the Validator
 ├── TxValidator.go               # Contains specific logic for validating transactions
 ├── Validator.go                 # Contains the main logic for validator functionalities
-├── data.go                      # Contains data structures or constants used in the validator service
 ├── metrics.go                   # Contains code for metrics collection within the Validator
+├── Mock.go                      # Mock implementation of the Validator interface for use in tests
 ├── options.go                   # Defines configuration options or settings for the validator service
-├── policy.go                    # Defines validation policies or rules
 └── validator_api
     ├── validator_api.pb.go          # Auto-generated Go code from validator_api.proto
     ├── validator_api.proto          # Protocol Buffers definition file for the validator API

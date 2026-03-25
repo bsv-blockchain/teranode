@@ -6836,7 +6836,7 @@
 <ul>
 <li><code>TXMETA_SMALL_TAG=true</code>: Uses <code>smalltxmetacache</code></li>
 <li><code>TXMETA_TEST_TAG=true</code>: Uses <code>testtxmetacache</code></li>
-<li>Default: Uses <code>largetxmetacache</code></li>
+<li>Default: Uses <code>largetxmetacache</code> (note: this tag is a no-op in the compiler; the large cache is selected by the absence of the other two tags)</li>
 </ul>
 </li>
 </ul>
@@ -6869,15 +6869,17 @@
 <h3 id="building-tools-and-utilities">Building Tools and Utilities</h3>
 <ul>
 <li><strong>build-chainintegrity</strong>: Builds the chain integrity testing tool at <code>./compose/cmd/chainintegrity/</code>.</li>
-<li><strong>build-tx-blaster</strong>: Builds the transaction blaster performance testing tool at <code>./cmd/txblaster/</code>.</li>
-<li><strong>build-blockchainstatus</strong>: Builds the blockchain status utility at <code>./cmd/blockchainstatus/</code>.</li>
+<li><strong>build-tx-blaster</strong>: Builds the transaction blaster performance testing tool at <code>./cmd/txblaster/</code>. <strong>Note:</strong> the <code>./cmd/txblaster/</code> source directory does not currently exist; this target will fail if invoked.</li>
+<li><strong>build-blockchainstatus</strong>: Builds the blockchain status utility at <code>./cmd/blockchainstatus/</code>. <strong>Note:</strong> the <code>./cmd/blockchainstatus/</code> source directory does not currently exist; this target will fail if invoked.</li>
 </ul>
 <h3 id="testing">Testing</h3>
 <ul>
 <li><strong>test</strong>: Runs unit tests with race detection and configurable output format. Excludes tests in the <code>test/</code> directory. Uses <code>testtxmetacache</code> tag and <code>SETTINGS_CONTEXT=test</code>.</li>
-<li><strong>buildtest</strong>: Builds tests without running them for separate execution.</li>
 <li><strong>sequentialtest</strong>: Executes tests in the <code>test/sequentialtest/</code> directory sequentially for more stable results.</li>
-<li><strong>longtest</strong>: Executes long-running tests in the <code>test/longtest/</code> directory with 5-minute timeout.</li>
+<li><strong>sequentialtest-sqlite</strong>: Runs sequential tests using the SQLite database backend only.</li>
+<li><strong>sequentialtest-postgres</strong>: Runs sequential tests using the PostgreSQL database backend only.</li>
+<li><strong>sequentialtest-aerospike</strong>: Runs sequential tests using the Aerospike database backend only.</li>
+<li><strong>longtest</strong>: Executes long-running tests in the <code>test/longtest/</code> directory with 10-minute timeout.</li>
 <li><strong>testall</strong>: Runs all test suites: <code>test</code>, <code>longtest</code>, and <code>sequentialtest</code>.</li>
 <li><strong>nightly-tests</strong>: Runs comprehensive tests typically scheduled for nightly builds. Builds Docker images and uses CTRF JSON reporter for results.</li>
 <li><strong>smoketest</strong>: Runs smoke tests in the <code>test/e2e/daemon/ready/</code> directory focused on basic functionality.</li>
@@ -6926,14 +6928,6 @@
 </ul>
 </li>
 <li>
-<p><strong>ecr-login</strong>: AWS ECR login for pulling required Docker images:</p>
-<ul>
-<li>Logs into AWS ECR (eu-north-1 region)</li>
-<li>Required before building or pulling ECR-hosted images</li>
-<li>Uses AWS CLI credentials</li>
-</ul>
-</li>
-<li>
 <p><strong>show-hashes</strong>: Displays hash analysis results from chainintegrity test:</p>
 <ul>
 <li>Extracts hash information from test output</li>
@@ -6960,6 +6954,7 @@
 <li><code>services/alert/alert_api/alert_api.proto</code></li>
 <li><code>services/legacy/peer_api/peer_api.proto</code></li>
 <li><code>services/p2p/p2p_api/p2p_api.proto</code></li>
+<li><code>services/pruner/pruner_api/pruner_api.proto</code></li>
 <li><code>util/kafka/kafka_message/kafka_messages.proto</code></li>
 </ul>
 </li>
@@ -7168,6 +7163,14 @@ make<span class="w"> </span>testall
 <span class="c1"># Run only smoke tests</span>
 make<span class="w"> </span>smoketest
 
+<span class="c1"># Run smoke tests with retry support (TEST_RETRY_DELAY is seconds between retries)</span>
+make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">5</span>
+
+<span class="c1"># Run sequential tests against a specific database backend</span>
+make<span class="w"> </span>sequentialtest-sqlite
+make<span class="w"> </span>sequentialtest-postgres
+make<span class="w"> </span>sequentialtest-aerospike<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span>
+
 <span class="c1"># Run tests in specific directory</span>
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;testtxmetacache&quot;</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./services/validator/...
 </code></pre></div>
@@ -7211,8 +7214,8 @@ make<span class="w"> </span>lint-full-changed-dirs
 <div class="highlight"><pre><span></span><code><span class="c1"># Generate FSM state machine diagram</span>
 make<span class="w"> </span>generate_fsm_diagram
 
-<span class="c1"># Login to AWS ECR</span>
-make<span class="w"> </span>ecr-login
+<span class="c1"># Login to AWS ECR (no make target — must be done manually)</span>
+aws<span class="w"> </span>ecr<span class="w"> </span>get-login-password<span class="w"> </span>--region<span class="w"> </span>eu-north-1<span class="w"> </span><span class="p">|</span><span class="w"> </span>docker<span class="w"> </span>login<span class="w"> </span>--username<span class="w"> </span>AWS<span class="w"> </span>--password-stdin<span class="w"> </span>&lt;your-ecr-registry&gt;
 
 <span class="c1"># Reset test data</span>
 make<span class="w"> </span>reset-data
@@ -7226,7 +7229,7 @@ make<span class="w"> </span>reset-data
 <p><strong>Go modules</strong>: The Makefile uses <code>-mod=readonly</code> for production builds to ensure reproducible builds and prevent accidental dependency changes.</p>
 </li>
 <li>
-<p><strong>Build tags</strong>: Several build commands use tags like <code>aerospike</code> and transaction metadata cache tags (<code>smalltxmetacache</code>, <code>testtxmetacache</code>, <code>largetxmetacache</code>) to control conditional compilation.</p>
+<p><strong>Build tags</strong>: Several build commands use tags like <code>aerospike</code> and transaction metadata cache tags (<code>smalltxmetacache</code>, <code>testtxmetacache</code>) to control conditional compilation. The <code>largetxmetacache</code> tag is passed by the Makefile by default but is not used as a positive constraint in any source file — the large cache is selected by the absence of <code>smalltxmetacache</code> and <code>testtxmetacache</code>. Passing <code>-tags largetxmetacache</code> has no effect on the build.</p>
 </li>
 <li>
 <p><strong>Race detection</strong>: The <code>-race</code> flag is only used in CI builds (<code>build-teranode-ci</code>) and test commands to detect race conditions. It's not enabled in standard development builds due to performance overhead.</p>

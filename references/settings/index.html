@@ -6644,12 +6644,13 @@
 </ol>
 <h2 id="configuration-system">Configuration System</h2>
 <p>The configuration system allows for a layered approach to settings. At its core, it works with a base setting. However, to cater to individualized or context-specific requirements, you can have context-dependent overrides.</p>
-<p>Here's how it prioritizes:</p>
+<p>Here's how it prioritizes (highest to lowest):</p>
 <ol>
-<li><code>SETTING_NAME.context_name</code>: A context-specific override (highest priority)</li>
-<li><code>SETTING_NAME.base</code>: A general override</li>
+<li>Environment variable (exact setting key name — highest priority)</li>
+<li><code>SETTING_NAME.context_name</code>: A context-specific override (longest matching context chain wins)</li>
 <li><code>SETTING_NAME</code>: The base setting (lowest priority)</li>
 </ol>
+<p>Context resolution strips suffixes from right to left until a match is found. There is no special <code>.base</code> suffix — the plain key name is the final fallback.</p>
 <h3 id="example">Example</h3>
 <p>Suppose we have a base setting named <code>DATABASE_URL</code> to define the database connection URL for our application.</p>
 <p>The base setting might be:</p>
@@ -6757,6 +6758,8 @@
 <li><a href="services/subtreevalidation_settings/">Subtree Validation Settings</a></li>
 <li><a href="services/utxopersister_settings/">UTXO Persister Settings</a></li>
 <li><a href="services/validator_settings/">Validator Settings</a></li>
+<li><a href="services/coinbase_settings/">Coinbase Settings</a></li>
+<li><a href="services/faucet_settings/">Faucet Settings</a></li>
 </ul>
 <h3 id="stores">Stores</h3>
 <ul>

@@ -7940,11 +7940,16 @@
 <p><strong>Enabled Linters</strong>:</p>
 </li>
 <li>
-<p><code>depguard</code>: Prevents importing disallowed packages like <code>errors</code> (use standard <code>errors</code> instead).</p>
+<p><code>depguard</code>: Prevents importing disallowed packages such as the standard library <code>errors</code> package; use the project's designated error-handling package/utilities instead.</p>
 </li>
-<li><code>forbidigo</code>: Disallows use of <code>fmt.Errorf</code> (use <code>errors.New</code> instead).</li>
-<li><code>gocognit</code>: Flags functions exceeding complexity threshold (200).</li>
-<li>Additional linters for style, security, imports, and error handling (<code>gosec</code>, <code>goimports</code>, <code>errcheck</code>, etc.).</li>
+<li><code>forbidigo</code>: Disallows use of <code>fmt.Errorf</code>; use the project's preferred error-construction helpers (for example, functions from the project's <code>errors</code> package) instead. <strong>Exception:</strong> disabled for <code>pkg/</code> and <code>errors/</code> directories.</li>
+<li>
+<p>Additional linters for style and correctness (for example, <code>misspell</code>, <code>asciicheck</code>, etc.).</p>
+</li>
+<li>
+<p>Code formatting (including import ordering) is enforced via formatters configured in <code>golangci-lint</code> such as <code>gci</code> and <code>goimports</code>.</p>
+</li>
+<li>Note: <code>gosec</code>, <code>staticcheck</code>, <code>goconst</code>, <code>gocritic</code>, <code>unconvert</code>, <code>whitespace</code>, and <code>gocognit</code> are listed but currently <strong>disabled</strong> in the active configuration.</li>
 </ul>
 <h6 id="exceptions">Exceptions</h6>
 <ul>
@@ -8028,8 +8033,9 @@ These rules are to be used on the Teranode project for Go conventions and best p
   * Linter configuration includes the following rules:
     • depguard: Prevents use of disallowed packages (e.g., &quot;errors&quot; package is blocked in favor of the standard library)
     • forbidigo: Blocks use of fmt.Errorf; enforces errors.New instead
-    • gocognit: Flags functions with high cognitive complexity (threshold set at 200)
-    • Other enabled linters include: asciicheck, errcheck, goconst, gocritic, gci, goimports, gosec, misspell, prealloc, unconvert, whitespace, wsl
+    • gocognit: Flags functions with high cognitive complexity (threshold set at 50)
+    • Currently active linters include: asciicheck, depguard, forbidigo, misspell, prealloc, gci, goimports
+    • Disabled in current config (do not rely on these): gosec, staticcheck, goconst, gocritic, unconvert, whitespace, gocognit
 </code></pre></div>
 
 
