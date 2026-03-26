@@ -531,7 +531,12 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree meta already exists", subtreeRetry.subtreeHash.String())
+			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree meta already exists, updating DeleteAtHeight", subtreeRetry.subtreeHash.String())
+			if dahErr := ba.subtreeStore.SetDAH(ctx, subtreeRetry.subtreeHash[:], fileformat.FileTypeSubtreeMeta, dah); dahErr != nil {
+				ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to update subtree meta DAH: %s", subtreeRetry.subtreeHash.String(), dahErr)
+				ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree meta DAH update")
+				return dahErr
+			}
 		} else {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
 			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree meta")
@@ -552,7 +557,12 @@ func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeR
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
+			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists, updating DeleteAtHeight", subtreeRetry.subtreeHash.String())
+			if dahErr := ba.subtreeStore.SetDAH(ctx, subtreeRetry.subtreeHash[:], fileformat.FileTypeSubtree, dah); dahErr != nil {
+				ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to update subtree DAH: %s", subtreeRetry.subtreeHash.String(), dahErr)
+				ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree DAH update")
+				return dahErr
+			}
 		} else {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
 			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree")
@@ -633,7 +643,14 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
-		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
+		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists, updating DeleteAtHeight", subtree.RootHash().String())
+		dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
+			return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
+		}
+		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
+			return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree meta DAH", subtree.RootHash().String(), err)
+		}
 		return nil, nil, errors.ErrBlobAlreadyExists
 	}
 
