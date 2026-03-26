@@ -10,8 +10,8 @@
 | QuorumAbsoluteTimeout | time.Duration | 30s | subtree_quorum_absolute_timeout | Quorum operation timeout |
 | SubtreeStore | *url.URL | "" | subtreestore | **CRITICAL** - Subtree data storage |
 | GetMissingTransactions | int | max(4, CPU/2) | subtreevalidation_getMissingTransactions | **CRITICAL** - Missing transaction retrieval concurrency |
-| GRPCAddress | string | "localhost:8089" | subtreevalidation_grpcAddress | gRPC client connections |
-| GRPCListenAddress | string | ":8089" | subtreevalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
+| GRPCAddress | string | "localhost:8089" (Go default; overridden to `localhost:8086` by `settings.conf` via `SUBTREE_VALIDATION_GRPC_PORT`) | subtreevalidation_grpcAddress | gRPC client connections |
+| GRPCListenAddress | string | ":8089" (Go default; overridden to `:8086` by `settings.conf` via `SUBTREE_VALIDATION_GRPC_PORT`) | subtreevalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
 | ProcessTxMetaUsingCacheBatchSize | int | 1024 | subtreevalidation_processTxMetaUsingCache_BatchSize | **CRITICAL** - Cache processing batch size |
 | ProcessTxMetaUsingCacheConcurrency | int | 32 | subtreevalidation_processTxMetaUsingCache_Concurrency | **CRITICAL** - Cache processing concurrency |
 | ProcessTxMetaUsingCacheMissingTxThreshold | int | 1 | subtreevalidation_processTxMetaUsingCache_MissingTxThreshold | Cache miss threshold |
@@ -81,7 +81,7 @@
 ### Basic Configuration
 
 ```bash
-subtreevalidation_grpcListenAddress=:8089
+subtreevalidation_grpcListenAddress=:8086
 subtreestore=memory:///
 ```
 

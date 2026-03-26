@@ -807,6 +807,12 @@ func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) er
 	return t.utxoStore.PreviousOutputsDecorate(ctx, tx)
 }
 
+// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+// multiple transactions in bulk, delegating to the underlying store.
+func (t *TxMetaCache) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	return t.utxoStore.BatchPreviousOutputsDecorate(ctx, txs)
+}
+
 // FreezeUTXOs marks UTXOs as frozen and not spendable in the underlying store
 // and removes any related entries from the cache to ensure consistency.
 //

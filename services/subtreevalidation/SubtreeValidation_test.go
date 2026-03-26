@@ -14,7 +14,9 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -31,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -38,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	gocore "github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,6 +117,124 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 		require.NoError(t, err)
 	})
+}
+
+func TestValidateSubtreeInternal_CacheMissRetry(t *testing.T) {
+	// Verifies that when some txs are missing from the txmetacache (partial miss),
+	// ValidateSubtreeInternal retries the cache lookup rather than falling through
+	// to the store/network path. A background goroutine populates the missing txs
+	// after a short delay, simulating propagation completing.
+	InitPrometheusMetrics()
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Use a short retry sleep so the test completes quickly, but generous enough
+	// to avoid flakiness on slow CI runners
+	tSettings.BlockValidation.RetrySleep = 500 * time.Millisecond
+	tSettings.BlockValidation.ValidationMaxRetries = 3
+	tSettings.Block.FailFastValidation = false
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheBatchSize = 1024
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheConcurrency = 4
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1000 // high to avoid fail-fast
+
+	// Create a real sqlitememory store and wrap it with txmetacache
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	cache, err := txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
+	require.NoError(t, err)
+	require.IsType(t, &txmetacache.TxMetaCache{}, cache)
+	txMetaCache := cache.(*txmetacache.TxMetaCache)
+
+	// Create transactions and build subtree
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddNode(*hash1, 121, 0))
+	require.NoError(t, st.AddNode(*hash2, 122, 0))
+	require.NoError(t, st.AddNode(*hash3, 123, 0))
+	require.NoError(t, st.AddNode(*hash4, 123, 0))
+
+	nodeBytes, err := st.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/tx/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
+	)
+	httpmock.RegisterRegexpMatcherResponder(
+		"POST",
+		regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
+		httpmock.Matcher{},
+		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
+	)
+
+	// Create proper metadata via the underlying utxo store (gets correct TxInpoints from tx inputs)
+	txMeta1, err := utxoStore.Create(ctx, tx1, 0)
+	require.NoError(t, err)
+	txMeta2, err := utxoStore.Create(ctx, tx2, 0)
+	require.NoError(t, err)
+
+	// For txMeta3/txMeta4, use a separate helper store so that the Server's underlying
+	// utxoStore does NOT contain them. This ensures ValidateSubtreeInternal cannot fall
+	// back to processTxMetaUsingStore to find these txmetas — the only way to succeed
+	// is via the cache-miss retry logic being tested.
+	helperStoreURL, err := url.Parse("sqlitememory:///helper")
+	require.NoError(t, err)
+	helperStore, err := sql.New(ctx, logger, tSettings, helperStoreURL)
+	require.NoError(t, err)
+	txMeta3, err := helperStore.Create(ctx, tx3, 0)
+	require.NoError(t, err)
+	txMeta4, err := helperStore.Create(ctx, tx4, 0)
+	require.NoError(t, err)
+
+	// Populate only tx1 and tx2 in the cache — tx3 and tx4 are "still in propagation"
+	require.NoError(t, txMetaCache.SetCache(hash1, txMeta1))
+	require.NoError(t, txMetaCache.SetCache(hash2, txMeta2))
+
+	// Background goroutine: populate tx3 and tx4 after a short delay (simulates propagation completing)
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		_ = txMetaCache.SetCache(hash3, txMeta3)
+		_ = txMetaCache.SetCache(hash4, txMeta4)
+	}()
+
+	subtreeStore := blobmemory.New()
+
+	// Construct the Server directly to avoid New() re-wrapping the txmetacache
+	server := &Server{
+		logger:                            logger,
+		settings:                          tSettings,
+		subtreeStore:                      subtreeStore,
+		txStore:                           blobmemory.New(),
+		utxoStore:                         txMetaCache,
+		validatorClient:                   &validator.MockValidatorClient{UtxoStore: utxoStore},
+		stats:                             gocore.NewStat("subtreevalidation"),
+		prioritySubtreeCheckActiveMap:     map[string]bool{},
+		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
+	}
+
+	v := ValidateSubtree{
+		SubtreeHash:   *st.RootHash(),
+		BaseURL:       "http://localhost:8000",
+		TxHashes:      nil,
+		AllowFailFast: false,
+	}
+
+	_, err = server.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
+	require.NoError(t, err)
 }
 
 func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {

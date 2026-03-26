@@ -1344,19 +1344,19 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 		}
 	}
 
-	// Delete external files before Aerospike records (fail-safe: if file deletion fails, we keep the record)
-	if len(externalFiles) > 0 {
-		if err := s.executeBatchExternalFileDeletions(ctx, externalFiles); err != nil {
-			return err
-		}
-	}
-
+	// Delete Aerospike records before external files (fail-safe: if file deletion fails,
+	// orphaned files are harmless; if record deletion fails, both remain consistent)
 	if !s.settings.Pruner.SkipDeletions {
-		// Delete Aerospike records last
 		if len(deletions) > 0 {
 			if err := s.executeBatchDeletions(ctx, deletions); err != nil {
 				return err
 			}
+		}
+	}
+
+	if len(externalFiles) > 0 {
+		if err := s.executeBatchExternalFileDeletions(ctx, externalFiles); err != nil {
+			return err
 		}
 	}
 

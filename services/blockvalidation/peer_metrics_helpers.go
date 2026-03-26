@@ -184,3 +184,35 @@ func (u *Server) isPeerBad(peerID string) bool {
 
 	return false
 }
+
+// reportValidBlockForPeers reports a successfully validated block to the P2P service
+// for the primary peer and all contributing secondary peers.
+// This credits reputation to all peers that provided data for this block.
+func (u *Server) reportValidBlockForPeers(ctx context.Context, primaryPeerID string, blockHash string, contributingPeers map[string]struct{}) {
+	if u.p2pClient == nil {
+		return
+	}
+
+	// Credit the primary peer
+	if primaryPeerID != "" {
+		if err := u.p2pClient.ReportValidBlock(ctx, primaryPeerID, blockHash); err != nil {
+			u.logger.Warnf("[peer_metrics] Failed to report valid block %s for primary peer %s: %v", blockHash, primaryPeerID, err)
+		}
+	}
+
+	// Credit each secondary peer that contributed subtree data
+	secondaryCount := 0
+	for contributingPeerID := range contributingPeers {
+		if contributingPeerID == primaryPeerID {
+			continue // already credited
+		}
+		if err := u.p2pClient.ReportValidBlock(ctx, contributingPeerID, blockHash); err != nil {
+			u.logger.Warnf("[peer_metrics] Failed to report valid block %s for contributing peer %s: %v", blockHash, contributingPeerID, err)
+		} else {
+			secondaryCount++
+		}
+	}
+	if secondaryCount > 0 {
+		u.logger.Infof("[peer_metrics] Credited %d contributing peers for valid block %s", secondaryCount, blockHash)
+	}
+}

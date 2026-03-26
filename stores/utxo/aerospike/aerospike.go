@@ -682,10 +682,11 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(txIDs))
 
+	var keyErrors int
 	for i, txID := range txIDs {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
 		if err != nil {
-			s.logger.Errorf("[PreserveTransactions] Failed to create key for tx %s: %v", txID.String(), err)
+			keyErrors++
 			continue
 		}
 
@@ -698,6 +699,10 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		)
 	}
 
+	if keyErrors > 0 {
+		s.logger.Errorf("[PreserveTransactions] Failed to create keys for %d/%d transactions", keyErrors, len(txIDs))
+	}
+
 	// Execute batch operation
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
@@ -706,6 +711,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	// Check results and handle external transactions
 	preservedCount := 0
+	var parseErrors, luaErrors, noResponseErrors int
 
 	for i, record := range batchRecords {
 		batchRecord := record.BatchRec()
@@ -718,8 +724,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
 			res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
 			if err != nil {
-				s.logger.Errorf("[PreserveTransactions] Failed to parse response for tx %s: %v",
-					txIDs[i].String(), err)
+				parseErrors++
 				continue
 			}
 
@@ -727,15 +732,17 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 			case LuaStatusOK:
 				preservedCount++
 			case LuaStatusError:
-				if res.ErrorCode == LuaErrorCodeTxNotFound {
-					s.logger.Debugf("[PreserveTransactions] Transaction not found for tx %s", txIDs[i].String())
-				} else {
-					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s", txIDs[i].String(), res.Message)
+				if res.ErrorCode != LuaErrorCodeTxNotFound {
+					luaErrors++
 				}
 			}
 		} else {
-			s.logger.Errorf("[PreserveTransactions] No response received for tx %s", txIDs[i].String())
+			noResponseErrors++
 		}
+	}
+
+	if parseErrors > 0 || luaErrors > 0 || noResponseErrors > 0 {
+		s.logger.Errorf("[PreserveTransactions] Errors processing %d transactions: %d parse failures, %d lua errors, %d missing responses", len(txIDs), parseErrors, luaErrors, noResponseErrors)
 	}
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
@@ -773,10 +780,11 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	txIDs := make([]chainhash.Hash, 0, batchSize)
 
 	processedCount := 0
+	var readErrors, keyErrors, batchErrors int
 
 	for res := range recordset.Results() {
 		if res.Err != nil {
-			s.logger.Errorf("[ProcessExpiredPreservations] Error reading record: %v", res.Err)
+			readErrors++
 			continue
 		}
 
@@ -801,7 +809,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 		if err != nil {
-			s.logger.Errorf("[ProcessExpiredPreservations] Failed to create key for tx %s: %v", txHash.String(), err)
+			keyErrors++
 			continue
 		}
 
@@ -820,7 +828,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		// Process batch when full
 		if len(batch) >= batchSize {
 			if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
-				s.logger.Errorf("[ProcessExpiredPreservations] Failed to process batch: %v", err)
+				batchErrors++
 			} else {
 				processedCount += len(batch)
 			}
@@ -833,10 +841,14 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	// Process remaining records
 	if len(batch) > 0 {
 		if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
-			s.logger.Errorf("[ProcessExpiredPreservations] Failed to process final batch: %v", err)
+			batchErrors++
 		} else {
 			processedCount += len(batch)
 		}
+	}
+
+	if readErrors > 0 || keyErrors > 0 || batchErrors > 0 {
+		s.logger.Errorf("[ProcessExpiredPreservations] Errors at height %d: %d read failures, %d key failures, %d batch failures", currentHeight, readErrors, keyErrors, batchErrors)
 	}
 
 	s.logger.Infof("[ProcessExpiredPreservations] Processed %d expired preservations at height %d", processedCount, currentHeight)

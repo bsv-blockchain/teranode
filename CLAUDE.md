@@ -24,7 +24,6 @@ make build-teranode-cli
 
 # Build specific components
 make build-chainintegrity
-make build-tx-blaster
 ```
 
 ### Testing Commands
@@ -48,32 +47,20 @@ make testall
 go test -v -race -tags "testtxmetacache" -run TestNameHere ./path/to/package
 
 # Test Retry Support (for flaky tests)
-# Automatically retry failed tests to handle timing/race issues
-# Default: 3 retries for all test targets
-
-# Unit tests with retry (gotestsum native --rerun-fails)
-make test TEST_RETRY_COUNT=3
-make longtest TEST_RETRY_COUNT=5
+# Note: Only sequentialtest and smoketest support TEST_RETRY_COUNT.
+# make test and make longtest do NOT support TEST_RETRY_COUNT.
 
 # E2E tests with retry (custom retry wrapper with timeout extension)
 make smoketest TEST_RETRY_COUNT=3
-make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3
+make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3  # delay is seconds between retries
 
-# Disable retries (set to 0 or 1)
-make test TEST_RETRY_COUNT=0
+# Disable retries (set to 1)
 make smoketest TEST_RETRY_COUNT=1
 
 # Database-specific sequential tests with retry
 make sequentialtest-aerospike TEST_RETRY_COUNT=5
 make sequentialtest-postgres TEST_RETRY_COUNT=3
 make sequentialtest-sqlite TEST_RETRY_COUNT=3
-
-# Flaky test reports (JSON format):
-# - Unit tests: /tmp/teranode-test-results/unit-test-flaky.json
-# - Long tests: /tmp/teranode-test-results/longtest-flaky.json
-# - Sequential tests: console output with flaky test summary
-
-# See docs/testing/test-retry-mechanism.md for full documentation
 ```
 
 ### Linting Commands
@@ -109,23 +96,27 @@ make dev-dashboard
 Teranode consists of multiple specialized services communicating via gRPC and Kafka:
 
 **Core Services:**
+- **Alert** (`services/alert/`): Bitcoin SV network alert system
 - **Asset Server** (`services/asset/`): HTTP/WebSocket interface to blockchain data stores
 - **Propagation** (`services/propagation/`): Receives and forwards transactions (gRPC/UDP/HTTP)
 - **Validator** (`services/validator/`): Validates transactions against consensus rules
 - **Block Validation** (`services/blockvalidation/`): Validates complete blocks
 - **Block Assembly** (`services/blockassembly/`): Assembles new blocks from validated transactions
+- **Block Persister** (`services/blockpersister/`): Persists finalized blocks to storage
 - **Blockchain** (`services/blockchain/`): Manages blockchain state and FSM
+- **Pruner** (`services/pruner/`): Prunes old UTXO and block data
 - **Subtree Validation** (`services/subtreevalidation/`): Validates merkle subtrees
+- **UTXO Persister** (`services/utxopersister/`): Persists UTXO set snapshots to blob storage
 
 **Overlay Services:**
-- **P2P** (`services/p2p/`): Peer-to-peer network communication
+- **P2P** (`services/p2p/`): Peer-to-peer network communication (includes bootstrap peer discovery)
 - **RPC** (`services/rpc/`): Bitcoin-compatible JSON-RPC interface
 - **Legacy** (`services/legacy/`): Backward compatibility with existing Bitcoin nodes
 
 **Data Stores:**
-- **UTXO Store** (`stores/utxo/`): Manages unspent transaction outputs (Aerospike-backed)
+- **UTXO Store** (`stores/utxo/`): Manages unspent transaction outputs (supports Aerospike, SQL, and null backends)
 - **Blob Store** (`stores/blob/`): Stores transactions and subtrees (S3/filesystem)
-- **Blockchain Store** (`stores/blockchain/`): Block header and chain state (PostgreSQL)
+- **Blockchain Store** (`stores/blockchain/`): Block header and chain state (PostgreSQL, SQLite)
 
 ### Communication Patterns
 - **gRPC**: Service-to-service synchronous communication
@@ -148,12 +139,32 @@ Teranode consists of multiple specialized services communicating via gRPC and Ka
 - Environment contexts: `dev`, `test`, `docker`, `operator`
 
 ### Port Configuration
-Services use standardized ports with optional prefixes for multi-node setups:
-- Asset Server: 8090
-- RPC: 9292
-- P2P: 9905
-- Blockchain gRPC: 8087
-- Validator gRPC: 8081
+Services use standardized ports with optional prefixes for multi-node setups. Full configuration is in `settings.conf` lines 88-140.
+
+| Service | Port | Protocol |
+|---------|------|----------|
+| Asset Server | 8090 | HTTP |
+| Blockchain | 8087 | gRPC |
+| Blockchain | 8082 | HTTP |
+| Block Assembly | 8085 | gRPC |
+| Block Persister | 8083 | HTTP |
+| Block Validation | 8088 | gRPC |
+| Legacy | 8099 | gRPC |
+| Legacy | 8098 | HTTP |
+| P2P | 9904 | gRPC |
+| P2P | 9906 | HTTP |
+| P2P | 9905 | libp2p TCP (configured via `p2p_listen_addresses`) |
+| Propagation | 8084 | gRPC |
+| Propagation | 8833 | HTTP |
+| Pruner | 8096 | gRPC |
+| RPC | 9292 | HTTP (configured via `rpc_listener_url`) |
+| Subtree Validation | 8086 | gRPC |
+| Validator | 8081 | gRPC |
+| Validator | 8834 | HTTP |
+| Alert P2P | 9908 | TCP |
+| Health Check | 8000 | HTTP |
+| Jaeger (UDP) | 6831 | UDP |
+| Jaeger (HTTP) | 4318 | HTTP |
 
 ## Available Agents
 
@@ -163,12 +174,13 @@ Claude will automatically use specialized agents in `.claude/agents/` when appro
 - **test-writer-fixer**: Automatically runs tests after code changes
 - **api-tester**: API load testing and contract validation
 - **backend-architect**: System design and architecture decisions
+- **document-reviewer**: Documentation quality review and accuracy audit
 
 These agents work together - for example, when implementing a new Bitcoin feature:
 1. bitcoin-expert provides protocol guidance
 2. backend-architect designs the implementation
 3. test-writer-fixer ensures tests pass
-4. performance-benchmarker validates performance
+4. api-tester validates performance and load
 
 ## Bitcoin-Specific Context
 

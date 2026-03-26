@@ -20,6 +20,10 @@ type PropagationServer struct {
     validatorKafkaProducerClient kafka.KafkaAsyncProducerI    // Kafka producer for async validation
     httpServer                   *echo.Echo                   // HTTP server for REST endpoints
     validatorHTTPAddr            *url.URL                     // Validator HTTP endpoint URL
+    banList                      banlist.Interface            // IP ban list for UDP/gRPC security
+    udpWorkerPool                chan struct{}                 // Semaphore limiting concurrent UDP processing goroutines
+    udpConns                     []*net.UDPConn               // Active UDP connections
+    udpConnsMu                   sync.Mutex                   // Mutex protecting udpConns
 }
 ```
 
@@ -30,7 +34,7 @@ The `PropagationServer` struct is the main type for the Propagation Server. It c
 ### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer
 ```
 
 Creates a new instance of the Propagation Server with the provided dependencies.
@@ -185,7 +189,7 @@ Performs basic sanity checks on transactions to ensure they have at least one in
 
 The server listens on multiple IPv6 multicast addresses for incoming transactions. The implementation has the following characteristics:
 
-- Supports configurable UDP datagram size (default: 512 bytes)
+- Uses a fixed UDP datagram size of 512 bytes
 - Uses the default IPv6 port 9999 for multicast listeners
 - Creates independent listeners for each multicast address specified in `settings.Propagation.IPv6Addresses`
 - Processes incoming datagrams concurrently through separate goroutines
@@ -211,16 +215,17 @@ The Propagation Server is configured through the settings system instead of dire
 ### Propagation Settings
 
 - `settings.Propagation.IPv6Addresses`: Comma-separated list of IPv6 multicast addresses for UDP listeners
-- `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: "en0")
+- `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: empty string, falls back to "en0" at runtime)
 - `settings.Propagation.HTTPListenAddress`: HTTP addresses for transaction submission endpoints
 - `settings.Propagation.HTTPAddresses`: Array of HTTP addresses for multiple endpoint configurations
 - `settings.Propagation.HTTPRateLimit`: HTTP request rate limiting (requests per second)
 - `settings.Propagation.AlwaysUseHTTP`: Boolean flag to prefer HTTP over other protocols
 - `settings.Propagation.SendBatchSize`: Batch size for sending transactions (default: 100)
-- `settings.Propagation.SendBatchTimeout`: Timeout for batch sending operations (default: 5 seconds)
+- `settings.Propagation.SendBatchTimeout`: Timeout for batch sending operations in milliseconds (default: 5 milliseconds)
 - `settings.Propagation.GRPCListenAddress`: gRPC server address for the Propagation API
 - `settings.Propagation.GRPCAddresses`: Array of gRPC addresses for multiple endpoint configurations
 - `settings.Propagation.GRPCMaxConnectionAge`: Maximum age for gRPC connections before forced refresh
+- `settings.Propagation.IPv6AllowedSources`: List of allowed UDP source IPs or CIDR ranges (empty = allow all sources)
 
 ### Validator Settings
 

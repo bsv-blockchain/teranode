@@ -1177,6 +1177,18 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 	return nil
 }
 
+// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+// multiple transactions. The Aerospike implementation delegates to per-tx PreviousOutputsDecorate
+// which already uses an internal batcher for efficiency.
+func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	for _, tx := range txs {
+		if err := s.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	start := gocore.CurrentTime()
 	defer func() {

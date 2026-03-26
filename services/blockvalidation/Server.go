@@ -621,6 +621,22 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							continue
 						}
 
+						// FSM rejected the transition (e.g. LEGACYSYNCING active) — not a peer issue
+						if errors.Is(err, errors.ErrStateError) {
+							u.logger.Warnf("[catchup] FSM rejected catchup for block %s (node not in RUNNING state), clearing markers", c.block.Hash().String())
+							u.processBlockNotify.Delete(*c.block.Hash())
+							u.catchupAlternatives.Delete(*c.block.Hash())
+							continue
+						}
+
+						// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue
+						if errors.Is(err, errors.ErrServiceError) {
+							u.logger.Warnf("[catchup] Local service error during catchup for block %s, clearing markers to allow retry: %v", c.block.Hash().String(), err)
+							u.processBlockNotify.Delete(*c.block.Hash())
+							u.catchupAlternatives.Delete(*c.block.Hash())
+							continue
+						}
+
 						// Report catchup failure to P2P service
 						u.reportCatchupFailure(ctx, c.peerID)
 
@@ -1177,7 +1193,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		} else if peer != nil {
 			baseURL = peer.DataHubURL
 		}
-		if err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+		if _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
 		}
 	}

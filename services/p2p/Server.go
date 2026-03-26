@@ -209,8 +209,8 @@ func NewServer(
 	}
 
 	listenMode := tSettings.P2P.ListenMode
-	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly {
-		return nil, errors.NewConfigurationError("listen_mode must be either '%s' or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, listenMode)
+	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly && listenMode != settings.ListenModeSilent {
+		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
 	}
 
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
@@ -283,8 +283,13 @@ func NewServer(
 	// - If AdvertiseAddresses is explicitly set, those addresses are used
 	// - If SharePrivateAddresses is true, we pass listen addresses to ensure local connectivity
 	// - Otherwise, go-p2p will automatically filter private IPs and detect public addresses
+	// In silent mode, address advertisement is always suppressed regardless of other settings.
 	var advertiseAddresses []string
-	if len(tSettings.P2P.AdvertiseAddresses) > 0 {
+	if listenMode == settings.ListenModeSilent {
+		// Silent mode: never advertise any addresses so the node remains undiscoverable
+		advertiseAddresses = []string{}
+		logger.Infof("[silent mode] Address advertisement suppressed - node will not be discoverable")
+	} else if len(tSettings.P2P.AdvertiseAddresses) > 0 {
 		// Use explicitly configured advertise addresses
 		advertiseAddresses = tSettings.P2P.AdvertiseAddresses
 		logger.Infof("Using configured advertise addresses: %v", advertiseAddresses)
@@ -312,6 +317,13 @@ func NewServer(
 	if err != nil {
 		return nil, errors.NewServiceError("failed to unmarshal key", err)
 	}
+	// In silent mode, DHT is disabled entirely so the node is not discoverable via DHT.
+	dhtMode := tSettings.P2P.DHTMode
+	if listenMode == settings.ListenModeSilent {
+		dhtMode = "off"
+		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
+	}
+
 	conf := p2pMessageBus.Config{
 		PrivateKey:         privKey,
 		Name:               tSettings.ClientName,
@@ -319,7 +331,7 @@ func NewServer(
 		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
 		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            tSettings.P2P.DHTMode,
+		DHTMode:            dhtMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
 		EnableNAT:          tSettings.P2P.EnableNAT,
 		EnableMDNS:         tSettings.P2P.EnableMDNS,
@@ -749,7 +761,7 @@ func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaM
 
 func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
-		if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+		if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 			return nil
 		}
 
@@ -1020,7 +1032,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 }
 
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
@@ -1221,15 +1233,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		startTime = s.startTime.Unix()
 	}
 
-	// Set empty baseURL if in listen only mode
+	// Suppress DataHub and propagation URLs in non-publishing modes so this node
+	// cannot be selected as a sync source by remote peers.
+	suppressURLs := s.settings.P2P.ListenMode == settings.ListenModeListenOnly ||
+		s.settings.P2P.ListenMode == settings.ListenModeSilent
+
 	baseURL := s.AssetHTTPAddressURL
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if suppressURLs {
 		baseURL = ""
 	}
 
-	// Set propagation URL - empty if in listen only mode
 	propagationURL := s.PropagationURL
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if suppressURLs {
 		propagationURL = ""
 	}
 
@@ -1355,6 +1370,18 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
+	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable,
+	// but still forward to local WebSocket clients for monitoring purposes.
+	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarding to WebSocket only")
+		select {
+		case s.notificationCh <- msg:
+		default:
+			s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
+		}
+		return nil
+	}
+
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
@@ -1380,7 +1407,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 }
 
 func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 

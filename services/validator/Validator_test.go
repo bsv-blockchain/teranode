@@ -714,7 +714,7 @@ func (s *MockBlockAssemblyStore) RemoveTx(_ context.Context, hash *chainhash.Has
 }
 
 func Benchmark_validateInternal(b *testing.B) {
-	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9")
 	require.NoError(b, err)
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
@@ -726,11 +726,16 @@ func Benchmark_validateInternal(b *testing.B) {
 		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
+	utxoHeights := make([]uint32, len(tx.Inputs))
+	for i := range utxoHeights {
+		utxoHeights[i] = 740975
+	}
+
 	for i := 0; i < b.N; i++ {
 		err = v.validateTransaction(context.Background(), tx, 740975, nil, &Options{})
 		require.NoError(b, err)
 
-		err = v.validateTransactionScripts(context.Background(), tx, 740975, []uint32{740975}, &Options{SkipPolicyChecks: true})
+		err = v.validateTransactionScripts(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(b, err)
 	}
 }

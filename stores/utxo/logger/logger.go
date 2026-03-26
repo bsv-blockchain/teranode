@@ -252,6 +252,13 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return err
 }
 
+func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	err := s.store.BatchPreviousOutputsDecorate(ctx, txs)
+	s.logger.Debugf("[UTXOStore][logger][BatchPreviousOutputsDecorate] txCount=%d err=%v : %s", len(txs), err, caller())
+
+	return err
+}
+
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	err := s.store.FreezeUTXOs(ctx, spends, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][FreezeUTXOs] spends %v err %v : %s", spends, err, caller())

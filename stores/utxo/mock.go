@@ -128,6 +128,12 @@ func (m *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) 
 	return args.Error(0)
 }
 
+// BatchPreviousOutputsDecorate mocks batch decoration of transaction inputs with previous output data.
+func (m *MockUtxostore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	args := m.Called(ctx, txs)
+	return args.Error(0)
+}
+
 // FreezeUTXOs mocks the freezing of UTXOs to prevent their spending.
 // Returns the configured mock response for UTXO freezing operations.
 func (m *MockUtxostore) FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error {

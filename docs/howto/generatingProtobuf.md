@@ -16,28 +16,33 @@ Before proceeding, make sure the following tools and resources are available:
 The project uses `.proto` files to define the structure of its services and messages. Each service is typically located in the `services` directory, and they follow the pattern:
 
 ```text
-services/<service_name>/<service_name>_api.proto
+services/<service_name>/<service_name>_api/<service_name>_api.proto
 ```
 
-For example, the file `services/subtreevalidation/subtreevalidation_api.proto` defines the RPC services and message types for the `SubtreeValidationService`.
+For example, the file `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` defines the RPC services and message types for the subtree validation service.
+
+> Note: The following `proto` snippet is a **simplified example** intended only to illustrate how `.proto` files are structured for code generation. It does **not** show all fields or exact types used in the real `CheckSubtreeFromBlockRequest`. For the authoritative schema, always refer directly to `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` in the repository.
 
 ```proto
 syntax = "proto3";
 
-package subtreevalidation;
+option go_package = "./;subtreevalidation_api";
 
-service SubtreeValidationService {
-rpc ValidateSubtree (SubtreeValidationRequest) returns (SubtreeValidationResponse);
+package subtreevalidation_api;
+
+// Simplified example - refer to the real subtreevalidation_api.proto
+// for the complete and accurate message definitions (fields, types, etc.).
+service SubtreeValidationAPI {
+  rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {}
 }
 
-message SubtreeValidationRequest {
-string tree_id = 1;
-int32 max_depth = 2;
+message CheckSubtreeFromBlockRequest {
+  string subtree_hash = 1;
+  string base_url = 2;
 }
 
-message SubtreeValidationResponse {
-bool is_valid = 1;
-string validation_message = 2;
+message CheckSubtreeFromBlockResponse {
+  bool blessed = 1;
 }
 ```
 

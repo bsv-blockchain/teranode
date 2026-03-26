@@ -292,6 +292,12 @@ type Store interface {
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
 	PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
 
+	// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+	// multiple transactions in bulk. This is more efficient than calling PreviousOutputsDecorate
+	// per-transaction because it reduces database round-trips.
+	// Inputs that are already decorated (PreviousTxScript != nil) are skipped.
+	BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error
+
 	// functions related to Alert System
 
 	// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.

@@ -120,6 +120,11 @@ func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) erro
 	return args.Error(0)
 }
 
+func (m *MockStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	args := m.Called(ctx, txs)
+	return args.Error(0)
+}
+
 func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	args := m.Called(ctx, spends, tSettings)
 	return args.Error(0)

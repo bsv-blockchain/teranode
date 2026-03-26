@@ -149,6 +149,11 @@ func (m *mockCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) erro
 	return args.Error(0)
 }
 
+func (m *mockCache) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	args := m.Called(ctx, txs)
+	return args.Error(0)
+}
+
 func (m *mockCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	args := m.Called(ctx, spends, tSettings)
 	return args.Error(0)

@@ -12,8 +12,8 @@ This package is typically used to print application settings in JSON format, alo
 
 ## Development
 
-- See `settings.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- See `Settings.go` for the main logic and entry points.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ---
 

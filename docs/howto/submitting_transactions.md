@@ -23,7 +23,7 @@ The traditional Bitcoin transaction format used by most Bitcoin implementations:
 package main
 
 import (
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
 )
 
 func main() {
@@ -78,7 +78,7 @@ Enhanced transaction format that includes additional metadata in each input:
 package main
 
 import (
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
 )
 
 func main() {
@@ -129,7 +129,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
 
@@ -137,8 +137,8 @@ import (
 )
 
 func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
-    // Connect to Teranode Propagation service (default port: 8086)
-    conn, err := grpc.Dial(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+    // Connect to Teranode Propagation service (default port: 8084)
+    conn, err := grpc.NewClient(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
         return fmt.Errorf("failed to connect: %w", err)
     }
@@ -325,15 +325,18 @@ import (
 )
 
 func TestTransactionSubmission(t *testing.T) {
-    // Setup test client (see test/utils/testenv.go)
-    node := utils.NewTeranodeTestClient()
+    // Setup test environment (see test/utils/testenv.go)
+    env := utils.NewTeraNodeTestEnv(tconfig.TConfig{})
+    err := env.InitializeTeranodeTestClients()
+    require.NoError(t, err)
+    node := &env.Nodes[0]
 
     // Generate a valid transaction using test helpers
     tx, err := utils.GenerateNewValidSingleInputTransaction(node)
     require.NoError(t, err)
 
-    // Submit via distributor client
-    _, err = node.DistributorClient.SendTransaction(context.Background(), tx)
+    // Submit via propagation client
+    err = node.PropagationClient.ProcessTransaction(context.Background(), tx)
     require.NoError(t, err)
 }
 ```

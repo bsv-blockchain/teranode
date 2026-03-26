@@ -601,7 +601,11 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	retrySleepDuration := u.settings.BlockValidation.RetrySleep
 
-	// TODO document, what does this do?
+	// failFast is an optimisation that avoids checking every tx in the cache when most are missing.
+	// During the warmup phase (first N subtrees), failFast is disabled so we do full checks.
+	// After warmup, if the cache has too many misses, we short-circuit with ErrThresholdExceeded
+	// and retry later rather than wasting time checking all txs individually.
+	// failFast is always disabled on the final retry attempt to ensure a complete check.
 	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
 	subtreeWarmupCountInt32, err := safeconversion.IntToInt32(subtreeWarmupCount)
@@ -609,7 +613,6 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		return nil, err
 	}
 
-	// TODO document, what is the logic here?
 	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > subtreeWarmupCountInt32
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
@@ -661,8 +664,47 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			// Not recoverable, returning processing error
-			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			// Not recoverable — too many txs missing from cache exceeds abandon threshold
+			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] [attempt #%d] too many txs missing from cache (%d missed, threshold %d)", v.SubtreeHash.String(), attempt, missed, abandonTxThreshold)
+		}
+
+		// Determine how many txHashes are actually checkable in the cache. The coinbase
+		// placeholder is not stored in the cache and is not counted as missed by
+		// processTxMetaUsingCache, so exclude it from the comparison.
+		checkable := len(txHashes)
+		if checkable > 0 && txHashes[0].Equal(*subtreepkg.CoinbasePlaceholderHash) {
+			checkable--
+		}
+
+		if missed > 0 && missed < checkable && attempt <= maxRetries {
+			// Some (but not all) txs are missing from the cache — propagation is likely still
+			// processing them. Wait and retry step 1 (cache lookup) rather than falling through
+			// to the expensive store lookup and network fetch, since the txs will appear in the
+			// cache shortly.
+			// When missed == checkable, the cache is either disabled or empty (e.g. Kafka
+			// txmeta topic not configured), so retrying would just add unnecessary delay.
+			u.logger.Debugf("[ValidateSubtreeInternal][%s] [attempt #%d] %d txs missing from cache, waiting for propagation", v.SubtreeHash.String(), attempt, missed)
+			ticker := time.NewTicker(10 * time.Millisecond)
+			deadline := time.NewTimer(retrySleepDuration)
+		priorityWait:
+			for {
+				select {
+				case <-ctx.Done():
+					break priorityWait
+				case <-deadline.C:
+					break priorityWait
+				case <-ticker.C:
+					if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
+						break priorityWait
+					}
+				}
+			}
+			ticker.Stop()
+			deadline.Stop()
+			if ctx.Err() != nil {
+				return nil, errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context done while waiting for cache retry", v.SubtreeHash.String(), ctx.Err())
+			}
+			continue
 		}
 
 		if missed > 0 {

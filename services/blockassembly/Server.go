@@ -659,8 +659,16 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			for idx, node := range subtreeRequest.Subtree.Nodes {
 				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 					txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
+					if !found && subtreeRequest.DeletedTxs != nil {
+						// Fallback: check if transaction was deleted during async storage
+						var deletedTxInpoints subtreepkg.TxInpoints
+						deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
+						if found {
+							txInpoints = &deletedTxInpoints
+						}
+					}
 					if !found {
-						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
+						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
 						return
 					}
 
@@ -733,6 +741,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		defer close(allDoneCh)
 		<-subtreeStorageDone
 		<-metaDoneCh
+		// Trigger cleanup of soft-deleted transactions
+		if subtreeRequest.OnStorageComplete != nil {
+			subtreeRequest.OnStorageComplete()
+		}
 	}()
 
 	return subtreeDoneCh, allDoneCh, nil

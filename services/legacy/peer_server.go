@@ -916,13 +916,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 	sp.AddKnownInventory(iv)
 
-	exists, err := sp.server.blockchainClient.GetBlockExists(sp.ctx, block.Hash())
-	if err != nil {
-		sp.server.logger.Errorf("Block exists check error: %v", err)
-		return
-	}
+	// single round-trip: GetBlockHeader tells us both existence and validity
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, block.Hash())
+	blockIsKnownValid := err == nil && !meta.Invalid
 
-	if !exists {
+	if !blockIsKnownValid {
 		// Queue the block up to be handled by the block
 		// manager and intentionally block further receives
 		// until the bitcoin block is fully processed and known
@@ -1499,8 +1497,8 @@ func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
 // transactions.  This function should be called whenever new transactions
 // are added to the mempool.
 func (s *server) AnnounceNewTransactions(txns []*netsync.TxHashAndFee) {
-	// check listen mode - if listen_only, don't announce new transactions
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't announce new transactions
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return
 	}
 
@@ -2591,8 +2589,8 @@ func (s *server) BanPeer(sp *serverPeer) {
 // RelayInventory relays the passed inventory vector to all connected peers
 // that are not already known to have it.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
-	// check listen mode - if listen_only, don't relay inventory
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't relay inventory
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return
 	}
 
@@ -2605,8 +2603,8 @@ func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 // BroadcastMessage sends msg to all peers currently connected to the server
 // except those in the passed peers to exclude.
 func (s *server) BroadcastMessage(msg wire.Message, exclPeers ...*serverPeer) {
-	// check listen mode - if listen_only, don't broadcast messages
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't broadcast messages
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return
 	}
 

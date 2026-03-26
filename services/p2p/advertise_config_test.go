@@ -5,7 +5,32 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestSilentModeAdvertiseAddressesSuppressed verifies that silent mode always returns an
+// empty advertise address list regardless of AdvertiseAddresses or SharePrivateAddresses.
+func TestSilentModeAdvertiseAddressesSuppressed(t *testing.T) {
+	listenAddresses := []string{"/ip4/10.0.0.1/tcp/9905"}
+
+	t.Run("silent_overrides_explicit_advertise_addresses", func(t *testing.T) {
+		result := resolveAdvertiseAddresses(settings.ListenModeSilent,
+			[]string{"/ip4/203.0.113.1/tcp/9905"}, false, listenAddresses)
+		require.Empty(t, result, "silent mode must suppress explicitly configured AdvertiseAddresses")
+	})
+
+	t.Run("silent_overrides_share_private_addresses", func(t *testing.T) {
+		result := resolveAdvertiseAddresses(settings.ListenModeSilent,
+			[]string{}, true, listenAddresses)
+		require.Empty(t, result, "silent mode must suppress address sharing even when SharePrivateAddresses=true")
+	})
+
+	t.Run("silent_with_no_configured_addresses", func(t *testing.T) {
+		result := resolveAdvertiseAddresses(settings.ListenModeSilent,
+			[]string{}, false, listenAddresses)
+		require.Empty(t, result, "silent mode must always return empty advertise addresses")
+	})
+}
 
 // TestAdvertiseConfiguration verifies that advertise addresses are configured correctly
 // With go-p2p v1.2.1, the library handles address advertisement intelligently
@@ -18,7 +43,8 @@ func TestAdvertiseConfiguration(t *testing.T) {
 		testSettings.P2P.SharePrivateAddresses = false
 
 		listenAddresses := []string{"/ip4/192.168.1.1/tcp/9905", "/ip4/1.2.3.4/tcp/9905"}
-		advertiseAddresses := getConfiguredAdvertiseAddresses(
+		advertiseAddresses := resolveAdvertiseAddresses(
+			testSettings.P2P.ListenMode,
 			testSettings.P2P.AdvertiseAddresses,
 			testSettings.P2P.SharePrivateAddresses,
 			listenAddresses,
@@ -36,7 +62,8 @@ func TestAdvertiseConfiguration(t *testing.T) {
 		testSettings.P2P.SharePrivateAddresses = true
 
 		listenAddresses := []string{"/ip4/192.168.1.1/tcp/9905", "/ip4/10.0.0.1/tcp/9905"}
-		advertiseAddresses := getConfiguredAdvertiseAddresses(
+		advertiseAddresses := resolveAdvertiseAddresses(
+			testSettings.P2P.ListenMode,
 			testSettings.P2P.AdvertiseAddresses,
 			testSettings.P2P.SharePrivateAddresses,
 			listenAddresses,
@@ -54,7 +81,8 @@ func TestAdvertiseConfiguration(t *testing.T) {
 		testSettings.P2P.SharePrivateAddresses = false // Should be ignored when explicit addresses are set
 
 		listenAddresses := []string{"/ip4/192.168.1.1/tcp/9905"}
-		advertiseAddresses := getConfiguredAdvertiseAddresses(
+		advertiseAddresses := resolveAdvertiseAddresses(
+			testSettings.P2P.ListenMode,
 			testSettings.P2P.AdvertiseAddresses,
 			testSettings.P2P.SharePrivateAddresses,
 			listenAddresses,
@@ -65,18 +93,21 @@ func TestAdvertiseConfiguration(t *testing.T) {
 	})
 }
 
-// Helper function that mirrors the logic in Server.go
-func getConfiguredAdvertiseAddresses(configuredAddresses []string, sharePrivateAddresses bool, listenAddresses []string) []string {
+// resolveAdvertiseAddresses mirrors the address resolution logic in NewServer, including
+// the silent mode override. Tests should use this helper rather than reimplementing the
+// logic inline.
+func resolveAdvertiseAddresses(listenMode string, configuredAddresses []string, sharePrivateAddresses bool, listenAddresses []string) []string {
+	if listenMode == settings.ListenModeSilent {
+		return []string{}
+	}
+
 	if len(configuredAddresses) > 0 {
-		// Use explicitly configured advertise addresses
 		return configuredAddresses
 	}
 
 	if sharePrivateAddresses {
-		// Share private addresses for local connectivity
 		return listenAddresses
 	}
 
-	// Let go-p2p auto-detect and filter private addresses
 	return []string{}
 }

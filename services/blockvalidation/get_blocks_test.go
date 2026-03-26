@@ -57,7 +57,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(1)
-		validateBlocksChan := make(chan *model.Block, 1)
+		validateBlocksChan := make(chan blockForValidation, 1)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -80,7 +80,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 1; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 1)
@@ -124,7 +125,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -147,7 +148,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < numBlocks; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, numBlocks)
@@ -194,7 +196,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -250,7 +252,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(1)
-		validateBlocksChan := make(chan *model.Block, 1)
+		validateBlocksChan := make(chan blockForValidation, 1)
 
 		// Create cancellable context
 		ctx, cancel := context.WithCancel(suite.Ctx)
@@ -304,7 +306,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -372,7 +374,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		// Create error group and measure total time
 		// errorGroup, gCtx := errgroup.WithContext(suite.Ctx)
@@ -400,7 +402,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < numBlocks; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, numBlocks)
@@ -432,7 +435,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 		var size atomic.Int64
 		size.Store(0)
-		validateBlocksChan := make(chan *model.Block, 1)
+		validateBlocksChan := make(chan blockForValidation, 1)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -456,7 +459,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 		// Try to read from channel with timeout - should get nothing
 		select {
-		case block := <-validateBlocksChan:
+		case item := <-validateBlocksChan:
+			block := item.block
 			if block != nil {
 				receivedBlocks = append(receivedBlocks, block)
 			}
@@ -476,7 +480,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 		var size atomic.Int64
 		size.Store(0)
-		validateBlocksChan := make(chan *model.Block, 1)
+		validateBlocksChan := make(chan blockForValidation, 1)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -586,7 +590,7 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -609,7 +613,8 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < numBlocks; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, numBlocks)
@@ -640,7 +645,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 
 		var size atomic.Int64
 		size.Store(0)
-		validateBlocksChan := make(chan *model.Block, 1)
+		validateBlocksChan := make(chan blockForValidation, 1)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -919,7 +924,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test optimized fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 10)
+		validateBlocksChan := make(chan blockForValidation, 10)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -942,7 +947,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 5; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 5)
@@ -1003,7 +1009,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test optimized fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 20)
+		validateBlocksChan := make(chan blockForValidation, 20)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1026,7 +1032,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 15; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 15)
@@ -1074,7 +1081,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test high-performance fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 200)
+		validateBlocksChan := make(chan blockForValidation, 200)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1097,7 +1104,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 100; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 100)
@@ -1157,7 +1165,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test high-performance fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 300)
+		validateBlocksChan := make(chan blockForValidation, 300)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1180,7 +1188,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 250; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 250)
@@ -1238,7 +1247,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test high-performance fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 100)
+		validateBlocksChan := make(chan blockForValidation, 100)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1263,7 +1272,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 50; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 50)
@@ -1309,7 +1319,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 		// Test error handling
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 10)
+		validateBlocksChan := make(chan blockForValidation, 10)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1368,7 +1378,7 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 
 		// Test high-performance fetching
 		ctx := context.Background()
-		validateBlocksChan := make(chan *model.Block, 200)
+		validateBlocksChan := make(chan blockForValidation, 200)
 		size := &atomic.Int64{}
 
 		catchupCtx := &CatchupContext{
@@ -1391,7 +1401,8 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 100; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d/%d", i+1, 100)
@@ -1593,7 +1604,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err)
 
 		// Verify both were stored in subtreeStore
@@ -1645,7 +1656,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Height: 100,
 		}
 
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree from")
 	})
@@ -1684,7 +1695,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -1698,7 +1709,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err) // Should return early with no error
 	})
 
@@ -1723,7 +1734,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1758,7 +1769,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1795,7 +1806,7 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 		// Create channels and size counter
 		var size atomic.Int64
 		size.Store(2)
-		validateBlocksChan := make(chan *model.Block, 2)
+		validateBlocksChan := make(chan blockForValidation, 2)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -1818,7 +1829,8 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 		var receivedBlocks []*model.Block
 		for i := 0; i < 2; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				receivedBlocks = append(receivedBlocks, block)
 			case <-time.After(time.Second):
 				t.Fatalf("Timeout waiting for block %d", i+1)
@@ -1880,7 +1892,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1907,7 +1919,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1940,7 +1952,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 				httpmock.NewBytesResponder(200, subtreeDataBytes))
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1955,7 +1967,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("subtree fetch error")))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1994,7 +2006,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		err := server.fetchSubtreeDataForBlock(cancelCtx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchSubtreeDataForBlock(cancelCtx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2072,7 +2084,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -2105,7 +2117,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
 	})
@@ -2147,7 +2159,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2201,7 +2213,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 	})
 
@@ -2252,7 +2264,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2654,7 +2666,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(int64(len(headers)))
-		validateBlocksChan := make(chan *model.Block, 10)
+		validateBlocksChan := make(chan blockForValidation, 10)
 
 		// Create context that will be cancelled
 		ctx, cancel := context.WithCancel(context.Background())
@@ -2720,7 +2732,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		// Create channels and counters
 		var size atomic.Int64
 		size.Store(2)
-		validateBlocksChan := make(chan *model.Block, 2)
+		validateBlocksChan := make(chan blockForValidation, 2)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    blocks[2],
@@ -2807,7 +2819,7 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	// Create channels and counters
 	var size atomic.Int64
 	size.Store(int64(len(headers)))
-	validateBlocksChan := make(chan *model.Block, 10)
+	validateBlocksChan := make(chan blockForValidation, 10)
 
 	catchupCtx := &CatchupContext{
 		blockUpTo:    blocks[5],
@@ -2826,7 +2838,8 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	var deliveredBlocks []*model.Block
 	for i := 0; i < len(headers); i++ {
 		select {
-		case block := <-validateBlocksChan:
+		case item := <-validateBlocksChan:
+			block := item.block
 			deliveredBlocks = append(deliveredBlocks, block)
 		case <-time.After(5 * time.Second):
 			t.Fatal("Timeout waiting for block delivery")
@@ -3150,7 +3163,7 @@ func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
 
 		var size atomic.Int64
 		size.Store(int64(numBlocks))
-		validateBlocksChan := make(chan *model.Block, numBlocks)
+		validateBlocksChan := make(chan blockForValidation, numBlocks)
 
 		catchupCtx := &CatchupContext{
 			blockUpTo:    targetBlock,
@@ -3168,7 +3181,8 @@ func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
 		// Collect blocks and verify heights
 		for i := 0; i < numBlocks; i++ {
 			select {
-			case block := <-validateBlocksChan:
+			case item := <-validateBlocksChan:
+				block := item.block
 				expectedHeight := startingHeight + uint32(i)
 				assert.Equal(t, expectedHeight, block.Height,
 					"Block %d should have height %d, got %d",
