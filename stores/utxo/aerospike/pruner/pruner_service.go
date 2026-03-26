@@ -37,6 +37,15 @@ import (
 // Ensure Store implements the Pruner Service interface
 var _ pruner.Service = (*Service)(nil)
 
+// prunerClient abstracts the Aerospike client operations used by the pruner.
+// This enables unit testing without a real Aerospike connection.
+type prunerClient interface {
+	QueryPartitions(policy *aerospike.QueryPolicy, statement *aerospike.Statement, partitionFilter *aerospike.PartitionFilter) (*aerospike.Recordset, aerospike.Error)
+	BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error
+	GetNodes() []*aerospike.Node
+	GetConnectionQueueSize() int
+}
+
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
 // TimeoutError indicates that a query operation timed out or encountered a network error.
@@ -107,7 +116,7 @@ type Options struct {
 type Service struct {
 	logger      ulogger.Logger
 	settings    *settings.Settings
-	client      *uaerospike.Client
+	client      prunerClient
 	external    blob.Store
 	namespace   string
 	set         string
@@ -128,6 +137,7 @@ type Service struct {
 	connectionPoolWarningThreshold float64 // Threshold for connection pool auto-adjustment (0.0-1.0)
 	utxoSetTTL                     bool    // Use TTL expiration instead of hard delete
 	skipParentUpdates              bool    // Skip parent update operations and input fetching
+	partitionWorkerFn              func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int) (int64, int64, error)
 
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
@@ -281,6 +291,8 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldUnminedSince:              fields.UnminedSince.String(),
 		fieldBlockHeights:              fields.BlockHeights.String(),
 	}
+
+	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
 }
@@ -581,109 +593,136 @@ func (s *Service) partitionWorker(
 	return totalProcessed, totalSkipped, nil
 }
 
-// workerResult holds the result from a partition worker
-type workerResult struct {
-	processed int64
-	skipped   int64
-	err       error
+// partitionRange represents a contiguous range of Aerospike partitions assigned to a worker
+type partitionRange struct {
+	start int
+	count int
 }
 
-// PruneWithPartitions implements parallel partition-based pruning with retry logic for timeout handling
+// workerResult holds the result from a partition worker
+type workerResult struct {
+	processed      int64
+	skipped        int64
+	err            error
+	partitionStart int
+	partitionCount int
+}
+
+// PruneWithPartitions implements parallel partition-based pruning with retry logic for timeout handling.
 // This method splits the Aerospike keyspace (4096 partitions) across multiple workers
 // for maximum throughput, achieving 100x performance improvement over sequential queries.
 //
-// Timeout Handling: If any worker encounters a timeout or network error, the entire query is restarted
-// from the beginning. This is safe due to idempotent operations (already-processed records are handled
-// gracefully). Multiple retry attempts allow the system to adaptively process large catchup workloads
-// that accumulate when the pruner is stopped for extended periods.
+// Timeout Handling: When a worker encounters a timeout or network error, only the failed partition
+// ranges are retried — successfully completed ranges are skipped. This prevents a feedback loop
+// where re-processing already-deleted records generates KEY_NOT_FOUND errors and additional load.
+// All operations are idempotent, so partial retries are safe.
 func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, blockHashStr string, numPartitionQueries int) (int64, error) {
 	startTime := time.Now()
 	maxRetries := 10 // Reasonable limit to prevent infinite loop
 	var lastErr error
 
-	// Calculate partition distribution (remains constant across retries)
-	// Get total partitions from Aerospike client library (always 4096 in Aerospike architecture)
+	// Build initial partition ranges from the distribution logic
 	totalPartitions := aerospike.NewPartitionFilterAll().Count
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
-	// Retry loop: restart entire query on timeout, leveraging idempotency
+	pendingRanges := make([]partitionRange, 0, numPartitionQueries)
+	partitionStart := 0
+	for i := 0; i < numPartitionQueries; i++ {
+		partitionCount := partitionsPerQuery
+		if i < remainingPartitions {
+			partitionCount++ // Distribute remainder
+		}
+		pendingRanges = append(pendingRanges, partitionRange{start: partitionStart, count: partitionCount})
+		partitionStart += partitionCount
+	}
+
+	// Cumulative counters persist across retry attempts
+	var cumulativeProcessed, cumulativeSkipped int64
+
+	// Retry loop: on timeout, only retry the partition ranges that failed
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Track retry attempts (attempt 1 is initial, attempts 2+ are retries)
 		if attempt > 1 {
 			prometheusUtxoRetryAttempts.Inc()
 		}
 
 		s.logger.Infof("[pruner][%s:%d] phase 2: pruning attempt %d with %d partition workers (total partitions: %d)",
-			blockHashStr, blockHeight, attempt, numPartitionQueries, totalPartitions)
+			blockHashStr, blockHeight, attempt, len(pendingRanges), totalPartitions)
 
-		// Launch partition workers
-		results := make(chan workerResult, numPartitionQueries)
+		// Launch partition workers for pending ranges only
+		results := make(chan workerResult, len(pendingRanges))
 		var wg sync.WaitGroup
 
-		partitionStart := 0
-		for i := 0; i < numPartitionQueries; i++ {
-			partitionCount := partitionsPerQuery
-			if i < remainingPartitions {
-				partitionCount++ // Distribute remainder
-			}
-
+		for _, pr := range pendingRanges {
 			wg.Add(1)
-			go func(start, count int) {
-				defer wg.Done() // Call Done() AFTER sending to channel
-				processed, skipped, err := s.partitionWorker(ctx, blockHeight, start, count)
-				results <- workerResult{processed, skipped, err}
-			}(partitionStart, partitionCount)
-
-			partitionStart += partitionCount
+			go func(r partitionRange) {
+				defer wg.Done()
+				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count)
+				results <- workerResult{
+					processed:      processed,
+					skipped:        skipped,
+					err:            err,
+					partitionStart: r.start,
+					partitionCount: r.count,
+				}
+			}(pr)
 		}
 
-		// Close results channel when all workers done
 		go func() {
 			wg.Wait()
 			close(results)
 		}()
 
-		// Aggregate results from all workers
-		var totalProcessed, totalSkipped int64
-		var workerErr error
+		// Classify each worker result as success or timeout
+		var attemptProcessed, attemptSkipped int64
+		var failedRanges []partitionRange
+		var hasTimeout bool
+		var nonTimeoutErr error
 
 		for result := range results {
+			attemptProcessed += result.processed
+			attemptSkipped += result.skipped
+
 			if result.err != nil {
-				workerErr = result.err
-				// Don't break early - drain the channel to allow workers to finish
+				var timeoutErr *TimeoutError
+				if errors.As(result.err, &timeoutErr) {
+					hasTimeout = true
+					failedRanges = append(failedRanges, partitionRange{
+						start: result.partitionStart,
+						count: result.partitionCount,
+					})
+				} else {
+					nonTimeoutErr = result.err
+				}
 			}
-			totalProcessed += result.processed
-			totalSkipped += result.skipped
 		}
 
-		// Check if error is timeout (retriable)
-		if workerErr != nil {
-			var timeoutErr *TimeoutError
-			if errors.As(workerErr, &timeoutErr) {
-				// Timeout error - record partial progress and retry
-				prometheusUtxoTimeoutEvents.Inc()
+		// Accumulate partial progress from this attempt (including from timed-out workers)
+		cumulativeProcessed += attemptProcessed
+		cumulativeSkipped += attemptSkipped
 
-				p := message.NewPrinter(language.English)
-				formattedProcessed := p.Sprintf("%d", totalProcessed)
-
-				s.logger.Infof("[pruner][%s:%d] phase 2: timeout detected on attempt %d, processed %s records. Restarting query immediately...",
-					blockHashStr, blockHeight, attempt, formattedProcessed)
-
-				lastErr = workerErr
-				continue // Retry from beginning
-			}
-
-			// Other errors: return immediately (don't retry)
-			s.logger.Errorf("[pruner][%s:%d] phase 2: partition worker error (non-timeout): %v", blockHashStr, blockHeight, workerErr)
-			return 0, workerErr
+		// Non-timeout errors fail immediately (even if some workers also timed out)
+		if nonTimeoutErr != nil {
+			s.logger.Errorf("[pruner][%s:%d] phase 2: partition worker error (non-timeout): %v", blockHashStr, blockHeight, nonTimeoutErr)
+			return 0, nonTimeoutErr
 		}
 
-		// Success - all partitions processed without timeout
+		if hasTimeout {
+			prometheusUtxoTimeoutEvents.Inc()
+
+			p := message.NewPrinter(language.English)
+			s.logger.Infof("[pruner][%s:%d] phase 2: timeout on attempt %d, %d/%d workers timed out, processed %s records so far. Retrying failed partition ranges...",
+				blockHashStr, blockHeight, attempt, len(failedRanges), len(pendingRanges), p.Sprintf("%d", cumulativeProcessed))
+
+			lastErr = errors.NewProcessingError("timeout in %d partition ranges", len(failedRanges))
+			pendingRanges = failedRanges // Only retry the failed ranges
+			continue
+		}
+
+		// Success — all pending partitions processed without timeout
 		elapsed := time.Since(startTime)
-		tps := float64(totalProcessed) / elapsed.Seconds()
+		tps := float64(cumulativeProcessed) / elapsed.Seconds()
 
-		// Format TPS for readability (e.g., "24.3M records/sec" for large numbers)
 		var tpsStr string
 		if tps >= 1_000_000 {
 			tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
@@ -694,8 +733,8 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		}
 
 		p := message.NewPrinter(language.English)
-		formattedTotal := p.Sprintf("%d", totalProcessed)
-		formattedSkipped := p.Sprintf("%d", totalSkipped)
+		formattedTotal := p.Sprintf("%d", cumulativeProcessed)
+		formattedSkipped := p.Sprintf("%d", cumulativeSkipped)
 
 		var modeStr string
 		if s.defensiveEnabled {
@@ -715,14 +754,14 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 
 		prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
 
-		s.notifier.NotifyPruneComplete(blockHeight, totalProcessed)
+		s.notifier.NotifyPruneComplete(blockHeight, cumulativeProcessed)
 
-		return totalProcessed, nil
+		return cumulativeProcessed, nil
 	}
 
 	// Max retries exceeded
-	s.logger.Warnf("[pruner][%s:%d] phase 2: max retries (%d) exceeded for pruning, last error: %v",
-		blockHashStr, blockHeight, maxRetries, lastErr)
+	s.logger.Warnf("[pruner][%s:%d] phase 2: max retries (%d) exceeded for pruning, processed %d records before giving up, last error: %v",
+		blockHashStr, blockHeight, maxRetries, cumulativeProcessed, lastErr)
 	return 0, errors.NewProcessingError("max retries (%d) exceeded: %v", maxRetries, lastErr)
 }
 
