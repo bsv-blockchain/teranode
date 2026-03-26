@@ -37,15 +37,6 @@ import (
 // Ensure Store implements the Pruner Service interface
 var _ pruner.Service = (*Service)(nil)
 
-// prunerClient abstracts the Aerospike client operations used by the pruner.
-// This enables unit testing without a real Aerospike connection.
-type prunerClient interface {
-	QueryPartitions(policy *aerospike.QueryPolicy, statement *aerospike.Statement, partitionFilter *aerospike.PartitionFilter) (*aerospike.Recordset, aerospike.Error)
-	BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error
-	GetNodes() []*aerospike.Node
-	GetConnectionQueueSize() int
-}
-
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
 // TimeoutError indicates that a query operation timed out or encountered a network error.
@@ -116,7 +107,7 @@ type Options struct {
 type Service struct {
 	logger      ulogger.Logger
 	settings    *settings.Settings
-	client      prunerClient
+	client      *uaerospike.Client
 	external    blob.Store
 	namespace   string
 	set         string
@@ -817,9 +808,9 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		// Step 1: Extract ALL unique spending children from chunk
 		// For each parent record, we extract all spending child TX hashes from spent UTXOs
 		// We must verify EVERY child is stable before deleting the parent
-		uniqueSpendingChildren := make(map[string][]byte, 100000) // hex hash -> bytes (typical: ~50-100 children per chunk)
-		parentToChildren = make(map[string][]string, len(chunk))  // parent record key -> child hashes
-		deletedChildren := make(map[string]bool, 20)              // child hash -> already deleted (typical: 0-20)
+		uniqueSpendingChildren := make(map[string][]byte, 1000)  // hex hash -> bytes (typical: ~50-100 children per chunk)
+		parentToChildren = make(map[string][]string, len(chunk)) // parent record key -> child hashes
+		deletedChildren := make(map[string]bool, 20)             // child hash -> already deleted (typical: 0-20)
 
 		for _, rec := range chunk {
 			if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
@@ -1442,14 +1433,14 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		// For each child transaction being deleted, add it to the DeletedChildren map
-		ops := make([]*aerospike.Operation, len(info.childHashes))
-		for i, childHash := range info.childHashes {
-			ops[i] = aerospike.MapPutOp(mapPolicy, s.fieldDeletedChildren,
-				aerospike.NewStringValue(childHash.String()), aerospike.BoolValue(true))
+		// Build a single map of all children to insert, avoiding multiple MapPutOps on the same record
+		items := make(map[interface{}]interface{}, len(info.childHashes))
+		for _, childHash := range info.childHashes {
+			items[childHash.String()] = true
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(s.batchWritePolicy, info.key, ops...))
+		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(s.batchWritePolicy, info.key, op))
 	}
 
 	// Check context before expensive operation
