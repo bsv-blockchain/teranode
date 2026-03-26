@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
@@ -55,6 +56,7 @@ var commandHelp = map[string]string{
 	"remainderbench":          "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
+	"diagnose":                "Diagnose node health and validate configuration",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -264,6 +266,19 @@ func Start(args []string, version, commit string) {
 
 		cmd.Execute = func(args []string) error {
 			return logs.Run(*logFile, *bufferSize)
+		}
+	case "diagnose":
+		checkMode := cmd.FlagSet.Bool("check", false, "Run service health checks (default if no mode specified)")
+		configMode := cmd.FlagSet.Bool("config", false, "Validate configuration without running services")
+		jsonOutput := cmd.FlagSet.Bool("json", false, "Output results as JSON")
+
+		cmd.Execute = func(args []string) error {
+			exitCode := diagnose.Run(logger, tSettings, *checkMode, *configMode, *jsonOutput)
+			if exitCode != 0 {
+				os.Exit(exitCode)
+			}
+
+			return nil
 		}
 	case "setfsmstate":
 		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")
