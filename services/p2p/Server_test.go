@@ -3828,7 +3828,7 @@ func TestSilentModeRejectedTxHandler(t *testing.T) {
 
 	h := s.rejectedTxHandler(ctx)
 	err := h(&kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{Value: []byte("anything")},
+		Value: []byte("anything"),
 	})
 	require.NoError(t, err)
 
