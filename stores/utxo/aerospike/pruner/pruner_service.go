@@ -95,6 +95,9 @@ type Options struct {
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	GetPersistedHeight func() uint32
 
+	// LuaPackage is the name of the registered Lua UDF module
+	LuaPackage string
+
 	// Observers is a list of observers to notify when pruning completes
 	Observers []pruner.Observer
 }
@@ -130,15 +133,17 @@ type Service struct {
 	skipParentUpdates              bool    // Skip parent update operations and input fetching
 	partitionWorkerFn              func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int) (int64, int64, error)
 
+	// Lua UDF module name
+	luaPackage string
+
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
 
 	// Internally reused variables
-	queryPolicy      *aerospike.QueryPolicy
-	writePolicy      *aerospike.WritePolicy
-	batchWritePolicy *aerospike.BatchWritePolicy
-	batchPolicy      *aerospike.BatchPolicy
+	queryPolicy *aerospike.QueryPolicy
+	writePolicy *aerospike.WritePolicy
+	batchPolicy *aerospike.BatchPolicy
 }
 
 // parentUpdateInfo holds accumulated parent update information for batching
@@ -235,10 +240,6 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 	// Use the configured write policy from settings
 	writePolicy := util.GetAerospikeWritePolicy(settings, 0)
 
-	// Use the configured batch policies from settings
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(settings)
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
 	batchPolicy := util.GetAerospikeBatchPolicy(settings)
 
@@ -257,9 +258,9 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		ctx:                            opts.Ctx,
 		indexWaiter:                    opts.IndexWaiter,
 		notifier:                       notifier,
+		luaPackage:                     opts.LuaPackage,
 		queryPolicy:                    queryPolicy,
 		writePolicy:                    writePolicy,
-		batchWritePolicy:               batchWritePolicy,
 		batchPolicy:                    batchPolicy,
 		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
@@ -1416,8 +1417,12 @@ func (s *Service) extractInputs(ctx context.Context, blockHeight uint32, bins ae
 // executeBatchParentUpdates performs Phase 2a: updates parent records to mark that their
 // child transactions have been deleted (adds to deletedChildren map).
 //
+// Uses a Lua UDF (addDeletedChildren) instead of BatchWrite+MapPutItemsOp so that
+// missing parent records are handled server-side without generating KEY_NOT_FOUND errors
+// in Aerospike client metrics.
+//
 // IDEMPOTENCY: This operation is safely re-runnable:
-// - Missing parents (KEY_NOT_FOUND) are skipped - they were already deleted
+// - Missing parents are silently skipped by the Lua UDF (TX_NOT_FOUND)
 // - Duplicate updates are no-ops - deletedChildren map updates are idempotent
 // - Partial batch failures can be retried without side effects
 //
@@ -1427,20 +1432,27 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return nil
 	}
 
-	// Convert map to batch operations
-	// Track deleted children by adding child tx hashes to the DeletedChildren map
-	mapPolicy := aerospike.DefaultMapPolicy()
+	if s.luaPackage == "" {
+		return errors.NewProcessingError("lua package not configured for parent updates")
+	}
+
+	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		// Build a single map of all children to insert, avoiding multiple MapPutOps on the same record
-		items := make(map[interface{}]interface{}, len(info.childHashes))
+		// Build list of child hash strings for the Lua function
+		childHashList := make([]interface{}, 0, len(info.childHashes))
 		for _, childHash := range info.childHashes {
-			items[childHash.String()] = true
+			childHashList = append(childHashList, childHash.String())
 		}
 
-		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(s.batchWritePolicy, info.key, op))
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(
+			batchUDFPolicy,
+			info.key,
+			s.luaPackage,
+			"addDeletedChildren",
+			aerospike.NewValue(childHashList),
+		))
 	}
 
 	// Check context before expensive operation
@@ -1457,25 +1469,43 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return errors.NewStorageError("batch parent update failed", err)
 	}
 
-	// Check for errors
+	// Process results from Lua UDF responses
 	successCount := 0
 	notFoundCount := 0
 	errorCount := 0
 
 	for _, rec := range batchRecords {
-		if rec.BatchRec().Err != nil {
-			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-				// Idempotent: Parent may have been deleted by concurrent pruning or LocalDAH cleanup
-				// This is a success condition - parent is already gone so we don't need to update it
-				notFoundCount++
-				continue
-			}
-			// Log other errors
-			s.logger.Errorf("Parent update error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
+		batchRec := rec.BatchRec()
+		if batchRec.Err != nil {
+			s.logger.Errorf("Parent update error for key %v: %v", batchRec.Key, batchRec.Err)
 			errorCount++
-		} else {
-			successCount++
+			continue
 		}
+
+		// Parse Lua response from record bins
+		if batchRec.Record != nil && batchRec.Record.Bins != nil {
+			if resp, ok := batchRec.Record.Bins["SUCCESS"]; ok {
+				if respMap, ok := resp.(map[interface{}]interface{}); ok {
+					if status, ok := respMap["status"].(string); ok {
+						switch status {
+						case "OK":
+							successCount++
+						case "ERROR":
+							if errCode, ok := respMap["errorCode"].(string); ok && errCode == "TX_NOT_FOUND" {
+								notFoundCount++
+							} else {
+								s.logger.Errorf("Parent update Lua error for key %v: %v", batchRec.Key, respMap)
+								errorCount++
+							}
+						}
+						continue
+					}
+				}
+			}
+		}
+
+		// No parseable response — count as success (UDF executed without error)
+		successCount++
 	}
 
 	// Return error if any individual record operations failed

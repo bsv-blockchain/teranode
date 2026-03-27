@@ -1094,6 +1094,46 @@ function preserveUntil(rec, blockHeight)
     return response
 end
 
+--            _     _ ____       _      _           _  ____ _     _ _     _
+--   __ _  __| | __| |  _ \  ___| | ___| |_ ___  __| |/ ___| |__ (_) | __| |_ __ ___ _ __
+--  / _` |/ _` |/ _` | | | |/ _ \ |/ _ \ __/ _ \/ _` | |   | '_ \| | |/ _` | '__/ _ \ '_ \
+-- | (_| | (_| | (_| | |_| |  __/ |  __/ ||  __/ (_| | |___| | | | | | (_| | | |  __/ | | |
+--  \__,_|\__,_|\__,_|____/ \___|_|\___|\__\___|\__,_|\____|_| |_|_|_|\__,_|_|  \___|_| |_|
+--
+
+-- Adds child transaction hashes to the deletedChildren map on a parent record.
+-- If the record does not exist, returns TX_NOT_FOUND (no error raised).
+-- Parameters:
+--   rec: record - The parent transaction record
+--   childHashes: list - List of child transaction hash strings to mark as deleted
+function addDeletedChildren(rec, childHashes)
+    local response = map()
+
+    if not aerospike:exists(rec) then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_TX_NOT_FOUND
+        response[FIELD_MESSAGE] = ERR_TX_NOT_FOUND
+
+        return response
+    end
+
+    local deletedChildren = rec[BIN_DELETED_CHILDREN]
+    if deletedChildren == nil then
+        deletedChildren = map()
+    end
+
+    for childHash in list.iterator(childHashes) do
+        deletedChildren[childHash] = true
+    end
+
+    rec[BIN_DELETED_CHILDREN] = deletedChildren
+    aerospike:update(rec)
+
+    response[FIELD_STATUS] = STATUS_OK
+
+    return response
+end
+
 -- Function to set the 'conflicting' field of a record
 -- Parameters:
 --   rec: table - The record to update
