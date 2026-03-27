@@ -237,9 +237,9 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 
 	// Use the configured batch policies from settings
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(settings)
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	// Silently skip non-existing records instead of returning KEY_NOT_FOUND errors.
-	// Parents may have already been pruned by a concurrent run or DAH cleanup.
+	// Use UPDATE (not UPDATE_ONLY) so Aerospike evaluates the filter expression on non-existing records.
+	// With UPDATE_ONLY, missing records short-circuit to KEY_NOT_FOUND before the filter is checked.
+	// The filter expression acts as the existence guard — records without the utxos bin are silently skipped.
 	batchWritePolicy.FilterExpression = aerospike.ExpBinExists(fields.Utxos.String())
 
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
