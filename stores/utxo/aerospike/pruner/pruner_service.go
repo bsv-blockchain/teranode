@@ -237,10 +237,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 
 	// Use the configured batch policies from settings
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(settings)
-	// Use UPDATE (not UPDATE_ONLY) so Aerospike evaluates the filter expression on non-existing records.
-	// With UPDATE_ONLY, missing records short-circuit to KEY_NOT_FOUND before the filter is checked.
-	// The filter expression acts as the existence guard — records without the utxos bin are silently skipped.
-	batchWritePolicy.FilterExpression = aerospike.ExpBinExists(fields.Utxos.String())
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
 	batchPolicy := util.GetAerospikeBatchPolicy(settings)
@@ -1467,9 +1464,9 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 
 	for _, rec := range batchRecords {
 		if rec.BatchRec().Err != nil {
-			var aErr *aerospike.AerospikeError
-			if errors.As(rec.BatchRec().Err, &aErr) && aErr.ResultCode == types.FILTERED_OUT {
-				// Parent record doesn't exist (filtered out) - already pruned, nothing to update
+			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+				// Idempotent: Parent may have been deleted by concurrent pruning or LocalDAH cleanup
+				// This is a success condition - parent is already gone so we don't need to update it
 				notFoundCount++
 				continue
 			}

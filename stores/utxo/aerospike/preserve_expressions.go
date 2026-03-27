@@ -17,11 +17,8 @@ import (
 func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	// Use UPDATE (not UPDATE_ONLY) so Aerospike evaluates the filter expression on non-existing records.
-	// With UPDATE_ONLY, missing records short-circuit to KEY_NOT_FOUND before the filter is checked.
-	// The filter expression acts as the existence guard — records without the utxos bin are silently skipped.
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
-	batchWritePolicy.FilterExpression = aerospike.ExpBinExists(fields.Utxos.String())
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	ops := []*aerospike.Operation{
 		aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
@@ -64,7 +61,7 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 	for j, record := range batchRecords {
 		batchRec := record.BatchRec()
 		if batchRec.Err != nil {
-			if errors.As(batchRec.Err, &aErr) && aErr.ResultCode == types.FILTERED_OUT {
+			if errors.As(batchRec.Err, &aErr) && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
 				continue
 			}
 
