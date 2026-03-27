@@ -676,6 +676,10 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		return nil
 	}
 
+	if s.settings.Aerospike.EnablePreserveFilterExpressions {
+		return s.PreserveTransactionsWithExpressions(ctx, txIDs, preserveUntilHeight)
+	}
+
 	// Use batch operations for efficiency
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
