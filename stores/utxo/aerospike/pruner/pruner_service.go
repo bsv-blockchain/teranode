@@ -1432,15 +1432,20 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return nil
 	}
 
-	if s.luaPackage == "" {
-		return errors.NewProcessingError("lua package not configured for parent updates")
+	if s.luaPackage != "" {
+		return s.executeBatchParentUpdatesUDF(ctx, updates)
 	}
 
+	return s.executeBatchParentUpdatesBatchWrite(ctx, updates)
+}
+
+// executeBatchParentUpdatesUDF uses a Lua UDF (addDeletedChildren) so that missing parent
+// records are handled server-side without generating KEY_NOT_FOUND errors in Aerospike client metrics.
+func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[string]*parentUpdateInfo) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		// Build list of child hash strings for the Lua function
 		childHashList := make([]interface{}, 0, len(info.childHashes))
 		for _, childHash := range info.childHashes {
 			childHashList = append(childHashList, childHash.String())
@@ -1455,7 +1460,6 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		))
 	}
 
-	// Check context before expensive operation
 	select {
 	case <-ctx.Done():
 		s.logger.Infof("Context cancelled, skipping parent update batch")
@@ -1463,13 +1467,11 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 	default:
 	}
 
-	// Execute batch
 	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
 		s.logger.Errorf("Batch parent update failed: %v", err)
 		return errors.NewStorageError("batch parent update failed", err)
 	}
 
-	// Process results from Lua UDF responses
 	successCount := 0
 	notFoundCount := 0
 	errorCount := 0
@@ -1482,7 +1484,6 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 			continue
 		}
 
-		// Parse Lua response from record bins
 		if batchRec.Record != nil && batchRec.Record.Bins != nil {
 			if resp, ok := batchRec.Record.Bins["SUCCESS"]; ok {
 				if respMap, ok := resp.(map[interface{}]interface{}); ok {
@@ -1504,16 +1505,77 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 			}
 		}
 
-		// No parseable response — count as success (UDF executed without error)
 		successCount++
 	}
 
-	// Return error if any individual record operations failed
 	if errorCount > 0 {
 		return errors.NewStorageError("%d parent update operations failed", errorCount)
 	}
 
-	// Update metric with successful parent updates
+	if successCount > 0 {
+		prometheusUtxoParentsUpdated.Add(float64(successCount))
+	}
+
+	if notFoundCount > 0 {
+		prometheusUtxoParentsUpdatedSkipped.Add(float64(notFoundCount))
+	}
+
+	return nil
+}
+
+// executeBatchParentUpdatesBatchWrite is the fallback when Lua UDF is not configured.
+// Uses BatchWrite+MapPutItemsOp with UPDATE_ONLY policy. Missing records generate
+// KEY_NOT_FOUND in Aerospike client metrics but are handled gracefully.
+func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updates map[string]*parentUpdateInfo) error {
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	mapPolicy := aerospike.DefaultMapPolicy()
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
+
+	for _, info := range updates {
+		items := make(map[interface{}]interface{}, len(info.childHashes))
+		for _, childHash := range info.childHashes {
+			items[childHash.String()] = true
+		}
+
+		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, info.key, op))
+	}
+
+	select {
+	case <-ctx.Done():
+		s.logger.Infof("Context cancelled, skipping parent update batch")
+		return ctx.Err()
+	default:
+	}
+
+	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+		s.logger.Errorf("Batch parent update failed: %v", err)
+		return errors.NewStorageError("batch parent update failed", err)
+	}
+
+	successCount := 0
+	notFoundCount := 0
+	errorCount := 0
+
+	for _, rec := range batchRecords {
+		if rec.BatchRec().Err != nil {
+			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+				notFoundCount++
+				continue
+			}
+			s.logger.Errorf("Parent update error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
+			errorCount++
+		} else {
+			successCount++
+		}
+	}
+
+	if errorCount > 0 {
+		return errors.NewStorageError("%d parent update operations failed", errorCount)
+	}
+
 	if successCount > 0 {
 		prometheusUtxoParentsUpdated.Add(float64(successCount))
 	}
