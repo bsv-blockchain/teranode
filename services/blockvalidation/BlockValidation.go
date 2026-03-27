@@ -1877,6 +1877,14 @@ func (u *BlockValidation) computeAndSetCoinbaseBUMP(ctx context.Context, block *
 		return
 	}
 
+	// Replace coinbase placeholder with real coinbase txid (same as blockassembly does
+	// in Server.go:1352). The stored subtree has 0xFFFF...FF at Nodes[0] because the
+	// coinbase wasn't known when the subtree was written during validation.
+	if block.CoinbaseTx != nil {
+		coinbaseTxID := block.CoinbaseTx.TxIDChainHash()
+		subtree0.ReplaceRootNode(coinbaseTxID, 0, uint64(block.CoinbaseTx.Size()))
+	}
+
 	block.CoinbaseBUMP = bump.ComputeCoinbaseBUMP(subtree0, block.Subtrees, block.Height)
 }
 
