@@ -1,11 +1,9 @@
 package bump
 
 import (
-	"errors" //nolint:depguard
-	"fmt"
-
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/merkleproof"
 )
 
@@ -15,19 +13,19 @@ import (
 // subtreeHashes are the root hashes of all subtrees in the block.
 func ComputeCoinbaseBUMP(subtree0 *subtreepkg.Subtree, subtreeHashes []*chainhash.Hash, blockHeight uint32) ([]byte, error) {
 	if subtree0 == nil || len(subtreeHashes) == 0 {
-		return nil, errors.New("invalid input: subtree0 is nil or subtreeHashes is empty")
+		return nil, errors.NewInvalidArgumentError("subtree0 is nil or subtreeHashes is empty")
 	}
 
 	// Get the within-subtree proof: coinbase is at index 0 of subtree 0
 	subtreeProofPtrs, err := subtree0.GetMerkleProof(0)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to get subtree merkle proof: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to get subtree merkle proof", err)
 	}
 
 	// Get the block-level proof: from subtree 0's root to block merkle root
 	blockProofPtrs, _, err := merkleproof.GenerateBlockMerkleProof(subtreeHashes, 0)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to generate block merkle proof: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to generate block merkle proof", err)
 	}
 
 	// Convert pointer slices to value slices for MerkleProof struct
@@ -52,12 +50,12 @@ func ComputeCoinbaseBUMP(subtree0 *subtreepkg.Subtree, subtreeHashes []*chainhas
 
 	bumpFormat, err := ConvertToBUMP(proof)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to convert to BUMP format: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to convert to BUMP format", err)
 	}
 
 	bumpBytes, err := bumpFormat.EncodeBinary()
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to encode BUMP binary: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to encode BUMP binary", err)
 	}
 
 	return bumpBytes, nil
