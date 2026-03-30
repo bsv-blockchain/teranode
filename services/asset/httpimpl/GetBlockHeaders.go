@@ -141,8 +141,8 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 				numberOfHeaders = 100
 			}
 
-			if numberOfHeaders > 1000 {
-				numberOfHeaders = 1000
+			if numberOfHeaders > 10_000 {
+				numberOfHeaders = 10_000
 			}
 		}
 
