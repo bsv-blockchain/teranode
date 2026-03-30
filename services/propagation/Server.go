@@ -1113,26 +1113,24 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return err
 	}
 
-	// // decouple the tracing context to not cancel the context when the tx is being saved in the background
-	// decoupledCtx, decoupledSpan, decoupledEndSpan := tracing.DecoupleTracingSpan(ctx, "processTransactionInternal", "decoupled")
-	// defer decoupledEndSpan()
+	// Serialize once and reuse everywhere downstream to avoid redundant allocations
+	txBytes := btTx.SerializeBytes()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(ctx, btTx); err != nil {
+	if err = ps.storeTransaction(ctx, btTx, txBytes); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
-		// Check transaction size first - if it's too large, use HTTP endpoint instead
-		txSize := len(btTx.SerializeBytes())
+		txSize := len(txBytes)
 		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
 
 		if txSize > maxKafkaMessageSize {
-			return ps.validateTransactionViaHTTP(ctx, btTx, txSize, maxKafkaMessageSize)
+			return ps.validateTransactionViaHTTP(ctx, btTx, txBytes, txSize, maxKafkaMessageSize)
 		}
 
 		// For normal-sized transactions, continue with Kafka
-		return ps.validateTransactionViaKafka(btTx)
+		return ps.validateTransactionViaKafka(btTx, txBytes)
 	} else {
 		ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
@@ -1185,7 +1183,7 @@ func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
 	seen := make(map[inputKey]struct{}, numInputs)
 	for _, input := range btTx.Inputs {
 		var key inputKey
-		copy(key.prevTxID[:], input.PreviousTxID())
+		key.prevTxID = *input.PreviousTxIDChainHash()
 		key.vout = input.PreviousTxOutIndex
 
 		if _, exists := seen[key]; exists {
@@ -1210,12 +1208,13 @@ func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
 // Parameters:
 //   - ctx: Context for HTTP request with cancellation support
 //   - btTx: Bitcoin transaction to validate
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //   - txSize: Size of the transaction in bytes (pre-calculated)
 //   - maxKafkaMessageSize: Maximum Kafka message size for logging/comparison
 //
 // Returns:
 //   - error: Error if HTTP validation fails or is not available
-func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error {
+func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txBytes []byte, txSize int, maxKafkaMessageSize int) error {
 	if ps.validatorHTTPAddr == nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), but no HTTP endpoint configured for validator",
 			btTx.TxID(), txSize, maxKafkaMessageSize)
@@ -1237,7 +1236,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 
 	fullURL := ps.validatorHTTPAddr.ResolveReference(endpoint)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.SerializeBytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(txBytes))
 	if err != nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", btTx.TxID(), err)
 	}
@@ -1275,14 +1274,15 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 //
 // Parameters:
 //   - btTx: Bitcoin transaction to validate
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //
 // Returns:
 //   - error: Error if message preparation or publishing fails
-func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
+func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx, txBytes []byte) error {
 	validationOptions := validator.NewDefaultOptions()
 
 	msg := &kafkamessage.KafkaTxValidationTopicMessage{
-		Tx:     btTx.SerializeBytes(),
+		Tx:     txBytes,
 		Height: 0,
 		Options: &kafkamessage.KafkaTxValidationOptions{
 			SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
@@ -1322,15 +1322,16 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 // Parameters:
 //   - ctx: context for the storage operation with tracing and timeout
 //   - btTx: Bitcoin transaction to store (must be properly parsed)
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //
 // Returns:
 //   - error: error with detailed context if the storage operation fails
-func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
+func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx, txBytes []byte) error {
 	ctx, _, deferFn := tracing.Tracer("propagation").Start(ctx, "PropagationServer:Set:Store")
 	defer deferFn()
 
 	if ps.txStore != nil {
-		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.SerializeBytes()); err != nil {
+		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, txBytes); err != nil {
 			// Duplicate transactions are acceptable - the transaction already exists
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
 				return nil

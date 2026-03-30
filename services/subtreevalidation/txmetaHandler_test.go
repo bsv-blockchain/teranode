@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -236,12 +235,8 @@ func createKafkaMessage(t *testing.T, delete bool, content []byte) *kafka.KafkaM
 		copy(data[offset:], content)
 	}
 
-	consumerMsg := sarama.ConsumerMessage{
-		Value: data,
-	}
-
 	return &kafka.KafkaMessage{
-		ConsumerMessage: consumerMsg,
+		Value: data,
 	}
 }
 
@@ -261,7 +256,7 @@ func TestServer_txmetaHandler(t *testing.T) {
 		{
 			name:       "message too short for entry count",
 			setupMocks: func(l *mockLogger, c *mockCache) {},
-			input:      &kafka.KafkaMessage{ConsumerMessage: sarama.ConsumerMessage{Value: make([]byte, 3)}},
+			input:      &kafka.KafkaMessage{Value: make([]byte, 3)},
 		},
 		{
 			name: "successful delete operation",

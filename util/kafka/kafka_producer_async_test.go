@@ -2,11 +2,12 @@ package kafka
 
 import (
 	"context"
+	"math"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -56,39 +57,6 @@ func TestKafkaAsyncProducerBrokersURLNilProducer(t *testing.T) {
 
 	result := producer.BrokersURL()
 	assert.Nil(t, result)
-}
-
-func TestKafkaAsyncProducerDecodeKeyOrValue(t *testing.T) {
-	producer := &KafkaAsyncProducer{}
-
-	tests := []struct {
-		name     string
-		encoder  sarama.Encoder
-		expected string
-	}{
-		{
-			name:     "Nil encoder",
-			encoder:  nil,
-			expected: "",
-		},
-		{
-			name:     "Short data",
-			encoder:  sarama.ByteEncoder("hello"),
-			expected: "68656c6c6f",
-		},
-		{
-			name:     "Long data gets truncated",
-			encoder:  sarama.ByteEncoder(make([]byte, 100)),
-			expected: "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000... (truncated)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := producer.decodeKeyOrValue(tt.encoder)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 func TestKafkaAsyncProducerStopNilProducer(t *testing.T) {
@@ -194,25 +162,26 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {
 	logger := &mockAsyncLogger{}
 	cfg := KafkaProducerConfig{
-		Logger: logger,
-		URL:    &url.URL{Scheme: memoryScheme},
-		Topic:  "memory-topic",
+		Logger:     logger,
+		URL:        &url.URL{Scheme: memoryScheme, Path: "/memory-topic", Host: "localhost"},
+		Topic:      "memory-topic",
+		BrokersURL: []string{"localhost"},
 	}
 
 	producer, err := NewKafkaAsyncProducer(logger, cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)
-	assert.NotNil(t, producer.Producer)
-	assert.Equal(t, cfg, producer.Config)
+	assert.Equal(t, cfg.Topic, producer.Config.Topic)
 }
 
 func TestNewKafkaAsyncProducerWithKafkaSettings(t *testing.T) {
 	logger := &mockAsyncLogger{}
 	cfg := KafkaProducerConfig{
 		Logger:             logger,
-		URL:                &url.URL{Scheme: memoryScheme},
+		URL:                &url.URL{Scheme: memoryScheme, Path: "/test-topic", Host: "localhost"},
 		Topic:              "test-topic",
+		BrokersURL:         []string{"localhost"},
 		EnableTLS:          false,
 		TLSSkipVerify:      false,
 		EnableDebugLogging: false,
@@ -424,6 +393,60 @@ func TestKafkaAsyncProducerURLQueryParams(t *testing.T) {
 			require.NotNil(t, producer)
 
 			tt.checkFunc(t, producer)
+		})
+	}
+}
+
+func TestClampBatchMaxBytes(t *testing.T) {
+	tests := []struct {
+		name       string
+		flushBytes int
+		want       int32
+	}{
+		{
+			name:       "small value clamped to minimum 512",
+			flushBytes: 64,
+			want:       512,
+		},
+		{
+			name:       "zero clamped to minimum 512",
+			flushBytes: 0,
+			want:       512,
+		},
+		{
+			name:       "negative clamped to minimum 512",
+			flushBytes: -1,
+			want:       512,
+		},
+		{
+			name:       "exactly minimum unchanged",
+			flushBytes: 512,
+			want:       512,
+		},
+		{
+			name:       "valid value unchanged",
+			flushBytes: 1024 * 1024,
+			want:       1024 * 1024,
+		},
+		{
+			name:       "max int32 unchanged",
+			flushBytes: math.MaxInt32,
+			want:       math.MaxInt32,
+		},
+	}
+
+	// On 64-bit architectures, also test overflow above MaxInt32
+	if strconv.IntSize > 32 {
+		overflowVal64 := int64(math.MaxInt32) + 1
+		overflowVal := int(overflowVal64)
+		got := clampBatchMaxBytes(overflowVal)
+		assert.Equal(t, int32(math.MaxInt32), got, "above max int32 should be clamped")
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clampBatchMaxBytes(tt.flushBytes)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

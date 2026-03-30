@@ -399,25 +399,45 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		ctx = context.WithValue(ctx, sampleRateOverrideKey{}, options.SampleRate)
 	}
 
-	var span trace.Span
+	var (
+		span           trace.Span
+		shortCircuited bool
+	)
 
 	if tracingEnabled {
-		// Add any options.Tags to the span options...
-		for _, tag := range options.Tags {
-			options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
+		// Fast path: skip the entire OTel SDK when the parent span is unsampled
+		// and there's no per-span override that could force sampling.
+		// This avoids context traversal, sampler evaluation, and span allocation
+		// for the 99%+ of child spans whose parent was already dropped.
+		// At ~2M tx/s with multiple spans per tx, this eliminates millions of
+		// unnecessary sampler evaluations, context lookups, and span allocations
+		// per second on the unsampled path.
+		if options.SampleRate == nil && canShortCircuit(options.SpanStartOptions) {
+			parentSpan := trace.SpanFromContext(ctx)
+			if parentSpan.SpanContext().IsValid() && !parentSpan.SpanContext().IsSampled() {
+				span = parentSpan
+				shortCircuited = true
+			}
 		}
 
-		// Start OpenTelemetry span
-		ctx, span = u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
-
-		// Set span attributes from tags
-		if len(options.Tags) > 0 {
-			attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+		if !shortCircuited {
+			// Add any options.Tags to the span options...
 			for _, tag := range options.Tags {
-				attrs = append(attrs, attribute.String(tag.key, tag.value))
+				options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
 			}
 
-			span.SetAttributes(attrs...)
+			// Start OpenTelemetry span
+			ctx, span = u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
+
+			// Set span attributes from tags
+			if len(options.Tags) > 0 {
+				attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+				for _, tag := range options.Tags {
+					attrs = append(attrs, attribute.String(tag.key, tag.value))
+				}
+
+				span.SetAttributes(attrs...)
+			}
 		}
 	} else {
 		span = trace.SpanFromContext(ctx)
@@ -442,10 +462,14 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 	endFn := func(optionalError ...error) {
 		var err error
+		if len(optionalError) > 0 {
+			err = optionalError[0]
+		}
 
-		if tracingEnabled {
-			if len(optionalError) > 0 && optionalError[0] != nil {
-				err = optionalError[0]
+		// Only interact with the OTel span if we own it (not short-circuited).
+		// When short-circuited, span points to the parent — we must not End() it.
+		if tracingEnabled && !shortCircuited {
+			if err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
 			}
@@ -570,6 +594,19 @@ func (u *UTracer) recordMetrics(options *TraceOptions, start time.Time) {
 	if options.Counter != nil {
 		options.Counter.Inc()
 	}
+}
+
+// canShortCircuit reports whether the span creation can skip the OTel SDK
+// based on the parent's sampling decision. It returns false when any
+// SpanStartOption is present that could change the effective parent
+// (e.g. WithNewRoot), because in that case we cannot infer the sampling
+// outcome from the current context's parent span.
+func canShortCircuit(spanOpts []trace.SpanStartOption) bool {
+	// If there are span start options, one of them might be WithNewRoot or
+	// WithLinks that could alter the sampling decision. To keep this check
+	// allocation-free and simple, we conservatively fall through to the
+	// OTel SDK whenever any SpanStartOption is provided.
+	return len(spanOpts) == 0
 }
 
 // SetupMockTracer sets up a mock tracer for testing

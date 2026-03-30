@@ -152,6 +152,13 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
+			// Skip all pruning until block height exceeds minimum threshold
+			if s.settings.Pruner.MinBlockHeight > 0 && blockHeight <= s.settings.Pruner.MinBlockHeight {
+				s.logger.Debugf("[pruner][%s:%d] skipping - block height below minimum (%d)", blockHashStr, blockHeight, s.settings.Pruner.MinBlockHeight)
+				prunerSkipped.WithLabelValues("below_min_height").Inc()
+				continue
+			}
+
 			// Check FSM state - skip during CATCHINGBLOCKS if configured
 			if s.settings.Pruner.SkipDuringCatchup {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)

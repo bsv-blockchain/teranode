@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -21,17 +22,18 @@ import (
 // It scans all records in the set and yields those that are not mined (i.e., unmined/mempool)
 // Uses multiple workers to read from Aerospike in parallel for improved throughput
 type unminedTxIterator struct {
-	store         *Store
-	fullScan      bool
-	prunerMode    bool   // when true, uses pruner-specific bins and filter
-	prunerCutoff  uint32 // cutoff block height for pruner mode
-	err           error
-	done          bool
-	recordset     *as.Recordset
-	resultChan    chan []*utxo.UnminedTransaction
-	errorChan     chan error
-	cancelWorkers context.CancelFunc
-	wg            sync.WaitGroup
+	store            *Store
+	fullScan         bool
+	prunerMode       bool   // when true, uses pruner-specific bins and filter
+	prunerCutoff     uint32 // cutoff block height for pruner mode
+	err              error
+	done             bool
+	recordset        *as.Recordset
+	resultChan       chan []*utxo.UnminedTransaction
+	errorChan        chan error
+	cancelWorkers    context.CancelFunc
+	wg               sync.WaitGroup
+	queryIdleTimeout time.Duration // idle timeout for detecting stalled Aerospike connections
 }
 
 // newUnminedTxIterator creates a new iterator for scanning unmined transactions in Aerospike.
@@ -142,14 +144,17 @@ func launchPartitionIterator(store *Store, numPartitionQueries int, fullScan, pr
 	workerCtx, cancel := context.WithCancel(context.Background())
 	resultChanSize := numPartitionQueries * 2
 
+	queryIdleTimeout := time.Duration(store.settings.UtxoStore.QueryIdleTimeoutSeconds) * time.Second
+
 	it := &unminedTxIterator{
-		store:         store,
-		fullScan:      fullScan,
-		prunerMode:    prunerMode,
-		prunerCutoff:  prunerCutoff,
-		resultChan:    make(chan []*utxo.UnminedTransaction, resultChanSize),
-		errorChan:     make(chan error, numPartitionQueries),
-		cancelWorkers: cancel,
+		store:            store,
+		fullScan:         fullScan,
+		prunerMode:       prunerMode,
+		prunerCutoff:     prunerCutoff,
+		resultChan:       make(chan []*utxo.UnminedTransaction, resultChanSize),
+		errorChan:        make(chan error, numPartitionQueries),
+		cancelWorkers:    cancel,
+		queryIdleTimeout: queryIdleTimeout,
 	}
 
 	partitionStart := 0
@@ -285,6 +290,14 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 		_ = flush() // Best effort flush on exit
 	}()
 
+	// Create a reusable timer for idle timeout detection to avoid allocating a new
+	// timer on every iteration (time.After would create GC pressure during high-throughput scans).
+	var idleTimer *time.Timer
+	if it.queryIdleTimeout > 0 {
+		idleTimer = time.NewTimer(it.queryIdleTimeout)
+		defer idleTimer.Stop()
+	}
+
 	for {
 		// Only check context every contextCheckPeriod iterations for performance
 		if itemsProcessed%contextCheckPeriod == 0 {
@@ -295,10 +308,36 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			}
 		}
 
-		// Read from result channel without select for performance
-		rec, ok := <-results
-		if !ok || rec == nil {
-			return
+		// Read from result channel with idle timeout to detect stalled Aerospike connections.
+		// A hard timeout would be wrong since large scans can take hours, but if no record
+		// arrives within the idle timeout the connection is likely dead (e.g. Aerospike node restart).
+		var rec *as.Result
+		var ok bool
+		if idleTimer != nil {
+			idleTimer.Reset(it.queryIdleTimeout)
+			select {
+			case rec, ok = <-results:
+				if !idleTimer.Stop() {
+					<-idleTimer.C
+				}
+				if !ok || rec == nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			case <-idleTimer.C:
+				it.store.logger.Errorf("[processRecordset] no records received from Aerospike partition query in %v — connection may be stalled, aborting worker", it.queryIdleTimeout)
+				select {
+				case it.errorChan <- errors.NewProcessingError("Aerospike partition query stalled: no records received in %v", it.queryIdleTimeout):
+				default:
+				}
+				return
+			}
+		} else {
+			rec, ok = <-results
+			if !ok || rec == nil {
+				return
+			}
 		}
 
 		if rec.Err != nil {
@@ -501,13 +540,29 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 	default:
 	}
 
-	batch, ok := <-it.resultChan
-	if !ok {
+	select {
+	case <-ctx.Done():
+		it.err = ctx.Err()
 		it.closeWithLogging()
-		return nil, nil
+		return nil, it.err
+	case batch, ok := <-it.resultChan:
+		if !ok {
+			// resultChan closed — all workers finished. Check if any worker reported an error
+			// that arrived after our earlier non-blocking check (e.g. idle timeout error).
+			select {
+			case err := <-it.errorChan:
+				if err != nil {
+					it.err = err
+					it.closeWithLogging()
+					return nil, err
+				}
+			default:
+			}
+			it.closeWithLogging()
+			return nil, nil
+		}
+		return batch, nil
 	}
-
-	return batch, nil
 }
 
 // transactionData holds the basic transaction data extracted from a record

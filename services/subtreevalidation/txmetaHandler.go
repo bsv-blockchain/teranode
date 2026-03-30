@@ -41,7 +41,7 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 // Processing errors are logged and the message is marked as completed
 // to prevent infinite retry loops on malformed data.
 func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) error {
-	if msg == nil || len(msg.ConsumerMessage.Value) < 4 {
+	if msg == nil || len(msg.Value) < 4 {
 		return nil
 	}
 
@@ -50,7 +50,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	go func() {
 		startTime := time.Now()
 
-		data := msg.ConsumerMessage.Value
+		data := msg.Value
 		offset := 0
 
 		// Read entry count

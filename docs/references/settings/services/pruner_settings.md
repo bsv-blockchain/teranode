@@ -267,16 +267,6 @@ Limits deletions per cycle to prevent overwhelming the blob store. Remaining del
 
 When enabled, parent transactions will not be protected from deletion even if they have unmined children.
 
-### pruner_skipParentUpdates
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_skipParentUpdates`
-
-**Description**: Skip parent update operations during pruning
-
 ### pruner_skipDeletions
 
 **Type**: Boolean
