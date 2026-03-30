@@ -339,30 +339,24 @@ func TestSign(t *testing.T) {
 	assert.True(t, ed25519.Verify(pubKey, testData, signatureBytes))
 }
 
-// TestCustomLoggerMiddleware tests the customLoggerMiddleware function
-func TestCustomLoggerMiddleware(t *testing.T) {
-	// Create a test logger
+// TestAccessLogMiddleware tests the accessLogMiddleware function
+func TestAccessLogMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
-	// Create the middleware
-	middleware := customLoggerMiddleware(logger)
+	mw := accessLogMiddleware(logger)
 
-	// Create a test Echo instance
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Create a test handler
 	testHandler := func(c echo.Context) error {
 		return c.String(http.StatusOK, "Test response")
 	}
 
-	// Call the middleware with the test handler
-	handler := middleware(testHandler)
+	handler := mw(testHandler)
 	err := handler(c)
 
-	// Assert that the handler was called and returned the expected response
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "Test response", rec.Body.String())

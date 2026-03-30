@@ -335,6 +335,11 @@ func NewServer(
 	if err != nil {
 		return nil, errors.NewServiceError("failed to unmarshal key", err)
 	}
+
+	// Set the HTTP request signer so all outgoing peer HTTP requests (block/subtree fetches)
+	// include authentication headers for rate limit exemption on the receiving asset service.
+	util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(privKey))
+
 	// In silent mode, DHT is disabled entirely so the node is not discoverable via DHT.
 	dhtMode := tSettings.P2P.DHTMode
 	if listenMode == settings.ListenModeSilent {

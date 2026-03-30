@@ -90,7 +90,7 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXO_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXO in %s for %s: %s?vout=%s", mode, c.Request().RemoteAddr, hashStr, voutStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXO in %s for %s: %s?vout=%s", mode, c.RealIP(), hashStr, voutStr),
 		)
 
 		defer deferFn()

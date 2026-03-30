@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,7 @@ type HTTP struct {
 	e                   *echo.Echo
 	startTime           time.Time
 	privKey             crypto.PrivKey
+	peerTierCache       *peerTierCache
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -124,6 +127,26 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Configure real IP extraction for reverse proxy deployments.
+	if tSettings.Asset.TrustedProxyCIDRs != "" {
+		var trustOpts []echo.TrustOption
+		for _, cidrStr := range strings.Split(tSettings.Asset.TrustedProxyCIDRs, "|") {
+			cidrStr = strings.TrimSpace(cidrStr)
+			if cidrStr == "" {
+				continue
+			}
+			_, ipNet, err := net.ParseCIDR(cidrStr)
+			if err != nil {
+				logger.Errorf("[Asset] invalid trusted proxy CIDR %q: %v", cidrStr, err)
+				continue
+			}
+			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
+		}
+		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
+	} else {
+		e.IPExtractor = echo.ExtractIPFromXFFHeader()
+	}
+
 	e.HTTPErrorHandler = customHTTPErrorHandler(logger)
 
 	e.Use(middleware.Recover())
@@ -153,16 +176,53 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	e.Use(securityHeadersMiddleware())
 
-	if e.Debug {
-		e.Use(customLoggerMiddleware(logger))
+	// Peer authentication — verifies Ed25519 signed requests and sets peer_tier in context.
+	// The peerCache refresh goroutine is started in Start() when a context is available.
+	var peerCache *peerTierCache
+	p2pClient := repo.GetP2PClient()
+	if p2pClient != nil {
+		peerCache = newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
+		e.Use(peerAuthMiddleware(logger, peerCache))
+	}
+
+	// Always-on access logging with Prometheus metrics.
+	e.Use(accessLogMiddleware(logger))
+
+	// Global per-IP tiered rate limiting.
+	if tSettings.Asset.HTTPRateLimit > 0 {
+		e.Use(tieredRateLimitMiddleware(logger,
+			tSettings.Asset.HTTPRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			"global"))
+	}
+
+	// Request body size limit.
+	if tSettings.Asset.HTTPBodyLimit != "" {
+		e.Use(middleware.BodyLimit(tSettings.Asset.HTTPBodyLimit))
+	}
+
+	// Heavy-endpoint rate limiter (applied per-route below).
+	var heavyRateLimiter echo.MiddlewareFunc
+	if tSettings.Asset.HTTPHeavyRateLimit > 0 {
+		heavyRateLimiter = tieredRateLimitMiddleware(logger,
+			tSettings.Asset.HTTPHeavyRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			"heavy")
+	}
+	heavyMW := func() []echo.MiddlewareFunc {
+		if heavyRateLimiter != nil {
+			return []echo.MiddlewareFunc{heavyRateLimiter}
+		}
+		return nil
 	}
 
 	h := &HTTP{
-		logger:     logger,
-		settings:   tSettings,
-		repository: repo,
-		e:          e,
-		startTime:  time.Now(),
+		logger:        logger,
+		settings:      tSettings,
+		repository:    repo,
+		e:             e,
+		startTime:     time.Now(),
+		peerTierCache: peerCache,
 	}
 
 	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
@@ -203,7 +263,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	apiRestGroup := e.Group("/rest")
-	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock()) // BINARY_STREAM
+	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock(), heavyMW()...) // BINARY_STREAM
 
 	apiPrefix := tSettings.Asset.APIPrefix
 	apiGroup := e.Group(apiPrefix)
@@ -228,11 +288,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/txmeta_raw/:hash/hex", h.GetTxMetaByTxID(HEX))
 	apiGroup.GET("/txmeta_raw/:hash/json", h.GetTxMetaByTxID(JSON))
 
-	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
-	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
-	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
-	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData())
-	apiGroup.POST("/subtree/:hash/txs", h.GetTransactions()) // BINARY_STREAM only
+	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX), heavyMW()...)
+	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON), heavyMW()...)
+	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData(), heavyMW()...)
+	apiGroup.POST("/subtree/:hash/txs", h.GetTransactions(), heavyMW()...) // BINARY_STREAM only
 
 	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
 
@@ -256,15 +316,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks", h.GetBlocks)
 	apiGroup.GET("/block_locator", h.GetBlockLocator)
 
-	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM))
-	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
-	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
+	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX), heavyMW()...)
+	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON), heavyMW()...)
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM (also supports ?type=miningcandidate)
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock(), heavyMW()...) // BINARY_STREAM (also supports ?type=miningcandidate)
 
-	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
-	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
-	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX), heavyMW()...)
+	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON), heavyMW()...)
 	apiGroup.GET("/block/:hash/forks", h.GetBlockForks)
 	apiGroup.GET("/block/:hash/nearestforks", h.GetNearestForkHeights)
 
@@ -457,6 +517,11 @@ func (h *HTTP) Init(_ context.Context) error {
 }
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
+	// Start the peer tier cache refresh goroutine (stops when ctx is cancelled).
+	if h.peerTierCache != nil {
+		h.peerTierCache.Start(ctx)
+	}
+
 	mode := "HTTPS"
 	if level := h.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
@@ -578,24 +643,36 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 	}
 }
 
-// Middleware to log HTTP requests using the custom logger
-func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
+// accessLogMiddleware logs every HTTP request with real client IP, duration, status,
+// response size, and peer tier. It also records Prometheus histogram metrics.
+func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			prometheusAssetHTTPInFlight.Inc()
+			defer prometheusAssetHTTPInFlight.Dec()
+
 			start := time.Now()
 
-			// Process the request
 			err := next(c)
-
-			// Log response status and duration
-			status := c.Response().Status
-			duration := time.Since(start)
-
 			if err != nil {
-				c.Error(err) // Ensure Echo's default error handling
+				c.Error(err)
 			}
 
-			logger.Infof("http request: Method=%s, URI=%s, RemoteAddr=%s Status=%d, Duration=%v, err=%v", c.Request().Method, c.Request().RequestURI, c.Request().RemoteAddr, status, duration, err)
+			duration := time.Since(start)
+			status := c.Response().Status
+			size := c.Response().Size
+			method := c.Request().Method
+			path := c.Path() // route pattern, not full URI — keeps Prometheus cardinality bounded
+			ip := c.RealIP()
+			statusStr := strconv.Itoa(status)
+
+			tier, _ := c.Get("peer_tier").(peerTier)
+
+			prometheusAssetHTTPRequestDuration.WithLabelValues(method, path, statusStr).Observe(duration.Seconds())
+			prometheusAssetHTTPResponseSize.WithLabelValues(method, path, statusStr).Observe(float64(size))
+
+			logger.Infof("[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s uri=%s",
+				method, path, ip, status, duration, size, tier, c.Request().RequestURI)
 
 			return err
 		}

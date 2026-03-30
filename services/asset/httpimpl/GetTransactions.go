@@ -79,7 +79,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransactions_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http:GetTransactions] for %s", c.Request().RemoteAddr),
+			tracing.WithLogMessage(h.logger, "[Asset_http:GetTransactions] for %s", c.RealIP()),
 		)
 
 		defer deferFn()
