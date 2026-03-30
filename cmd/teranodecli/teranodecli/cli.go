@@ -7,12 +7,12 @@ import (
 	"os"
 	"sort"
 
-	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
+	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
 	"github.com/bsv-blockchain/teranode/cmd/logs"
