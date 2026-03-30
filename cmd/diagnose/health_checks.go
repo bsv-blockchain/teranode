@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -101,7 +102,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				name:    "Blockchain gRPC",
 				address: s.BlockChain.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", fmt.Errorf("failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
 				},
 			})
 		}
@@ -143,7 +144,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				name:    "Block Validation gRPC",
 				address: s.BlockValidation.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", fmt.Errorf("failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
 				},
 			})
 		}
@@ -165,7 +166,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				name:    "Block Assembly gRPC",
 				address: s.BlockAssembly.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", fmt.Errorf("failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
 				},
 			})
 		}
@@ -213,7 +214,7 @@ func checkGRPCServices(ctx context.Context, logger ulogger.Logger, s *settings.S
 				name:    "P2P gRPC",
 				address: s.P2P.GRPCAddress,
 				check: func() (int, string, error) {
-					return http.StatusServiceUnavailable, "", fmt.Errorf("failed to create client")
+					return http.StatusServiceUnavailable, "", errors.New(errors.ERR_SERVICE_UNAVAILABLE, "failed to create client")
 				},
 			})
 		}
