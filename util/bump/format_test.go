@@ -207,25 +207,25 @@ func TestBUMPFormat_EncodeBinary(t *testing.T) {
 
 		_, err := bump.EncodeBinary()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid hash hex")
+		assert.Contains(t, err.Error(), "invalid hash at level")
 	})
 
-	t.Run("wrong hash length should return error", func(t *testing.T) {
+	t.Run("short hash is zero-padded by chainhash", func(t *testing.T) {
 		bump := &Format{
 			BlockHeight: 100,
 			Path: []Level{
 				{
 					{
 						Offset: 1,
-						Hash:   "abc123", // Too short
+						Hash:   "abc123", // Short hash — chainhash.NewHashFromStr zero-pads it
 					},
 				},
 			},
 		}
 
-		_, err := bump.EncodeBinary()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "hash must be 32 bytes")
+		binary, err := bump.EncodeBinary()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, binary)
 	})
 }
 
