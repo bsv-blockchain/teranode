@@ -45,6 +45,7 @@ type HTTP struct {
 	startTime           time.Time
 	privKey             crypto.PrivKey
 	peerTierCache       *peerTierCache
+	rateLimiters        []*tieredRateLimiter
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -189,11 +190,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.Use(accessLogMiddleware(logger))
 
 	// Global per-IP tiered rate limiting.
+	// Rate limiters are created here; cleanup goroutines are started in Start() with a context.
+	var rateLimiters []*tieredRateLimiter
 	if tSettings.Asset.HTTPRateLimit > 0 {
-		e.Use(tieredRateLimitMiddleware(logger,
-			tSettings.Asset.HTTPRateLimit,
-			tSettings.Asset.HTTPPeerRateMultiplier,
-			"global"))
+		globalRL := newTieredRateLimiter(tSettings.Asset.HTTPRateLimit, tSettings.Asset.HTTPPeerRateMultiplier, "global")
+		e.Use(globalRL.Middleware())
+		rateLimiters = append(rateLimiters, globalRL)
 	}
 
 	// Request body size limit.
@@ -204,10 +206,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Heavy-endpoint rate limiter (applied per-route below).
 	var heavyRateLimiter echo.MiddlewareFunc
 	if tSettings.Asset.HTTPHeavyRateLimit > 0 {
-		heavyRateLimiter = tieredRateLimitMiddleware(logger,
-			tSettings.Asset.HTTPHeavyRateLimit,
-			tSettings.Asset.HTTPPeerRateMultiplier,
-			"heavy")
+		heavyRL := newTieredRateLimiter(tSettings.Asset.HTTPHeavyRateLimit, tSettings.Asset.HTTPPeerRateMultiplier, "heavy")
+		heavyRateLimiter = heavyRL.Middleware()
+		rateLimiters = append(rateLimiters, heavyRL)
 	}
 	heavyMW := func() []echo.MiddlewareFunc {
 		if heavyRateLimiter != nil {
@@ -223,6 +224,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e:             e,
 		startTime:     time.Now(),
 		peerTierCache: peerCache,
+		rateLimiters:  rateLimiters,
 	}
 
 	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
@@ -517,9 +519,12 @@ func (h *HTTP) Init(_ context.Context) error {
 }
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
-	// Start the peer tier cache refresh goroutine (stops when ctx is cancelled).
+	// Start background goroutines (all stop when ctx is cancelled).
 	if h.peerTierCache != nil {
 		h.peerTierCache.Start(ctx)
+	}
+	for _, rl := range h.rateLimiters {
+		rl.StartCleanup(ctx)
 	}
 
 	mode := "HTTPS"
@@ -654,9 +659,6 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			start := time.Now()
 
 			err := next(c)
-			if err != nil {
-				c.Error(err)
-			}
 
 			duration := time.Since(start)
 			status := c.Response().Status

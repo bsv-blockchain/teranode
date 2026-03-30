@@ -273,7 +273,7 @@ func _initPrometheusMetrics() {
 			Subsystem: "asset",
 			Name:      "http_response_size_bytes",
 			Help:      "HTTP response size in bytes",
-			Buckets:   prometheus.ExponentialBuckets(256, 4, 10), // 256B to ~256MB
+			Buckets:   prometheus.ExponentialBuckets(256, 4, 10), // 256B to ~64MB
 		},
 		[]string{"method", "path", "status"},
 	)
@@ -285,7 +285,7 @@ func _initPrometheusMetrics() {
 			Name:      "http_rate_limited_total",
 			Help:      "Number of rate-limited HTTP requests",
 		},
-		[]string{"tier"},
+		[]string{"scope"}, // "global" or "heavy" — identifies which rate limiter triggered
 	)
 
 	prometheusAssetHTTPInFlight = promauto.NewGauge(

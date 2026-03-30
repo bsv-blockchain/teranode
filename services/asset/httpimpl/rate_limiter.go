@@ -1,12 +1,12 @@
 package httpimpl
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/time/rate"
 )
@@ -17,34 +17,54 @@ type limiterEntry struct {
 	lastSeen atomic.Int64
 }
 
-// tieredRateLimitMiddleware returns Echo middleware that applies per-IP rate
-// limiting based on the caller's peer tier. Mining peers are exempt, known
-// peers get a multiplied rate, and unverified clients get the base rate.
-// Setting defaultRate to 0 disables the middleware entirely.
-func tieredRateLimitMiddleware(
-	logger ulogger.Logger,
-	defaultRate int,
-	peerMultiplier int,
-	tierLabel string,
-) echo.MiddlewareFunc {
-	var unverifiedLimiters sync.Map
-	var peerLimiters sync.Map
+// tieredRateLimiter holds the state for a tiered rate limiting middleware instance.
+// Call StartCleanup to begin the background cleanup goroutine.
+type tieredRateLimiter struct {
+	unverifiedLimiters sync.Map
+	peerLimiters       sync.Map
+	defaultRate        int
+	peerMultiplier     int
+	tierLabel          string
+}
 
-	// Background cleanup of stale entries every 5 minutes.
+// newTieredRateLimiter creates a tiered rate limiter. defaultRate <= 0 disables
+// the limiter entirely. peerMultiplier is clamped to a minimum of 1.
+func newTieredRateLimiter(defaultRate int, peerMultiplier int, tierLabel string) *tieredRateLimiter {
+	if peerMultiplier < 1 {
+		peerMultiplier = 1
+	}
+	return &tieredRateLimiter{
+		defaultRate:    defaultRate,
+		peerMultiplier: peerMultiplier,
+		tierLabel:      tierLabel,
+	}
+}
+
+// StartCleanup launches a background goroutine that removes stale limiter entries
+// every 5 minutes. The goroutine stops when ctx is cancelled.
+func (rl *tieredRateLimiter) StartCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			now := time.Now().Unix()
-			cleanupMap(&unverifiedLimiters, now)
-			cleanupMap(&peerLimiters, now)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now().Unix()
+				cleanupMap(&rl.unverifiedLimiters, now)
+				cleanupMap(&rl.peerLimiters, now)
+			}
 		}
 	}()
+}
 
+// Middleware returns the Echo middleware function for this rate limiter.
+func (rl *tieredRateLimiter) Middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if defaultRate == 0 {
+			if rl.defaultRate <= 0 {
 				return next(c)
 			}
 
@@ -59,30 +79,24 @@ func tieredRateLimitMiddleware(
 			var limiter *rate.Limiter
 			switch tier {
 			case tierPeer:
-				peerRate := defaultRate * peerMultiplier
-				val, loaded := peerLimiters.LoadOrStore(ip, &limiterEntry{
+				peerRate := rl.defaultRate * rl.peerMultiplier
+				val, _ := rl.peerLimiters.LoadOrStore(ip, &limiterEntry{
 					limiter: rate.NewLimiter(rate.Limit(peerRate), peerRate),
 				})
 				entry := val.(*limiterEntry)
 				entry.lastSeen.Store(time.Now().Unix())
-				if !loaded {
-					// newly created, entry already stored
-				}
 				limiter = entry.limiter
 			default:
-				val, loaded := unverifiedLimiters.LoadOrStore(ip, &limiterEntry{
-					limiter: rate.NewLimiter(rate.Limit(defaultRate), defaultRate),
+				val, _ := rl.unverifiedLimiters.LoadOrStore(ip, &limiterEntry{
+					limiter: rate.NewLimiter(rate.Limit(rl.defaultRate), rl.defaultRate),
 				})
 				entry := val.(*limiterEntry)
 				entry.lastSeen.Store(time.Now().Unix())
-				if !loaded {
-					// newly created, entry already stored
-				}
 				limiter = entry.limiter
 			}
 
 			if !limiter.Allow() {
-				prometheusAssetHTTPRateLimited.WithLabelValues(tierLabel).Inc()
+				prometheusAssetHTTPRateLimited.WithLabelValues(rl.tierLabel).Inc()
 				return c.JSON(http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 			}
 

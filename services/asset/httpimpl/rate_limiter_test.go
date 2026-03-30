@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +16,6 @@ func init() {
 }
 
 func TestTieredRateLimiter_UnverifiedGetsLimited(t *testing.T) {
-	logger := ulogger.TestLogger{}
 	e := echo.New()
 
 	// Set tier before rate limiter sees the request.
@@ -27,7 +25,7 @@ func TestTieredRateLimiter_UnverifiedGetsLimited(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(tieredRateLimitMiddleware(logger, 2, 1, "test"))
+	e.Use(newTieredRateLimiter(2, 1, "test").Middleware())
 	e.GET("/test", func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -46,7 +44,6 @@ func TestTieredRateLimiter_UnverifiedGetsLimited(t *testing.T) {
 }
 
 func TestTieredRateLimiter_MinerExempt(t *testing.T) {
-	logger := ulogger.TestLogger{}
 	e := echo.New()
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -55,7 +52,7 @@ func TestTieredRateLimiter_MinerExempt(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(tieredRateLimitMiddleware(logger, 1, 1, "test"))
+	e.Use(newTieredRateLimiter(1, 1, "test").Middleware())
 	e.GET("/test", func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -69,7 +66,6 @@ func TestTieredRateLimiter_MinerExempt(t *testing.T) {
 }
 
 func TestTieredRateLimiter_PeerGetsHigherRate(t *testing.T) {
-	logger := ulogger.TestLogger{}
 	e := echo.New()
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -78,7 +74,7 @@ func TestTieredRateLimiter_PeerGetsHigherRate(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(tieredRateLimitMiddleware(logger, 1, 5, "test"))
+	e.Use(newTieredRateLimiter(1, 5, "test").Middleware())
 	e.GET("/test", func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -92,7 +88,6 @@ func TestTieredRateLimiter_PeerGetsHigherRate(t *testing.T) {
 }
 
 func TestTieredRateLimiter_DisabledWhenZero(t *testing.T) {
-	logger := ulogger.TestLogger{}
 	e := echo.New()
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -101,7 +96,7 @@ func TestTieredRateLimiter_DisabledWhenZero(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(tieredRateLimitMiddleware(logger, 0, 1, "test"))
+	e.Use(newTieredRateLimiter(0, 1, "test").Middleware())
 	e.GET("/test", func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
