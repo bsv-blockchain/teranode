@@ -3935,66 +3935,22 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#consumer-watchdog-and-recovery" class="md-nav__link">
+  <a href="#consumer-resilience" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Consumer Watchdog and Recovery
+        Consumer Resilience
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Consumer Watchdog and Recovery">
+    <nav class="md-nav" aria-label="Consumer Resilience">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-the-watchdog-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How the Watchdog Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#watchdog-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Watchdog Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#force-recovery-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Force Recovery Process
-      
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#offset-out-of-range-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
         Offset Out of Range Handling
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#watchdog-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Watchdog Monitoring
       
     </span>
   </a>
@@ -4201,17 +4157,6 @@
     <span class="md-ellipsis">
       
         Offset Reset Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#channel-buffer-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Channel Buffer Tuning
       
     </span>
   </a>
@@ -7039,66 +6984,22 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#consumer-watchdog-and-recovery" class="md-nav__link">
+  <a href="#consumer-resilience" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Consumer Watchdog and Recovery
+        Consumer Resilience
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Consumer Watchdog and Recovery">
+    <nav class="md-nav" aria-label="Consumer Resilience">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-the-watchdog-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How the Watchdog Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#watchdog-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Watchdog Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#force-recovery-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Force Recovery Process
-      
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#offset-out-of-range-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
         Offset Out of Range Handling
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#watchdog-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Watchdog Monitoring
       
     </span>
   </a>
@@ -7305,17 +7206,6 @@
     <span class="md-ellipsis">
       
         Offset Reset Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#channel-buffer-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Channel Buffer Tuning
       
     </span>
   </a>
@@ -7529,7 +7419,7 @@
 </ul>
 </li>
 <li><a href="#3-reliability-and-recoverability">Reliability and Recoverability</a><ul>
-<li><a href="#consumer-watchdog-and-recovery">Consumer Watchdog and Recovery</a></li>
+<li><a href="#consumer-resilience">Consumer Resilience</a></li>
 </ul>
 </li>
 <li><a href="#4-configuration">Configuration</a><ul>
@@ -7643,42 +7533,21 @@
 <li>During Kafka downtime or unreliability, the node enters a safe state, preventing potential data inconsistencies or processing errors.</li>
 <li>Once Kafka is reported as healthy again, the node automatically resumes normal operation without manual intervention.</li>
 </ol>
-<h3 id="consumer-watchdog-and-recovery">Consumer Watchdog and Recovery</h3>
-<p>Teranode implements a consumer watchdog mechanism to detect and recover from stuck Kafka consumer situations. This addresses a known issue in the Sarama Kafka client where <code>Consume()</code> calls can hang indefinitely in <code>RefreshMetadata</code> operations.</p>
-<h4 id="how-the-watchdog-works">How the Watchdog Works</h4>
-<p>The watchdog monitors consumer health by tracking two key states:</p>
-<ol>
-<li><strong>Initial Stuck Detection</strong> - Detects when <code>Consume()</code> is called but <code>Setup()</code> is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)</li>
-<li><strong>Post-Error Stuck Detection</strong> - Detects when <code>Consume()</code> returns with an error, but subsequent retry attempts hang without completing <code>Setup()</code></li>
-</ol>
-<h4 id="watchdog-configuration">Watchdog Configuration</h4>
+<h3 id="consumer-resilience">Consumer Resilience</h3>
+<p>The franz-go Kafka client handles broker disconnections, metadata refresh, and reconnection internally. Key timeout settings that control this behavior:</p>
 <ul>
-<li><strong>Check Interval</strong>: 30 seconds (watchdog runs periodic checks)</li>
-<li><strong>Stuck Threshold</strong>: Configurable via <code>consumerTimeout</code> URL parameter (default: 90 seconds)</li>
-<li><strong>Recovery Action</strong>: Force recovery by closing and recreating the consumer group</li>
+<li><strong><code>FetchMaxWait</code></strong> (configured via <code>maxProcessingTime</code>, default 100ms): Broker responds within this time even with no data, preventing indefinite blocking.</li>
+<li><strong><code>SessionTimeout</code></strong> (default 10s): Broker detects dead consumers automatically.</li>
+<li><strong><code>HeartbeatInterval</code></strong> (default 3s): Consumer sends periodic heartbeats to the broker.</li>
+<li><strong><code>RebalanceTimeout</code></strong> (default 60s): Maximum time for consumer group rebalancing.</li>
 </ul>
-<h4 id="force-recovery-process">Force Recovery Process</h4>
-<p>When a stuck consumer is detected, the watchdog triggers force recovery:</p>
-<ol>
-<li>Closes the existing consumer group (unblocks the stuck <code>Consume()</code> call)</li>
-<li>Creates a new consumer group with identical configuration</li>
-<li>The retry loop automatically uses the new consumer</li>
-<li>Metrics are recorded for monitoring stuck duration and recovery attempts</li>
-</ol>
-<p>This mechanism simulates what happens when restarting a Kafka server in production, providing automatic recovery without manual intervention.</p>
 <h4 id="offset-out-of-range-handling">Offset Out of Range Handling</h4>
-<p>Teranode also handles offset out of range errors automatically:</p>
+<p>Teranode handles offset out of range errors automatically:</p>
 <ul>
 <li><strong>Cause</strong>: Committed offset has been deleted due to retention policies</li>
-<li><strong>Detection</strong>: Error handler detects <code>ErrOffsetOutOfRange</code> from Sarama</li>
-<li><strong>Recovery</strong>: Consumer is recreated, and Sarama's <code>offsetReset</code> configuration automatically resets to the configured offset (typically "latest")</li>
+<li><strong>Detection</strong>: franz-go detects offset out of range internally</li>
+<li><strong>Recovery</strong>: The <code>offsetReset</code> configuration resets to the configured offset (typically "latest")</li>
 <li><strong>No Data Loss</strong>: For critical topics, longer retention periods prevent offset expiration</li>
-</ul>
-<h4 id="watchdog-monitoring">Watchdog Monitoring</h4>
-<p>Prometheus metrics track watchdog activity:</p>
-<ul>
-<li><code>teranode_kafka_watchdog_recovery_attempts_total</code>: Counter of recovery attempts per topic and consumer group</li>
-<li><code>teranode_kafka_watchdog_stuck_duration_seconds</code>: Histogram of how long consumers were stuck before recovery (in seconds)</li>
 </ul>
 <h2 id="4-configuration">4. Configuration</h2>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/kafka_settings/">Kafka Settings Reference</a>.</p>
@@ -7702,7 +7571,7 @@
 </code></pre></div>
 <p><strong>Important</strong>: All three certificate files must be provided when using mutual TLS authentication. For server-side TLS only (broker certificate verification), only <code>KAFKA_TLS_CA_FILE</code> is required.</p>
 <h4 id="debug-logging">Debug Logging</h4>
-<p>Enable verbose Sarama (Kafka client library) logging for troubleshooting connection issues:</p>
+<p>Enable verbose Kafka client library logging for troubleshooting connection issues:</p>
 <div class="highlight"><pre><span></span><code><span class="na">kafka_enable_debug_logging</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">true</span>
 </code></pre></div>
 <p><strong>Warning</strong>: Debug logging is extremely verbose and should only be enabled for troubleshooting. Not recommended for production environments.</p>
@@ -7929,7 +7798,7 @@
 <td><code>maxProcessingTime</code></td>
 <td>int (ms)</td>
 <td>100</td>
-<td>Max time to process message before Sarama stops fetching</td>
+<td>Max time broker waits before returning fetch results when no records are available (franz-go FetchMaxWait)</td>
 </tr>
 <tr>
 <td><code>sessionTimeout</code></td>
@@ -7950,18 +7819,6 @@
 <td>Max time for all consumers to join rebalance</td>
 </tr>
 <tr>
-<td><code>channelBufferSize</code></td>
-<td>int</td>
-<td>256</td>
-<td>Number of messages buffered in internal channels</td>
-</tr>
-<tr>
-<td><code>consumerTimeout</code></td>
-<td>int (ms)</td>
-<td>90000</td>
-<td>Watchdog timeout for detecting stuck consumers</td>
-</tr>
-<tr>
 <td><code>offsetReset</code></td>
 <td>string</td>
 <td>-</td>
@@ -7971,18 +7828,17 @@
 </table>
 <p><strong>Important Constraints</strong>:</p>
 <ul>
-<li><code>sessionTimeout</code> must be &gt;= 3 × <code>heartbeatInterval</code> (Sarama requirement)</li>
-<li>For slow processing services (e.g., subtree validation), increase <code>maxProcessingTime</code> and <code>sessionTimeout</code> proportionally</li>
+<li><code>sessionTimeout</code> must be &gt;= 3 × <code>heartbeatInterval</code> (validated at consumer creation for both URL-based and direct configuration)</li>
+<li>For slow processing services (e.g., subtree validation), increase <code>sessionTimeout</code> and <code>heartbeatInterval</code> to prevent the broker from declaring the consumer dead during long processing</li>
 </ul>
 <h4 id="timeout-configuration-for-slow-processing-services">Timeout Configuration for Slow Processing Services</h4>
 <p>Services that process messages slowly (e.g., subtree validation with large datasets) need increased timeouts to prevent partition abandonment:</p>
-<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=4&amp;consumer_ratio=1&amp;maxProcessingTime=30000&amp;sessionTimeout=90000&amp;heartbeatInterval=20000
+<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=4&amp;consumer_ratio=1&amp;sessionTimeout=90000&amp;heartbeatInterval=20000
 </code></pre></div>
 <p>This configuration:</p>
 <ul>
-<li>Allows 30 seconds for message processing</li>
-<li>Gives 90 seconds before broker declares consumer dead (3× heartbeat interval)</li>
-<li>Sends heartbeats every 20 seconds</li>
+<li>Gives 90 seconds before broker declares consumer dead (3x heartbeat interval)</li>
+<li>Sends heartbeats every 20 seconds, allowing up to ~60 seconds of processing between heartbeats</li>
 </ul>
 <h4 id="offset-reset-configuration">Offset Reset Configuration</h4>
 <p>Control how consumers handle offset out of range errors:</p>
@@ -7997,15 +7853,6 @@ kafka://localhost:9092/blocks?offsetReset=earliest
 <li><code>latest</code>: Skip to newest message (data loss acceptable)</li>
 <li><code>earliest</code>: Reprocess from oldest available message (no data loss if within retention)</li>
 <li><code>""</code> (empty): Use <code>replay</code> parameter setting (legacy behavior)</li>
-</ul>
-<h4 id="channel-buffer-tuning">Channel Buffer Tuning</h4>
-<p>Increase channel buffer size for high-throughput consumers to reduce context switching:</p>
-<div class="highlight"><pre><span></span><code>kafka://localhost:9092/validator-txs?partitions=8&amp;consumer_ratio=2&amp;channelBufferSize=1024
-</code></pre></div>
-<p><strong>Trade-offs</strong>:</p>
-<ul>
-<li>Larger buffers improve throughput but increase memory usage</li>
-<li>Smaller buffers reduce memory but may cause processing delays</li>
 </ul>
 <h2 id="7-service-specific-kafka-settings">7. Service-Specific Kafka Settings</h2>
 <h3 id="auto-commit-behavior-by-service-criticality">Auto-Commit Behavior by Service Criticality</h3>

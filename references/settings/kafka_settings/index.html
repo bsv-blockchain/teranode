@@ -5585,17 +5585,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#consumer-watchdog" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Consumer Watchdog
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#service-usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5707,10 +5696,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#legacy-service_1" class="md-nav__link">
+  <a href="#legacy-service-tls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Legacy Service
+        Legacy Service (TLS)
       
     </span>
   </a>
@@ -5718,10 +5707,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#blockchain-service_1" class="md-nav__link">
+  <a href="#blockchain-service-tls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Blockchain Service
+        Blockchain Service (TLS)
       
     </span>
   </a>
@@ -6939,17 +6928,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#consumer-watchdog" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Consumer Watchdog
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#service-usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7061,10 +7039,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#legacy-service_1" class="md-nav__link">
+  <a href="#legacy-service-tls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Legacy Service
+        Legacy Service (TLS)
       
     </span>
   </a>
@@ -7072,10 +7050,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#blockchain-service_1" class="md-nav__link">
+  <a href="#blockchain-service-tls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Blockchain Service
+        Blockchain Service (TLS)
       
     </span>
   </a>
@@ -7251,7 +7229,7 @@
 <td><code>maxProcessingTime</code></td>
 <td>int</td>
 <td>100</td>
-<td>Max time (ms) to process a message before Sarama stops fetching. Must exceed actual processing time</td>
+<td>Max time (ms) broker waits before returning fetch results when no records are available (franz-go FetchMaxWait)</td>
 </tr>
 <tr>
 <td><code>sessionTimeout</code></td>
@@ -7270,18 +7248,6 @@
 <td>int</td>
 <td>60000</td>
 <td>Max time (ms) for all consumers to join rebalance</td>
-</tr>
-<tr>
-<td><code>channelBufferSize</code></td>
-<td>int</td>
-<td>256</td>
-<td>Number of messages buffered in internal channels</td>
-</tr>
-<tr>
-<td><code>consumerTimeout</code></td>
-<td>int</td>
-<td>90000</td>
-<td>Watchdog timeout (ms). Triggers recovery if no messages received and Setup() not called</td>
 </tr>
 </tbody>
 </table>
@@ -7384,7 +7350,7 @@
 </tbody>
 </table>
 <p><strong>Example Consumer URL:</strong></p>
-<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=8&amp;sessionTimeout=15000&amp;heartbeatInterval=5000&amp;maxProcessingTime=30000
+<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=8&amp;sessionTimeout=15000&amp;heartbeatInterval=5000
 </code></pre></div>
 <p><strong>Example Async Producer URL:</strong></p>
 <div class="highlight"><pre><span></span><code>kafka://localhost:9092/blocks?partitions=4&amp;replication=3&amp;retention=3600000&amp;flush_frequency=5s&amp;flush_messages=100000
@@ -7615,7 +7581,7 @@
 <td>EnableDebugLogging</td>
 <td>false</td>
 <td>kafka_enable_debug_logging</td>
-<td>Verbose Sarama logging</td>
+<td>Verbose Kafka client logging</td>
 </tr>
 </tbody>
 </table>
@@ -7684,10 +7650,10 @@
 <li><strong>Individual Settings</strong> (e.g., <code>InvalidBlocks</code>, <code>Hosts</code>, <code>Port</code>) - fallback</li>
 </ol>
 <h2 id="consumer-timeout-constraints">Consumer Timeout Constraints</h2>
-<p><strong>Critical Validation Rule:</strong>
+<p><strong>Critical Validation Rule:</strong></p>
 <div class="highlight"><pre><span></span><code>sessionTimeout &gt;= 3 * heartbeatInterval
-</code></pre></div></p>
-<p>This constraint is enforced by Sarama. Consumer creation will fail if violated.</p>
+</code></pre></div>
+<p>This constraint is validated during consumer creation for both URL-based and direct configuration. Consumer creation will fail if this rule is violated.</p>
 <p><strong>Example Valid Configuration:</strong></p>
 <ul>
 <li><code>heartbeatInterval=5000</code> (5s)</li>
@@ -7695,21 +7661,8 @@
 </ul>
 <p><strong>Example Invalid Configuration:</strong></p>
 <ul>
-<li><code>heartbeatInterval=5000</code> (5s)  </li>
+<li><code>heartbeatInterval=5000</code> (5s)</li>
 <li><code>sessionTimeout=10000</code> (10s) ✗ Invalid: 10000 &lt; 15000</li>
-</ul>
-<h2 id="consumer-watchdog">Consumer Watchdog</h2>
-<p>The consumer watchdog monitors for stuck consumers and automatically recovers by recreating the consumer group.</p>
-<p><strong>Behavior:</strong></p>
-<ul>
-<li>Checks every 30 seconds</li>
-<li>Triggers recovery if <code>Consume()</code> is stuck for longer than <code>consumerTimeout</code> (default 90s)</li>
-<li>Detects RefreshMetadata hangs and offset-related issues</li>
-<li>Automatically recreates consumer group on recovery</li>
-</ul>
-<p><strong>Configuration:</strong></p>
-<ul>
-<li><code>consumerTimeout</code> URL parameter (default: 90000ms)</li>
 </ul>
 <h2 id="service-usage">Service Usage</h2>
 <h3 id="block-assembly-service">Block Assembly Service</h3>
@@ -7757,12 +7710,12 @@
 <li>Applies TLS settings from KafkaSettings</li>
 <li>Consumer group: <code>{topic}-consumer</code></li>
 </ul>
-<h3 id="legacy-service_1">Legacy Service</h3>
+<h3 id="legacy-service-tls">Legacy Service (TLS)</h3>
 <ul>
 <li>Uses <code>LegacyInvConfig</code>, <code>BlocksFinalConfig</code>, <code>TxMetaConfig</code></li>
 <li>Applies TLS settings from KafkaSettings</li>
 </ul>
-<h3 id="blockchain-service_1">Blockchain Service</h3>
+<h3 id="blockchain-service-tls">Blockchain Service (TLS)</h3>
 <ul>
 <li>Uses async producer for block notifications</li>
 <li>Applies TLS settings from KafkaSettings</li>
@@ -7772,7 +7725,7 @@
 <div class="highlight"><pre><span></span><code>kafka://localhost:9092/blocks?partitions=8&amp;replication=3&amp;retention=3600000&amp;flush_bytes=10485760&amp;flush_messages=100000&amp;flush_frequency=5s
 </code></pre></div>
 <h3 id="slow-processing-consumer">Slow Processing Consumer</h3>
-<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=4&amp;maxProcessingTime=30000&amp;sessionTimeout=60000&amp;heartbeatInterval=20000&amp;consumerTimeout=120000
+<div class="highlight"><pre><span></span><code>kafka://localhost:9092/subtrees?partitions=4&amp;sessionTimeout=60000&amp;heartbeatInterval=20000
 </code></pre></div>
 <h3 id="low-latency-producer">Low-Latency Producer</h3>
 <div class="highlight"><pre><span></span><code>kafka://localhost:9092/txmeta?partitions=4&amp;flush_bytes=524288&amp;flush_messages=1000&amp;flush_frequency=1s
@@ -7781,13 +7734,13 @@
 <div class="highlight"><pre><span></span><code>kafka://localhost:9092/blocks?partitions=2&amp;offsetReset=latest&amp;replay=0
 </code></pre></div>
 <h3 id="tls-enabled-configuration">TLS-Enabled Configuration</h3>
-<p>Environment variables:
+<p>Environment variables:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">KAFKA_ENABLE_TLS</span><span class="o">=</span><span class="nb">true</span>
 <span class="nv">KAFKA_TLS_CA_FILE</span><span class="o">=</span>/path/to/ca.pem
 <span class="nv">KAFKA_TLS_CERT_FILE</span><span class="o">=</span>/path/to/client-cert.pem
 <span class="nv">KAFKA_TLS_KEY_FILE</span><span class="o">=</span>/path/to/client-key.pem
 <span class="nv">kafka_blocksConfig</span><span class="o">=</span>kafka://broker1:9093,broker2:9093/blocks?partitions<span class="o">=</span><span class="m">4</span>
-</code></pre></div></p>
+</code></pre></div>
 <p><strong>Note:</strong> <code>KAFKA_TLS_CERT_FILE</code> and <code>KAFKA_TLS_KEY_FILE</code> must both be provided for mutual TLS authentication. Omit both for server-only TLS.</p>
 <h3 id="memory-testing">Memory Testing</h3>
 <div class="highlight"><pre><span></span><code>memory://test_blocks?partitions=2&amp;replay=1
