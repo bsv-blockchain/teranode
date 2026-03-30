@@ -1364,6 +1364,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#option-1-using-admin-dashboard-easiest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Using Admin Dashboard (Easiest)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-using-teranode-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Using teranode-cli
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#step-6-verify-services" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7555,6 +7577,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#option-1-using-admin-dashboard-easiest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Using Admin Dashboard (Easiest)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-using-teranode-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Using teranode-cli
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#step-6-verify-services" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8422,9 +8466,9 @@ git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-block
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 <p>Force the node to transition to Run mode:</p>
-<p><strong>Option 1: Using Admin Dashboard (Easiest)</strong></p>
+<h4 id="option-1-using-admin-dashboard-easiest">Option 1: Using Admin Dashboard (Easiest)</h4>
 <p>Access the dashboard at <a href="http://localhost:8090/admin">http://localhost:8090/admin</a> and use the FSM State controls to transition to <strong>RUNNING</strong> or <strong>LEGACYSYNCING</strong>.</p>
-<p><strong>Option 2: Using teranode-cli</strong></p>
+<h4 id="option-2-using-teranode-cli">Option 2: Using teranode-cli</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Transition to Run mode</span>
 docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
 
@@ -8524,7 +8568,7 @@ docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </spa
 <td>kafka-console-shared</td>
 <td>2 minutes ago</td>
 <td>Up 2 minutes</td>
-<td>0.0.0.0:8080-&gt;8080/tcp, :::8080-&gt;8080/tcp</td>
+<td>0.0.0.0:9095-&gt;8080/tcp, :::9095-&gt;8080/tcp</td>
 </tr>
 <tr>
 <td>kafka-shared</td>
@@ -8533,7 +8577,7 @@ docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </spa
 <td>kafka-shared</td>
 <td>2 minutes ago</td>
 <td>Up 2 minutes</td>
-<td>8082/tcp, 9644/tcp, 0.0.0.0:9092-9093-&gt;9092-9093/tcp, :::9092-9093-&gt;9092-9093/tcp, 0.0.0.0:32794-&gt;8081/tcp, [::]:32794-&gt;8081/tcp</td>
+<td>8082/tcp, 9644/tcp, 0.0.0.0:9092-9093-&gt;9092-9093/tcp, :::9092-9093-&gt;9092-9093/tcp, 0.0.0.0:9096-&gt;8081/tcp, [::]:9096-&gt;8081/tcp</td>
 </tr>
 <tr>
 <td>legacy</td>
@@ -8595,7 +8639,7 @@ docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </spa
 </ul>
 </li>
 <li>
-<p><strong>Kafka Console</strong>: Available internally on port 8080</p>
+<p><strong>Kafka Console</strong>: Available at <code>http://localhost:9095</code></p>
 </li>
 <li>
 <p><strong>Prometheus</strong>: Available internally on port 9090</p>
