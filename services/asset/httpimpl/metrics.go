@@ -54,7 +54,7 @@ var (
 	// prometheusAssetHTTPResponseSize tracks HTTP response sizes by route
 	prometheusAssetHTTPResponseSize *prometheus.HistogramVec
 
-	// prometheusAssetHTTPRateLimited counts rate-limited requests by tier
+	// prometheusAssetHTTPRateLimited counts rate-limited requests by scope (global/heavy)
 	prometheusAssetHTTPRateLimited *prometheus.CounterVec
 
 	// prometheusAssetHTTPInFlight tracks in-flight HTTP requests

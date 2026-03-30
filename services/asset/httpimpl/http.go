@@ -143,6 +143,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 			}
 			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
 		}
+		if len(trustOpts) == 0 {
+			logger.Warnf("[Asset] asset_trustedProxyCIDRs is set but no valid CIDRs were parsed; using default XFF extraction")
+		}
 		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
 	} else {
 		e.IPExtractor = echo.ExtractIPFromXFFHeader()
@@ -659,6 +662,12 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			start := time.Now()
 
 			err := next(c)
+			if err != nil {
+				// Invoke the error handler so the response status/size are finalized
+				// before we read them for metrics and logging. Return nil afterward
+				// to prevent Echo from invoking the error handler a second time.
+				c.Error(err)
+			}
 
 			duration := time.Since(start)
 			status := c.Response().Status
@@ -676,7 +685,7 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			logger.Infof("[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s uri=%s",
 				method, path, ip, status, duration, size, tier, c.Request().RequestURI)
 
-			return err
+			return nil
 		}
 	}
 }
