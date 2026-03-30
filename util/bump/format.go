@@ -68,15 +68,6 @@ func hashToDisplayHex(h chainhash.Hash) string {
 	return h.String()
 }
 
-// reverseBytes returns a new byte slice with the bytes in reverse order.
-func reverseBytes(b []byte) []byte {
-	r := make([]byte, len(b))
-	for i := range b {
-		r[i] = b[len(b)-1-i]
-	}
-	return r
-}
-
 // ConvertToBUMP converts a standard merkle proof to BUMP format.
 // This function takes the existing Teranode merkle proof structure and converts
 // it to the standardized BUMP format for compatibility with BSV ecosystem tools.
@@ -212,17 +203,13 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 					return nil, errors.New(fmt.Sprintf("hash required for flag %02x at level %d, node %d", flag, levelIdx, nodeIdx))
 				}
 
-				hashBytes, err := hex.DecodeString(node.Hash)
+				h, err := chainhash.NewHashFromStr(node.Hash)
 				if err != nil {
-					return nil, errors.New(fmt.Sprintf("invalid hash hex at level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+					return nil, errors.New(fmt.Sprintf("invalid hash at level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
 				}
 
-				if len(hashBytes) != 32 {
-					return nil, errors.New(fmt.Sprintf("hash must be 32 bytes at level %d, node %d, got %d bytes", levelIdx, nodeIdx, len(hashBytes)))
-				}
-
-				// Node.Hash is in display order (big-endian); BRC-74 binary uses internal order (little-endian)
-				if _, err := buf.Write(reverseBytes(hashBytes)); err != nil {
+				// chainhash.NewHashFromStr converts display-order hex to internal (little-endian) byte order
+				if _, err := buf.Write(h[:]); err != nil {
 					return nil, errors.New(fmt.Sprintf("failed to write hash for level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
 				}
 			}

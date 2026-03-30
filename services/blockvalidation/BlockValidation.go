@@ -1359,7 +1359,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
-			u.computeAndSetCoinbaseBUMP(ctx, block)
+			if err := u.computeAndSetCoinbaseBUMP(ctx, block); err != nil {
+				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
+			}
 
 			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID); err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
@@ -1528,7 +1530,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				storeCtx, storeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer storeCancel()
 
-				u.computeAndSetCoinbaseBUMP(storeCtx, block)
+				if err := u.computeAndSetCoinbaseBUMP(storeCtx, block); err != nil {
+					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
+				}
 
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID); err != nil {
 					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
@@ -1859,22 +1863,20 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 // This is needed for peer-received blocks, which don't have a BUMP computed during block assembly.
 // It loads subtree 0 from the blob store, computes the within-subtree proof for the coinbase,
 // and combines it with the block-level proof from the subtree hashes.
-func (u *BlockValidation) computeAndSetCoinbaseBUMP(ctx context.Context, block *model.Block) {
+func (u *BlockValidation) computeAndSetCoinbaseBUMP(ctx context.Context, block *model.Block) error {
 	if len(block.CoinbaseBUMP) > 0 || len(block.Subtrees) == 0 {
-		return
+		return nil
 	}
 
 	reader, err := u.subtreeStore.GetIoReader(ctx, block.Subtrees[0][:], fileformat.FileTypeSubtree)
 	if err != nil {
-		u.logger.Warnf("[ValidateBlock][%s] failed to load subtree 0 for coinbase BUMP: %v", block.Hash().String(), err)
-		return
+		return errors.NewProcessingError("failed to load subtree 0 for coinbase BUMP", err)
 	}
 	defer reader.Close()
 
 	subtree0, err := subtreepkg.NewSubtreeFromReader(reader)
 	if err != nil {
-		u.logger.Warnf("[ValidateBlock][%s] failed to parse subtree 0 for coinbase BUMP: %v", block.Hash().String(), err)
-		return
+		return errors.NewProcessingError("failed to parse subtree 0 for coinbase BUMP", err)
 	}
 
 	// Replace coinbase placeholder with real coinbase txid (same as blockassembly does
@@ -1885,7 +1887,13 @@ func (u *BlockValidation) computeAndSetCoinbaseBUMP(ctx context.Context, block *
 		subtree0.ReplaceRootNode(coinbaseTxID, 0, uint64(block.CoinbaseTx.Size()))
 	}
 
-	block.CoinbaseBUMP = bump.ComputeCoinbaseBUMP(subtree0, block.Subtrees, block.Height)
+	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, block.Subtrees, block.Height)
+	if err != nil {
+		return errors.NewProcessingError("failed to compute coinbase BUMP", err)
+	}
+
+	block.CoinbaseBUMP = bumpBytes
+	return nil
 }
 
 // checkOldBlockIDs verifies that referenced blocks are in the current chain.

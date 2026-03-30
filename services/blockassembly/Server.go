@@ -1521,7 +1521,13 @@ func (ba *BlockAssembly) computeCoinbaseBUMP(jobID string, subtreesInJob []*subt
 		subtreeHashPtrs[i] = &subtreeHashes[i]
 	}
 
-	return bump.ComputeCoinbaseBUMP(subtreesInJob[0], subtreeHashPtrs, blockHeight)
+	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtreesInJob[0], subtreeHashPtrs, blockHeight)
+	if err != nil {
+		ba.logger.Warnf("[computeCoinbaseBUMP][%s] failed to compute coinbase BUMP: %v", jobID, err)
+		return nil
+	}
+
+	return bumpBytes
 }
 
 // SubtreeCount returns the current number of subtrees managed by the block assembler.

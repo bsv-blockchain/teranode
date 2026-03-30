@@ -49,7 +49,8 @@ func TestComputeCoinbaseBUMP_EndToEnd(t *testing.T) {
 
 		// Generate coinbase BUMP (single subtree block)
 		subtreeHashes := []*chainhash.Hash{subtreeRoot}
-		bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 100)
+		bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 100)
+		require.NoError(t, err)
 		require.NotNil(t, bumpBytes)
 
 		// Parse with go-bc reference implementation
@@ -120,7 +121,8 @@ func TestComputeCoinbaseBUMP_EndToEnd(t *testing.T) {
 
 		// Generate coinbase BUMP
 		subtreeHashes := []*chainhash.Hash{root0, root1}
-		bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 200)
+		bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 200)
+		require.NoError(t, err)
 		require.NotNil(t, bumpBytes)
 
 		// Parse with go-bc
@@ -164,7 +166,8 @@ func TestComputeCoinbaseBUMP_EndToEnd(t *testing.T) {
 		subtree0.Nodes = append(subtree0.Nodes, subtreepkg.Node{Hash: *tx1Hash, Fee: 1, SizeInBytes: 100})
 
 		subtreeHashes := []*chainhash.Hash{subtree0.RootHash()}
-		bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 500)
+		bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 500)
+		require.NoError(t, err)
 		require.NotNil(t, bumpBytes)
 
 		// Parse with go-bc and re-encode
@@ -259,7 +262,8 @@ func TestBUMP_KnownMerkleRoot(t *testing.T) {
 
 		// Generate coinbase BUMP
 		subtreeHashes := []*chainhash.Hash{subtree0.RootHash()}
-		bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, blockHeight)
+		bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, blockHeight)
+		require.NoError(t, err)
 		require.NotNil(t, bumpBytes)
 
 		// Parse with go-bc and verify level 0 has coinbase txid + sibling
@@ -404,7 +408,8 @@ func TestBUMP_RealBlock_12069(t *testing.T) {
 
 	// Generate coinbase BUMP
 	subtreeHashes := []*chainhash.Hash{subtree0.RootHash()}
-	bumpBytes := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 12069)
+	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, 12069)
+	require.NoError(t, err)
 	require.NotNil(t, bumpBytes)
 
 	t.Run("exact BUMP hex matches expected", func(t *testing.T) {

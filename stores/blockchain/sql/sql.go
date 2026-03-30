@@ -372,6 +372,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 				return errors.NewStorageError("could not add coinbase_bump column to blocks table", err)
 			}
 		} else {
+			_ = db.Close()
 			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
 		}
 	}
@@ -629,6 +630,7 @@ func createSqliteSchema(db *usql.DB) error {
 				return errors.NewStorageError("could not add coinbase_bump column to blocks table", err)
 			}
 		} else {
+			_ = db.Close()
 			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
 		}
 	}
