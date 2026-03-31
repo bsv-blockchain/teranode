@@ -125,6 +125,10 @@ build-tx-blaster: set_debug_flags
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
 
+.PHONY: build-teranode-dev
+build-teranode-dev:
+	CGO_ENABLED=0 go build -o teranode-dev ./cmd/teranodedev
+
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/

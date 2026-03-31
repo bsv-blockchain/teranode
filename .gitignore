@@ -106,5 +106,8 @@ teranode.logrotate
 teranode
 
 settings_local.conf
+.teranode-dev.yaml
+.teranode-dev.pid
+teranode-dev
 .gitnexus
 .worktrees

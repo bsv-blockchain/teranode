@@ -402,6 +402,60 @@ go mod download
 
 This will effectively reset your cache and re-download all dependencies.
 
+## Quick Setup with teranode-dev
+
+As an alternative to the manual steps above, you can use the `teranode-dev` CLI tool to automate the entire local setup process. It asks a few questions and handles everything else - prerequisites, settings, Docker containers, and building.
+
+### Build the tool
+
+```bash
+make build-teranode-dev
+```
+
+### Run the interactive wizard
+
+```bash
+./teranode-dev init
+```
+
+The wizard will ask for:
+
+1. Your developer name (for `SETTINGS_CONTEXT`)
+2. UTXO storage backend (SQLite, PostgreSQL, or Aerospike)
+3. Network (regtest, testnet, or mainnet)
+4. Whether to use Docker-based Kafka (default: in-memory)
+5. Whether to enable monitoring (Grafana + Prometheus)
+6. Whether to enable tracing (Jaeger)
+
+It then automatically:
+
+- Checks prerequisites (Go, Docker, Python)
+- Generates `settings_local.conf` entries
+- Creates data directories
+- Configures `/etc/hosts` for Kafka (if selected)
+- Starts Docker containers and waits for health
+- Builds `teranode.run` with the correct build tags
+
+### Other commands
+
+```bash
+./teranode-dev doctor   # Check prerequisites and configuration
+./teranode-dev up       # Start infrastructure containers
+./teranode-dev down     # Stop infrastructure containers
+./teranode-dev status   # Show running services and health
+./teranode-dev start    # Start teranode daemon with log rotation
+./teranode-dev stop     # Stop teranode daemon
+./teranode-dev clean    # Wipe data directory
+```
+
+### Non-interactive mode
+
+For CI or scripting:
+
+```bash
+./teranode-dev init --non-interactive --name=liam --utxo=sqlite --network=regtest
+```
+
 ## Next Steps
 
 - [Check our Git Commit Signing Setup Guide for Contributors](../../references/gitCommitSigningSetupGuide.md)
