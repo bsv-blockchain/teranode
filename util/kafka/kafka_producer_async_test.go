@@ -326,11 +326,15 @@ func TestKafkaAsyncProducerBrokersURLParsing(t *testing.T) {
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)
 	require.NoError(t, err)
 
+	// In-memory producers return nil from BrokersURL() since there are no real brokers
 	brokers := producer.BrokersURL()
-	assert.Len(t, brokers, 3)
-	assert.Equal(t, "broker1:9092", brokers[0])
-	assert.Equal(t, "broker2:9092", brokers[1])
-	assert.Equal(t, "broker3:9092", brokers[2])
+	assert.Nil(t, brokers)
+
+	// But the config still has the parsed broker URLs
+	assert.Len(t, producer.Config.BrokersURL, 3)
+	assert.Equal(t, "broker1:9092", producer.Config.BrokersURL[0])
+	assert.Equal(t, "broker2:9092", producer.Config.BrokersURL[1])
+	assert.Equal(t, "broker3:9092", producer.Config.BrokersURL[2])
 }
 
 func TestKafkaAsyncProducerWithMultipleBrokers(t *testing.T) {

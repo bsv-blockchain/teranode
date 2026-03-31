@@ -741,7 +741,6 @@ func (k *KafkaConsumerGroup) BrokersURL() []string {
 	return k.Config.BrokersURL
 }
 
-
 // PauseAll suspends fetching from all partitions.
 func (k *KafkaConsumerGroup) PauseAll() {
 	if k.isInMemory {

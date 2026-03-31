@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/process"
 	devsettings "github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/settings"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/wizard"
+	"github.com/bsv-blockchain/teranode/errors"
 	teranodeSettings "github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	cli "github.com/urfave/cli/v3"
@@ -116,7 +117,7 @@ func initCmd() *cli.Command {
 				}
 
 				if cfg.DevName == "" || cfg.UTXOBackend == "" || cfg.Network == "" {
-					return fmt.Errorf("--name, --utxo, and --network are required in non-interactive mode")
+					return errors.NewProcessingError("--name, --utxo, and --network are required in non-interactive mode")
 				}
 			} else {
 				cfg, err = wizard.Run(existing)
@@ -134,18 +135,18 @@ func initCmd() *cli.Command {
 			prereq.PrintResults(results)
 
 			if prereq.HasFailures(results) {
-				return fmt.Errorf("prerequisite checks failed, fix the issues above and try again")
+				return errors.NewProcessingError("prerequisite checks failed, fix the issues above and try again")
 			}
 
 			// Save config early so choices persist even if later steps fail
 			if err := config.Save(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to save config: %w", err)
+				return errors.NewProcessingError("failed to save config", err)
 			}
 
 			// Generate settings_local.conf
 			fmt.Println("\nGenerating settings_local.conf...")
 			if err := devsettings.Generate(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to generate settings: %w", err)
+				return errors.NewProcessingError("failed to generate settings", err)
 			}
 
 			fmt.Println("  Done.")
@@ -153,7 +154,7 @@ func initCmd() *cli.Command {
 			// Create data directories
 			fmt.Println("\nCreating data directories...")
 			if err := docker.CreateDataDirs(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to create data directories: %w", err)
+				return errors.NewProcessingError("failed to create data directories", err)
 			}
 
 			fmt.Println("  Done.")
@@ -170,13 +171,13 @@ func initCmd() *cli.Command {
 			// Start Docker containers
 			fmt.Println("\nStarting Docker containers...")
 			if err := docker.Up(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to start containers: %w", err)
+				return errors.NewProcessingError("failed to start containers", err)
 			}
 
 			// Build teranode
 			fmt.Println("\nBuilding teranode...")
 			if err := build.Build(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to build teranode: %w", err)
+				return errors.NewProcessingError("failed to build teranode", err)
 			}
 
 			// Print summary
@@ -357,7 +358,7 @@ func startCmd() *cli.Command {
 				// Re-check after potential fix
 				chainResult = prereq.CheckChain(cfg.Network, storeURL, dataFolder)
 				if !chainResult.OK && !chainResult.NoDatabase {
-					return fmt.Errorf("chain mismatch not resolved, cannot start")
+					return errors.NewProcessingError("chain mismatch not resolved, cannot start")
 				}
 			}
 
@@ -395,18 +396,18 @@ func generateCmd() *cli.Command {
 			// Check if network supports generation
 			params, err := chaincfg.GetChainParams(cfg.Network)
 			if err != nil {
-				return fmt.Errorf("unknown network: %s", cfg.Network)
+				return errors.NewProcessingError("unknown network: %s", cfg.Network)
 			}
 
 			if !params.GenerateSupported {
-				return fmt.Errorf("block generation is not supported on %s", cfg.Network)
+				return errors.NewProcessingError("block generation is not supported on %s", cfg.Network)
 			}
 
 			numBlocks := 1
 			if cmd.Args().Len() > 0 {
 				n, err := strconv.Atoi(cmd.Args().First())
 				if err != nil || n <= 0 {
-					return fmt.Errorf("invalid number of blocks: %s", cmd.Args().First())
+					return errors.NewProcessingError("invalid number of blocks: %s", cmd.Args().First())
 				}
 
 				numBlocks = n
@@ -438,13 +439,13 @@ func generateCmd() *cli.Command {
 
 			resp, err := client.Do(req)
 			if err != nil {
-				return fmt.Errorf("RPC request failed: %w", err)
+				return errors.NewProcessingError("RPC request failed", err)
 			}
 			defer resp.Body.Close()
 
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return fmt.Errorf("failed to read response: %w", err)
+				return errors.NewProcessingError("failed to read response", err)
 			}
 
 			// Parse response to extract block hashes or error
@@ -457,11 +458,11 @@ func generateCmd() *cli.Command {
 			}
 
 			if err := json.Unmarshal(body, &rpcResp); err != nil {
-				return fmt.Errorf("failed to parse response: %s", string(body))
+				return errors.NewProcessingError("failed to parse response: %s", string(body))
 			}
 
 			if rpcResp.Error != nil {
-				return fmt.Errorf("RPC error: %s", rpcResp.Error.Message)
+				return errors.NewProcessingError("RPC error: %s", rpcResp.Error.Message)
 			}
 
 			fmt.Printf("Generated %d block(s):\n", len(rpcResp.Result))
@@ -552,13 +553,13 @@ Examples:
 
 			resp, err := client.Do(req)
 			if err != nil {
-				return fmt.Errorf("RPC request failed (is teranode running?): %w", err)
+				return errors.NewProcessingError("RPC request failed (is teranode running?)", err)
 			}
 			defer resp.Body.Close()
 
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return fmt.Errorf("failed to read response: %w", err)
+				return errors.NewProcessingError("failed to read response", err)
 			}
 
 			// Parse response
@@ -571,11 +572,11 @@ Examples:
 			}
 
 			if err := json.Unmarshal(body, &rpcResp); err != nil {
-				return fmt.Errorf("failed to parse response: %s", string(body))
+				return errors.NewProcessingError("failed to parse response: %s", string(body))
 			}
 
 			if rpcResp.Error != nil {
-				return fmt.Errorf("RPC error (%d): %s", rpcResp.Error.Code, rpcResp.Error.Message)
+				return errors.NewProcessingError("RPC error (%d): %s", rpcResp.Error.Code, rpcResp.Error.Message)
 			}
 
 			// Pretty-print result

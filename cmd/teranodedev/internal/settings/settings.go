@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 const settingsFile = "settings_local.conf"
@@ -26,7 +27,7 @@ func Generate(projectRoot string, cfg *config.Config) error {
 
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read %s: %w", settingsFile, err)
+		return errors.NewProcessingError("failed to read %s", settingsFile, err)
 	}
 
 	block := generateBlock(cfg)

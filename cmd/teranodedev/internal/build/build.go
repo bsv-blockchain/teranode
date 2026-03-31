@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // Build compiles the teranode binary with the appropriate build tags.
@@ -28,7 +29,7 @@ func Build(projectRoot string, cfg *config.Config) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build failed: %w", err)
+		return errors.NewProcessingError("build failed", err)
 	}
 
 	fmt.Println("  Built teranode.run")

@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 const hostsFile = "/etc/hosts"
@@ -14,7 +16,7 @@ const kafkaEntry = "127.0.0.1\tkafka-shared"
 func EnsureKafkaEntry() error {
 	data, err := os.ReadFile(hostsFile)
 	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", hostsFile, err)
+		return errors.NewProcessingError("failed to read %s", hostsFile, err)
 	}
 
 	if strings.Contains(string(data), "kafka-shared") {
@@ -30,7 +32,7 @@ func EnsureKafkaEntry() error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to update /etc/hosts: %w", err)
+		return errors.NewProcessingError("failed to update /etc/hosts", err)
 	}
 
 	fmt.Println("  Added successfully.")

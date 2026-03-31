@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9.]*$`)
@@ -50,7 +51,7 @@ func Run(existing *config.Config) (*config.Config, error) {
 	}
 
 	if !validName.MatchString(name) {
-		return nil, fmt.Errorf("invalid name %q - use letters, numbers, and dots only, starting with a letter", name)
+		return nil, errors.NewProcessingError("invalid name %q - use letters, numbers, and dots only, starting with a letter", name)
 	}
 
 	cfg.DevName = name
@@ -126,7 +127,7 @@ func askString(scanner *bufio.Scanner, prompt, defaultVal string) (string, error
 	}
 
 	if !scanner.Scan() {
-		return "", fmt.Errorf("no input")
+		return "", errors.NewProcessingError("no input")
 	}
 
 	val := strings.TrimSpace(scanner.Text())
@@ -166,7 +167,7 @@ func askChoice(scanner *bufio.Scanner, prompt string, options []string, defaultI
 		}
 	}
 
-	return 0, fmt.Errorf("invalid choice %q - enter a number 1-%d", val, len(options))
+	return 0, errors.NewProcessingError("invalid choice %q - enter a number 1-%d", val, len(options))
 }
 
 func askYesNo(scanner *bufio.Scanner, prompt string, defaultVal bool) (bool, error) {

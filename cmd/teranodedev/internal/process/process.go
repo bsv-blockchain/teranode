@@ -12,6 +12,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	"github.com/bsv-blockchain/teranode/errors"
 	teranodeSettings "github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -22,25 +23,25 @@ const pidFile = ".teranode-dev.pid"
 func Start(projectRoot string, cfg *config.Config) error {
 	// Check if already running
 	if pid, running := isRunning(projectRoot); running {
-		return fmt.Errorf("teranode is already running (PID %d)", pid)
+		return errors.NewProcessingError("teranode is already running (PID %d)", pid)
 	}
 
 	binary := filepath.Join(projectRoot, "teranode.run")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
-		return fmt.Errorf("teranode.run not found - run 'teranode-dev init' to build it")
+		return errors.NewProcessingError("teranode.run not found - run 'teranode-dev init' to build it")
 	}
 
 	// Create logs directory
 	logDir := filepath.Join(projectRoot, "logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("failed to create logs directory: %w", err)
+		return errors.NewProcessingError("failed to create logs directory", err)
 	}
 
 	logFile := filepath.Join(logDir, "teranode.log")
 
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+		return errors.NewProcessingError("failed to open log file", err)
 	}
 
 	settingsContext := "dev." + cfg.DevName
@@ -55,7 +56,7 @@ func Start(projectRoot string, cfg *config.Config) error {
 	if err := cmd.Start(); err != nil {
 		f.Close()
 
-		return fmt.Errorf("failed to start teranode: %w", err)
+		return errors.NewProcessingError("failed to start teranode", err)
 	}
 
 	f.Close()
@@ -63,7 +64,7 @@ func Start(projectRoot string, cfg *config.Config) error {
 	// Write PID file
 	pidPath := filepath.Join(projectRoot, pidFile)
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
+		return errors.NewProcessingError("failed to write PID file", err)
 	}
 
 	fmt.Printf("  teranode started (PID %d)\n", cmd.Process.Pid)
@@ -91,7 +92,7 @@ func Stop(projectRoot string) error {
 	// Send SIGTERM
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("failed to find process %d: %w", pid, err)
+		return errors.NewProcessingError("failed to find process %d", pid, err)
 	}
 
 	if err := proc.Signal(syscall.SIGTERM); err != nil {

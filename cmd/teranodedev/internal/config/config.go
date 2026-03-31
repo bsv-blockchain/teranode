@@ -1,12 +1,12 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,7 +31,7 @@ type Config struct {
 func FindProjectRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("failed to get working directory: %w", err)
+		return "", errors.NewProcessingError("failed to get working directory", err)
 	}
 
 	for {
@@ -44,7 +44,7 @@ func FindProjectRoot() (string, error) {
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("could not find teranode project root (no go.mod with teranode module found)")
+			return "", errors.NewProcessingError("could not find teranode project root (no go.mod with teranode module found)")
 		}
 
 		dir = parent
@@ -57,12 +57,12 @@ func Load(projectRoot string) (*Config, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", configFile, err)
+		return nil, errors.NewProcessingError("failed to read %s", configFile, err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %w", configFile, err)
+		return nil, errors.NewProcessingError("failed to parse %s", configFile, err)
 	}
 
 	return &cfg, nil
@@ -81,7 +81,7 @@ func Save(projectRoot string, cfg *Config) error {
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return errors.NewProcessingError("failed to marshal config", err)
 	}
 
 	path := filepath.Join(projectRoot, configFile)

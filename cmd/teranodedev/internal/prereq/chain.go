@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -191,7 +192,7 @@ func DeleteChainData(storeURL *url.URL, dataFolder string) error {
 		fmt.Printf("  Removing %s\n", path)
 
 		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("failed to remove %s: %w", path, err)
+			return errors.NewProcessingError("failed to remove %s", path, err)
 		}
 	}
 
@@ -209,12 +210,12 @@ func clearPostgresChain(connStr string) error {
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to postgres: %w", err)
+		return errors.NewProcessingError("failed to connect to postgres", err)
 	}
 	defer db.Close()
 
 	if err := db.Ping(); err != nil {
-		return fmt.Errorf("postgres not reachable: %w", err)
+		return errors.NewProcessingError("postgres not reachable", err)
 	}
 
 	fmt.Println("  Clearing PostgreSQL blockchain tables...")

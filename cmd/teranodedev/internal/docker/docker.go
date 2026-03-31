@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 type service struct {
@@ -83,7 +84,7 @@ func CreateDataDirs(projectRoot string, cfg *config.Config) error {
 		for _, dir := range svc.dataDirs {
 			path := filepath.Join(projectRoot, "data", dir)
 			if err := os.MkdirAll(path, 0755); err != nil {
-				return fmt.Errorf("failed to create %s: %w", path, err)
+				return errors.NewProcessingError("failed to create %s", path, err)
 			}
 		}
 	}
@@ -109,11 +110,11 @@ func Up(projectRoot string, cfg *config.Config) error {
 
 		if !svc.isDocker {
 			if err := startJaeger(); err != nil {
-				return fmt.Errorf("failed to start %s: %w", svc.name, err)
+				return errors.NewProcessingError("failed to start %s", svc.name, err)
 			}
 		} else {
 			if err := composeUp(projectRoot, svc, dataPath); err != nil {
-				return fmt.Errorf("failed to start %s: %w", svc.name, err)
+				return errors.NewProcessingError("failed to start %s", svc.name, err)
 			}
 		}
 
@@ -121,7 +122,7 @@ func Up(projectRoot string, cfg *config.Config) error {
 		if svc.healthPort > 0 {
 			fmt.Printf("  Waiting for %s (port %d)...\n", svc.name, svc.healthPort)
 			if err := waitForPort(svc.healthPort, 60*time.Second); err != nil {
-				return fmt.Errorf("%s did not become healthy: %w", svc.name, err)
+				return errors.NewProcessingError("%s did not become healthy", svc.name, err)
 			}
 
 			fmt.Printf("  %s is ready.\n", svc.name)
@@ -195,7 +196,7 @@ func Clean(projectRoot string, cfg *config.Config) error {
 	// Check if any containers are running
 	for _, svc := range services(cfg) {
 		if svc.healthPort > 0 && isPortOpen(svc.healthPort) {
-			return fmt.Errorf("%s is still running on port %d - run 'teranode-dev down' first", svc.name, svc.healthPort)
+			return errors.NewProcessingError("%s is still running on port %d - run 'teranode-dev down' first", svc.name, svc.healthPort)
 		}
 	}
 
@@ -209,7 +210,7 @@ func Clean(projectRoot string, cfg *config.Config) error {
 	}
 
 	if err := os.RemoveAll(dataDir); err != nil {
-		return fmt.Errorf("failed to remove data directory: %w", err)
+		return errors.NewProcessingError("failed to remove data directory", err)
 	}
 
 	fmt.Println("Data directory removed.")
@@ -298,7 +299,7 @@ func waitForPort(port int, timeout time.Duration) error {
 		time.Sleep(2 * time.Second)
 	}
 
-	return fmt.Errorf("timeout waiting for port %d", port)
+	return errors.NewProcessingError("timeout waiting for port %d", port)
 }
 
 func isPortOpen(port int) bool {
