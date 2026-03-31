@@ -97,7 +97,7 @@ func (rl *tieredRateLimiter) Middleware() echo.MiddlewareFunc {
 
 			if !limiter.Allow() {
 				prometheusAssetHTTPRateLimited.WithLabelValues(rl.tierLabel).Inc()
-				return c.JSON(http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+				return c.JSON(http.StatusTooManyRequests, map[string]string{"message": "rate limit exceeded"})
 			}
 
 			return next(c)
