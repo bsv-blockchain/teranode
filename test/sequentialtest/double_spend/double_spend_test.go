@@ -62,6 +62,9 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
 		testNonConflictingTxBlockAssemblyReset(t, "postgres")
 	})
+	t.Run("test_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
+		testConflictingTxBlockAssemblyReset(t, "postgres")
+	})
 	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
 		testDoubleSpendForkWithNestedTXs(t, "postgres")
 	})
@@ -104,6 +107,9 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
 		testNonConflictingTxBlockAssemblyReset(t, "aerospike")
+	})
+	t.Run("🧨test_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
+		testConflictingTxBlockAssemblyReset(t, "aerospike")
 	})
 	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
 		testDoubleSpendForkWithNestedTXs(t, "aerospike")
@@ -842,6 +848,135 @@ func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
 
 	td.VerifyConflictingInUtxoStore(t, false, txX0)
 	td.VerifyConflictingInSubtrees(t, block105a.Subtrees[0]) // Should not have any conflicts
+}
+
+// testConflictingTxBlockAssemblyReset tests that after a block assembly reset, conflicting (double-spend)
+// transactions retain their correct state and do not leak back into the mining candidate.
+// It also verifies that child transactions of a previously-conflicting parent stay conflicting
+// after a reorg restores the parent (asymmetry in markConflictingRecursively vs ProcessConflicting).
+//
+// Test flow:
+//  1. Setup: txA0 mined in 102a, txB0 is its double spend (rejected), txX0 is independent
+//  2. Create txA1 (child of txA0) and submit it to mempool
+//  3. Reorg to chain B: 102b(txB0) -> 103b wins, txA0 + txA1 become conflicting
+//  4. Reorg back to chain A: 103a -> 104a wins, txB0 becomes conflicting, txA0 restored
+//  5. Reset block assembly
+//  6. Verify: txB0 (loser) is still conflicting and NOT in block assembly
+//  7. Verify: txA0 (winner, mined) is non-conflicting and not in assembly
+//  8. Verify: txA1 (child of winner) remains conflicting due to recursive marking asymmetry
+//     — markConflictingRecursively marks children, but ProcessConflicting only unmarks the
+//       direct conflict winner, not its children. So txA1 stays conflicting after the reorg
+//       back and is NOT reloaded into block assembly by loadUnminedTransactions.
+//  9. Resubmit txB0 via propagation — must still be rejected as a double spend
+// 10. Verify: txX0 (independent, non-conflicting) is in block assembly and can be mined
+//
+// Block structure:
+//
+//	                 / 102a(txA0) -> 103a -> 104a -> 105a(txX0) (*)
+//	0 -> 1 ... 101 ->
+//	                 \ 102b(txB0) -> 103b
+func testConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txA0, txB0, block102a, txX0 := setupDoubleSpendTest(t, utxoStore)
+	defer td.Stop(t)
+
+	// 0 -> 1 ... 101 -> 102a(txA0) (*)
+
+	// Create a child transaction of txA0 to test recursive conflict marking
+	txA1 := td.CreateTransaction(t, txA0)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA1))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(txA1, blockWait))
+
+	// Create block 102b with the double spend transaction (txB0)
+	block102b := createConflictingBlock(t, td, block102a, []*bt.Tx{txB0}, []*bt.Tx{txA0}, 10202)
+
+	// Create block 103b to make chain B the longest chain
+	_, block103b := td.CreateTestBlock(t, block102b, 10302)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"),
+		"Failed to process block")
+
+	td.WaitForBlockHeight(t, block103b, blockWait)
+
+	//                   / 102a(txA0)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b(txB0) -> 103b (*)
+
+	// After reorg to chain B: txA0 and its child txA1 should be conflicting
+	td.VerifyConflictingInUtxoStore(t, true, txA0)
+	td.VerifyConflictingInUtxoStore(t, true, txA1)
+	td.VerifyConflictingInUtxoStore(t, false, txB0)
+	td.VerifyNotInBlockAssembly(t, txA0, txA1)
+
+	// Reorg back to chain A by making it longer
+	_, block103a := td.CreateTestBlock(t, block102a, 10301) // Empty block
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+		"Failed to process block")
+
+	_, block104a := td.CreateTestBlock(t, block103a, 10401) // Empty block
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+		"Failed to process block")
+
+	td.WaitForBlockHeight(t, block104a, blockWait)
+
+	//                   / 102a(txA0) -> 103a -> 104a (*)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b(txB0) -> 103b
+
+	// Before reset: verify conflict state
+	td.VerifyConflictingInUtxoStore(t, false, txA0)
+	td.VerifyConflictingInUtxoStore(t, true, txB0)
+	td.VerifyNotInBlockAssembly(t, txB0)
+
+	// txA1 stays conflicting: markConflictingRecursively marked it during the first reorg,
+	// but ProcessConflicting only unmarks the direct winner (txA0), not its children.
+	td.VerifyConflictingInUtxoStore(t, false, txA1)
+
+	// Reset block assembly
+	require.NoError(t, td.BlockAssemblyClient.ResetBlockAssembly(td.Ctx), "Failed to reset block assembly")
+
+	// After reset: conflicting flags must be preserved
+	td.VerifyConflictingInUtxoStore(t, false, txA0)
+	td.VerifyConflictingInUtxoStore(t, true, txB0)
+	td.VerifyConflictingInUtxoStore(t, true, txA1)
+
+	// The losing double-spend must NOT re-enter block assembly after reset
+	td.VerifyNotInBlockAssembly(t, txB0)
+
+	// txA0 was already mined in 102a, so it should not be in block assembly either
+	td.VerifyNotInBlockAssembly(t, txA0)
+
+	// txA1 is still marked conflicting, so it should NOT be in block assembly
+	td.VerifyNotInBlockAssembly(t, txA1)
+
+	// txX0 (independent, non-conflicting) should be reloaded into block assembly after reset
+	td.VerifyInBlockAssembly(t, txX0)
+
+	// Resubmit the losing double-spend after reset — it must still be rejected
+	require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, txB0),
+		"Resubmitting the losing double-spend after reset should fail")
+
+	// txB0 must still not be in block assembly after resubmission attempt
+	td.VerifyNotInBlockAssembly(t, txB0)
+	td.VerifyConflictingInUtxoStore(t, true, txB0)
+
+	// Mine txX0 to confirm block assembly works correctly after reset
+	_, block105a := td.CreateTestBlock(t, block104a, 10501, txX0)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy"),
+		"Failed to process block")
+
+	td.WaitForBlockHeight(t, block105a, blockWait)
+
+	//                   / 102a(txA0) -> 103a -> 104a -> 105a(txX0) (*)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b(txB0) -> 103b
+
+	// Final state: conflicts unchanged, txX0 mined successfully
+	td.VerifyConflictingInUtxoStore(t, false, txA0)
+	td.VerifyConflictingInUtxoStore(t, true, txB0)
+	td.VerifyConflictingInUtxoStore(t, true, txA1)
+	td.VerifyConflictingInUtxoStore(t, false, txX0)
+	td.VerifyConflictingInSubtrees(t, block105a.Subtrees[0]) // No conflicts in the new block
+	td.VerifyNotInBlockAssembly(t, txX0)                     // Mined, so removed from assembly
 }
 
 // testDoubleSpendForkWithNestedTXs tests a scenario with two competing chains and multiple reorganizations:
