@@ -10,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
+	teranodeSettings "github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
 const pidFile = ".teranode-dev.pid"
@@ -126,14 +129,23 @@ func Stop(projectRoot string) error {
 	return nil
 }
 
-// Status prints whether teranode is running.
-func Status(projectRoot string) {
+// Status prints whether teranode is running and runs diagnostics if so.
+func Status(projectRoot string, cfg *config.Config) {
 	pid, running := isRunning(projectRoot)
-	if running {
-		fmt.Printf("\nteranode: running (PID %d)\n", pid)
-	} else {
+	if !running {
 		fmt.Println("\nteranode: stopped")
+		return
 	}
+
+	fmt.Printf("\nteranode: running (PID %d)\n\n", pid)
+
+	if cfg == nil {
+		return
+	}
+
+	tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+	logger := ulogger.New("teranode-dev", ulogger.WithLevel("ERROR"))
+	diagnose.Run(logger, tSettings, true, false, false)
 }
 
 func isRunning(projectRoot string) (int, bool) {

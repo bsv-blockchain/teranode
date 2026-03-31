@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bsv-blockchain/go-chaincfg"
-	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
-	"github.com/bsv-blockchain/teranode/settings"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -29,26 +29,21 @@ type ChainCheckResult struct {
 var knownNetworks = []string{"mainnet", "testnet", "regtest", "stn", "teratestnet", "tstn"}
 
 // CheckChain verifies the configured network matches the genesis block stored in the blockchain database.
-// It reads the blockchain_store setting via gocore to determine the actual configured store.
-func CheckChain(projectRoot string, cfg *config.Config) *ChainCheckResult {
+// storeURL is the resolved blockchain_store setting, dataFolder is the resolved dataFolder setting.
+func CheckChain(network string, storeURL *url.URL, dataFolder string) *ChainCheckResult {
 	result := &ChainCheckResult{
-		ConfiguredNet: cfg.Network,
+		ConfiguredNet: network,
 	}
 
 	// Get expected genesis hash for configured network
-	params, err := chaincfg.GetChainParams(cfg.Network)
+	params, err := chaincfg.GetChainParams(network)
 	if err != nil {
-		result.ExpectedHash = "unknown network: " + cfg.Network
+		result.ExpectedHash = "unknown network: " + network
 		return result
 	}
 
 	result.ExpectedHash = hex.EncodeToString(params.GenesisHash[:])
 
-	// Load settings with the developer's context to get the actual blockchain_store URL
-	ctx := "dev." + cfg.DevName
-	tSettings := settings.NewSettings(ctx)
-
-	storeURL := tSettings.BlockChain.StoreURL
 	if storeURL == nil {
 		result.OK = true
 		result.NoDatabase = true
@@ -64,10 +59,14 @@ func CheckChain(projectRoot string, cfg *config.Config) *ChainCheckResult {
 	case "postgres":
 		hash, found = queryPostgresGenesis(storeURL.String())
 	case "sqlite":
-		dbPath := filepath.Join(tSettings.DataFolder, storeURL.Path[1:]+".db")
+		dbPath := sqliteDBPath(dataFolder, storeURL)
+		if dbPath == "" {
+			result.OK = true
+			return result
+		}
+
 		hash, found = querySQLiteGenesis(dbPath)
 	default:
-		// Unknown store type (aerospike etc.) - skip check
 		result.OK = true
 		return result
 	}
@@ -90,11 +89,16 @@ func CheckChain(projectRoot string, cfg *config.Config) *ChainCheckResult {
 	return result
 }
 
+func sqliteDBPath(dataFolder string, storeURL *url.URL) string {
+	if storeURL.Path == "" || !strings.HasPrefix(storeURL.Path, "/") {
+		return ""
+	}
+
+	return filepath.Join(dataFolder, storeURL.Path[1:]+".db")
+}
+
 func queryPostgresGenesis(connStr string) (hash []byte, found bool) {
-	// Ensure sslmode is set
-	if connStr[len(connStr)-1] == '/' {
-		connStr += "?sslmode=disable"
-	} else if !bytes.Contains([]byte(connStr), []byte("sslmode")) {
+	if !bytes.Contains([]byte(connStr), []byte("sslmode")) {
 		if bytes.Contains([]byte(connStr), []byte("?")) {
 			connStr += "&sslmode=disable"
 		} else {
@@ -158,11 +162,7 @@ func identifyNetwork(hash []byte) string {
 }
 
 // DeleteChainData removes the blockchain data from the configured store.
-func DeleteChainData(projectRoot string, cfg *config.Config) error {
-	ctx := "dev." + cfg.DevName
-	tSettings := settings.NewSettings(ctx)
-
-	storeURL := tSettings.BlockChain.StoreURL
+func DeleteChainData(storeURL *url.URL, dataFolder string) error {
 	if storeURL != nil {
 		switch storeURL.Scheme {
 		case "postgres":
@@ -170,17 +170,17 @@ func DeleteChainData(projectRoot string, cfg *config.Config) error {
 				return err
 			}
 		case "sqlite":
-			dbPath := filepath.Join(tSettings.DataFolder, storeURL.Path[1:]+".db")
-			deleteSQLiteFiles(dbPath)
+			if dbPath := sqliteDBPath(dataFolder, storeURL); dbPath != "" {
+				deleteSQLiteFiles(dbPath)
+			}
 		}
 	}
 
 	// Delete related data directories
-	dataDir := filepath.Join(projectRoot, "data")
 	dataDirs := []string{
-		filepath.Join(dataDir, "blockstore"),
-		filepath.Join(dataDir, "subtreestore"),
-		filepath.Join(dataDir, "external"),
+		filepath.Join(dataFolder, "blockstore"),
+		filepath.Join(dataFolder, "subtreestore"),
+		filepath.Join(dataFolder, "external"),
 	}
 
 	for _, path := range dataDirs {

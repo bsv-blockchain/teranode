@@ -93,6 +93,7 @@ func generateBlock(cfg *config.Config) string {
 		lines = append(lines, fmt.Sprintf("KAFKA_SCHEMA.%s = memory", ctx))
 	}
 
+	lines = append(lines, fmt.Sprintf("local_test_start_from_state.%s = RUNNING", ctx))
 	lines = append(lines, markerEnd(cfg.DevName))
 
 	return strings.Join(lines, "\n")

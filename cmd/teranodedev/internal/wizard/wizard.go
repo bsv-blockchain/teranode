@@ -12,15 +12,38 @@ import (
 
 var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9.]*$`)
 
+var (
+	utxoBackends = []string{"sqlite", "postgres", "aerospike"}
+	networks     = []string{"regtest", "testnet", "mainnet"}
+)
+
 // Run runs the interactive setup wizard and returns the resulting config.
-func Run() (*config.Config, error) {
+// If existing is non-nil, its values are used as defaults.
+func Run(existing *config.Config) (*config.Config, error) {
 	scanner := bufio.NewScanner(os.Stdin)
 	cfg := &config.Config{}
+
+	// Defaults from existing config
+	defName := ""
+	defBackend := 0
+	defNetwork := 0
+	defKafka := false
+	defMonitoring := false
+	defTracing := false
+
+	if existing != nil {
+		defName = existing.DevName
+		defBackend = indexOf(utxoBackends, existing.UTXOBackend)
+		defNetwork = indexOf(networks, existing.Network)
+		defKafka = existing.UseKafka
+		defMonitoring = existing.EnableMonitoring
+		defTracing = existing.EnableTracing
+	}
 
 	// Developer name
 	name, err := askString(scanner,
 		"What is your developer name? (used for SETTINGS_CONTEXT=dev.<name>)",
-		"",
+		defName,
 	)
 	if err != nil {
 		return nil, err
@@ -36,53 +59,63 @@ func Run() (*config.Config, error) {
 	backend, err := askChoice(scanner,
 		"UTXO storage backend:",
 		[]string{
-			"sqlite    - simplest, no containers needed (default)",
+			"sqlite    - simplest, no containers needed",
 			"postgres  - realistic, needs Docker",
 			"aerospike - high-performance, needs Docker + build tag",
 		},
-		0,
+		defBackend,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg.UTXOBackend = []string{"sqlite", "postgres", "aerospike"}[backend]
+	cfg.UTXOBackend = utxoBackends[backend]
 
 	// Network
 	network, err := askChoice(scanner,
 		"Network:",
 		[]string{
-			"regtest - default for local dev (default)",
+			"regtest - default for local dev",
 			"testnet",
 			"mainnet",
 		},
-		0,
+		defNetwork,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg.Network = []string{"regtest", "testnet", "mainnet"}[network]
+	cfg.Network = networks[network]
 
 	// Kafka
-	cfg.UseKafka, err = askYesNo(scanner, "Use Docker-based Kafka? (default: no, uses in-memory)", false)
+	cfg.UseKafka, err = askYesNo(scanner, "Use Docker-based Kafka? (default: no, uses in-memory)", defKafka)
 	if err != nil {
 		return nil, err
 	}
 
 	// Monitoring
-	cfg.EnableMonitoring, err = askYesNo(scanner, "Enable monitoring (Grafana + Prometheus)?", false)
+	cfg.EnableMonitoring, err = askYesNo(scanner, "Enable monitoring (Grafana + Prometheus)?", defMonitoring)
 	if err != nil {
 		return nil, err
 	}
 
 	// Tracing
-	cfg.EnableTracing, err = askYesNo(scanner, "Enable tracing (Jaeger)?", false)
+	cfg.EnableTracing, err = askYesNo(scanner, "Enable tracing (Jaeger)?", defTracing)
 	if err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+func indexOf(slice []string, val string) int {
+	for i, s := range slice {
+		if s == val {
+			return i
+		}
+	}
+
+	return 0
 }
 
 func askString(scanner *bufio.Scanner, prompt, defaultVal string) (string, error) {
@@ -108,7 +141,12 @@ func askChoice(scanner *bufio.Scanner, prompt string, options []string, defaultI
 	fmt.Println(prompt)
 
 	for i, opt := range options {
-		fmt.Printf("  [%d] %s\n", i+1, opt)
+		marker := "  "
+		if i == defaultIdx {
+			marker = "* "
+		}
+
+		fmt.Printf("  %s[%d] %s\n", marker, i+1, opt)
 	}
 
 	fmt.Print("> ")

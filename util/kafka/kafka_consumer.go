@@ -732,9 +732,15 @@ func (k *KafkaConsumerGroup) commitRecords(records []*kgo.Record) {
 }
 
 // BrokersURL returns the list of Kafka broker URLs.
+// Returns nil for in-memory consumers since there are no real brokers.
 func (k *KafkaConsumerGroup) BrokersURL() []string {
+	if k.isInMemory {
+		return nil
+	}
+
 	return k.Config.BrokersURL
 }
+
 
 // PauseAll suspends fetching from all partitions.
 func (k *KafkaConsumerGroup) PauseAll() {

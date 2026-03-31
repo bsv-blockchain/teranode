@@ -2,19 +2,33 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/cmd/diagnose"
+	"github.com/bsv-blockchain/teranode/cmd/logs"
+	"github.com/bsv-blockchain/teranode/cmd/monitor"
+	cmdSettings "github.com/bsv-blockchain/teranode/cmd/settings"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/build"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/docker"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/hostfile"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/prereq"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/process"
-	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/settings"
+	devsettings "github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/settings"
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/wizard"
+	teranodeSettings "github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	cli "github.com/urfave/cli/v3"
 )
 
@@ -31,6 +45,12 @@ func main() {
 			cleanCmd(),
 			startCmd(),
 			stopCmd(),
+			monitorCmd(),
+			logsCmd(),
+			settingsCmd(),
+			diagnoseCmd(),
+			generateCmd(),
+			rpcCmd(),
 		},
 	}
 
@@ -80,6 +100,9 @@ func initCmd() *cli.Command {
 				return err
 			}
 
+			// Load existing config for defaults (if re-running init)
+			existing, _ := config.Load(projectRoot)
+
 			var cfg *config.Config
 
 			if cmd.Bool("non-interactive") {
@@ -96,7 +119,7 @@ func initCmd() *cli.Command {
 					return fmt.Errorf("--name, --utxo, and --network are required in non-interactive mode")
 				}
 			} else {
-				cfg, err = wizard.Run()
+				cfg, err = wizard.Run(existing)
 				if err != nil {
 					return err
 				}
@@ -114,9 +137,14 @@ func initCmd() *cli.Command {
 				return fmt.Errorf("prerequisite checks failed, fix the issues above and try again")
 			}
 
+			// Save config early so choices persist even if later steps fail
+			if err := config.Save(projectRoot, cfg); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
 			// Generate settings_local.conf
 			fmt.Println("\nGenerating settings_local.conf...")
-			if err := settings.Generate(projectRoot, cfg); err != nil {
+			if err := devsettings.Generate(projectRoot, cfg); err != nil {
 				return fmt.Errorf("failed to generate settings: %w", err)
 			}
 
@@ -149,11 +177,6 @@ func initCmd() *cli.Command {
 			fmt.Println("\nBuilding teranode...")
 			if err := build.Build(projectRoot, cfg); err != nil {
 				return fmt.Errorf("failed to build teranode: %w", err)
-			}
-
-			// Save config
-			if err := config.Save(projectRoot, cfg); err != nil {
-				return fmt.Errorf("failed to save config: %w", err)
 			}
 
 			// Print summary
@@ -217,7 +240,7 @@ func statusCmd() *cli.Command {
 				docker.Status(projectRoot, cfg)
 			}
 
-			process.Status(projectRoot)
+			process.Status(projectRoot, cfg)
 
 			return nil
 		},
@@ -259,7 +282,7 @@ func doctorCmd() *cli.Command {
 			fmt.Printf("  Tracing: %v\n", cfg.EnableTracing)
 
 			// Check settings_local.conf
-			if settings.HasEntries(projectRoot, cfg.DevName) {
+			if devsettings.HasEntries(projectRoot, cfg.DevName) {
 				fmt.Println("\nsettings_local.conf: OK (has entries for dev." + cfg.DevName + ")")
 			} else {
 				fmt.Println("\nsettings_local.conf: MISSING entries for dev." + cfg.DevName)
@@ -284,13 +307,14 @@ func doctorCmd() *cli.Command {
 
 			// Check chain consistency
 			fmt.Println("\nChain consistency:")
-			chainResult := prereq.CheckChain(projectRoot, cfg)
+			storeURL, dataFolder := loadBlockchainSettings(cfg)
+			chainResult := prereq.CheckChain(cfg.Network, storeURL, dataFolder)
 			if chainResult.NoDatabase {
 				fmt.Println("  No blockchain database found (fresh setup)")
 			} else if chainResult.OK {
 				fmt.Printf("  OK - stored genesis matches configured network (%s)\n", cfg.Network)
 			} else {
-				handleChainMismatch(projectRoot, cfg, chainResult)
+				handleChainMismatch(projectRoot, cfg, storeURL, dataFolder, chainResult)
 			}
 
 			return nil
@@ -324,13 +348,14 @@ func startCmd() *cli.Command {
 			}
 
 			// Check chain consistency before starting
-			chainResult := prereq.CheckChain(projectRoot, cfg)
+			storeURL, dataFolder := loadBlockchainSettings(cfg)
+			chainResult := prereq.CheckChain(cfg.Network, storeURL, dataFolder)
 			if !chainResult.OK && !chainResult.NoDatabase {
 				fmt.Println("Chain consistency check failed:")
-				handleChainMismatch(projectRoot, cfg, chainResult)
+				handleChainMismatch(projectRoot, cfg, storeURL, dataFolder, chainResult)
 
 				// Re-check after potential fix
-				chainResult = prereq.CheckChain(projectRoot, cfg)
+				chainResult = prereq.CheckChain(cfg.Network, storeURL, dataFolder)
 				if !chainResult.OK && !chainResult.NoDatabase {
 					return fmt.Errorf("chain mismatch not resolved, cannot start")
 				}
@@ -356,6 +381,314 @@ func stopCmd() *cli.Command {
 	}
 }
 
+func generateCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "generate",
+		Usage:     "Generate blocks (regtest only)",
+		ArgsUsage: "[numblocks]",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_, cfg := loadConfigOrHint()
+			if cfg == nil {
+				return nil
+			}
+
+			// Check if network supports generation
+			params, err := chaincfg.GetChainParams(cfg.Network)
+			if err != nil {
+				return fmt.Errorf("unknown network: %s", cfg.Network)
+			}
+
+			if !params.GenerateSupported {
+				return fmt.Errorf("block generation is not supported on %s", cfg.Network)
+			}
+
+			numBlocks := 1
+			if cmd.Args().Len() > 0 {
+				n, err := strconv.Atoi(cmd.Args().First())
+				if err != nil || n <= 0 {
+					return fmt.Errorf("invalid number of blocks: %s", cmd.Args().First())
+				}
+
+				numBlocks = n
+			}
+
+			// Load settings for RPC connection
+			tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+
+			rpcURL := "http://localhost:9292"
+			if tSettings.RPC.RPCListenerURL != nil {
+				rpcURL = tSettings.RPC.RPCListenerURL.String()
+			}
+
+			rpcUser := tSettings.RPC.RPCUser
+			rpcPass := tSettings.RPC.RPCPass
+
+			// Call the generate RPC
+			payload := fmt.Sprintf(`{"jsonrpc":"1.0","id":"teranode-dev","method":"generate","params":[%d]}`, numBlocks)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, strings.NewReader(payload))
+			if err != nil {
+				return err
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(rpcUser, rpcPass)
+
+			client := &http.Client{Timeout: 120 * time.Second}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("RPC request failed: %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return fmt.Errorf("failed to read response: %w", err)
+			}
+
+			// Parse response to extract block hashes or error
+			var rpcResp struct {
+				Result []string `json:"result"`
+				Error  *struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+
+			if err := json.Unmarshal(body, &rpcResp); err != nil {
+				return fmt.Errorf("failed to parse response: %s", string(body))
+			}
+
+			if rpcResp.Error != nil {
+				return fmt.Errorf("RPC error: %s", rpcResp.Error.Message)
+			}
+
+			fmt.Printf("Generated %d block(s):\n", len(rpcResp.Result))
+
+			for _, hash := range rpcResp.Result {
+				fmt.Printf("  %s\n", hash)
+			}
+
+			return nil
+		},
+	}
+}
+
+func rpcCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "rpc",
+		Usage:     "Call Bitcoin JSON-RPC methods",
+		ArgsUsage: "[method] [params...]",
+		Description: `With no arguments, lists all available RPC commands.
+With a method name, calls that RPC method with optional parameters.
+
+Examples:
+  teranode-dev rpc                          List all commands
+  teranode-dev rpc help getblock            Detailed help for getblock
+  teranode-dev rpc getblockchaininfo        Call with no params
+  teranode-dev rpc getblockhash 0           Call with params
+  teranode-dev rpc getblock <hash> 2        Multiple params`,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_, cfg := loadConfigOrHint()
+			if cfg == nil {
+				return nil
+			}
+
+			tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+
+			rpcURL := "http://localhost:9292"
+			if tSettings.RPC.RPCListenerURL != nil {
+				rpcURL = tSettings.RPC.RPCListenerURL.String()
+			}
+
+			// Determine method and params
+			method := "help"
+			var params []json.RawMessage
+
+			if cmd.Args().Len() > 0 {
+				method = cmd.Args().First()
+
+				for i := 1; i < cmd.Args().Len(); i++ {
+					arg := cmd.Args().Get(i)
+					// Try parsing as JSON (handles numbers, booleans, objects, arrays)
+					if json.Valid([]byte(arg)) {
+						params = append(params, json.RawMessage(arg))
+					} else {
+						// Treat as string
+						quoted, _ := json.Marshal(arg)
+						params = append(params, json.RawMessage(quoted))
+					}
+				}
+			}
+
+			// Build JSON-RPC request
+			rpcReq := struct {
+				JSONRPC string            `json:"jsonrpc"`
+				ID      string            `json:"id"`
+				Method  string            `json:"method"`
+				Params  []json.RawMessage `json:"params"`
+			}{
+				JSONRPC: "1.0",
+				ID:      "teranode-dev",
+				Method:  method,
+				Params:  params,
+			}
+
+			reqBody, err := json.Marshal(rpcReq)
+			if err != nil {
+				return err
+			}
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, strings.NewReader(string(reqBody)))
+			if err != nil {
+				return err
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(tSettings.RPC.RPCUser, tSettings.RPC.RPCPass)
+
+			client := &http.Client{Timeout: 120 * time.Second}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("RPC request failed (is teranode running?): %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return fmt.Errorf("failed to read response: %w", err)
+			}
+
+			// Parse response
+			var rpcResp struct {
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+
+			if err := json.Unmarshal(body, &rpcResp); err != nil {
+				return fmt.Errorf("failed to parse response: %s", string(body))
+			}
+
+			if rpcResp.Error != nil {
+				return fmt.Errorf("RPC error (%d): %s", rpcResp.Error.Code, rpcResp.Error.Message)
+			}
+
+			// Pretty-print result
+			var result string
+			if err := json.Unmarshal(rpcResp.Result, &result); err == nil {
+				// String result (e.g. help text) - print directly
+				fmt.Println(result)
+			} else {
+				// JSON result - pretty-print
+				var pretty bytes.Buffer
+				if err := json.Indent(&pretty, rpcResp.Result, "", "  "); err == nil {
+					fmt.Println(pretty.String())
+				} else {
+					fmt.Println(string(rpcResp.Result))
+				}
+			}
+
+			return nil
+		},
+	}
+}
+
+func monitorCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "monitor",
+		Usage: "Live TUI dashboard for monitoring node status",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_, cfg := loadConfigOrHint()
+			if cfg == nil {
+				return nil
+			}
+
+			tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+			logger := ulogger.New("monitor", ulogger.WithLevel("ERROR"))
+
+			return monitor.Run(logger, tSettings)
+		},
+	}
+}
+
+func logsCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "logs",
+		Usage: "Interactive log viewer with filtering and search",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "file",
+				Usage: "Path to log file",
+				Value: "./logs/teranode.log",
+			},
+			&cli.IntFlag{
+				Name:  "buffer",
+				Usage: "Number of log entries to keep in memory",
+				Value: 10000,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			return logs.Run(cmd.String("file"), int(cmd.Int("buffer")))
+		},
+	}
+}
+
+func settingsCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "settings",
+		Usage: "Print resolved settings as JSON",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_, cfg := loadConfigOrHint()
+			if cfg == nil {
+				return nil
+			}
+
+			tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+			logger := ulogger.New("settings", ulogger.WithLevel("ERROR"))
+			cmdSettings.PrintSettings(logger, tSettings, "", "")
+
+			return nil
+		},
+	}
+}
+
+func diagnoseCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "diagnose",
+		Usage: "Run health checks and configuration validation",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "config",
+				Usage: "Run configuration checks",
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Output as JSON",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_, cfg := loadConfigOrHint()
+			if cfg == nil {
+				return nil
+			}
+
+			tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+			logger := ulogger.New("diagnose", ulogger.WithLevel("ERROR"))
+
+			checkMode := !cmd.Bool("config") // default to health checks
+			configMode := cmd.Bool("config")
+			diagnose.Run(logger, tSettings, checkMode, configMode, cmd.Bool("json"))
+
+			return nil
+		},
+	}
+}
+
 // loadConfigOrHint loads config, printing a hint if missing. Returns nil cfg if not found.
 func loadConfigOrHint() (string, *config.Config) {
 	projectRoot, err := config.FindProjectRoot()
@@ -373,7 +706,13 @@ func loadConfigOrHint() (string, *config.Config) {
 	return projectRoot, cfg
 }
 
-func handleChainMismatch(projectRoot string, cfg *config.Config, result *prereq.ChainCheckResult) {
+// loadBlockchainSettings uses gocore to resolve the actual blockchain_store setting.
+func loadBlockchainSettings(cfg *config.Config) (*url.URL, string) {
+	tSettings := teranodeSettings.NewSettings("dev." + cfg.DevName)
+	return tSettings.BlockChain.StoreURL, tSettings.DataFolder
+}
+
+func handleChainMismatch(projectRoot string, cfg *config.Config, storeURL *url.URL, dataFolder string, result *prereq.ChainCheckResult) { //nolint:unparam
 	storedDesc := result.StoredNet
 	if storedDesc == "unknown" {
 		storedDesc = "unknown network"
@@ -404,7 +743,7 @@ func handleChainMismatch(projectRoot string, cfg *config.Config, result *prereq.
 	switch choice {
 	case "1":
 		fmt.Println()
-		if err := prereq.DeleteChainData(projectRoot, cfg); err != nil {
+		if err := prereq.DeleteChainData(storeURL, dataFolder); err != nil {
 			fmt.Printf("  Error: %v\n", err)
 			return
 		}
@@ -422,7 +761,7 @@ func handleChainMismatch(projectRoot string, cfg *config.Config, result *prereq.
 			return
 		}
 
-		if err := settings.Generate(projectRoot, cfg); err != nil {
+		if err := devsettings.Generate(projectRoot, cfg); err != nil {
 			fmt.Printf("  Error updating settings: %v\n", err)
 			return
 		}

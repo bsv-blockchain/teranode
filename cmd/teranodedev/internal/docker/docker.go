@@ -99,6 +99,12 @@ func Up(projectRoot string, cfg *config.Config) error {
 	}
 
 	for _, svc := range services(cfg) {
+		// Skip if the service is already reachable
+		if svc.healthPort > 0 && isPortOpen(svc.healthPort) {
+			fmt.Printf("  %s already running on port %d, skipping.\n", svc.name, svc.healthPort)
+			continue
+		}
+
 		fmt.Printf("  Starting %s...\n", svc.name)
 
 		if !svc.isDocker {
@@ -257,6 +263,9 @@ func startJaeger() error {
 
 	// Remove stopped container if it exists
 	_ = exec.Command("docker", "rm", "-f", "jaeger").Run()
+
+	// Ensure the shared network exists
+	_ = exec.Command("docker", "network", "create", "my-teranode-network").Run()
 
 	cmd := exec.Command("docker", "run", "-d", "--name", "jaeger",
 		"--network", "my-teranode-network",
