@@ -111,6 +111,15 @@ func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consens
 	return nil
 }
 
+// VerifyScriptBatch falls back to sequential single-transaction verification.
+func (v *scriptVerifierGoBt) VerifyScriptBatch(txs []*bt.Tx, blockHeight uint32, consensus bool, utxoHeights [][]uint32, _ int) []error {
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		errs[i] = v.VerifyScript(tx, blockHeight, consensus, utxoHeights[i])
+	}
+	return errs
+}
+
 // Interpreter returns the Go-BT interpreter type identifier.
 func (v *scriptVerifierGoBt) Interpreter() TxInterpreter {
 	return TxInterpreterGoBT

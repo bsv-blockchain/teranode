@@ -159,6 +159,15 @@ func goBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 	return sdkTx
 }
 
+// VerifyScriptBatch falls back to sequential single-transaction verification.
+func (v *scriptVerifierGoSDK) VerifyScriptBatch(txs []*bt.Tx, blockHeight uint32, consensus bool, utxoHeights [][]uint32, _ int) []error {
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		errs[i] = v.VerifyScript(tx, blockHeight, consensus, utxoHeights[i])
+	}
+	return errs
+}
+
 func (v *scriptVerifierGoSDK) Interpreter() TxInterpreter {
 	return TxInterpreterGoSDK
 }

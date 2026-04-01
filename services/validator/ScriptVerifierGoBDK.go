@@ -25,7 +25,6 @@ import (
 const (
 	errMsgInvalidTx = "ScriptVerifierGoBDK fail to VerifyScript"
 	errMsgPolicy    = "ScriptVerifierGoBDK fail to VerifyScript by policy settings"
-	errMsgConsensus = "ScriptVerifierGoBDK fail to CheckConsensus"
 )
 
 // init registers the Go-BDK script verifier with the verification factory
@@ -174,15 +173,6 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 	}
 
 	// #nosec G115 -- blockHeight won't overflow
-	if consensus {
-		errConsensus := v.se.CheckConsensus(eTxBytes, intUtxoHeights, intBlockHeight)
-		if errConsensus != nil {
-			consensusErr := errors.NewTxConsensusError(errMsgConsensus, errConsensus)
-			return errors.NewTxInvalidError(errMsgInvalidTx, consensusErr)
-		}
-	}
-
-	// #nosec G115 -- blockHeight won't overflow
 	errVerify := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if errVerify != nil {
 		// Get the information of all utxo heights
@@ -220,6 +210,95 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 	}
 
 	return nil
+}
+
+// VerifyScriptBatch verifies scripts for multiple transactions using BDK's batch
+// parallel verification. This submits all transactions as a single batch to the
+// C++ side, which parallelizes across numThreads (0 = all cores), avoiding
+// per-transaction CGO overhead.
+func (v *scriptVerifierGoBDK) VerifyScriptBatch(txs []*bt.Tx, blockHeight uint32, consensus bool, utxoHeights [][]uint32, numThreads int) []error {
+	n := len(txs)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return errs
+	}
+
+	intBlockHeight, errConv := safeconversion.Uint32ToInt32(blockHeight)
+	if errConv != nil {
+		convErr := errors.NewInvalidArgumentError("failed conversion for block height", errConv)
+		for i := range errs {
+			errs[i] = convErr
+		}
+		return errs
+	}
+
+	batch := bdkscript.NewVerifyBatch(n)
+
+	for i, tx := range txs {
+		if tx == nil {
+			errs[i] = errors.NewTxInvalidError("transaction at index %d is nil", i)
+			continue
+		}
+
+		intUtxoHeights, err := uint2int(utxoHeights[i])
+		if err != nil {
+			errs[i] = errors.NewInvalidArgumentError("failed conversion for utxo heights at index %d", i, err)
+			continue
+		}
+
+		batch.Add(tx.ExtendedBytes(), intUtxoHeights, intBlockHeight, consensus, nil)
+	}
+
+	scriptErrors := v.se.VerifyScriptBatchParallel(batch, numThreads)
+
+	// Map results back, accounting for nil transactions that were skipped
+	batchIdx := 0
+	for i := range txs {
+		// Skip entries that already have errors (nil tx or conversion failure)
+		if errs[i] != nil {
+			continue
+		}
+
+		if batchIdx >= len(scriptErrors) {
+			break
+		}
+
+		sErr := scriptErrors[batchIdx]
+		batchIdx++
+
+		if sErr == nil {
+			continue
+		}
+
+		errCode := sErr.Code()
+		if errCode == bdkscript.SCRIPT_ERR_OK {
+			continue
+		}
+
+		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
+			errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
+			errCode == bdkscript.SCRIPT_ERR_STACK_SIZE)
+
+		if !consensus && policyRelatedError {
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, sErr)
+			errs[i] = errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+			continue
+		}
+
+		if consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE {
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, sErr)
+			errs[i] = errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+			continue
+		}
+
+		errs[i] = errors.NewTxInvalidError(errMsgInvalidTx, sErr)
+	}
+
+	return errs
 }
 
 func (v *scriptVerifierGoBDK) Interpreter() TxInterpreter {

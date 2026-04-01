@@ -1,0 +1,57 @@
+# Purego build: no CGO at compile time, loads BDK shared library at runtime via dlopen.
+# The shared library (.so) must be present in the run image at BDK_LIB_PATH or LD_LIBRARY_PATH.
+ARG BASE_IMG=ghcr.io/bsv-blockchain/teranode-base:build-latest
+ARG RUN_IMG=ghcr.io/bsv-blockchain/teranode-base:run-latest
+
+FROM ${BASE_IMG}
+ARG GIT_VERSION
+ARG GIT_COMMIT
+ARG GIT_SHA
+ARG TARGETOS
+ARG TARGETARCH
+ARG BUILD_JOBS=32
+ARG TXMETA_SMALL_TAG=false
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . /app
+
+# No CGO required — BDK is loaded at runtime via purego/dlopen
+ENV CGO_ENABLED=0
+
+RUN echo "Building Git SHA: ${GIT_SHA} (purego, CGO_ENABLED=0)"
+
+# Build with purego and prod tags
+RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
+  GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly \
+    -tags prod,purego,aerospike,testtxmetacache \
+    --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" \
+    -o teranode.run . ; \
+  else \
+  GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly \
+    -tags prod,purego,aerospike \
+    --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" \
+    -o teranode.run . ; \
+  fi
+
+# Build teranode-cli (no BDK dependency)
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -tags prod -o teranode-cli ./cmd/teranodecli
+
+FROM ${RUN_IMG}
+
+WORKDIR /app
+
+COPY --from=0 /app/teranode.run ./teranode.run
+COPY --from=0 /app/teranode-cli ./teranode-cli
+COPY --from=0 /app/compose/wait.sh /app/wait.sh
+COPY --from=0 /app/settings.conf .
+
+RUN chmod +x ./wait.sh
+
+# BDK shared library is loaded at runtime — must be on LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/app:${LD_LIBRARY_PATH}
+ENV PATH=/app:$PATH
+
+ENTRYPOINT ["./teranode.run"]

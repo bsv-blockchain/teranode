@@ -130,6 +130,11 @@ type TxValidatorI interface {
 	// Returns:
 	//   - error: Specific script validation error if validation fails, nil on success
 	ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
+
+	// ValidateTransactionScriptsBatch performs script validation for multiple transactions
+	// in a single batch, leveraging C++-side parallelism when using the GoBDK interpreter.
+	// Returns a slice of errors parallel to the input slice (nil entry = success).
+	ValidateTransactionScriptsBatch(txs []*bt.Tx, blockHeight uint32, utxoHeights [][]uint32, validationOptions *Options) []error
 }
 
 // TxValidator implements transaction validation logic
@@ -142,16 +147,13 @@ type TxValidator struct {
 
 // TxScriptInterpreter defines the interface for script verification operations
 type TxScriptInterpreter interface {
-	// VerifyScript implements script verification for a transaction
-	// Parameters:
-	//   - tx: The transaction containing the scripts to verify
-	//   - blockHeight: Current block height for validation context
-	// Returns:
-	//   - error: Any script verification errors encountered
-	// Logger return the encapsulated logger
-
 	// VerifyScript implement the method to verify a script for a transaction
 	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
+
+	// VerifyScriptBatch verifies scripts for multiple transactions in a single batch.
+	// Returns a slice of errors parallel to the input slice (nil entry = success).
+	// numThreads controls C++-side parallelism; 0 means use all available cores.
+	VerifyScriptBatch(txs []*bt.Tx, blockHeight uint32, consensus bool, utxoHeights [][]uint32, numThreads int) []error
 
 	// Interpreter returns the interpreter being used
 	Interpreter() TxInterpreter
@@ -319,6 +321,36 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 
 	// everything checks out
 	return nil
+}
+
+// ValidateTransactionScriptsBatch performs script validation for multiple transactions
+// in a single batch, leveraging C++-side parallelism when using the GoBDK interpreter.
+// Returns a slice of errors parallel to the input slice (nil entry = success).
+func (tv *TxValidator) ValidateTransactionScriptsBatch(txs []*bt.Tx, blockHeight uint32, utxoHeights [][]uint32, validationOptions *Options) []error {
+	if tv == nil {
+		err := errors.NewTxInvalidError("tx validator is nil")
+		errs := make([]error, len(txs))
+		for i := range errs {
+			errs[i] = err
+		}
+		return errs
+	}
+
+	if tv.interpreter == nil {
+		err := errors.NewTxInvalidError("tx interpreter is nil, available interpreters: %v", TxScriptInterpreterFactory)
+		errs := make([]error, len(txs))
+		for i := range errs {
+			errs[i] = err
+		}
+		return errs
+	}
+
+	consensus := true
+	if validationOptions != nil {
+		consensus = validationOptions.SkipPolicyChecks
+	}
+
+	return tv.interpreter.VerifyScriptBatch(txs, blockHeight, consensus, utxoHeights, tv.settings.Validator.ScriptBatchThreads)
 }
 
 // sequenceLocks verifies that relative lock-time constraints (BIP68) are satisfied for block validation.
