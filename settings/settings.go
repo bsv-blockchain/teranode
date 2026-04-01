@@ -483,6 +483,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxMetaKafkaBatchTimeoutMs:            getInt("validator_txmeta_kafka_batchTimeoutMs", 5, alternativeContext...),
 			TxMetaKafkaBatchTickerIntervalMillis: getInt("validator_txmeta_kafka_batchTickerIntervalMillis", 0, alternativeContext...),
 			TxLockedMaxRetries:                   getInt("validator_txlocked_maxRetries", 3, alternativeContext...),
+			ScriptBatchThreads:                   getInt("validator_scriptBatchThreads", 0, alternativeContext...),
 			TxMetaWireFormat:                     getString("validator_txmeta_wireFormat", "v1", alternativeContext...),
 			TxMetaNumPartitions:                  getInt("validator_txmeta_numPartitions", 32, alternativeContext...),
 			BlockAssemblyShedRetryTimeout:        getDuration("validator_blockAssemblyShedRetryTimeout", 2*time.Second, alternativeContext...),

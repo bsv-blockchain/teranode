@@ -7,8 +7,10 @@ package validator
 
 import (
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
@@ -250,6 +252,19 @@ type bdkNativeTxValidator interface {
 	ValidateTransaction(extendedTX []byte, utxoHeights []int32, blockHeight int32, consensus bool) error
 }
 
+// bdkBatchValidator is implemented by bdk adapters that can validate several
+// transactions per engine call. It is optional: TxValidator falls back to one
+// ValidateTransaction call per transaction for adapters that do not implement it.
+type bdkBatchValidator interface {
+	ValidateTransactionBatch(txs []*bt.Tx, blockHeights []uint32, consensus bool, utxoHeights [][]uint32, parallelism int) []error
+}
+
+// bdkNativeBatchValidator is the batch entry point of the native BDK engine
+// (*bdkscript.TxValidator). Optional for the same reason as bdkBatchValidator.
+type bdkNativeBatchValidator interface {
+	ValidateBatch(batch *bdkscript.ValidateBatch) []error
+}
+
 // scriptVerifierGoBDK adapts Teranode validation data to GoBDK.
 type scriptVerifierGoBDK struct {
 	logger ulogger.Logger
@@ -296,20 +311,194 @@ func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32,
 
 	errVerify := v.se.ValidateTransaction(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if errVerify != nil {
-		// Get the information of all utxo heights
-		var utxoHeighstStr []string
-		for _, h := range utxoHeights {
-			utxoHeighstStr = append(utxoHeighstStr, strconv.FormatUint(uint64(h), 10))
-		}
-
-		utxoInfoStr := strings.Join(utxoHeighstStr, "|")
-
-		v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
-
-		return v.mapBDKValidationError(errVerify, consensus)
+		return v.reportValidationError(tx, blockHeight, utxoHeights, consensus, errVerify)
 	}
 
 	return nil
+}
+
+// reportValidationError logs a failed BDK verdict and maps it onto the Teranode
+// error taxonomy. It is shared by the single and batched paths so that a
+// transaction rejected in a batch produces exactly the same log line and the same
+// error chain as the same transaction rejected on its own.
+func (v *scriptVerifierGoBDK) reportValidationError(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, consensus bool, errVerify error) error {
+	// Get the information of all utxo heights
+	utxoHeighstStr := make([]string, 0, len(utxoHeights))
+	for _, h := range utxoHeights {
+		utxoHeighstStr = append(utxoHeighstStr, strconv.FormatUint(uint64(h), 10))
+	}
+
+	utxoInfoStr := strings.Join(utxoHeighstStr, "|")
+
+	v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
+
+	return v.mapBDKValidationError(errVerify, consensus)
+}
+
+// ValidateTransactionBatch runs BDK-side validation for several transactions,
+// amortising the CGO transition over a whole sub-batch instead of paying it once
+// per transaction.
+//
+// BDK's TxValidator.ValidateBatch executes its entries sequentially on the
+// calling thread (bdk core/txvalidator.cpp: a plain loop over
+// ValidateTransaction), and a ValidateBatch handle is not safe for concurrent
+// use. Parallelism is therefore provided here: the input is split into
+// `parallelism` contiguous chunks (0 = GOMAXPROCS), each built and executed on
+// its own goroutine with its own ValidateBatch handle. The shared TxValidator is
+// safe for concurrent validation calls, exactly as on the per-transaction path.
+//
+// The result slice is parallel to txs: errs[i] is the verdict for txs[i], mapped
+// through the same reportValidationError as ValidateTransaction, so batching never
+// changes the error a caller sees for a given transaction.
+func (v *scriptVerifierGoBDK) ValidateTransactionBatch(txs []*bt.Tx, blockHeights []uint32, consensus bool, utxoHeights [][]uint32, parallelism int) []error {
+	n := len(txs)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return errs
+	}
+
+	if len(blockHeights) != n || len(utxoHeights) != n {
+		argErr := errors.NewInvalidArgumentError("batch validation input lengths differ: txs=%d blockHeights=%d utxoHeights=%d", n, len(blockHeights), len(utxoHeights))
+		for i := range errs {
+			errs[i] = argErr
+		}
+
+		return errs
+	}
+
+	native, ok := v.se.(bdkNativeBatchValidator)
+	if !ok {
+		// The engine behind this adapter cannot batch (a test double, for
+		// instance): validate one by one, which is the reference behaviour.
+		for i, tx := range txs {
+			errs[i] = v.ValidateTransaction(tx, blockHeights[i], consensus, utxoHeights[i])
+		}
+
+		return errs
+	}
+
+	chunks := parallelism
+	if chunks <= 0 {
+		chunks = runtime.GOMAXPROCS(0)
+	}
+
+	if chunks > n {
+		chunks = n
+	}
+
+	if chunks <= 1 {
+		v.validateBatchChunk(native, txs, blockHeights, consensus, utxoHeights, errs)
+
+		return errs
+	}
+
+	chunkSize := (n + chunks - 1) / chunks
+
+	var wg sync.WaitGroup
+
+	for lo := 0; lo < n; lo += chunkSize {
+		hi := min(lo+chunkSize, n)
+
+		wg.Add(1)
+
+		go func(lo, hi int) {
+			defer wg.Done()
+
+			v.validateBatchChunk(native, txs[lo:hi], blockHeights[lo:hi], consensus, utxoHeights[lo:hi], errs[lo:hi])
+		}(lo, hi)
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+// validateBatchChunk builds one BDK ValidateBatch for txs, executes it with a
+// single CGO call and writes each verdict into errs (parallel to txs). It must run
+// on a single goroutine: the ValidateBatch handle is not concurrent-safe.
+func (v *scriptVerifierGoBDK) validateBatchChunk(native bdkNativeBatchValidator, txs []*bt.Tx, blockHeights []uint32, consensus bool, utxoHeights [][]uint32, errs []error) {
+	batch := bdkscript.NewValidateBatch(len(txs))
+	if batch == nil {
+		v.logger.Warnf("[validateBatchChunk] unable to create a BDK validate batch, validating %d transactions one by one", len(txs))
+
+		for i, tx := range txs {
+			errs[i] = v.ValidateTransaction(tx, blockHeights[i], consensus, utxoHeights[i])
+		}
+
+		return
+	}
+
+	// BDK's ValidateArg stores spans over the buffers handed to Add rather than
+	// copies, so every buffer must stay reachable until ValidateBatch returns.
+	// Keeping them in these slices (and KeepAlive below) guarantees that.
+	added := make([]int, 0, len(txs))
+	txBufs := make([][]byte, 0, len(txs))
+	heightBufs := make([][]int32, 0, len(txs))
+	substituted := make([][]uint32, len(txs))
+
+	for i, tx := range txs {
+		if tx.IsCoinbase() {
+			errs[i] = errors.NewTxInvalidError("coinbase transactions are not supported")
+			continue
+		}
+
+		substituted[i] = substituteUnconfirmedHeights(utxoHeights[i], blockHeights[i], consensus)
+
+		intUtxoHeights, errConv := uint2int(substituted[i])
+		if errConv != nil {
+			errs[i] = errors.NewInvalidArgumentError("failed conversion for utxo heights", errConv)
+			continue
+		}
+
+		intBlockHeight, errConv := bdkBlockHeight(blockHeights[i], consensus)
+		if errConv != nil {
+			errs[i] = errors.NewInvalidArgumentError("failed conversion for block height", errConv)
+			continue
+		}
+
+		eTxBytes := tx.ExtendedBytes()
+
+		// A failed Add appends nothing, so the positional mapping in `added`
+		// stays aligned with the batch results. The failure is an ABI error about
+		// this one argument, reported exactly as the single path reports it.
+		if addErr := batch.Add(eTxBytes, intUtxoHeights, intBlockHeight, consensus); addErr != nil {
+			errs[i] = v.reportValidationError(tx, blockHeights[i], substituted[i], consensus, addErr)
+			continue
+		}
+
+		added = append(added, i)
+		txBufs = append(txBufs, eTxBytes)
+		heightBufs = append(heightBufs, intUtxoHeights)
+	}
+
+	if len(added) == 0 {
+		return
+	}
+
+	results := native.ValidateBatch(batch)
+
+	runtime.KeepAlive(txBufs)
+	runtime.KeepAlive(heightBufs)
+
+	if len(results) != len(added) {
+		// The batch result could not be expressed across the ABI (BDK then
+		// returns a single ABI error instead of one verdict per entry). Never
+		// guess a mapping: give every transaction its own single-call verdict.
+		v.logger.Warnf("[validateBatchChunk] BDK batch returned %d results for %d entries, validating them one by one", len(results), len(added))
+
+		for _, i := range added {
+			errs[i] = v.ValidateTransaction(txs[i], blockHeights[i], consensus, utxoHeights[i])
+		}
+
+		return
+	}
+
+	for j, i := range added {
+		if results[j] != nil {
+			errs[i] = v.reportValidationError(txs[i], blockHeights[i], substituted[i], consensus, results[j])
+		}
+	}
 }
 
 // bdkCause turns the engine's own description of the failure into a typed link
