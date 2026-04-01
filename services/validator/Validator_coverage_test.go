@@ -556,6 +556,53 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 	mockStore.AssertExpectations(t)
 }
 
+func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	mockStore := &utxo.MockUtxostore{}
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	require.NoError(t, err)
+	v := validator.(*Validator)
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	spends := []*utxo.Spend{
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+	}
+
+	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
+
+	// CreateInUtxoStore returns ErrTxExists — tx was already validated via P2P
+	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, errors.NewTxExistsError("already exists"))
+
+	// GetMeta succeeds — tx exists in store
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	options := &Options{CreateConflicting: true}
+	_, err = v.validateInternal(ctx, tx, 100, options)
+
+	// Should return ErrTxConflicting, not a ProcessingError
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrTxConflicting), "expected ErrTxConflicting, got: %v", err)
+
+	mockStore.AssertExpectations(t)
+}
+
 func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}

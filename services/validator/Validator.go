@@ -613,9 +613,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 							return nil, err
 						}
+
+						// Tx already exists — treat as conflicting (same as successful create)
+						err = errors.NewTxConflictingError("[Validate][%s] tx is conflicting (already exists)", txID, err)
+						span.RecordError(err)
+
+						return txMetaData, err
 					}
 
-					err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+					err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed: %v", txID, utxoMapErr)
 					span.RecordError(err)
 
 					return txMetaData, err
