@@ -889,11 +889,13 @@ func (b *BlockAssembler) Reset(fullReset bool) {
 	b.resetWithOptions(fullReset, false)
 }
 
-// ResetWithInputValidation triggers a full reset with UTXO input validation.
+// ResetWithInputValidation triggers a reset with UTXO input validation.
 // For each unmined transaction, verifies inputs are still spent by this tx.
 // If an input is spent by a different tx, marks the tx as conflicting and skips it.
+// Uses index-based scan (not full scan) for performance — only iterates unmined txs
+// via the unminedSince secondary index, avoiding a scan of the entire UTXO store.
 func (b *BlockAssembler) ResetWithInputValidation() {
-	b.resetWithOptions(true, true)
+	b.resetWithOptions(false, true)
 }
 
 func (b *BlockAssembler) resetWithOptions(fullReset bool, validateInputs bool) {
@@ -1900,6 +1902,11 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 					}
 
 					if shouldValidateInputs {
+						validatedCount := invalidInputCount.Load() + int64(len(localResult.unminedTxs))
+						if validatedCount > 0 && validatedCount%1000 == 0 {
+							b.logger.Infof("[loadUnminedTransactions] input validation progress: %d txs checked, %d invalid", validatedCount, invalidInputCount.Load())
+						}
+
 						if !b.validateUnminedTxInputs(ctx, unminedTransaction.Hash) {
 							invalidInputCount.Add(1)
 							continue
@@ -2131,9 +2138,9 @@ type sortEntry struct {
 // by THIS transaction. If any input is spent by a different tx, marks the tx as conflicting.
 // Returns true if the transaction is valid for inclusion in block assembly.
 func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash) bool {
-	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Tx, fields.Conflicting)
-	if err != nil || txMeta == nil || txMeta.Tx == nil {
-		b.logger.Warnf("[validateUnminedTxInputs][%s] cannot get tx data, skipping: %v", txHash.String(), err)
+	// Load only inputs and conflicting flag — NOT full Tx (avoids loading heavy output data)
+	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Inputs, fields.Conflicting)
+	if err != nil || txMeta == nil || txMeta.Tx == nil || txMeta.Tx.Inputs == nil {
 		return false
 	}
 

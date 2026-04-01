@@ -1553,9 +1553,11 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-// ResetBlockAssemblyValidateInputs performs a full reset with UTXO input validation.
+// ResetBlockAssemblyValidateInputs performs a reset with UTXO input validation.
+// Uses index-based scan (not full scan) for performance — only iterates unmined txs.
 // For each unmined transaction, verifies that its inputs are still spent by this transaction.
 // If an input is spent by a different tx, marks the tx as conflicting and excludes it.
+// Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
 func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "ResetBlockAssemblyValidateInputs",
 		tracing.WithParentStat(ba.stats),
