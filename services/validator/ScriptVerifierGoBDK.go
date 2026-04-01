@@ -172,6 +172,13 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		return errors.NewInvalidArgumentError("failed conversion for block height heights", errConv)
 	}
 
+	// Validate utxo heights count matches transaction inputs before calling BDK,
+	// which throws a C++ exception for mismatched counts.
+	if len(intUtxoHeights) != len(tx.Inputs) {
+		consensusErr := errors.NewTxConsensusError("inconsistent utxo heights: got %d, expected %d inputs", len(intUtxoHeights), len(tx.Inputs))
+		return errors.NewTxInvalidError(errMsgInvalidTx, consensusErr)
+	}
+
 	// #nosec G115 -- blockHeight won't overflow
 	errVerify := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if errVerify != nil {
@@ -221,6 +228,14 @@ func (v *scriptVerifierGoBDK) VerifyScriptBatch(txs []*bt.Tx, blockHeight uint32
 	errs := make([]error, n)
 
 	if n == 0 {
+		return errs
+	}
+
+	if len(utxoHeights) != n {
+		for i := range errs {
+			errs[i] = errors.NewInvalidArgumentError("length of utxoHeights must match number of transactions")
+		}
+
 		return errs
 	}
 
