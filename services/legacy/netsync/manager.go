@@ -15,6 +15,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1263,7 +1264,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			return nil
-		} else if errors.Is(err, context.Canceled) {
+		} else if errors.Is(err, context.Canceled) || isBenignCancellationError(err) {
 			return nil
 		} else {
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
@@ -1273,8 +1274,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
 
-			// TODO TEMPORARY: we should not panic here, but return the error
-			panic(err)
+			// Never panic in sync processing goroutines; bubble error to caller.
+			return err
 		}
 	}
 
@@ -1916,6 +1917,19 @@ type blockQueueMsg struct {
 	blockHeight int32
 	peer        *peerpkg.Peer
 	reply       chan error
+}
+
+// isBenignCancellationError identifies wrapped shutdown/cancellation errors
+// that can surface from downstream gRPC calls and should not crash sync loops.
+func isBenignCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "context canceled") ||
+		strings.Contains(errText, "client connection is closing") ||
+		strings.Contains(errText, "code = canceled")
 }
 
 // blockHandler is the main handler for the sync manager.  It must be run as a
