@@ -675,7 +675,16 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithAddTXToBlockAssembly(false),
 					validator.WithSkipPolicyChecks(true),
 					validator.WithSkipTxMetaPublishing(true),
+					validator.WithCreateConflicting(true),
 				); validateErr != nil {
+					// ErrTxConflicting is expected during legacy catchup when the UTXO store
+					// has stale spending data. The block is confirmed, so its transactions
+					// take precedence — the conflict will be resolved by ProcessConflicting
+					// during block acceptance.
+					if errors.Is(validateErr, errors.ErrTxConflicting) {
+						return nil
+					}
+
 					if errors.IsRetryableError(validateErr) {
 						mu.Lock()
 						retryableTxs = append(retryableTxs, txHash)
