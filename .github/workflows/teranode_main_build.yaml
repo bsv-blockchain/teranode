@@ -36,7 +36,7 @@ jobs:
         id: version
         run: ./scripts/determine-git-version.sh
 
-  # Run remote build and deploy workflow
+  # Run remote build and deploy workflow (CGO image)
   build-and-deploy:
     needs: calculate-version
     uses: bsv-blockchain/teranode-shared-workflows/.github/workflows/build_and_deploy.yaml@main
@@ -46,6 +46,27 @@ jobs:
       id-token: write
     with:
       repository: ${{ github.repository }}
+      tag_latest: true
+      build_args: |
+        GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
+        GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
+        GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}
+      architectures: '["amd64", "arm64"]'
+      runner_labels: '{"amd64":"teranode-runner-16-core","arm64":"teranode-runner-16-core-arm","manifest":"ubuntu-latest"}'
+    secrets: inherit
+
+  # Run remote build and deploy workflow (purego image - no CGO)
+  build-and-deploy-purego:
+    needs: calculate-version
+    uses: bsv-blockchain/teranode-shared-workflows/.github/workflows/build_and_deploy.yaml@main
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      repository: ${{ github.repository }}
+      file: './Dockerfile.purego'
+      image_prefix: 'purego'
       tag_latest: true
       build_args: |
         GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
