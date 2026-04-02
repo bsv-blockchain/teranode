@@ -417,8 +417,13 @@ func (c *KafkaAsyncProducer) Stop() error {
 }
 
 // BrokersURL returns the list of configured Kafka broker URLs.
+// Returns nil for in-memory producers since there are no real brokers.
 func (c *KafkaAsyncProducer) BrokersURL() []string {
 	if c == nil {
+		return nil
+	}
+
+	if c.inMemoryProducer != nil {
 		return nil
 	}
 

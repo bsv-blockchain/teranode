@@ -577,6 +577,20 @@ func (s *Client) ResetBlockAssemblyFully(ctx context.Context) error {
 	return unwrappedErr
 }
 
+// ResetBlockAssemblyValidateInputs performs a full reset with UTXO input validation.
+// For each unmined transaction, verifies inputs are still spent by this tx.
+// If an input is spent by a different tx, marks the tx as conflicting and excludes it.
+func (s *Client) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	_, err := s.client.ResetBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
+}
+
 // GetBlockAssemblyState retrieves the current state of block assembly.
 //
 // Parameters:

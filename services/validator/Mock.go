@@ -1,7 +1,7 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
 including script verification, UTXO management, and policy enforcement. It supports
 multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
 transaction validation ruleset.
@@ -116,3 +116,9 @@ func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx
 // TriggerBatcher implements the batcher trigger interface for testing.
 // This is a no-op in the mock implementation as no actual batching occurs.
 func (m *MockValidatorClient) TriggerBatcher() {}
+
+// EnsureMTPLoaded implements mock MTP store pre-warming.
+// This is a no-op in the mock implementation as no actual MTP loading occurs.
+func (m *MockValidatorClient) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
+}

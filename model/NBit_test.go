@@ -52,7 +52,7 @@ func TestBlock911636Difficulty(t *testing.T) {
 	// This test verifies the standard Bitcoin difficulty calculation
 	// Block 911636 has nBits value 0x180f9ff5
 	// Note: SVNode may report a different value (~35858832210.37) which appears
-	// to be incorrect based on the Bitcoin SV C++ source code analysis
+	// to be incorrect based on the SV Node C++ source code analysis
 
 	bits, err := NewNBitFromString("180f9ff5")
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestBlock911636Difficulty(t *testing.T) {
 	difficultyFloat, _ := difficulty.Float64()
 
 	// Expected difficulty using standard Bitcoin algorithm
-	// This matches what Bitcoin Core and Bitcoin SV C++ code produces
+	// This matches what Bitcoin Core and SV Node C++ code produces
 	expectedDifficulty := 70368426346.669891357421875
 
 	t.Logf("nBits: 0x180f9ff5")

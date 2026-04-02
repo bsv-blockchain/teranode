@@ -135,6 +135,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		if bestErr != nil {
 			s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
 		} else if uint64(postBestID) != newBlockID {
+			s.blockTimestampCache.Clear()
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
@@ -145,6 +146,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
 			// Case 2: new block is the best but doesn't extend the old best (reorg),
 			// or preBestHash was unavailable — take the conservative path and rebuild.
+			s.blockTimestampCache.Clear()
 			s.resetChainWalkCache()
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
@@ -265,6 +267,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
 	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to get previous block data for block %s: %v", block.Hash().String(), err)
 		return 0, 0, nil, false, err
 	}
 
@@ -303,11 +306,12 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
 RETURNING id
 			`
 		} else {
@@ -330,11 +334,12 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
 RETURNING id
 			`
 		}
@@ -360,11 +365,12 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
 RETURNING id
 			`
 		} else {
@@ -387,11 +393,12 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
 RETURNING id
 			`
 		}
@@ -400,6 +407,13 @@ RETURNING id
 	cumulativeChainWorkBytes, err := calculateAndPrepareChainWork(previousChainWork, block)
 	if err != nil {
 		return 0, 0, nil, false, err // Return error from calculation
+	}
+
+	// Calculate Median Time Past (MTP) for this block
+	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height)
+	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to calculate MTP for height %d (CSVHeight=%d): %v", height, s.chainParams.CSVHeight, err)
+		return 0, 0, nil, false, err
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
@@ -447,6 +461,7 @@ RETURNING id
 			subtreeBytes,
 			peerID,
 			coinbaseBytes,
+			medianTimePast,
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
@@ -471,6 +486,7 @@ RETURNING id
 			subtreeBytes,
 			peerID,
 			coinbaseBytes,
+			medianTimePast,
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
@@ -492,6 +508,12 @@ RETURNING id
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
 		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
+	}
+
+	// Update MTP cache with this block's timestamp for future MTP calculations.
+	// Only cache valid blocks — invalid blocks are excluded from MTP queries.
+	if !storeAsInvalid {
+		s.blockTimestampCache.Add(height, block.Header.Timestamp)
 	}
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
@@ -746,6 +768,109 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 	}
 
 	return nil // No validation needed or validation passed
+}
+
+// calculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
+// MTP is defined as the median of the timestamps of the previous 11 blocks (BIP113).
+//
+// BIP113 (Median Time Past) was activated as part of the CSV softfork at a specific block height
+// on each network (mainnet: 419328, testnet3: 770112, etc.). Before this activation height,
+// MTP was not used and this function returns 0.
+//
+// Parameters:
+//   - ctx: Context for the database operation
+//   - height: The block height to calculate MTP for
+//
+// Returns:
+//   - uint32: The MTP value as Unix timestamp, or 0 if height < CSVHeight or height < 11
+//   - error: Error if block timestamps cannot be retrieved
+func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
+	// BIP113 is only active from CSVHeight onwards
+	// Before CSVHeight, MTP was not used
+	if height < s.chainParams.CSVHeight {
+		return 0, nil
+	}
+
+	// MTP requires at least 11 previous blocks
+	// For early blocks (height < 11), return 0
+	// MTP of block N is the median of timestamps from blocks [N-11, N-1] (previous 11 blocks)
+	const medianTimeBlocks = 11
+	if height < medianTimeBlocks {
+		return 0, nil
+	}
+
+	// Calculate the range: [height-11, height-1] (previous 11 blocks)
+	startHeight := height - medianTimeBlocks
+	endHeight := height - 1
+
+	// Fast path: check in-memory cache before hitting the database.
+	if cached := s.blockTimestampCache.GetRange(startHeight, endHeight); cached != nil {
+		return calculateMTPFromTimestamps(cached)
+	}
+
+	// Slow path: fetch from database.
+	timestamps, err := s.fetchBlockTimestamps(ctx, startHeight, endHeight)
+	if err != nil {
+		return 0, err
+	}
+
+	return calculateMTPFromTimestamps(timestamps)
+}
+
+// fetchBlockTimestamps retrieves block timestamps from the database for the given
+// height range [startHeight, endHeight] (inclusive). Returns an error if the
+// number of rows returned does not match the expected count derived from the
+// range (indicating missing or duplicate blocks).
+func (s *SQL) fetchBlockTimestamps(ctx context.Context, startHeight, endHeight uint32) ([]uint32, error) {
+	expectedCount := int(endHeight-startHeight) + 1
+
+	q := `
+		SELECT block_time
+		FROM blocks
+		WHERE height >= $1 AND height <= $2
+		  AND invalid = FALSE
+		ORDER BY height ASC
+	`
+	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to fetch block timestamps from %d to %d", startHeight, endHeight, err)
+	}
+	defer rows.Close()
+
+	timestamps := make([]uint32, 0, expectedCount)
+	for rows.Next() {
+		var blockTime uint32
+		if err := rows.Scan(&blockTime); err != nil {
+			return nil, errors.NewStorageError("failed to scan block timestamp", err)
+		}
+		timestamps = append(timestamps, blockTime)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("error iterating block timestamps", err)
+	}
+
+	if len(timestamps) != expectedCount {
+		return nil, errors.NewStorageError("expected %d timestamps, got %d", expectedCount, len(timestamps))
+	}
+
+	return timestamps, nil
+}
+
+// calculateMTPFromTimestamps computes the Median Time Past from a slice of
+// block timestamps (expected to be in ascending height order).
+func calculateMTPFromTimestamps(timestamps []uint32) (uint32, error) {
+	times := make([]time.Time, len(timestamps))
+	for i, ts := range timestamps {
+		times[i] = time.Unix(int64(ts), 0)
+	}
+
+	medianTime, err := model.CalculateMedianTimestamp(times)
+	if err != nil {
+		return 0, errors.NewStorageError("failed to calculate median timestamp", err)
+	}
+
+	return uint32(medianTime.Unix()), nil
 }
 
 // getCumulativeChainWork calculates the total proof-of-work up to and including this block.

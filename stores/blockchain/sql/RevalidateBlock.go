@@ -30,6 +30,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
+	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()

@@ -76,7 +76,7 @@ func (b NBit) CalculateTarget() *big.Int {
 // CalculateDifficulty from nBits using the standard Bitcoin algorithm
 func (b NBit) CalculateDifficulty() *big.Float {
 	// This implementation follows the standard Bitcoin difficulty calculation
-	// as used in both Bitcoin Core and Bitcoin SV:
+	// as used in both Bitcoin Core and SV Node:
 	// https://github.com/bitcoin/bitcoin/blob/master/src/rpc/blockchain.cpp
 	// https://github.com/bitcoin-sv/bitcoin-sv/blob/master/src/rpc/blockchain.cpp
 	//

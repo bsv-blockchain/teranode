@@ -297,7 +297,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
 
-				err := b.reset(ctx, resetReq.FullReset)
+				err := b.reset(ctx, resetReq.FullReset, resetReq.ValidateInputs)
 
 				// empty out the reset channel
 				for len(b.resetCh) > 0 {
@@ -362,7 +362,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 //
 // Returns:
 //   - error: Any error encountered during reset
-func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
+func (b *BlockAssembler) reset(ctx context.Context, fullScan bool, validateInputs ...bool) error {
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return errors.NewProcessingError("[Reset] error getting best block header", err)
@@ -489,11 +489,13 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 		}
 	}
 
+	shouldValidateInputs := len(validateInputs) > 0 && validateInputs[0]
+
 	// define a post process function to be called after the reset is complete, but before we release the lock
 	// in the for/select in the subtreeprocessor
 	postProcessFn := func() error {
 		// reload the unmined transactions
-		if err = b.loadUnminedTransactions(ctx, fullScan); err != nil {
+		if err = b.loadUnminedTransactions(ctx, fullScan, shouldValidateInputs); err != nil {
 			return errors.NewProcessingError("[Reset] error loading unmined transactions", err)
 		}
 
@@ -876,20 +878,35 @@ func (b *BlockAssembler) RemoveTx(ctx context.Context, hash chainhash.Hash) erro
 }
 
 type resetRequest struct {
-	FullReset bool
-	ErrCh     chan error
+	FullReset      bool
+	ValidateInputs bool
+	ErrCh          chan error
 }
 
 // Reset triggers a reset of the block assembler state.
 // This operation runs asynchronously to prevent blocking.
 func (b *BlockAssembler) Reset(fullReset bool) {
+	b.resetWithOptions(fullReset, false)
+}
+
+// ResetWithInputValidation triggers a reset with UTXO input validation.
+// For each unmined transaction, verifies inputs are still spent by this tx.
+// If an input is spent by a different tx, marks the tx as conflicting and skips it.
+// Uses index-based scan (not full scan) for performance — only iterates unmined txs
+// via the unminedSince secondary index, avoiding a scan of the entire UTXO store.
+func (b *BlockAssembler) ResetWithInputValidation() {
+	b.resetWithOptions(false, true)
+}
+
+func (b *BlockAssembler) resetWithOptions(fullReset bool, validateInputs bool) {
 	// run in a go routine to prevent blocking
 	go func() {
 		errCh := make(chan error, 1)
 
 		b.resetCh <- resetRequest{
-			FullReset: fullReset,
-			ErrCh:     errCh,
+			FullReset:      fullReset,
+			ValidateInputs: validateInputs,
+			ErrCh:          errCh,
 		}
 
 		if err := <-errCh; err != nil {
@@ -1714,10 +1731,12 @@ func (b *BlockAssembler) validateParentChain(
 //
 // Returns:
 //   - error: Any error encountered during loading
-func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan bool) (err error) {
+func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan bool, validateInputs ...bool) (err error) {
+	shouldValidateInputs := len(validateInputs) > 0 && validateInputs[0]
+
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "loadUnminedTransactions",
 		tracing.WithParentStat(b.stats),
-		tracing.WithLogMessage(b.logger, "[loadUnminedTransactions] called with fullScan=%t", fullScan),
+		tracing.WithLogMessage(b.logger, "[loadUnminedTransactions] called with fullScan=%t validateInputs=%t", fullScan, shouldValidateInputs),
 	)
 	defer deferFn()
 
@@ -1824,6 +1843,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	skippedCount := atomic.Int64{}
 	alreadyMinedCount := atomic.Int64{}
 	lockedCount := atomic.Int64{}
+	invalidInputCount := atomic.Int64{}
 
 	// Worker pool configuration
 	numWorkers := runtime.NumCPU() * 4
@@ -1877,6 +1897,18 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 								localResult.markAsMinedOnLongestTxs = append(localResult.markAsMinedOnLongestTxs, unminedTransaction.Hash)
 							}
 
+							continue
+						}
+					}
+
+					if shouldValidateInputs {
+						validatedCount := invalidInputCount.Load() + int64(len(localResult.unminedTxs))
+						if validatedCount > 0 && validatedCount%1000 == 0 {
+							b.logger.Infof("[loadUnminedTransactions] input validation progress: %d txs checked, %d invalid", validatedCount, invalidInputCount.Load())
+						}
+
+						if !b.validateUnminedTxInputs(ctx, unminedTransaction.Hash, bestBlockHeaderIDsMap) {
+							invalidInputCount.Add(1)
 							continue
 						}
 					}
@@ -2014,8 +2046,12 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		}
 	}
 
-	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into block assembly (total processed: %d, skipped: %d, already mined: %d, locked: %d)",
-		len(unminedTransactions), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load())
+	if invalidInputCount.Load() > 0 {
+		b.logger.Warnf("[BlockAssembler] input validation: marked %d transactions as conflicting (inputs spent by different tx)", invalidInputCount.Load())
+	}
+
+	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into block assembly (total processed: %d, skipped: %d, already mined: %d, locked: %d, invalid inputs: %d)",
+		len(unminedTransactions), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load(), invalidInputCount.Load())
 
 	b.logger.Infof("[loadUnminedTransactions] adding unmined transactions to subtree processor")
 
@@ -2096,6 +2132,91 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 type sortEntry struct {
 	CreatedAt int    // 8 bytes - timestamp with milliseconds for sorting
 	Sequence  uint64 // 8 bytes - key to retrieve from temp store
+}
+
+// validateUnminedTxInputs checks that each input of an unmined transaction is still validly
+// spent by THIS transaction. Catches two cases:
+//  1. Input is spent by a DIFFERENT tx (spending data doesn't match)
+//  2. Input is spent by THIS tx, but a counter-conflicting tx is confirmed on the current chain
+//     (e.g. ProcessConflicting incorrectly made this tx the winner over a confirmed tx)
+//
+// Returns true if the transaction is valid for inclusion in block assembly.
+func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool) bool {
+	// Load only inputs and conflicting flag — NOT full Tx (avoids loading heavy output data)
+	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Inputs, fields.Conflicting)
+	if err != nil || txMeta == nil || txMeta.Tx == nil || txMeta.Tx.Inputs == nil {
+		return false
+	}
+
+	if txMeta.Conflicting {
+		return false
+	}
+
+	for _, input := range txMeta.Tx.Inputs {
+		parentHash := input.PreviousTxIDChainHash()
+
+		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
+		if err != nil || parentMeta == nil {
+			return false
+		}
+
+		vout := int(input.PreviousTxOutIndex)
+		if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
+			continue
+		}
+
+		spendingData := parentMeta.SpendingDatas[vout]
+		if spendingData == nil || spendingData.TxID == nil {
+			continue
+		}
+
+		if !spendingData.TxID.IsEqual(&txHash) {
+			// Case 1: input spent by a different tx
+			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
+				txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
+
+			b.markAsConflicting(ctx, txHash)
+			return false
+		}
+
+		// Case 2: spending data matches, but check if the counter-conflicting tx
+		// (the one this tx replaced via ProcessConflicting) is on the current chain.
+		// This catches the scenario where ProcessConflicting incorrectly flipped a
+		// confirmed transaction to "loser" status.
+		counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
+		if err != nil || counterTxMeta == nil {
+			continue
+		}
+
+		for _, counterChild := range counterTxMeta.ConflictingChildren {
+			if counterChild.IsEqual(&txHash) {
+				continue
+			}
+
+			counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
+			if err != nil || counterMeta == nil {
+				continue
+			}
+
+			for _, blockID := range counterMeta.BlockIDs {
+				if bestBlockIDsMap[blockID] {
+					b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
+						txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
+
+					b.markAsConflicting(ctx, txHash)
+					return false
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash.Hash) {
+	if _, _, err := b.utxoStore.SetConflicting(ctx, []chainhash.Hash{txHash}, true); err != nil {
+		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
+	}
 }
 
 // loadUnminedTransactionsWithDiskSort loads unmined transactions using disk-based sorting

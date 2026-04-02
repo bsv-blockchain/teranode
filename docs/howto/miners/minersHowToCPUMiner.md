@@ -27,7 +27,7 @@ This guide provides instructions for setting up CPU mining with Teranode using t
 - Running Teranode instance with RPC service enabled
 - Docker installed and configured
 - Access to the Teranode network (Docker network or direct network access)
-- Valid Bitcoin SV address for receiving mining rewards
+- Valid BSV Blockchain address for receiving mining rewards
 
 ## BSV CPU Miner Setup
 
@@ -63,7 +63,7 @@ docker run -it \
 ### Required Parameters
 
 | Parameter | Short Form | Description | Example |
-|-----------|------------|-------------|---------|
+| ----------- | ------------ | ------------- | --------- |
 | `--algo` | `-a` | Mining algorithm (always sha256d for BSV) | `--algo=sha256d` |
 | `--url` | `-o` | RPC server URL | `--url=http://rpc:9292` |
 | `--userpass` | `-O` | RPC credentials (username:password) | `--userpass=bitcoin:bitcoin` |
@@ -72,7 +72,7 @@ docker run -it \
 ### Optional Parameters
 
 | Parameter | Short Form | Description | Default | Example |
-|-----------|------------|-------------|---------|---------|
+| ----------- | ------------ | ------------- | --------- | --------- |
 | `--threads` | `-t` | Number of mining threads | CPU cores | `--threads=4` |
 | `--coinbase-sig` | | Custom signature for mined blocks | Empty | `--coinbase-sig="My Pool"` |
 | `--retries` | `-r` | Number of retries for failed requests | 3 | `--retries=10` |
@@ -82,7 +82,7 @@ docker run -it \
 ### Advanced Parameters
 
 | Parameter | Description | Example |
-|-----------|-------------|---------|
+| ----------- | ------------- | --------- |
 | `--scantime` | Time to spend on each work unit (seconds) | `--scantime=30` |
 | `--timeout` | Timeout for RPC requests (seconds) | `--timeout=60` |
 | `--retry-pause` | Pause between retries (seconds) | `--retry-pause=5` |

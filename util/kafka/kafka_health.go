@@ -20,7 +20,8 @@ import (
 //
 // Parameters:
 //   - ctx: Context for the health check operation (unused at construction time).
-//   - brokersURL: List of Kafka broker URLs to check.
+//   - brokersURL: List of Kafka broker URLs to check. Nil or empty skips the check
+//     (e.g. when using in-memory Kafka).
 //
 // Returns a function with signature:
 //
@@ -39,7 +40,7 @@ func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Cont
 
 		opts := []kgo.Opt{
 			kgo.SeedBrokers(brokersURL...),
-			kgo.ConnIdleTimeout(100 * time.Millisecond),
+			kgo.ConnIdleTimeout(1 * time.Second),
 			kgo.MetadataMinAge(100 * time.Millisecond),
 			kgo.RetryBackoffFn(func(int) time.Duration { return 0 }),
 		}

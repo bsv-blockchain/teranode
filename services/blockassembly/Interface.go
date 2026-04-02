@@ -117,6 +117,10 @@ type ClientI interface {
 	//   - error: Any error encountered during reset
 	ResetBlockAssemblyFully(ctx context.Context) error
 
+	// ResetBlockAssemblyValidateInputs performs a full reset with UTXO input validation.
+	// Verifies each unmined tx's inputs are still spent by this tx, marks invalid ones as conflicting.
+	ResetBlockAssemblyValidateInputs(ctx context.Context) error
+
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	//
 	// Parameters:

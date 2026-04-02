@@ -1,4 +1,4 @@
-// Package utxo provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
+// Package utxo provides UTXO (Unspent Transaction Output) management for the BSV Blockchain Teranode implementation.
 //
 // The package implements a UTXO store interface that handles:
 //   - UTXO creation, retrieval, and deletion

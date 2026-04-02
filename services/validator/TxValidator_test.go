@@ -1,7 +1,7 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
 including script verification, UTXO management, and policy enforcement. It supports
 multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
 transaction validation ruleset.
@@ -617,6 +617,9 @@ func Test_MinFeePolicy(t *testing.T) {
 func TestCheckP2SHOutput(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams.RequireStandard = true
+	// Disable BIP68 for this test (set CSVHeight above test heights)
+	// This test is about P2SH validation, not BIP68
+	tSettings.ChainCfgParams.CSVHeight = 1000000
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 

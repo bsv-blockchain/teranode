@@ -1,8 +1,8 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 This file implements the Go-BT script verification functionality, providing
-script validation using the Bitcoin SV go-bt library implementation. This is
+script validation using the BSV Blockchain go-bt library implementation. This is
 typically used as the default script interpreter.
 */
 package validator

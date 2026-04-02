@@ -47,7 +47,7 @@ const (
 )
 
 var (
-	bsvPeerConnected chan bool                // bsvPeerConnected is a channel used to signal when a Bitcoin SV peer is connected.
+	bsvPeerConnected chan bool                // bsvPeerConnected is a channel used to signal when a BSV Blockchain peer is connected.
 	conn             net.Conn                 // conn is the network connection to the Bitcoin peer.
 	logger           = ulogger.New("peercli") // logger is the logger instance used for logging messages in the peercli application.
 	p                *peer.Peer               // p is the peer instance used to interact with the Bitcoin network.

@@ -4,7 +4,7 @@
 
 ### Why a Custom Test Framework?
 
-Bitcoin SV node testing presents unique challenges that standard testing frameworks can't fully address:
+BSV Blockchain node testing presents unique challenges that standard testing frameworks can't fully address:
 
 1. **Complex Distributed Systems**
     - Multiple nodes need to interact

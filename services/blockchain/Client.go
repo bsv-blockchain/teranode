@@ -668,13 +668,14 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	}
 
 	meta := &model.BlockHeaderMeta{
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	return header, meta, nil
@@ -752,18 +753,19 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	}
 
 	meta := &model.BlockHeaderMeta{
-		ID:          resp.Id,
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		PeerID:      resp.PeerId,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
-		MinedSet:    resp.MinedSet,
-		SubtreesSet: resp.SubtreesSet,
-		Invalid:     resp.Invalid,
+		ID:             resp.Id,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		PeerID:         resp.PeerId,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MinedSet:       resp.MinedSet,
+		SubtreesSet:    resp.SubtreesSet,
+		Invalid:        resp.Invalid,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	if resp.ProcessedAt != nil {
@@ -1875,7 +1877,7 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Recovering from network disconnections or service downtime
 // - Ensuring the local blockchain is synchronized with the network
 // - Handling blockchain reorganizations and chain updates
-// - Maintaining consensus with the Bitcoin SV network
+// - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
 // The method first checks if the FSM is already in the CATCHING_BLOCKS state
@@ -1935,11 +1937,11 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // LegacySync sends a legacy sync FSM event to the blockchain service.
 // This method initiates a legacy synchronization process by transitioning the
 // blockchain service's finite state machine to the LEGACY_SYNCING state, which
-// triggers compatibility mode synchronization with older Bitcoin SV network
+// triggers compatibility mode synchronization with older BSV Blockchain network
 // protocols and legacy blockchain implementations.
 //
 // The legacy sync mode is essential for:
-// - Maintaining compatibility with older Bitcoin SV network nodes
+// - Maintaining compatibility with older BSV Blockchain network nodes
 // - Synchronizing with legacy blockchain implementations
 // - Supporting migration scenarios from older Teranode versions
 // - Ensuring interoperability across diverse network topologies
@@ -1958,7 +1960,7 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 //
 // This operation is typically used during:
 // - Network upgrades and migration periods
-// - Integration with legacy Bitcoin SV infrastructure
+// - Integration with legacy BSV Blockchain infrastructure
 // - Debugging synchronization issues with older nodes
 // - Ensuring network-wide compatibility during protocol transitions
 //
@@ -2060,7 +2062,7 @@ func (c *Client) Idle(ctx context.Context) error {
 // which blocks they need to synchronize.
 //
 // This implementation follows the standard Bitcoin protocol for block locators,
-// ensuring compatibility with the broader Bitcoin SV network.
+// ensuring compatibility with the broader BSV Blockchain network.
 //
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support
@@ -2420,4 +2422,41 @@ func (c *Client) CompleteBlobDeletionBatch(ctx context.Context, batchToken strin
 	}
 
 	return nil
+}
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
+}
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Internally builds a full heights array to reuse the existing GetMedianTimePastByHeights RPC,
+// avoiding the need for a new proto endpoint.
+func (c *Client) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	count := toHeight - fromHeight + 1
+	heights := make([]uint32, count)
+	for i := range heights {
+		heights[i] = fromHeight + uint32(i)
+	}
+
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
 }

@@ -1,5 +1,5 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 This file implements option patterns for both general validation options and
 transaction validator-specific options, providing flexible configuration for

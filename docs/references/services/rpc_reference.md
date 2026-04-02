@@ -1,5 +1,7 @@
 # RPC Service Reference Documentation
 
+<!-- markdownlint-disable MD046 -->
+
 ## Index
 
 - [Overview](#overview)
@@ -61,7 +63,7 @@
 
 ## Overview
 
-The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections. The service implements a standard Bitcoin protocol interface while integrating with Teranode's modular architecture to provide high-performance access to blockchain data and network operations.
+The RPC Service provides a JSON-RPC interface for interacting with the BSV Blockchain node. It handles various Bitcoin-related commands and manages client connections. The service implements a standard Bitcoin protocol interface while integrating with Teranode's modular architecture to provide high-performance access to blockchain data and network operations.
 
 ## Types
 
@@ -169,7 +171,7 @@ type RPCServer struct {
 
 The RPCServer provides a concurrent-safe JSON-RPC server implementation for the Bitcoin protocol. It handles client authentication, request processing, response generation, and maintains connections to other Teranode services to fulfill RPC requests.
 
-The server implements a two-tier authentication system that separates administrative capabilities from limited-user operations, providing security through proper authorization. It supports standard Bitcoin Core RPC methods and Bitcoin SV extensions for compatibility with existing tools while enhancing functionality.
+The server implements a two-tier authentication system that separates administrative capabilities from limited-user operations, providing security through proper authorization. It supports standard Bitcoin Core RPC methods and BSV Blockchain extensions for compatibility with existing tools while enhancing functionality.
 
 The RPCServer is designed for concurrent operation, employing synchronization mechanisms to handle multiple simultaneous client connections without race conditions or resource conflicts. It implements proper connection management, graceful shutdown, and health monitoring.
 
@@ -1397,7 +1399,6 @@ Returns the server version information.
 }
 ```
 
-
 **Example Request:**
 
 ```json
@@ -1839,17 +1840,17 @@ RPC calls return errors in the following format:
 
 Common error codes that may be returned:
 
-| Code    | Message                  | Meaning                                          |
-|---------|--------------------------|--------------------------------------------------|
-| -1      | RPC_MISC_ERROR          | Standard "catch-all" error                       |
-| -3      | RPC_TYPE_ERROR          | Unexpected type was passed as parameter          |
-| -5      | RPC_INVALID_ADDRESS     | Invalid address or key                           |
-| -8      | RPC_INVALID_PARAMETER   | Invalid, missing or duplicate parameter          |
-| -32600  | RPC_INVALID_REQUEST     | JSON request format error                        |
-| -32601  | RPC_METHOD_NOT_FOUND    | Method not found                                 |
-| -32602  | RPC_INVALID_PARAMS      | Invalid method parameters                        |
-| -32603  | RPC_INTERNAL_ERROR      | Internal RPC error                              |
-| -32700  | RPC_PARSE_ERROR         | Error parsing JSON request                       |
+| Code      | Message                    | Meaning                                            |
+| --------- | -------------------------- | -------------------------------------------------- |
+| -1        | RPC_MISC_ERROR             | Standard "catch-all" error                         |
+| -3        | RPC_TYPE_ERROR             | Unexpected type was passed as parameter            |
+| -5        | RPC_INVALID_ADDRESS        | Invalid address or key                             |
+| -8        | RPC_INVALID_PARAMETER      | Invalid, missing or duplicate parameter            |
+| -32600    | RPC_INVALID_REQUEST        | JSON request format error                          |
+| -32601    | RPC_METHOD_NOT_FOUND       | Method not found                                   |
+| -32602    | RPC_INVALID_PARAMS         | Invalid method parameters                          |
+| -32603    | RPC_INTERNAL_ERROR         | Internal RPC error                                 |
+| -32700    | RPC_PARSE_ERROR            | Error parsing JSON request                         |
 
 ## Connection Limiting
 
@@ -1859,7 +1860,7 @@ The RPC interface implements connection limiting to prevent resource exhaustion.
 
 ## Version Compatibility
 
-These RPC commands are compatible with Bitcoin SV Teranode version 1.0.0 and later.
+These RPC commands are compatible with BSV Blockchain Teranode version 1.0.0 and later.
 
 ## Concurrency
 

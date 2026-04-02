@@ -353,7 +353,7 @@ The entire codebase is written in Go (Golang), a statically typed, compiled prog
 
 Technology highlights:
 
-- **Bitcoin SV (BSV):** An implementation of the Bitcoin protocol that follows the vision set out by Satoshi Nakamoto's original Bitcoin whitepaper. BSV focuses on scalability, aiming to provide high transaction throughput and enterprise-level capabilities.
+- **BSV Blockchain:** An implementation of the Bitcoin protocol that follows the vision set out by Satoshi Nakamoto's original Bitcoin whitepaper. BSV Blockchain focuses on scalability, aiming to provide high transaction throughput and enterprise-level capabilities.
 - **Teranode:** A high-performance implementation of the Bitcoin protocol designed to handle a massive scale of transactions.
 
 - **Echo Framework:** The code uses Echo, a high-performance, extensible web framework for Go, to create an HTTP server. This server exposes endpoints for block, transaction, and subtree data retrieval.

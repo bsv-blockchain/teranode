@@ -1,7 +1,7 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
 including script verification, UTXO management, and policy enforcement. It supports
 multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
 transaction validation ruleset.
@@ -193,6 +193,13 @@ func (c *Client) TriggerBatcher() {
 	if c.batchSize > 0 {
 		c.batcher.Trigger()
 	}
+}
+
+// EnsureMTPLoaded is a no-op on the gRPC client. The remote validator service manages
+// its own in-memory MTP store; EnsureMTPLoaded is called server-side before concurrent
+// per-transaction goroutines start.
+func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
 }
 
 // Validate performs transaction validation by applying the given options and delegating

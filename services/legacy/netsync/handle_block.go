@@ -612,6 +612,12 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 	concurrencyLimit := spendBatcherSize * spendBatcherConcurrency
 
+	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
+	// can read mtpStore[h] without locking and without making gRPC calls.
+	if err = sm.validationClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
+		return err
+	}
+
 	// These transactions arrive as part of a block, so they should be treated as valid
 	// transactions that all need to be processed. If one fails (e.g. transient Aerospike
 	// DEVICE_OVERLOAD), rolling back or cancelling all other independent transactions
@@ -669,7 +675,16 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithAddTXToBlockAssembly(false),
 					validator.WithSkipPolicyChecks(true),
 					validator.WithSkipTxMetaPublishing(true),
+					validator.WithCreateConflicting(true),
 				); validateErr != nil {
+					// ErrTxConflicting is expected during legacy catchup when the UTXO store
+					// has stale spending data. The block is confirmed, so its transactions
+					// take precedence — the conflict will be resolved by ProcessConflicting
+					// during block acceptance.
+					if errors.Is(validateErr, errors.ErrTxConflicting) {
+						return nil
+					}
+
 					if errors.IsRetryableError(validateErr) {
 						mu.Lock()
 						retryableTxs = append(retryableTxs, txHash)
@@ -733,6 +748,17 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 
 	var timeStart time.Time
+
+	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
+	// can read mtpStore[h] without locking and without making gRPC calls.
+	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
+	if err != nil {
+		return err
+	}
+
+	if err = sm.validationClient.EnsureMTPLoaded(ctx, blockHeightUint32); err != nil {
+		return err
+	}
 
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.

@@ -650,7 +650,7 @@ type ClientI interface {
 	//
 	// This method updates the blockchain database to indicate that the subtree hash structure
 	// for a specific block has been properly set. Subtree hashes are important for efficient
-	// validation and transaction lookup in the Bitcoin SV blockchain architecture.
+	// validation and transaction lookup in the BSV Blockchain architecture.
 	//
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
@@ -1125,6 +1125,43 @@ type ClientI interface {
 	// Returns:
 	// - Error if completion fails or token is invalid
 	CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error
+
+	// GetMedianTimePastForHeights returns the Median Time Past (MTP) for one or more block heights.
+	// MTP is defined as the median of the timestamps of the previous 11 blocks (BIP113).
+	//
+	// BIP113 (Median Time Past) was activated as part of the CSV softfork at a specific block height
+	// on each network (mainnet: 419328, testnet3: 770112, etc.). Before this activation height,
+	// MTP was not used and this function returns 0 for those heights.
+	//
+	// Parameters:
+	// - ctx: Context for the operation
+	// - heights: Array of block heights to get MTP for
+	//
+	// Returns:
+	// - []uint32: Array of MTP values corresponding to input heights (0 for height < CSVHeight or height < 11)
+	// - error: Error if block headers cannot be retrieved or MTP cannot be calculated
+	//
+	// Note: MTP of block N is the median of timestamps from blocks [N-11, N-1] (previous 11 blocks).
+	GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error)
+
+	// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+	// Returns a dense slice where result[i] = MTP for height (fromHeight + i),
+	// so len(result) == toHeight - fromHeight + 1.
+	//
+	// This is more efficient than GetMedianTimePastForHeights for contiguous ranges
+	// because it avoids constructing and transmitting a full heights array.
+	// Used for bulk pre-loading the in-memory MTP store at validator startup and
+	// for extending it when new block heights are encountered.
+	//
+	// Parameters:
+	// - ctx: Context for the operation
+	// - fromHeight: Start of the height range (inclusive)
+	// - toHeight: End of the height range (inclusive); must be >= fromHeight
+	//
+	// Returns:
+	// - []uint32: Dense slice of MTP values indexed from fromHeight
+	// - error: Error if block headers cannot be retrieved
+	GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error)
 }
 
 const notImplemented = "not implemented"

@@ -1,7 +1,9 @@
 package smoke
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"strings"
@@ -9,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
@@ -36,7 +41,7 @@ const (
 
 var legacySyncTestLock sync.Mutex
 
-// multistreamArgs are the flags needed to enable multistream on Bitcoin SV 1.2.0
+// multistreamArgs are the flags needed to enable multistream on SV Node 1.2.0
 var multistreamArgs = []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}
 
 // newSVNode creates an SVNode using Docker via testcontainers
@@ -53,7 +58,7 @@ func newMultistreamSVNode() svnode.SVNodeI {
 }
 
 // waitForOutboundPeer waits for svnode to have at least one outbound peer.
-// Bitcoin SV only downloads blocks from outbound connections, so this is
+// SV Node only downloads blocks from outbound connections, so this is
 // necessary to confirm the AddNode connection is established (not just an
 // inbound connection from ConnectPeers).
 func waitForOutboundPeer(ctx context.Context, sv svnode.SVNodeI, timeout time.Duration) error {
@@ -97,7 +102,7 @@ func waitForLegacyListener(t *testing.T, addr string, timeout time.Duration) {
 // This validates teranode's legacy block serving even when svnode's IBD bug
 // prevents it from requesting the actual block data.
 // verifyTeranodeServedHeaders checks svnode's peer info to confirm teranode
-// announced the correct height (startingheight) in VERSION. Bitcoin SV 1.2.0
+// announced the correct height (startingheight) in VERSION. SV Node 1.2.0
 // intermittently fails to process the headers response (synced_headers stays -1),
 // so we only assert on startingheight which proves the VERSION exchange worked.
 func verifyTeranodeServedHeaders(t *testing.T, sv svnode.SVNodeI, expectedHeight int) {
@@ -229,9 +234,9 @@ func TestLegacySync(t *testing.T) {
 // 3. Starts svnode with -connect flag pointing to teranode's legacy listener
 // 4. Verifies svnode syncs teranode's blocks via IBD over the outbound connection
 //
-// Note: Bitcoin SV only downloads blocks from outbound connections (eclipse attack
+// Note: SV Node only downloads blocks from outbound connections (eclipse attack
 // prevention). The -connect flag creates a real outbound connection (unlike addnode)
-// that Bitcoin SV reliably uses for initial block download.
+// that SV Node reliably uses for initial block download.
 func TestSVNodeSyncFromTeranode(t *testing.T) {
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
@@ -303,7 +308,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 
 	// Connect svnode and attempt sync. Teranode correctly serves blocks
 	// (confirmed: VERSION announces correct height, getheaders responds with
-	// correct headers, getdata serves block data). Bitcoin SV 1.2.0 has an
+	// correct headers, getdata serves block data). SV Node 1.2.0 has an
 	// intermittent bug where it receives valid headers but never sends getdata.
 	// If svnode syncs, we get full validation. If not, teranode still did its job.
 	opts := svnode.DefaultOptions()
@@ -324,7 +329,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 		// SVNode didn't fully sync. Verify teranode correctly served headers by
 		// checking svnode's peer info - synced_headers shows how many headers
 		// svnode received, startingheight shows what teranode announced in VERSION.
-		t.Logf("SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug - skips getdata): %v", syncErr)
+		t.Logf("SVNode did not sync blocks (known SV Node 1.2.0 bug - skips getdata): %v", syncErr)
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
@@ -443,7 +448,7 @@ func TestBidirectionalSync(t *testing.T) {
 	// Phase 3: Restart teranode WITH legacy to serve blocks to svnode.
 	// Teranode correctly serves blocks (confirmed: VERSION announces correct
 	// height, getheaders responds with correct headers, getdata serves block data).
-	// Bitcoin SV 1.2.0 has an intermittent bug where it receives valid headers
+	// SV Node 1.2.0 has an intermittent bug where it receives valid headers
 	// but never sends getdata. If svnode doesn't sync, teranode still did its job.
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
@@ -478,7 +483,7 @@ func TestBidirectionalSync(t *testing.T) {
 
 	phase3Err := sv.WaitForBlockHeight(ctx, currentHeight, 30*time.Second)
 	if phase3Err != nil {
-		t.Logf("Phase 3: SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug): %v", phase3Err)
+		t.Logf("Phase 3: SVNode did not sync blocks (known SV Node 1.2.0 bug): %v", phase3Err)
 		verifyTeranodeServedHeaders(t, sv, currentHeight)
 		t.Log("Phase 3: Skipping Phase 4 (requires svnode to have synced)")
 		return
@@ -717,7 +722,7 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 
 	syncErr := sv.WaitForBlockHeight(ctx, targetHeight, 30*time.Second)
 	if syncErr != nil {
-		t.Logf("Multistream SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug): %v", syncErr)
+		t.Logf("Multistream SVNode did not sync blocks (known SV Node 1.2.0 bug): %v", syncErr)
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("Multistream SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
@@ -1340,7 +1345,7 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 	// Phase 2: Restart teranode WITH legacy listening + ConnectPeers to svnode.
 	// ConnectPeers creates a teranode→svnode connection (inbound on svnode).
 	// sv.AddNode below creates an svnode→teranode outbound connection (required
-	// for block download in Bitcoin SV).
+	// for block download in SV Node).
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		EnableP2P:            true,
@@ -1427,4 +1432,345 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 	require.Equal(t, svBlockHash, teranodeBlock.Hash().String(), "Block hash at height %d should match", finalHeight)
 
 	t.Logf("All %d teranode blocks validated by svnode - chain integrity confirmed", blocksToGenerate)
+}
+
+// TestSimpleTransaction_SVNodeFirst tests creating a simple transaction and having SV Node mine it first
+// This test:
+// 1. Sets up two synced nodes at height 101
+// 2. Uses TxCreator to fund and create a spending transaction
+// 3. Submits transaction to SV Node, SV Node mines it
+// 4. Verifies Teranode syncs the block with the transaction
+func TestSimpleTransaction_SVNodeFirst(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Start SV Node and generate 101 blocks
+	sv := newSVNode()
+	err := sv.Start(ctx)
+	require.NoError(t, err, "Failed to start SV Node")
+
+	defer func() {
+		_ = sv.Stop(ctx)
+	}()
+
+	const initialHeight = 101
+	_, err = sv.Generate(initialHeight)
+	require.NoError(t, err, "Failed to generate blocks on SV Node")
+
+	t.Logf("SV Node generated %d blocks", initialHeight)
+
+	// Start Teranode and wait for sync
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
+				s.P2P.StaticPeers = []string{}
+				s.ChainCfgParams.CoinbaseMaturity = 2 // Short maturity for faster tests
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+
+	defer td.Stop(t)
+
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialHeight), 60*time.Second)
+	require.NoError(t, err, "Teranode failed to sync initial blocks")
+
+	t.Logf("Both nodes synced to height %d", initialHeight)
+
+	// Create TxCreator with Teranode's private key
+	privKey := td.GetPrivateKey(t)
+	txCreator, err := svnode.NewTxCreator(sv, privKey)
+	require.NoError(t, err)
+	t.Logf("TxCreator address: %s", txCreator.Address())
+
+	// Create and mine funding transaction (10 BSV)
+	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
+	require.NoError(t, err, "Should create and mine funding")
+	fundingBlockHeight := uint32(initialHeight + 1)
+	t.Logf("Created funding UTXO: %s:%d with %d satoshis", fundingUTXO.TxID, fundingUTXO.Vout, fundingUTXO.Amount)
+
+	// Wait for Teranode to sync the funding block
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, fundingBlockHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should sync funding block")
+	t.Logf("Teranode synced to height %d", fundingBlockHeight)
+
+	// Create a spending transaction (self-payment with 10k satoshi fee)
+	tx, err := txCreator.CreateSpendingTransaction(
+		[]*svnode.FundingUTXO{fundingUTXO},
+		txCreator.SelfPaymentBuilder(10000),
+	)
+	require.NoError(t, err, "Should create spending transaction")
+	t.Logf("Created transaction: %s (fee: 10000 satoshis)", tx.TxID())
+
+	// Submit transaction to SV Node's mempool
+	txHex := tx.String()
+	txID, err := sv.SendRawTransaction(txHex)
+	require.NoError(t, err, "SV Node should accept transaction")
+	t.Logf("SV Node accepted transaction %s into mempool", txID)
+
+	// Have SV Node mine a block containing this transaction
+	blockHashes, err := sv.Generate(1)
+	require.NoError(t, err, "SV Node should mine block")
+	require.Len(t, blockHashes, 1)
+
+	expectedHeight := fundingBlockHeight + 1
+	t.Logf("SV Node mined block %s at height %d", blockHashes[0], expectedHeight)
+
+	// Wait for Teranode to sync the new block
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, expectedHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should sync block from SV Node")
+	t.Logf("Teranode synced to height %d", expectedHeight)
+
+	// Verify consensus - both nodes have same best block hash
+	tdHeader, _, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	tdHash := tdHeader.Hash().String()
+
+	svHash, err := sv.GetBestBlockHash()
+	require.NoError(t, err)
+
+	require.Equal(t, svHash, tdHash, "Both nodes must agree on best block hash")
+
+	t.Logf("SUCCESS: Transaction accepted by SV Node, Teranode synced successfully. Consensus hash: %s", svHash)
+}
+
+// TestFloatingBlock_SubmitToBSVFirst tests creating a complete block and submitting to BSV Node first
+// This test:
+// 1. Sets up two synced nodes
+// 2. Creates funding via BSV Node's sendtoaddress
+// 3. Creates a transaction spending the UTXO
+// 4. Constructs a complete "floating block" containing the transaction
+// 5. Submits the block to BSV Node first
+// 6. Verifies Teranode syncs the block via P2P
+func TestFloatingBlock_SubmitToBSVFirst(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Start SV Node and generate initial blocks
+	sv := newSVNode()
+	err := sv.Start(ctx)
+	require.NoError(t, err, "Failed to start SV Node")
+
+	defer func() {
+		_ = sv.Stop(ctx)
+	}()
+
+	const initialHeight = 101
+	_, err = sv.Generate(initialHeight)
+	require.NoError(t, err, "Failed to generate blocks on SV Node")
+
+	t.Logf("SV Node generated %d blocks", initialHeight)
+
+	// Start Teranode and wait for sync
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
+				s.P2P.StaticPeers = []string{}
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+
+	defer td.Stop(t)
+
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialHeight), 60*time.Second)
+	require.NoError(t, err, "Teranode failed to sync initial blocks")
+
+	t.Logf("Both nodes synced to height %d", initialHeight)
+
+	// Create TxCreator with Teranode's private key
+	privKey := td.GetPrivateKey(t)
+	txCreator, err := svnode.NewTxCreator(sv, privKey)
+	require.NoError(t, err)
+	t.Logf("TxCreator address: %s", txCreator.Address())
+
+	// Create and mine funding transaction (10 BSV)
+	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
+	require.NoError(t, err, "Should create and mine funding")
+	fundingBlockHeight := uint32(initialHeight + 1)
+	t.Logf("Created funding UTXO: %s:%d with %d satoshis", fundingUTXO.TxID, fundingUTXO.Vout, fundingUTXO.Amount)
+
+	// Wait for Teranode to sync the funding block
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, fundingBlockHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should sync funding block")
+	t.Logf("Teranode synced to height %d", fundingBlockHeight)
+
+	// Create a spending transaction (self-payment with 10k satoshi fee)
+	tx, err := txCreator.CreateSpendingTransaction(
+		[]*svnode.FundingUTXO{fundingUTXO},
+		txCreator.SelfPaymentBuilder(10000),
+	)
+	require.NoError(t, err, "Should create spending transaction")
+	t.Logf("Created transaction: %s (fee: 10000 satoshis)", tx.TxID())
+
+	// Now create a floating block containing this transaction using BlockCreator
+	blockCreator := svnode.NewBlockCreator(sv, txCreator.Address())
+	t.Logf("Creating and mining block with transaction %s...", tx.TxID())
+
+	// Create block with our transaction (BlockCreator handles coinbase, merkle root, mining)
+	block, err := blockCreator.CreateBlock([]*bt.Tx{tx})
+	require.NoError(t, err, "Should create and mine block")
+	t.Logf("Mined block %s (nonce: %d, size: %d bytes)", block.Hash, block.Header.Nonce, len(block.Hex)/2)
+
+	// Submit the block to BSV Node
+	result, err := sv.SubmitBlock(block.Hex)
+	require.NoError(t, err, "BSV Node should accept the block")
+	t.Logf("BSV Node submitblock result: %v", result)
+
+	// Verify BSV Node accepted the block by checking block height increased by 1
+	svBlockCount, err := sv.GetBlockCount()
+	require.NoError(t, err, "Should get BSV Node block count after submitblock")
+	t.Logf("BSV Node block height after submitblock: %d", svBlockCount)
+	require.Equal(t, int(fundingBlockHeight)+1, svBlockCount, "BSV Node should have accepted the block, height should increase by 1")
+
+	expectedHeight := uint32(svBlockCount)
+	t.Logf("Expected new height: %d", expectedHeight)
+
+	// Wait for Teranode to sync the new block via P2P
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, expectedHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should sync floating block from BSV Node")
+
+	t.Logf("Teranode synced to height %d", expectedHeight)
+
+	// Verify both nodes agree on the best block hash, and that it matches the offline-mined block
+	tdHeader, _, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	tdHash := tdHeader.Hash().String()
+
+	svHash, err := sv.GetBestBlockHash()
+	require.NoError(t, err)
+
+	require.Equal(t, block.Hash, svHash, "BSV best block hash must match the offline-mined floating block")
+	require.Equal(t, block.Hash, tdHash, "Teranode best block hash must match the offline-mined floating block")
+
+	t.Logf("SUCCESS: Floating block accepted by BSV Node, Teranode synced successfully. Consensus hash: %s", svHash)
+}
+
+// TestFloatingBlock_SubmitToTeranodeFirst is the mirror of TestFloatingBlock_SubmitToBSVFirst.
+// It creates a floating block with a standard transaction, submits it to Teranode first via the
+// BlockValidation service, then verifies BSV syncs to the same block via the legacy P2P connection.
+func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Start SV Node and generate initial blocks
+	sv := newSVNode()
+	err := sv.Start(ctx)
+	require.NoError(t, err, "Failed to start SV Node")
+
+	defer func() {
+		_ = sv.Stop(ctx)
+	}()
+
+	const initialHeight = 101
+	_, err = sv.Generate(initialHeight)
+	require.NoError(t, err, "Failed to generate blocks on SV Node")
+
+	t.Logf("SV Node generated %d blocks", initialHeight)
+
+	// Start Teranode and wait for sync.
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
+				s.Legacy.AllowSyncCandidateFromLocalPeers = true
+				s.Legacy.ListenAddresses = []string{teranodeLegacyListenAddr}
+				s.P2P.StaticPeers = []string{}
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+
+	defer td.Stop(t)
+
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialHeight), 60*time.Second)
+	require.NoError(t, err, "Teranode failed to sync initial blocks")
+
+	t.Logf("Both nodes synced to height %d", initialHeight)
+
+	// Create TxCreator with Teranode's private key
+	privKey := td.GetPrivateKey(t)
+	txCreator, err := svnode.NewTxCreator(sv, privKey)
+	require.NoError(t, err)
+	t.Logf("TxCreator address: %s", txCreator.Address())
+
+	// Create and mine funding transaction (10 BSV)
+	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
+	require.NoError(t, err, "Should create and mine funding")
+	fundingBlockHeight := uint32(initialHeight + 1)
+	t.Logf("Created funding UTXO: %s:%d with %d satoshis", fundingUTXO.TxID, fundingUTXO.Vout, fundingUTXO.Amount)
+
+	// Wait for Teranode to sync the funding block
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, fundingBlockHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should sync funding block")
+	t.Logf("Teranode synced to height %d", fundingBlockHeight)
+
+	// Create a spending transaction (self-payment with 10k satoshi fee)
+	tx, err := txCreator.CreateSpendingTransaction(
+		[]*svnode.FundingUTXO{fundingUTXO},
+		txCreator.SelfPaymentBuilder(10000),
+	)
+	require.NoError(t, err, "Should create spending transaction")
+	t.Logf("Created transaction: %s (fee: 10000 satoshis)", tx.TxID())
+
+	// Create a floating block containing this transaction using BlockCreator
+	blockCreator := svnode.NewBlockCreator(sv, txCreator.Address())
+	t.Logf("Creating and mining block with transaction %s...", tx.TxID())
+
+	block, err := blockCreator.CreateBlock([]*bt.Tx{tx})
+	require.NoError(t, err, "Should create and mine block")
+	t.Logf("Mined block %s (nonce: %d, size: %d bytes)", block.Hash, block.Header.Nonce, len(block.Hex)/2)
+
+	// Submit the floating block to Teranode via the BlockValidation service.
+	// The block is in standard Bitcoin wire format; convert it to Teranode's model.Block
+	// via wire.MsgBlock → model.NewBlockFromMsgBlock.
+	blockBytes, err := hex.DecodeString(block.Hex)
+	require.NoError(t, err, "Should decode block hex")
+
+	msgBlock := &wire.MsgBlock{}
+	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
+	require.NoError(t, err, "Should deserialize block as wire.MsgBlock")
+
+	modelBlock, err := model.NewBlockFromMsgBlock(msgBlock, nil)
+	require.NoError(t, err, "Should create model block from wire.MsgBlock")
+
+	expectedHeight := fundingBlockHeight + 1
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "")
+	require.NoError(t, err, "Teranode should accept the floating block")
+	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)
+
+	// Verify Teranode accepted the block at the expected height
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, expectedHeight, 60*time.Second)
+	require.NoError(t, err, "Teranode should have accepted the floating block")
+
+	tdHeader, _, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	tdHash := tdHeader.Hash().String()
+
+	require.Equal(t, block.Hash, tdHash, "Teranode best block hash must match the submitted floating block")
+
+	t.Logf("SUCCESS: Floating block accepted by Teranode at height %d. Hash: %s", expectedHeight, tdHash)
 }

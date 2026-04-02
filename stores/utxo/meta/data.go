@@ -1,4 +1,4 @@
-// Package meta provides types and utilities for handling Bitcoin SV transaction metadata
+// Package meta provides types and utilities for handling BSV Blockchain transaction metadata
 // in the UTXO store. It includes serialization and deserialization of transaction data
 // along with associated metadata like parent transactions, block references, and fees.
 //

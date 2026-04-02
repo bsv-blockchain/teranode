@@ -402,6 +402,119 @@ go mod download
 
 This will effectively reset your cache and re-download all dependencies.
 
+## Quick Setup with teranode-dev
+
+As an alternative to the manual steps above, you can use the `teranode-dev` CLI tool to automate the entire local setup process. It asks a few questions and handles everything else - prerequisites, settings, Docker containers, and building.
+
+### Build the tool
+
+```bash
+make build-teranode-dev
+```
+
+### Run the interactive wizard
+
+```bash
+./teranode-dev init
+```
+
+The wizard will ask for:
+
+1. Your developer name (for `SETTINGS_CONTEXT`)
+2. UTXO storage backend (SQLite, PostgreSQL, or Aerospike)
+3. Network (regtest, testnet, or mainnet)
+4. Whether to use Docker-based Kafka (default: in-memory)
+5. Whether to enable monitoring (Grafana + Prometheus)
+6. Whether to enable tracing (Jaeger)
+
+It then automatically:
+
+- Checks prerequisites (Go, Docker, Python)
+- Generates `settings_local.conf` entries
+- Creates data directories
+- Configures `/etc/hosts` for Kafka (if selected)
+- Starts Docker containers and waits for health
+- Builds `teranode.run` with the correct build tags
+
+### Infrastructure management
+
+```bash
+./teranode-dev up       # Start infrastructure containers (postgres, kafka, etc.)
+./teranode-dev down     # Stop infrastructure containers
+./teranode-dev clean    # Wipe data directory (with confirmation)
+```
+
+If a service is already running on the expected port (e.g. a native PostgreSQL), the tool will skip starting a Docker container for it.
+
+### Running the node
+
+```bash
+./teranode-dev start    # Start teranode daemon in background with log rotation
+./teranode-dev stop     # Stop teranode daemon (graceful, then force after 5s)
+```
+
+The node starts directly in RUNNING state (no need to manually set the FSM state).
+
+### Generating blocks (regtest)
+
+On regtest, you can generate blocks for testing:
+
+```bash
+./teranode-dev generate      # Generate 1 block
+./teranode-dev generate 10   # Generate 10 blocks
+```
+
+This calls the node's RPC `generate` command. It only works on networks where CPU mining is supported (regtest). On other networks it will return an error.
+
+### RPC passthrough
+
+Call any Bitcoin JSON-RPC method directly without needing curl or remembering auth credentials:
+
+```bash
+./teranode-dev rpc                              # List all available RPC commands
+./teranode-dev rpc getblockchaininfo            # Query chain state
+./teranode-dev rpc getblockhash 0               # Get genesis block hash
+./teranode-dev rpc getblock <hash> 2            # Get block with verbosity level 2
+./teranode-dev rpc getpeerinfo                  # List connected peers
+./teranode-dev rpc sendrawtransaction <hex>      # Broadcast a raw transaction
+```
+
+Parameters are automatically converted to the correct JSON types (numbers, strings, booleans).
+
+### Monitoring and diagnostics
+
+```bash
+./teranode-dev status     # Show running services, health checks, FSM state, chain tip
+./teranode-dev monitor    # Live TUI dashboard for real-time node monitoring
+./teranode-dev logs       # Interactive log viewer with filtering and search
+./teranode-dev settings   # Print all resolved settings as JSON
+./teranode-dev doctor     # Check prerequisites, configuration, and chain consistency
+./teranode-dev diagnose   # Detailed health checks (gRPC, HTTP, Kafka, Postgres, Aerospike)
+./teranode-dev diagnose --config  # Validate configuration for common issues
+./teranode-dev diagnose --json    # Machine-readable output
+```
+
+The `doctor` command also detects chain/genesis mismatches - if you change your configured network without clearing the database, it will offer to either delete the stored data or change the network setting to match.
+
+The `logs` command supports flags:
+
+```bash
+./teranode-dev logs --file ./logs/teranode.log  # Custom log file path
+./teranode-dev logs --buffer 20000              # Keep more entries in memory
+```
+
+### Non-interactive mode
+
+For CI or scripting:
+
+```bash
+./teranode-dev init --non-interactive --name=liam --utxo=sqlite --network=regtest
+```
+
+### Re-running init
+
+Running `init` again presents your previous choices as defaults - just press enter to keep them. This is useful for changing a single setting (e.g. switching from sqlite to postgres) without re-entering everything.
+
 ## Next Steps
 
 - [Check our Git Commit Signing Setup Guide for Contributors](../../references/gitCommitSigningSetupGuide.md)

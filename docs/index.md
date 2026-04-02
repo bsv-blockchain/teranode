@@ -214,7 +214,7 @@
 
 ## Conclusion
 
-Teranode represents a significant advancement in blockchain infrastructure, designed to provide a scalable, reliable, and high-performance foundation for the Bitcoin SV network. This documentation serves as a comprehensive resource for developers, miners, and other stakeholders involved with Teranode implementation and operation.
+Teranode represents a significant advancement in blockchain infrastructure, designed to provide a scalable, reliable, and high-performance foundation for the BSV Blockchain network. This documentation serves as a comprehensive resource for developers, miners, and other stakeholders involved with Teranode implementation and operation.
 
 By leveraging a microservices architecture and modern technologies, Teranode addresses the challenges of building a truly scalable blockchain system. Whether you're developing against Teranode, operating mining infrastructure, or simply exploring its architecture, this documentation provides the necessary guidance to understand and utilize the platform effectively.
 
@@ -228,7 +228,9 @@ Licensed under the Open BSV License Version 6;
 you may not use this software except in compliance with the License.
 You may obtain a copy of the License at
 
-    https://github.com/bsv-blockchain/teranode/blob/main/LICENSE
+```text
+https://github.com/bsv-blockchain/teranode/blob/main/LICENSE
+```
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,

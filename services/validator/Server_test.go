@@ -465,3 +465,7 @@ func (m *TestMockValidator) GetMedianBlockTime() uint32 {
 func (m *TestMockValidator) TriggerBatcher() {
 	// No-op implementation for testing
 }
+
+func (m *TestMockValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
+}

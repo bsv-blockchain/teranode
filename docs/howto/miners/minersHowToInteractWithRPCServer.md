@@ -207,7 +207,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
 
         - `verbose` (boolean, optional): If true, returns detailed information about pending transactions
-    - Returns: 
+    - Returns:
 
         - If verbose=false: Array of transaction IDs being prepared for the next block
         - If verbose=true: Object with detailed information about transactions in the block assembly process
@@ -395,4 +395,4 @@ The default credentials are `bitcoin:bitcoin`. The default credentials can be ch
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}' -H 'content-type: text/plain;' http://localhost:9292/
 ```
 
-For detailed information on each method's parameters and return values, refer to the Bitcoin SV protocol documentation or the specific Teranode [RPC Reference](../../references/services/rpc_reference.md).
+For detailed information on each method's parameters and return values, refer to the Bitcoin protocol documentation or the specific Teranode [RPC Reference](../../references/services/rpc_reference.md).

@@ -2,7 +2,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 //
 // The params.go file defines network parameters for different Bitcoin networks (mainnet, testnet,

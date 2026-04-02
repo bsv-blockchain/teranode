@@ -4,7 +4,8 @@
 
 .history/**
 *.tar.gz
-build/
+/build/
+ui/dashboard/build/
 data
 data/
 *.run
@@ -106,5 +107,8 @@ teranode.logrotate
 teranode
 
 settings_local.conf
+.teranode-dev.yaml
+.teranode-dev.pid
+teranode-dev
 .gitnexus
 .worktrees

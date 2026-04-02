@@ -132,6 +132,16 @@ func (m *Mock) ResetBlockAssemblyFully(ctx context.Context) error {
 	return nil
 }
 
+func (m *Mock) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	args := m.Called(ctx)
+
+	if args.Error(0) != nil {
+		return args.Error(0)
+	}
+
+	return nil
+}
+
 func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	args := m.Called(ctx)
 
@@ -244,6 +254,14 @@ func (m *mockBlockAssemblyAPIClient) ResetBlockAssembly(ctx context.Context, in 
 }
 
 func (m *mockBlockAssemblyAPIClient) ResetBlockAssemblyFully(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) ResetBlockAssemblyValidateInputs(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
 	args := m.Called(ctx, in, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

@@ -46,7 +46,7 @@ var (
 )
 
 func TestSyncManager_HandleBlockDirect(t *testing.T) {
-	t.Skip("This test requires a running Bitcoin SV node with RPC enabled")
+	t.Skip("This test requires a running SV Node with RPC enabled")
 
 	initPrometheusMetrics()
 

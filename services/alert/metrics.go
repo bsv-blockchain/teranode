@@ -1,4 +1,4 @@
-// Package alert implements the Bitcoin SV alert system server and related functionality.
+// Package alert implements the BSV Blockchain alert system server and related functionality.
 // This file contains the metrics-related code for the alert service, which tracks
 // and exposes operational metrics via Prometheus for monitoring and observability.
 //

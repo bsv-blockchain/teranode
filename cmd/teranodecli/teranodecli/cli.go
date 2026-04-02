@@ -379,9 +379,10 @@ func Start(args []string, version, commit string) {
 		}
 	case "resetblockassembly":
 		fullReset := cmd.FlagSet.Bool("full-reset", false, "Perform a full reset, including clearing mempool and unmined transactions")
+		validateInputs := cmd.FlagSet.Bool("validate-inputs", false, "Validate that each unmined tx's inputs are still spent by this tx (marks invalid ones as conflicting)")
 
 		cmd.Execute = func(args []string) error {
-			err := resetblockassembly.ResetBlockAssembly(logger, tSettings, *fullReset)
+			err := resetblockassembly.ResetBlockAssembly(logger, tSettings, *fullReset, *validateInputs)
 			if err != nil {
 				return errors.NewProcessingError("Failed to reset block assembly", err)
 			}

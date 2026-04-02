@@ -56,6 +56,12 @@ service BlockAssemblyAPI {
   // This will traverse the whole UTXO set and is more intensive than a standard reset.
   rpc ResetBlockAssemblyFully (EmptyMessage) returns (EmptyMessage) {}
 
+  // ResetBlockAssemblyValidateInputs performs a full reset with input validation.
+  // For each unmined transaction, verifies that its inputs are still spent by this
+  // transaction. If an input is spent by a different tx, marks the tx as conflicting.
+  // Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
+  rpc ResetBlockAssemblyValidateInputs (EmptyMessage) returns (EmptyMessage) {}
+
   // GetBlockAssemblyState retrieves the current state of block assembly.
   // Provides detailed information about the assembly process status.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
