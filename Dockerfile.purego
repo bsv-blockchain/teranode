@@ -41,13 +41,13 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -tags prod -o t
 
 # Copy the correct BDK shared library for the target architecture.
 # The purego loader uses BDK_LIB_PATH to find the .so at runtime via dlopen.
-RUN case "${TARGETARCH}" in \
+RUN GOMODCACHE=$(go env GOMODCACHE) && \
+    case "${TARGETARCH}" in \
       amd64) LIBNAME="libGoBDK_linux_x86_64.so" ;; \
       arm64) LIBNAME="libGoBDK_linux_aarch64.so" ;; \
       *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
-    LIB=$(find $GOPATH/pkg/mod/github.com/bitcoin-sv/bdk/module/gobdk*/bdkpurego/lib/ \
-      -name "$LIBNAME" -print -quit 2>/dev/null) && \
+    LIB=$(find ${GOMODCACHE}/github.com/bitcoin-sv/ -name "${LIBNAME}" -print -quit) && \
     cp "$LIB" /app/libGoBDK.so && \
     echo "BDK shared library: $LIB -> /app/libGoBDK.so"
 
