@@ -6859,8 +6859,8 @@
 
 <h1 id="tx-validator-service-reference-documentation">TX Validator Service Reference Documentation</h1>
 <h2 id="overview">Overview</h2>
-<p>The TX Validator Service is responsible for validating transactions in a Bitcoin SV blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.</p>
-<p>The validator package implements comprehensive transaction validation functionality for Bitcoin SV nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin SV consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.</p>
+<p>The TX Validator Service is responsible for validating transactions in a BSV Blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.</p>
+<p>The validator package implements comprehensive transaction validation functionality for BSV Blockchain nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.</p>
 <h2 id="core-components">Core Components</h2>
 <h3 id="server">Server</h3>
 <p>The <code>Server</code> struct is the main component of the TX Validator Service. It acts as the primary coordinator for transaction validation requests, integrating with multiple components (UTXO store, blockchain, Kafka) to provide a complete validation service.</p>
@@ -6973,7 +6973,7 @@
 <li><code>Stop(_ context.Context) error</code>: Gracefully shuts down the validator server and all associated components. This method performs an orderly shutdown of all server resources, including Kafka producers/consumers and any background tasks.</li>
 </ul>
 <h3 id="validator">Validator</h3>
-<p>The <code>Validator</code> struct implements Bitcoin SV transaction validation and manages the lifecycle of transactions from validation through block assembly.</p>
+<p>The <code>Validator</code> struct implements BSV Blockchain transaction validation and manages the lifecycle of transactions from validation through block assembly.</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Validator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">logger</span><span class="w">                        </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
 <span class="w">    </span><span class="nx">settings</span><span class="w">                      </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
@@ -7007,7 +7007,7 @@
 <li><code>CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)</code>: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.</li>
 </ul>
 <h3 id="txvalidator">TxValidator</h3>
-<p>The <code>TxValidator</code> implements transaction validation logic based on Bitcoin SV consensus rules and configurable policy settings.</p>
+<p>The <code>TxValidator</code> implements transaction validation logic based on Bitcoin consensus rules and configurable policy settings.</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">TxValidator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">logger</span><span class="w">      </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
 <span class="w">    </span><span class="nx">settings</span><span class="w">    </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
@@ -7041,7 +7041,7 @@
 <p>The validator supports multiple script interpreter implementations:</p>
 <ul>
 <li><strong>GoBT</strong>: Pure Go implementation from the libsv/go-bt library</li>
-<li><strong>GoSDK</strong>: Bitcoin SV SDK implementation</li>
+<li><strong>GoSDK</strong>: BSV SDK implementation</li>
 <li><strong>GoBDK</strong>: Bitcoin Development Kit implementation</li>
 </ul>
 <blockquote>

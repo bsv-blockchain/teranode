@@ -6580,7 +6580,7 @@
 <h1 id="grpc-documentation-validatorapi">GRPC Documentation - ValidatorAPI</h1>
 <p><a name="top"></a></p>
 <blockquote>
-<p>The validator_api.proto defines the gRPC service interface for the Bitcoin SV transaction
+<p>The validator_api.proto defines the gRPC service interface for the BSV Blockchain transaction
 validation service. It specifies the methods and message types for transaction
 validation, health checking, and block information retrieval.</p>
 </blockquote>
@@ -6680,7 +6680,7 @@ validation, health checking, and block information retrieval.</p>
 </tr>
 <tr>
 <td>timestamp</td>
-<td><a href="#google-protobuf-Timestamp">google.protobuf.Timestamp</a></td>
+<td>google.protobuf.Timestamp</td>
 <td></td>
 <td>Timestamp of health check</td>
 </tr>
@@ -6702,7 +6702,7 @@ validation, health checking, and block information retrieval.</p>
 <tbody>
 <tr>
 <td>transactions</td>
-<td><a href="#validator_api-ValidateTransactionRequest">ValidateTransactionRequest</a></td>
+<td><a href="#ValidateTransactionRequest">ValidateTransactionRequest</a></td>
 <td>repeated</td>
 <td>Array of transactions to validate</td>
 </tr>
@@ -6730,7 +6730,7 @@ validation, health checking, and block information retrieval.</p>
 </tr>
 <tr>
 <td>errors</td>
-<td><a href="#errors-TError">errors.TError</a></td>
+<td>errors.TError</td>
 <td>repeated</td>
 <td>Array of error messages, one per transaction</td>
 </tr>
@@ -6855,32 +6855,32 @@ validation, health checking, and block information retrieval.</p>
 <tbody>
 <tr>
 <td>HealthGRPC</td>
-<td><a href="#validator_api-EmptyMessage">EmptyMessage</a></td>
-<td><a href="#validator_api-HealthResponse">HealthResponse</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td><a href="#HealthResponse">HealthResponse</a></td>
 <td>Checks the health status of the validation service. Returns detailed health information including service status and timestamp.</td>
 </tr>
 <tr>
 <td>ValidateTransaction</td>
-<td><a href="#validator_api-ValidateTransactionRequest">ValidateTransactionRequest</a></td>
-<td><a href="#validator_api-ValidateTransactionResponse">ValidateTransactionResponse</a></td>
+<td><a href="#ValidateTransactionRequest">ValidateTransactionRequest</a></td>
+<td><a href="#ValidateTransactionResponse">ValidateTransactionResponse</a></td>
 <td>Validates a single transaction. Performs comprehensive validation including script verification and UTXO checks.</td>
 </tr>
 <tr>
 <td>ValidateTransactionBatch</td>
-<td><a href="#validator_api-ValidateTransactionBatchRequest">ValidateTransactionBatchRequest</a></td>
-<td><a href="#validator_api-ValidateTransactionBatchResponse">ValidateTransactionBatchResponse</a></td>
+<td><a href="#ValidateTransactionBatchRequest">ValidateTransactionBatchRequest</a></td>
+<td><a href="#ValidateTransactionBatchResponse">ValidateTransactionBatchResponse</a></td>
 <td>Validates multiple transactions in a single request. Provides efficient batch processing of transactions.</td>
 </tr>
 <tr>
 <td>GetBlockHeight</td>
-<td><a href="#validator_api-EmptyMessage">EmptyMessage</a></td>
-<td><a href="#validator_api-GetBlockHeightResponse">GetBlockHeightResponse</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td><a href="#GetBlockHeightResponse">GetBlockHeightResponse</a></td>
 <td>Retrieves the current block height. Used for validation context and protocol upgrade determination.</td>
 </tr>
 <tr>
 <td>GetMedianBlockTime</td>
-<td><a href="#validator_api-EmptyMessage">EmptyMessage</a></td>
-<td><a href="#validator_api-GetMedianBlockTimeResponse">GetMedianBlockTimeResponse</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td><a href="#GetMedianBlockTimeResponse">GetMedianBlockTimeResponse</a></td>
 <td>Retrieves the median time of recent blocks. Used for time-based validation rules.</td>
 </tr>
 </tbody>

@@ -7397,7 +7397,7 @@
 <span class="w">    </span><span class="nx">catchupSuccesses</span><span class="w">          </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Int64</span><span class="w">                            </span><span class="c1">// Successful catchup operations counter</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>Server</code> type implements a high-performance block validation service for Bitcoin SV. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.</p>
+<p>The <code>Server</code> type implements a high-performance block validation service for BSV Blockchain. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.</p>
 <h3 id="processblockfound">processBlockFound</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">processBlockFound</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">hash</span><span class="w">    </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w"> </span><span class="c1">// Block identifier using double SHA256 hash</span>

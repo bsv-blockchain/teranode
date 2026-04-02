@@ -6553,7 +6553,7 @@
 <p align="right"><a href="#top">Top</a></p>
 
 <h2 id="propagation_apiproto">propagation_api.proto</h2>
-<p>Package propagation_api provides gRPC services for Bitcoin SV transaction propagation. It handles individual and batch transaction processing, health checks, and debugging capabilities for the BSV network.</p>
+<p>Package propagation_api provides gRPC services for BSV Blockchain transaction propagation. It handles individual and batch transaction processing, health checks, and debugging capabilities for the BSV network.</p>
 <p><a name="EmptyMessage"></a></p>
 <h3 id="emptymessage">EmptyMessage</h3>
 <p>Represents an empty request or response. Used when no additional data needs to be transmitted.</p>
@@ -6614,7 +6614,7 @@
 </tr>
 <tr>
 <td>timestamp</td>
-<td><a href="#google-protobuf-Timestamp">google.protobuf.Timestamp</a></td>
+<td>google.protobuf.Timestamp</td>
 <td></td>
 <td>Indicates when the health check was performed</td>
 </tr>
@@ -6658,7 +6658,7 @@
 <tbody>
 <tr>
 <td>errors</td>
-<td><a href="#errors-TError">errors.TError</a></td>
+<td>errors.TError</td>
 <td>repeated</td>
 <td>Error messages for each transaction in the batch. Empty string indicates success for that transaction.</td>
 </tr>
@@ -6706,20 +6706,20 @@
 <tbody>
 <tr>
 <td>HealthGRPC</td>
-<td><a href="#propagation_api-EmptyMessage">EmptyMessage</a></td>
-<td><a href="#propagation_api-HealthResponse">HealthResponse</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td><a href="#HealthResponse">HealthResponse</a></td>
 <td>Checks the health status of the propagation service and its dependencies. Returns a HealthResponse containing the service status and details.</td>
 </tr>
 <tr>
 <td>ProcessTransaction</td>
-<td><a href="#propagation_api-ProcessTransactionRequest">ProcessTransactionRequest</a></td>
-<td><a href="#propagation_api-EmptyMessage">EmptyMessage</a></td>
+<td><a href="#ProcessTransactionRequest">ProcessTransactionRequest</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
 <td>Processes a single BSV transaction. The transaction must be provided in raw byte format and must be extended. Coinbase transactions are not allowed.</td>
 </tr>
 <tr>
 <td>ProcessTransactionBatch</td>
-<td><a href="#propagation_api-ProcessTransactionBatchRequest">ProcessTransactionBatchRequest</a></td>
-<td><a href="#propagation_api-ProcessTransactionBatchResponse">ProcessTransactionBatchResponse</a></td>
+<td><a href="#ProcessTransactionBatchRequest">ProcessTransactionBatchRequest</a></td>
+<td><a href="#ProcessTransactionBatchResponse">ProcessTransactionBatchResponse</a></td>
 <td>Processes multiple transactions in a single request. This is more efficient than processing transactions individually when dealing with large numbers of transactions.</td>
 </tr>
 </tbody>

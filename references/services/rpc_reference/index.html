@@ -7682,6 +7682,8 @@
 
 
 <h1 id="rpc-service-reference-documentation">RPC Service Reference Documentation</h1>
+<!-- markdownlint-disable MD046 -->
+
 <h2 id="index">Index</h2>
 <ul>
 <li><a href="#overview">Overview</a></li>
@@ -7750,7 +7752,7 @@
 <li><a href="#security">Security</a></li>
 </ul>
 <h2 id="overview">Overview</h2>
-<p>The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections. The service implements a standard Bitcoin protocol interface while integrating with Teranode's modular architecture to provide high-performance access to blockchain data and network operations.</p>
+<p>The RPC Service provides a JSON-RPC interface for interacting with the BSV Blockchain node. It handles various Bitcoin-related commands and manages client connections. The service implements a standard Bitcoin protocol interface while integrating with Teranode's modular architecture to provide high-performance access to blockchain data and network operations.</p>
 <h2 id="types">Types</h2>
 <h3 id="rpcserver">RPCServer</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">RPCServer</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
@@ -7852,7 +7854,7 @@
 <span class="p">}</span>
 </code></pre></div>
 <p>The RPCServer provides a concurrent-safe JSON-RPC server implementation for the Bitcoin protocol. It handles client authentication, request processing, response generation, and maintains connections to other Teranode services to fulfill RPC requests.</p>
-<p>The server implements a two-tier authentication system that separates administrative capabilities from limited-user operations, providing security through proper authorization. It supports standard Bitcoin Core RPC methods and Bitcoin SV extensions for compatibility with existing tools while enhancing functionality.</p>
+<p>The server implements a two-tier authentication system that separates administrative capabilities from limited-user operations, providing security through proper authorization. It supports standard Bitcoin Core RPC methods and BSV Blockchain extensions for compatibility with existing tools while enhancing functionality.</p>
 <p>The RPCServer is designed for concurrent operation, employing synchronization mechanisms to handle multiple simultaneous client connections without race conditions or resource conflicts. It implements proper connection management, graceful shutdown, and health monitoring.</p>
 <h2 id="functions">Functions</h2>
 <h3 id="newserver">NewServer</h3>
@@ -9267,7 +9269,7 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 <li>Maximum concurrent connections: 1 (configurable via <code>rpc_max_clients</code>)</li>
 </ul>
 <h2 id="version-compatibility">Version Compatibility</h2>
-<p>These RPC commands are compatible with Bitcoin SV Teranode version 1.0.0 and later.</p>
+<p>These RPC commands are compatible with BSV Blockchain Teranode version 1.0.0 and later.</p>
 <h2 id="concurrency">Concurrency</h2>
 <p>The RPC Service is designed for high-concurrency operation with multiple simultaneous client connections. Key concurrency features include:</p>
 <ul>

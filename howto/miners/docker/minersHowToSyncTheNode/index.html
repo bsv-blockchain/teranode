@@ -7941,6 +7941,8 @@
 
 
 <h1 id="syncing-the-blockchain-docker-compose">Syncing the Blockchain (Docker Compose)</h1>
+<!-- markdownlint-disable MD046 -->
+
 <p>Last modified: 29-October-2025</p>
 <h2 id="table-of-contents">Table of Contents</h2>
 <ul>
@@ -7954,7 +7956,7 @@
 <li><a href="#additional-resources">Additional Resources</a></li>
 </ul>
 <h2 id="overview">Overview</h2>
-<p>This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
+<p>This guide covers the different methods available for synchronizing a Teranode instance with the BSV Blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
 <blockquote>
 <p><strong>📋 Network Scope:</strong> This guide applies to <strong>both mainnet and testnet</strong> deployments. All command examples use mainnet paths and settings for illustration - adjust the <code>network</code> parameter and data paths according to your target network (e.g., replace <code>mainnet</code> with <code>testnet</code> in paths and environment variables).</p>
 </blockquote>
@@ -8080,10 +8082,10 @@ docker<span class="w"> </span>compose<span class="w"> </span>ps
 </blockquote>
 <hr />
 <h2 id="method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node</h2>
-<p>This method allows you to bootstrap a Teranode instance using data exported from an existing Bitcoin SV node (bitcoind). This significantly reduces synchronization time compared to P2P sync.</p>
+<p>This method allows you to bootstrap a Teranode instance using data exported from an existing SV Node (bitcoind). This significantly reduces synchronization time compared to P2P sync.</p>
 <h3 id="prerequisites_1">Prerequisites</h3>
 <ul>
-<li>✅ Access to a fully synchronized Bitcoin SV node (bitcoind)</li>
+<li>✅ Access to a fully synchronized SV Node (bitcoind)</li>
 <li>✅ SV Node gracefully shut down (using <code>bitcoin-cli stop</code>)</li>
 <li>✅ Fresh Teranode instance with no existing blockchain data (see <a href="../minersHowToResetTeranode/">reset guide</a> to clear existing data if needed)</li>
 <li>✅ Sufficient disk space for export files (~1TB recommended, temporary during process)</li>
@@ -8105,7 +8107,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>ps
 <hr />
 <h3 id="phase-1-convert-sv-node-data-to-teranode-format">Phase 1: Convert SV Node Data to Teranode Format</h3>
 <h4 id="step-1-verify-sv-node-requirements">Step 1: Verify SV Node Requirements</h4>
-<p>Before proceeding with the export, ensure your Bitcoin SV node meets these critical requirements:</p>
+<p>Before proceeding with the export, ensure your SV Node meets these critical requirements:</p>
 <div class="admonition info">
 <p class="admonition-title">Data Location Requirements</p>
 <ul>
@@ -8143,9 +8145,9 @@ sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </sp
 sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="k">$(</span>id<span class="w"> </span>-gn<span class="w"> </span><span class="nv">$USER</span><span class="k">)</span><span class="w"> </span>/mnt/teranode/seed/export
 </code></pre></div>
 <h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from Bitcoin SV node</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from SV Node</span>
 <span class="c1"># Replace /mnt/bitcoin-sv-data with your actual SV node data directory</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
 <span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-v<span class="w"> </span>/mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro<span class="w"> </span><span class="se">\</span>
