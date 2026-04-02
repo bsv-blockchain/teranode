@@ -39,12 +39,22 @@ RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
 # Build teranode-cli (no BDK dependency)
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -tags prod -o teranode-cli ./cmd/teranodecli
 
+# Copy the BDK shared library from the module cache to a known location.
+# The purego loader searches for the platform-specific filename (e.g. libGoBDK_linux_x86_64.so)
+# on LD_LIBRARY_PATH at runtime.
+RUN mkdir -p /app/bdklib && \
+    find $GOPATH/pkg/mod/github.com/bitcoin-sv/bdk/module/gobdk*/bdkpurego/lib/ \
+    \( -name "libGoBDK_*.so" -o -name "libGoBDK_*.dylib" \) \
+    -exec cp {} /app/bdklib/ \; 2>/dev/null && \
+    ls -lh /app/bdklib/
+
 FROM ${RUN_IMG}
 
 WORKDIR /app
 
 COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/teranode-cli ./teranode-cli
+COPY --from=0 /app/bdklib/ ./
 COPY --from=0 /app/compose/wait.sh /app/wait.sh
 COPY --from=0 /app/settings.conf .
 
