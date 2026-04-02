@@ -39,10 +39,15 @@ RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
 # Build teranode-cli (no BDK dependency)
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -tags prod -o teranode-cli ./cmd/teranodecli
 
-# Copy the BDK shared library from the module cache to a fixed path.
+# Copy the correct BDK shared library for the target architecture.
 # The purego loader uses BDK_LIB_PATH to find the .so at runtime via dlopen.
-RUN LIB=$(find $GOPATH/pkg/mod/github.com/bitcoin-sv/bdk/module/gobdk*/bdkpurego/lib/ \
-    \( -name "libGoBDK_*.so" -o -name "libGoBDK_*.dylib" \) -print -quit 2>/dev/null) && \
+RUN case "${TARGETARCH}" in \
+      amd64) LIBNAME="libGoBDK_linux_x86_64.so" ;; \
+      arm64) LIBNAME="libGoBDK_linux_aarch64.so" ;; \
+      *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    LIB=$(find $GOPATH/pkg/mod/github.com/bitcoin-sv/bdk/module/gobdk*/bdkpurego/lib/ \
+      -name "$LIBNAME" -print -quit 2>/dev/null) && \
     cp "$LIB" /app/libGoBDK.so && \
     echo "BDK shared library: $LIB -> /app/libGoBDK.so"
 
