@@ -48,8 +48,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -1266,12 +1264,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			return nil
 		} else {
-			grpcCanceled := false
-			if s, ok := status.FromError(err); ok && s.Code() == codes.Canceled {
-				grpcCanceled = true
-			}
-
-			if errors.Is(err, context.Canceled) || errors.IsContextError(err) || grpcCanceled {
+			if errors.Is(err, context.Canceled) || errors.IsContextError(err) {
 				return nil
 			}
 

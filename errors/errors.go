@@ -905,7 +905,7 @@ func Is(err, target error) bool {
 		return true
 	}
 
-	// we have additional contral for GRPC context errors
+	// we have additional control for GRPC context errors
 	return checkGRPCContextError(origErr, err, target)
 }
 
