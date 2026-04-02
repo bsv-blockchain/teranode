@@ -15,7 +15,6 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +48,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -1264,9 +1265,16 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			return nil
-		} else if errors.Is(err, context.Canceled) || isBenignCancellationError(err) {
-			return nil
 		} else {
+			grpcCanceled := false
+			if s, ok := status.FromError(err); ok && s.Code() == codes.Canceled {
+				grpcCanceled = true
+			}
+
+			if errors.Is(err, context.Canceled) || errors.IsContextError(err) || grpcCanceled {
+				return nil
+			}
+
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
@@ -1917,19 +1925,6 @@ type blockQueueMsg struct {
 	blockHeight int32
 	peer        *peerpkg.Peer
 	reply       chan error
-}
-
-// isBenignCancellationError identifies wrapped shutdown/cancellation errors
-// that can surface from downstream gRPC calls and should not crash sync loops.
-func isBenignCancellationError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errText := strings.ToLower(err.Error())
-	return strings.Contains(errText, "context canceled") ||
-		strings.Contains(errText, "client connection is closing") ||
-		strings.Contains(errText, "code = canceled")
 }
 
 // blockHandler is the main handler for the sync manager.  It must be run as a
