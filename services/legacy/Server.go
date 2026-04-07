@@ -1,7 +1,7 @@
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 //
-// The legacy package provides a bridge between modern Bitcoin SV architecture and the traditional
+// The legacy package provides a bridge between modern BSV Blockchain architecture and the traditional
 // Bitcoin network protocol. It maintains compatibility with legacy Bitcoin nodes while integrating
 // with Teranode's high-performance microservices architecture.
 //

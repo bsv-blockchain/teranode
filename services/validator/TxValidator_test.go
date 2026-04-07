@@ -1,7 +1,7 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
 including script verification, UTXO management, and policy enforcement. It supports
 multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
 transaction validation ruleset.

@@ -650,7 +650,7 @@ type ClientI interface {
 	//
 	// This method updates the blockchain database to indicate that the subtree hash structure
 	// for a specific block has been properly set. Subtree hashes are important for efficient
-	// validation and transaction lookup in the Bitcoin SV blockchain architecture.
+	// validation and transaction lookup in the BSV Blockchain architecture.
 	//
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support

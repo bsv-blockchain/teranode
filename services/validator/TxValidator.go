@@ -1,5 +1,5 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 This file contains the core transaction validation logic and implements the standard
 Bitcoin transaction validation rules and policies. The TxValidator component is responsible
@@ -10,7 +10,7 @@ The implementation supports multiple script interpreters through a plugin archit
 allowing different script verification engines to be used based on configuration. Currently
 supported interpreters include:
 - Go-BT: Pure Go implementation from the libsv/go-bt library
-- Go-SDK: Bitcoin SV SDK implementation
+- Go-SDK: BSV SDK implementation
 - Go-BDK: Bitcoin Development Kit implementation
 
 The validation process enforces rules including but not limited to:
@@ -354,7 +354,7 @@ func (tv *TxValidator) ValidateTransactionScriptsBatch(txs []*bt.Tx, blockHeight
 }
 
 // sequenceLocks verifies that relative lock-time constraints (BIP68) are satisfied for block validation.
-// This function implements the SequenceLocks check from Bitcoin SV validation.cpp.
+// This function implements the SequenceLocks check from SV Node validation.cpp.
 //
 // BIP68 allows transaction inputs to specify minimum block heights or times before they can be spent
 // using the sequence number field. This enables relative lock-times for smart contracts and
@@ -647,7 +647,7 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []ui
 	txSize := tx.Size()
 	minRequiredFee := uint64(satoshisPerByte * float64(txSize))
 
-	// Ensure minimum 1 satoshi for non-zero sized transactions (matching Bitcoin SV)
+	// Ensure minimum 1 satoshi for non-zero sized transactions (matching SV Node)
 	if minRequiredFee == 0 && txSize > 0 && minFeeRateBSVPerKB > 0 {
 		minRequiredFee = 1
 	}
@@ -690,7 +690,7 @@ func (tv *TxValidator) isDustReturnTx(tx *bt.Tx) bool {
 }
 
 // isConsolidationTx checks if a transaction qualifies as a consolidation transaction
-// following Bitcoin SV rules.
+// following Bitcoin rules.
 //
 // Parameters:
 //   - tx: The transaction to check
@@ -727,7 +727,7 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 		return false
 	}
 
-	// Rule 2: Script Size Comparison (Bitcoin SV rule)
+	// Rule 2: Script Size Comparison (Bitcoin rule)
 	// Sum of input scriptPubKey sizes >= minConsolidationFactor × sum of output scriptPubKey sizes
 	if !isDustReturn {
 		// Check if transaction is extended (has PreviousTxScript for all inputs)

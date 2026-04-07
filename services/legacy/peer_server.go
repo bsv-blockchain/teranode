@@ -3,7 +3,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
@@ -578,16 +578,16 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Only allow connections from peers running Bitcoin SV
+	// Only allow connections from peers running BSV Blockchain nodes
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
 	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-Bitcoin SV user agent: %s", sp.Peer, userAgent)
+		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
 
 		// Ban the peer to prevent repeated connection attempts from incompatible clients
 		sp.server.BanPeer(sp)
 
-		reason := "Only Bitcoin SV clients are supported"
+		reason := "Only BSV Blockchain clients are supported"
 
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}

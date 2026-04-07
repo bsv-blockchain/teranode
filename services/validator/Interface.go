@@ -1,8 +1,8 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides a comprehensive transaction validation framework that implements
-the Bitcoin SV consensus and policy rules. It serves as a critical component in the
+the Bitcoin consensus and policy rules. It serves as a critical component in the
 Teranode architecture, ensuring that only valid transactions are accepted into the
 mempool and blocks.
 

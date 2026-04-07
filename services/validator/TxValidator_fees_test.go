@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestTxValidator_Fees_BitcoinSV tests fee calculation matching Bitcoin SV implementation
+// TestTxValidator_Fees_BitcoinSV tests fee calculation matching SV Node implementation
 func TestTxValidator_Fees_BitcoinSV(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -23,12 +23,12 @@ func TestTxValidator_Fees_BitcoinSV(t *testing.T) {
 		expectError    bool    // Whether we expect a fee error
 		expectedMinFee uint64  // Expected minimum fee in satoshis
 	}{
-		// Test cases matching Bitcoin SV's GetFee() logic
+		// Test cases matching SV Node's GetFee() logic
 		{
 			name:           "default_minrelayfee_250_satoshis_per_kb",
 			txSize:         1000,
 			fee:            250,
-			minFeeRate:     0.00000250, // 250 satoshis/kB (Bitcoin SV default)
+			minFeeRate:     0.00000250, // 250 satoshis/kB (SV Node default)
 			expectError:    false,
 			expectedMinFee: 250,
 		},
@@ -389,7 +389,7 @@ func TestTxValidator_Fees_DustReturn(t *testing.T) {
 	assert.NoError(t, err, "Dust return transactions should be fee-exempt")
 }
 
-// TestTxValidator_Fees_VariousFeeRates tests various fee rates used in Bitcoin SV
+// TestTxValidator_Fees_VariousFeeRates tests various fee rates used in BSV Blockchain
 func TestTxValidator_Fees_VariousFeeRates(t *testing.T) {
 	feeRates := []struct {
 		name       string

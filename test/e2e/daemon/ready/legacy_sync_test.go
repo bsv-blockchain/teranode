@@ -41,7 +41,7 @@ const (
 
 var legacySyncTestLock sync.Mutex
 
-// multistreamArgs are the flags needed to enable multistream on Bitcoin SV 1.2.0
+// multistreamArgs are the flags needed to enable multistream on SV Node 1.2.0
 var multistreamArgs = []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}
 
 // newSVNode creates an SVNode using Docker via testcontainers
@@ -58,7 +58,7 @@ func newMultistreamSVNode() svnode.SVNodeI {
 }
 
 // waitForOutboundPeer waits for svnode to have at least one outbound peer.
-// Bitcoin SV only downloads blocks from outbound connections, so this is
+// SV Node only downloads blocks from outbound connections, so this is
 // necessary to confirm the AddNode connection is established (not just an
 // inbound connection from ConnectPeers).
 func waitForOutboundPeer(ctx context.Context, sv svnode.SVNodeI, timeout time.Duration) error {
@@ -102,7 +102,7 @@ func waitForLegacyListener(t *testing.T, addr string, timeout time.Duration) {
 // This validates teranode's legacy block serving even when svnode's IBD bug
 // prevents it from requesting the actual block data.
 // verifyTeranodeServedHeaders checks svnode's peer info to confirm teranode
-// announced the correct height (startingheight) in VERSION. Bitcoin SV 1.2.0
+// announced the correct height (startingheight) in VERSION. SV Node 1.2.0
 // intermittently fails to process the headers response (synced_headers stays -1),
 // so we only assert on startingheight which proves the VERSION exchange worked.
 func verifyTeranodeServedHeaders(t *testing.T, sv svnode.SVNodeI, expectedHeight int) {
@@ -234,9 +234,9 @@ func TestLegacySync(t *testing.T) {
 // 3. Starts svnode with -connect flag pointing to teranode's legacy listener
 // 4. Verifies svnode syncs teranode's blocks via IBD over the outbound connection
 //
-// Note: Bitcoin SV only downloads blocks from outbound connections (eclipse attack
+// Note: SV Node only downloads blocks from outbound connections (eclipse attack
 // prevention). The -connect flag creates a real outbound connection (unlike addnode)
-// that Bitcoin SV reliably uses for initial block download.
+// that SV Node reliably uses for initial block download.
 func TestSVNodeSyncFromTeranode(t *testing.T) {
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
@@ -308,7 +308,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 
 	// Connect svnode and attempt sync. Teranode correctly serves blocks
 	// (confirmed: VERSION announces correct height, getheaders responds with
-	// correct headers, getdata serves block data). Bitcoin SV 1.2.0 has an
+	// correct headers, getdata serves block data). SV Node 1.2.0 has an
 	// intermittent bug where it receives valid headers but never sends getdata.
 	// If svnode syncs, we get full validation. If not, teranode still did its job.
 	opts := svnode.DefaultOptions()
@@ -329,7 +329,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 		// SVNode didn't fully sync. Verify teranode correctly served headers by
 		// checking svnode's peer info - synced_headers shows how many headers
 		// svnode received, startingheight shows what teranode announced in VERSION.
-		t.Logf("SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug - skips getdata): %v", syncErr)
+		t.Logf("SVNode did not sync blocks (known SV Node 1.2.0 bug - skips getdata): %v", syncErr)
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
@@ -448,7 +448,7 @@ func TestBidirectionalSync(t *testing.T) {
 	// Phase 3: Restart teranode WITH legacy to serve blocks to svnode.
 	// Teranode correctly serves blocks (confirmed: VERSION announces correct
 	// height, getheaders responds with correct headers, getdata serves block data).
-	// Bitcoin SV 1.2.0 has an intermittent bug where it receives valid headers
+	// SV Node 1.2.0 has an intermittent bug where it receives valid headers
 	// but never sends getdata. If svnode doesn't sync, teranode still did its job.
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
@@ -483,7 +483,7 @@ func TestBidirectionalSync(t *testing.T) {
 
 	phase3Err := sv.WaitForBlockHeight(ctx, currentHeight, 30*time.Second)
 	if phase3Err != nil {
-		t.Logf("Phase 3: SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug): %v", phase3Err)
+		t.Logf("Phase 3: SVNode did not sync blocks (known SV Node 1.2.0 bug): %v", phase3Err)
 		verifyTeranodeServedHeaders(t, sv, currentHeight)
 		t.Log("Phase 3: Skipping Phase 4 (requires svnode to have synced)")
 		return
@@ -722,7 +722,7 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 
 	syncErr := sv.WaitForBlockHeight(ctx, targetHeight, 30*time.Second)
 	if syncErr != nil {
-		t.Logf("Multistream SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug): %v", syncErr)
+		t.Logf("Multistream SVNode did not sync blocks (known SV Node 1.2.0 bug): %v", syncErr)
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("Multistream SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
@@ -1344,7 +1344,7 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 	// Phase 2: Restart teranode WITH legacy listening + ConnectPeers to svnode.
 	// ConnectPeers creates a teranode→svnode connection (inbound on svnode).
 	// sv.AddNode below creates an svnode→teranode outbound connection (required
-	// for block download in Bitcoin SV).
+	// for block download in SV Node).
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		EnableP2P:            true,

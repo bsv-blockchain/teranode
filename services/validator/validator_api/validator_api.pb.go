@@ -1,5 +1,5 @@
 //
-//validator_api.proto defines the gRPC service interface for the Bitcoin SV transaction
+//validator_api.proto defines the gRPC service interface for the BSV Blockchain transaction
 //validation service. It specifies the methods and message types for transaction
 //validation, health checking, and block information retrieval.
 

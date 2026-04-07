@@ -497,7 +497,7 @@ go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" -tags test_tnf
 
 ## TNJ
 
-As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tnj` folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin SV protocol.
+As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tnj` folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin protocol.
 
 The naming convention for files in this folder is descriptive, using names like `locktime_test.go` that indicate the specific consensus rule being tested. Some TNJ tests may also be found in other directories (e.g., `test/e2e/daemon/`) when they require full daemon integration.
 

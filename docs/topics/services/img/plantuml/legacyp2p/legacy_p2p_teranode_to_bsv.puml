@@ -55,6 +55,6 @@ end
 deactivate syncManager
 deactivate legacy
 
-left footer "P2P Legacy - Teranode to BSV Communication\n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+left footer "P2P Legacy - Teranode to BSV Communication\n Last Modified On: %date("dd-MMM-yyyy"). © 2025 BSV Association. All rights reserved."
 
 @enduml

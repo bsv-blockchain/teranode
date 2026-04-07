@@ -1,5 +1,5 @@
-// Package propagation provides Bitcoin SV transaction propagation functionality for the Teranode system.
-// This package implements efficient transaction processing and distribution across the Bitcoin SV network,
+// Package propagation provides BSV Blockchain transaction propagation functionality for the Teranode system.
+// This package implements efficient transaction processing and distribution across the BSV Blockchain network,
 // supporting both individual transaction handling and high-throughput batch processing operations.
 //
 // Key Features:
@@ -12,7 +12,7 @@
 //
 // Architecture:
 // The propagation service acts as a bridge between transaction producers (such as mining pools,
-// wallets, and applications) and the Bitcoin SV network. It optimizes transaction throughput
+// wallets, and applications) and the BSV Blockchain network. It optimizes transaction throughput
 // through intelligent batching while maintaining reliability through robust error handling.
 //
 // The service provides multiple interfaces:
@@ -23,7 +23,7 @@
 // Integration:
 // This package integrates with other Teranode services including the mempool, validator,
 // and P2P services to ensure transactions are properly validated and distributed across
-// the network according to Bitcoin SV protocol specifications.
+// the network according to Bitcoin protocol specifications.
 package propagation
 
 import (

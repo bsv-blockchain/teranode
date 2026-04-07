@@ -1,4 +1,4 @@
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 //
 // The metrics.go file provides Prometheus instrumentation for the legacy package,

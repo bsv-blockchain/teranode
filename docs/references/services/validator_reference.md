@@ -2,9 +2,9 @@
 
 ## Overview
 
-The TX Validator Service is responsible for validating transactions in a Bitcoin SV blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.
+The TX Validator Service is responsible for validating transactions in a BSV Blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.
 
-The validator package implements comprehensive transaction validation functionality for Bitcoin SV nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin SV consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.
+The validator package implements comprehensive transaction validation functionality for BSV Blockchain nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.
 
 ## Core Components
 
@@ -106,6 +106,7 @@ Creates and initializes a new validator server instance with the specified compo
 #### Methods
 
 ##### gRPC Endpoints
+
 - `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the validator service and its dependencies. When used as a liveness check (checkLiveness=true), it only verifies basic service operation. When used as a readiness check (checkLiveness=false), it performs comprehensive dependency checks.
 - `HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error)`: Implements the gRPC health check endpoint. This method provides the gRPC interface for health checking and records metrics for monitoring purposes.
 - `ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error)`: Validates a single transaction. This method is part of the validator_api.ValidatorAPIServer interface and serves as the public API entry point for transaction validation requests.
@@ -114,19 +115,21 @@ Creates and initializes a new validator server instance with the specified compo
 - `GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetMedianBlockTimeResponse, error)`: Returns the median time of recent blocks. This method provides access to the median timestamp of the last several blocks, which is critical for time-based transaction features like nLockTime.
 
 ##### HTTP Endpoints
+
 - `handleSingleTx(ctx context.Context) echo.HandlerFunc`: Handles HTTP requests for single transaction validation. This method implements an HTTP handler for validating a single Bitcoin transaction submitted via POST request.
 - `handleMultipleTx(ctx context.Context) echo.HandlerFunc`: Handles HTTP requests for validating multiple transactions. This method implements an HTTP handler for validating a stream of Bitcoin transactions submitted via POST request.
 - `startHTTPServer(ctx context.Context, httpAddresses string) error`: Initializes and starts the HTTP server for transaction processing. This method configures and launches an Echo web server that provides HTTP REST endpoints for transaction validation.
 - `startAndMonitorHTTPServer(ctx context.Context, httpAddresses string)`: Starts the HTTP server and monitors for shutdown. This method launches the HTTP server in a non-blocking manner using goroutines, allowing the main server thread to continue execution.
 
 ##### Lifecycle Methods
+
 - `Init(ctx context.Context) error`: Initializes the validator server and sets up the core validation engine. This method must be called before Start() and after NewServer(). It creates the core validator component and performs necessary setup operations.
 - `Start(ctx context.Context, readyCh chan<- struct{}) error`: Begins the validator server operation and registers handlers for validation requests. This method initiates all background processing, including Kafka consumer setup, HTTP API servers, and synchronization with the blockchain FSM.
 - `Stop(_ context.Context) error`: Gracefully shuts down the validator server and all associated components. This method performs an orderly shutdown of all server resources, including Kafka producers/consumers and any background tasks.
 
 ### Validator
 
-The `Validator` struct implements Bitcoin SV transaction validation and manages the lifecycle of transactions from validation through block assembly.
+The `Validator` struct implements BSV Blockchain transaction validation and manages the lifecycle of transactions from validation through block assembly.
 
 ```go
 type Validator struct {
@@ -167,7 +170,7 @@ Creates a new `Validator` instance with the provided configuration. It initializ
 
 ### TxValidator
 
-The `TxValidator` implements transaction validation logic based on Bitcoin SV consensus rules and configurable policy settings.
+The `TxValidator` implements transaction validation logic based on Bitcoin consensus rules and configurable policy settings.
 
 ```go
 type TxValidator struct {
@@ -211,7 +214,7 @@ type TxScriptInterpreter interface {
 The validator supports multiple script interpreter implementations:
 
 - **GoBT**: Pure Go implementation from the libsv/go-bt library
-- **GoSDK**: Bitcoin SV SDK implementation
+- **GoSDK**: BSV SDK implementation
 - **GoBDK**: Bitcoin Development Kit implementation
 
 > **Note**: The script interpreter is hardcoded to **GoBDK** (`TxInterpreterGoBDK`). Runtime selection via configuration is not supported.

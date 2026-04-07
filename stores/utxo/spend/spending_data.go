@@ -1,4 +1,4 @@
-// Package spend provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
+// Package spend provides UTXO (Unspent Transaction Output) management for the BSV Blockchain Teranode implementation.
 package spend
 
 import (

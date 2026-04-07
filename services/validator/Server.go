@@ -1,13 +1,13 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 The validator package is a critical component of the Teranode architecture that handles
-transaction validation according to Bitcoin SV consensus rules. It enforces transaction
+transaction validation according to Bitcoin consensus rules. It enforces transaction
 rules, manages UTXO state transitions, and ensures that only valid transactions are
 accepted into the mempool and blocks.
 
 Key features of the validator package include:
-- Comprehensive transaction validation against Bitcoin SV consensus rules
+- Comprehensive transaction validation against Bitcoin consensus rules
 - Multiple script execution engines (GoBDK, GoSDK, GoBT) for script verification
 - Integration with UTXO store for input/output tracking and double-spend prevention
 - Batch processing capability for efficient validation of transaction groups

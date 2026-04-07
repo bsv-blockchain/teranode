@@ -7,7 +7,7 @@
 
 ## Purpose
 
-These header files are used to test the emergency difficulty adjustment on Bitcoin SV testnet, specifically:
+These header files are used to test the emergency difficulty adjustment on BSV Blockchain testnet, specifically:
 
 - Block 1602682: Normal difficulty calculation (0x1a33c833)
 - Block 1602683: Emergency difficulty triggered (0x1d00ffff) - mined 1208 seconds (20+ minutes) after previous block

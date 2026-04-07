@@ -16,7 +16,7 @@ const (
 	DefaultDockerImage = "bitcoinsv/bitcoin-sv:1.2.0"
 )
 
-// SVNodeI defines the interface for interacting with a Bitcoin SV node
+// SVNodeI defines the interface for interacting with a BSV Blockchain node
 type SVNodeI interface {
 	// Lifecycle
 	Start(ctx context.Context) error
@@ -85,7 +85,7 @@ type Options struct {
 	KeepRunning bool
 	// ConnectTo specifies addresses to connect to at startup via -connect flag.
 	// Unlike addnode, -connect creates regular outbound connections that are
-	// used for initial block download in Bitcoin SV.
+	// used for initial block download in SV Node.
 	ConnectTo []string
 	// AdditionalArgs specifies extra command-line flags to pass to bitcoind.
 	// Example: []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}

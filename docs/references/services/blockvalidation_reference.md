@@ -45,7 +45,7 @@ type Server struct {
 }
 ```
 
-The `Server` type implements a high-performance block validation service for Bitcoin SV. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.
+The `Server` type implements a high-performance block validation service for BSV Blockchain. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.
 
 ### processBlockFound
 

@@ -1877,7 +1877,7 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Recovering from network disconnections or service downtime
 // - Ensuring the local blockchain is synchronized with the network
 // - Handling blockchain reorganizations and chain updates
-// - Maintaining consensus with the Bitcoin SV network
+// - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
 // The method first checks if the FSM is already in the CATCHING_BLOCKS state
@@ -1937,11 +1937,11 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // LegacySync sends a legacy sync FSM event to the blockchain service.
 // This method initiates a legacy synchronization process by transitioning the
 // blockchain service's finite state machine to the LEGACY_SYNCING state, which
-// triggers compatibility mode synchronization with older Bitcoin SV network
+// triggers compatibility mode synchronization with older BSV Blockchain network
 // protocols and legacy blockchain implementations.
 //
 // The legacy sync mode is essential for:
-// - Maintaining compatibility with older Bitcoin SV network nodes
+// - Maintaining compatibility with older BSV Blockchain network nodes
 // - Synchronizing with legacy blockchain implementations
 // - Supporting migration scenarios from older Teranode versions
 // - Ensuring interoperability across diverse network topologies
@@ -1960,7 +1960,7 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 //
 // This operation is typically used during:
 // - Network upgrades and migration periods
-// - Integration with legacy Bitcoin SV infrastructure
+// - Integration with legacy BSV Blockchain infrastructure
 // - Debugging synchronization issues with older nodes
 // - Ensuring network-wide compatibility during protocol transitions
 //
@@ -2062,7 +2062,7 @@ func (c *Client) Idle(ctx context.Context) error {
 // which blocks they need to synchronize.
 //
 // This implementation follows the standard Bitcoin protocol for block locators,
-// ensuring compatibility with the broader Bitcoin SV network.
+// ensuring compatibility with the broader BSV Blockchain network.
 //
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support

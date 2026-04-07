@@ -637,7 +637,7 @@ The Validation Service processes transactions in multiple formats:
 
 ## 5. Technology
 
-The code snippets you have been provided utilize a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:
+The code snippets you have been provided utilize a variety of technologies and libraries, each serving a specific purpose within the context of a BSV Blockchain-related application. Here's a breakdown of these technologies:
 
 1. **Go (Golang)**: The programming language used for the entire codebase.
 
@@ -651,7 +651,7 @@ The code snippets you have been provided utilize a variety of technologies and l
 
 5. **Go-Bitcoin**: A Go library that provides utilities and tools for working with Bitcoin, including transaction parsing and manipulation.
 
-6. **BSV Libraries**: Go libraries from the bsv-blockchain organization for Bitcoin SV, used for transaction-related operations.
+6. **BSV Libraries**: Go libraries from the bsv-blockchain organization for BSV Blockchain, used for transaction-related operations.
 
 7. **Other Utilities and Libraries**:
 

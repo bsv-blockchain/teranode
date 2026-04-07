@@ -41,7 +41,7 @@ Before you begin, ensure you have:
 
 ## What is Teranode?
 
-Teranode is a scalable Bitcoin SV node implementation that:
+Teranode is a scalable BSV Blockchain node implementation that:
 
 - Processes over 1 million transactions per second
 - Uses a microservices architecture

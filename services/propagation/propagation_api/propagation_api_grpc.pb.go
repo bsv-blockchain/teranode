@@ -28,7 +28,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// PropagationAPI provides services for processing and propagating BSV Blockchain transactions
 // across the network. It supports various transaction processing methods including
 // individual, batch, and streaming operations.
 type PropagationAPIClient interface {
@@ -87,7 +87,7 @@ func (c *propagationAPIClient) ProcessTransactionBatch(ctx context.Context, in *
 // All implementations must embed UnimplementedPropagationAPIServer
 // for forward compatibility.
 //
-// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// PropagationAPI provides services for processing and propagating BSV Blockchain transactions
 // across the network. It supports various transaction processing methods including
 // individual, batch, and streaming operations.
 type PropagationAPIServer interface {

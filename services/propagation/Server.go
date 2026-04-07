@@ -1,4 +1,4 @@
-// Package propagation implements Bitcoin SV transaction propagation and validation services.
+// Package propagation implements BSV Blockchain transaction propagation and validation services.
 // It provides functionality for processing, validating, and distributing BSV transactions
 // across the network using multiple protocols including GRPC and UDP6 multicast.
 //
@@ -82,9 +82,9 @@ var (
 	ipv6Port = 9999
 )
 
-// PropagationServer implements the transaction propagation service for Bitcoin SV.
+// PropagationServer implements the transaction propagation service for BSV Blockchain.
 // This server provides the core transaction processing infrastructure for the Teranode system,
-// handling transaction validation, storage, and distribution across the Bitcoin SV network.
+// handling transaction validation, storage, and distribution across the BSV Blockchain network.
 // It serves as the primary entry point for transaction ingress and manages the complete
 // transaction lifecycle from initial receipt through validation and network propagation.
 //
