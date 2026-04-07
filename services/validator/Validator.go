@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
 )
@@ -639,17 +640,36 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	ctxLogger := v.logger.WithTraceContext(ctx)
 	ctxLogger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
 
-	// Configurable retry for TX_LOCKED and TX_CREATING errors with exponential backoff.
-	// Both occur when a parent and child tx arrive nearly simultaneously and the
-	// parent hasn't finished its own two-phase commit yet: TX_LOCKED is the normal
-	// path, TX_CREATING is what a large, multi-record parent returns while it is
-	// still being written. Either way the child is spending an output of a parent
-	// that is still committing, and the condition clears on its own (or once the
-	// parent is mined) rather than needing distinct handling. The retry budget is
-	// shared and left as the existing validator_txlocked_maxRetries setting rather
-	// than a new one, since both cases need the same short tolerance for the same
-	// underlying race. Set maxRetries to 0 to disable and return the error immediately
-	// to the caller.
+	txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
+
+	txMetaData, err = v.retryWhileParentCommitting(ctx, ctxLogger, tx, txMetaData, err, func() (*meta.Data, error) {
+		return v.validateInternal(ctx, tx, blockHeight, validationOptions)
+	})
+
+	if err != nil {
+		v.publishRejection(ctx, ctxLogger, tx, err)
+	}
+
+	return txMetaData, err
+}
+
+// retryWhileParentCommitting implements the configurable retry for TX_LOCKED and
+// TX_CREATING errors with exponential backoff.
+// Both occur when a parent and child tx arrive nearly simultaneously and the
+// parent hasn't finished its own two-phase commit yet: TX_LOCKED is the normal
+// path, TX_CREATING is what a large, multi-record parent returns while it is
+// still being written. Either way the child is spending an output of a parent
+// that is still committing, and the condition clears on its own (or once the
+// parent is mined) rather than needing distinct handling. The retry budget is
+// shared and left as the existing validator_txlocked_maxRetries setting rather
+// than a new one, since both cases need the same short tolerance for the same
+// underlying race. Set maxRetries to 0 to disable and return the error immediately
+// to the caller.
+//
+// txMetaData/err are the outcome of the initial attempt; retry re-runs the whole
+// validation. Shared by ValidateWithOptions and ValidateBatch so both apply the
+// same budget, backoff and parent_commit metrics.
+func (v *Validator) retryWhileParentCommitting(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, txMetaData *meta.Data, err error, retry func() (*meta.Data, error)) (*meta.Data, error) {
 	maxRetries := v.settings.Validator.TxLockedMaxRetries
 	if maxRetries < 0 {
 		ctxLogger.Errorf("[ValidateWithOptions] invalid TxLockedMaxRetries (%d); clamping to 0", maxRetries)
@@ -662,8 +682,11 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 	// Loop runs maxRetries+1 times: 1 initial attempt + maxRetries retries.
 	// e.g. maxRetries=3 → attempts 0,1,2,3 → 1 initial + 3 retries with 10/20/40ms backoff.
+	// The initial attempt has already run: its outcome is txMetaData/err.
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
+		if attempt > 0 {
+			txMetaData, err = retry()
+		}
 
 		// If no error, or the error is neither TX_LOCKED nor TX_CREATING, break immediately (don't retry)
 		locked := errors.Is(err, errors.ErrTxLocked)
@@ -707,69 +730,72 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	if err != nil {
-		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			// Deliberately does not cover ErrTxMissingParent. This message carries
-			// an empty peer_id, and p2p's rejectedTxHandler re-broadcasts exactly
-			// those to the whole network, so announcing a missing parent would
-			// gossip "rejected" for a transaction that is valid and will succeed
-			// once its parent lands - at a rate proportional to the out-of-order
-			// delivery the 32-partition validatortxs topic produces by design.
-			// The drop is counted instead, on the Kafka intake path in Server.go
-			// (prometheusMissingParentTransactions). The real fix - an orphan pool
-			// like services/legacy/netsync already has, so the child is retried
-			// once its parent lands - remains deferred.
-			if errors.Is(err, errors.ErrTxInvalid) {
-				if v.blockchainClient != nil {
-					var (
-						state *blockchain.FSMStateType
-						err1  error
-					)
+	return txMetaData, err
+}
 
-					if state, err1 = v.blockchainClient.GetFSMCurrentState(ctx); err1 != nil {
-						ctxLogger.Errorf("[ValidateWithOptions] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
+// publishRejection reports a failed validation on the rejected-tx topic (for
+// ErrTxInvalid, only while the node is RUNNING) and, for policy rejections, on the
+// policy-rejected topic. Shared by ValidateWithOptions and ValidateBatch.
+func (v *Validator) publishRejection(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, err error) {
+	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
+		// Deliberately does not cover ErrTxMissingParent. This message carries
+		// an empty peer_id, and p2p's rejectedTxHandler re-broadcasts exactly
+		// those to the whole network, so announcing a missing parent would
+		// gossip "rejected" for a transaction that is valid and will succeed
+		// once its parent lands - at a rate proportional to the out-of-order
+		// delivery the 32-partition validatortxs topic produces by design.
+		// The drop is counted instead, on the Kafka intake path in Server.go
+		// (prometheusMissingParentTransactions). The real fix - an orphan pool
+		// like services/legacy/netsync already has, so the child is retried
+		// once its parent lands - remains deferred.
+		if errors.Is(err, errors.ErrTxInvalid) {
+			if v.blockchainClient != nil {
+				var (
+					state *blockchain.FSMStateType
+					err1  error
+				)
 
-						return
-					}
+				if state, err1 = v.blockchainClient.GetFSMCurrentState(ctx); err1 != nil {
+					ctxLogger.Errorf("[publishRejection] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
 
-					if *state != blockchain_api.FSMStateType_RUNNING {
-						// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
-						return
-					}
+					return
 				}
 
-				startKafka := time.Now()
-
-				txID := tx.TxIDChainHash().String()
-
-				m := &kafkamessage.KafkaRejectedTxTopicMessage{
-					TxHash: txID,
-					Reason: err.Error(),
-					PeerId: "", // Empty peer_id indicates internal rejection
+				if *state != blockchain_api.FSMStateType_RUNNING {
+					// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
+					return
 				}
-
-				value, marshalErr := proto.Marshal(m)
-				if marshalErr != nil {
-					ctxLogger.Errorf("[ValidateWithOptions] failed to marshal rejected tx message: %v", marshalErr)
-				} else {
-					v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-						Key:   []byte(txID),
-						Value: value,
-					})
-				}
-
-				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 			}
-		}
 
-		// Publish consensus-valid but policy-rejected transactions so subtree validation
-		// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
-		if errors.Is(err, errors.ErrTxPolicy) {
-			v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
+			startKafka := time.Now()
+
+			txID := tx.TxIDChainHash().String()
+
+			m := &kafkamessage.KafkaRejectedTxTopicMessage{
+				TxHash: txID,
+				Reason: err.Error(),
+				PeerId: "", // Empty peer_id indicates internal rejection
+			}
+
+			value, marshalErr := proto.Marshal(m)
+			if marshalErr != nil {
+				ctxLogger.Errorf("[publishRejection] failed to marshal rejected tx message: %v", marshalErr)
+			} else {
+				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+					Key:   []byte(txID),
+					Value: value,
+				})
+			}
+
+			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
 	}
 
-	return txMetaData, err
+	// Publish consensus-valid but policy-rejected transactions so subtree validation
+	// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
+	if errors.Is(err, errors.ErrTxPolicy) {
+		v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
+	}
 }
 
 // publishPolicyRejectedTx publishes the raw bytes of a policy-rejected transaction to
@@ -890,8 +916,33 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}()
 	}
 
-	var spentUtxos []*utxo.Spend
+	// Phase 1: everything that decides the transaction before BDK sees it.
+	var utxoHeights []uint32
 
+	if utxoHeights, blockHeight, err = v.validateBeforeDecision(ctx, span, tx, txID, blockHeight, validationOptions); err != nil {
+		return nil, err
+	}
+
+	// Run Teranode-owned checks and BDK transaction validation.
+	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// Phase 3: the store work that follows a positive verdict.
+	return v.validateAfterDecision(ctx, span, tx, txID, blockHeight, validationOptions)
+}
+
+// validateBeforeDecision is the part of validateInternal that runs before the
+// transaction is handed to validateTransaction: coinbase rejection, the
+// OutpointOnlySpend guards, finality and the parent read that extends the
+// transaction and resolves its input heights. It is shared by the single path
+// (validateInternal) and by ValidateBatch, so both reject a transaction with the
+// same error. blockHeight 0 resolves to the next block height; the resolved height
+// is returned.
+func (v *Validator) validateBeforeDecision(ctx context.Context, span trace.Span, tx *bt.Tx, txID string, blockHeight uint32, validationOptions *Options) (utxoHeights []uint32, resolvedHeight uint32, err error) {
 	// Get atomic block state to prevent race conditions between height and median time reads
 	blockState := v.GetBlockState()
 
@@ -906,14 +957,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	if validationOptions.OutpointOnlySpend && !validationOptions.SkipScriptValidation {
 		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend requires SkipScriptValidation", txID)
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Defence-in-depth: OutpointOnlySpend is only ever legitimate at or below the
@@ -926,7 +977,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used above the highest checkpoint (height %d)", txID, blockHeight)
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	// The guard above bounds the height the CALLER asserted; an attacker simply asserts a low
@@ -949,7 +1000,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
@@ -962,7 +1013,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend requires a UTXO store that supports it", txID)
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	comparisonTime, skipFinality, finalityErr := selectFinalityComparisonTime(validationOptions, blockHeight, uint32(v.settings.ChainCfgParams.CSVHeight), blockState)
@@ -970,7 +1021,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		err = finalityErr
 		span.RecordError(err)
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	if !skipFinality {
@@ -979,11 +1030,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 			span.RecordError(err)
 
-			return nil, err
+			return nil, 0, err
 		}
 	}
-
-	var utxoHeights []uint32
 
 	// OutpointOnlySpend: skip parent reads entirely. utxoHeights stays nil.
 	// Safe because (a) SkipScriptValidation short-circuits BDK before it indexes
@@ -1003,17 +1052,23 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
-	// Run Teranode-owned checks and BDK transaction validation.
-	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
+	return utxoHeights, blockHeight, nil
+}
 
-		return nil, err
-	}
+// validateAfterDecision is the part of validateInternal that runs once the
+// transaction has passed validateTransaction: spend-and-create in the UTXO store,
+// the block-assembly hand-off with its bounded shed retry, unwind and deadline
+// handling, the txmeta publish and the two-phase-commit unlock. It is shared by the
+// single path (validateInternal) and by ValidateBatch, so every accepted
+// transaction goes through exactly the same store and hand-off semantics.
+//
+//gocognit:ignore
+func (v *Validator) validateAfterDecision(ctx context.Context, span trace.Span, tx *bt.Tx, txID string, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	var spentUtxos []*utxo.Spend
 
 	// The post-decision store work must not be cancellable by the caller: the
 	// hand-off, its unwind and the two-phase commit all have to run to a decision even
@@ -2846,6 +2901,26 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	)
 	defer deferFn()
 
+	utxoHeights, err := v.prepareTransactionValidation(ctx, span, tx, blockHeight, utxoHeights, validationOptions)
+	if err != nil {
+		return err
+	}
+
+	// Phase 1: run Teranode-owned checks and BDK transaction validation.
+	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		span.RecordError(err)
+		return err
+	}
+
+	return v.validateTransactionBIP68(span, tx, blockHeight, utxoHeights, validationOptions)
+}
+
+// prepareTransactionValidation is the part of validateTransaction that runs before
+// txValidator.ValidateTransaction: it extends a non-extended transaction and, for
+// UnconfirmedParentsAtCandidateHeight, resolves the unconfirmed-parent sentinel to
+// the candidate height. It returns the utxoHeights every later consumer must use.
+// Shared with ValidateBatch.
+func (v *Validator) prepareTransactionValidation(ctx context.Context, span trace.Span, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) ([]uint32, error) {
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
 	//
@@ -2860,7 +2935,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 			// error is already wrapped in our errors package
 			span.RecordError(err)
 
-			return err
+			return nil, err
 		}
 	}
 
@@ -2888,12 +2963,13 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}
 
-	// Phase 1: run Teranode-owned checks and BDK transaction validation.
-	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		span.RecordError(err)
-		return err
-	}
+	return utxoHeights, nil
+}
 
+// validateTransactionBIP68 is the part of validateTransaction that runs after
+// txValidator.ValidateTransaction has accepted the transaction. Shared with
+// ValidateBatch.
+func (v *Validator) validateTransactionBIP68(span trace.Span, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	// Phase 2: BIP68 sequence-lock validation — only for block context
 	// (SkipPolicyChecks == true) and only when BIP68 is active
 	// (blockHeight >= CSVHeight). Performed after phase 1 so that MTP lookups
