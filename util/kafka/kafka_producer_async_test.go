@@ -274,8 +274,8 @@ func (m *mockAsyncLogger) Debug()                                               
 func (m *mockAsyncLogger) Debugf(string, ...interface{})                        { m.debugCount++ }
 func (m *mockAsyncLogger) Info()                                                { m.infoCount++ }
 func (m *mockAsyncLogger) Infof(string, ...interface{})                         { m.infoCount++ }
-func (m *mockAsyncLogger) Warn()                            { m.warnCount++ }
-func (m *mockAsyncLogger) Warnf(string, ...interface{})     { m.warnCount++ }
+func (m *mockAsyncLogger) Warn()                                                { m.warnCount++ }
+func (m *mockAsyncLogger) Warnf(string, ...interface{})                         { m.warnCount++ }
 func (m *mockAsyncLogger) Error(...interface{})                                 { m.errorCount++ }
 func (m *mockAsyncLogger) Errorf(string, ...interface{})                        { m.errorCount++ }
 func (m *mockAsyncLogger) Fatal(...interface{})                                 { m.fatalCount++ }

@@ -6,12 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func newTestHook(t *testing.T, cfg SlowTransferConfig) (*producerMetricsHook, *mockAsyncLogger) {

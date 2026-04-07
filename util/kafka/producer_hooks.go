@@ -66,14 +66,14 @@ type producerMetricsHook struct {
 	topic  string
 	cfg    SlowTransferConfig
 
-	mu             sync.Mutex
-	samples        []writeSample
-	sampleIdx      int
-	sampleCount    int
-	lastSlowAlert  time.Time
-	slowOngoing    bool
-	slowOnsetTime  time.Time
-	nowFunc        func() time.Time // pluggable clock for testing
+	mu            sync.Mutex
+	samples       []writeSample
+	sampleIdx     int
+	sampleCount   int
+	lastSlowAlert time.Time
+	slowOngoing   bool
+	slowOnsetTime time.Time
+	nowFunc       func() time.Time // pluggable clock for testing
 }
 
 func newProducerMetricsHook(logger ulogger.Logger, topic string, cfg SlowTransferConfig) *producerMetricsHook {
@@ -218,9 +218,9 @@ func (h *producerMetricsHook) evaluateSlowTransfer(now time.Time) {
 
 // compile-time interface assertions
 var (
-	_ kgo.HookBrokerConnect      = (*producerMetricsHook)(nil)
-	_ kgo.HookBrokerDisconnect   = (*producerMetricsHook)(nil)
-	_ kgo.HookBrokerWrite        = (*producerMetricsHook)(nil)
-	_ kgo.HookBrokerE2E          = (*producerMetricsHook)(nil)
+	_ kgo.HookBrokerConnect       = (*producerMetricsHook)(nil)
+	_ kgo.HookBrokerDisconnect    = (*producerMetricsHook)(nil)
+	_ kgo.HookBrokerWrite         = (*producerMetricsHook)(nil)
+	_ kgo.HookBrokerE2E           = (*producerMetricsHook)(nil)
 	_ kgo.HookProduceBatchWritten = (*producerMetricsHook)(nil)
 )
