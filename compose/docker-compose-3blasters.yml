@@ -97,10 +97,13 @@ services:
     container_name: svnode1-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
-    profiles:
-      - svnode1
+    depends_on:
+      - block-generator-1
+    # profiles:
+    #   - svnode1
     ports:
       - "18332:18332"
+      - "18333:18333"
     expose:
       - "18332"
       - "18333"
