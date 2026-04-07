@@ -820,6 +820,15 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 		return false
 	}
 
+	numInputs := len(tx.Inputs)
+	numOutputs := len(tx.Outputs)
+
+	// Early return: dust donations require exactly 1 output, so any multi-output tx can be
+	// evaluated against the ratio immediately, skipping coinbase and dust-donation checks.
+	if numOutputs != 1 && numInputs < minConsolidationFactor*numOutputs {
+		return false
+	}
+
 	// Coinbase transactions cannot be consolidation transactions
 	if tx.IsCoinbase() {
 		tv.logger.Debugf("Not a consolidation tx: coinbase transaction")
@@ -838,9 +847,6 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 		factor = len(tx.Inputs)
 		minConf = 0
 	}
-
-	numInputs := len(tx.Inputs)
-	numOutputs := len(tx.Outputs)
 
 	// Rule 1: Input/Output Ratio
 	// The consolidation transaction needs to reduce the count of UTXOs
