@@ -182,6 +182,16 @@ func (v *TopologicalOrderValidator) GetMedianBlockTime() uint32 {
 // TriggerBatcher implements validator.Interface (no-op).
 func (v *TopologicalOrderValidator) TriggerBatcher() {}
 
+// ValidateBatch implements validator.Interface by delegating to per-tx Validate.
+func (v *TopologicalOrderValidator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *validator.Options) ([]*meta.Data, []error) {
+	results := make([]*meta.Data, len(txs))
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		results[i], errs[i] = v.Validate(ctx, tx, blockHeight)
+	}
+	return results, errs
+}
+
 // EnsureMTPLoaded implements validator.Interface (no-op).
 func (v *TopologicalOrderValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 	return nil

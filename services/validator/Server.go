@@ -547,36 +547,112 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	)
 	defer deferFn()
 
+	txRequests := req.GetTransactions()
+	n := len(txRequests)
+
 	// Pre-warm the MTP store for BIP68 validation before spawning per-transaction goroutines.
 	// All transactions in a block share the same blockHeight; loading the store here (serially)
 	// means the concurrent goroutines below can look up MTPs via direct array reads, with no
 	// locking and no per-transaction gRPC calls.
-	if len(req.GetTransactions()) > 0 {
-		if err := v.validator.EnsureMTPLoaded(ctx, req.GetTransactions()[0].GetBlockHeight()); err != nil {
+	if n > 0 {
+		if err := v.validator.EnsureMTPLoaded(ctx, txRequests[0].GetBlockHeight()); err != nil {
 			return nil, err
 		}
 	}
 
-	g, gCtx := errgroup.WithContext(ctx)
+	metaData := make([][]byte, n)
+	errReasons := make([]*errors.TError, n)
 
-	// we create a slice for all transactions we just batched, in the same order as we got them
-	metaData := make([][]byte, len(req.GetTransactions()))
-	errReasons := make([]*errors.TError, len(req.GetTransactions()))
+	// Try batched validation: parse all txs and extract options.
+	// If all txs share the same options, use ValidateBatch for batched script verification.
+	txs := make([]*bt.Tx, n)
+	opts := make([]*Options, n)
+	canBatch := true
+	var blockHeight uint32
 
-	for idx, reqItem := range req.GetTransactions() {
-		idx, reqItem := idx, reqItem
+	for i, reqItem := range txRequests {
+		tx, err := bt.NewTxFromBytes(reqItem.GetTransactionData())
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			errReasons[i] = errors.Wrap(errors.NewTxError("error reading transaction data", err))
+			continue
+		}
+		tx.SetTxHash(tx.TxIDChainHash())
+		txs[i] = tx
 
-		g.Go(func() error {
-			validatorResponse, err := v.validateTransaction(gCtx, reqItem)
-			metaData[idx] = validatorResponse.Metadata
-			errReasons[idx] = errors.Wrap(err)
+		o := NewDefaultOptions()
+		if reqItem.SkipUtxoCreation != nil {
+			o.SkipUtxoCreation = *reqItem.SkipUtxoCreation
+		}
+		if reqItem.AddTxToBlockAssembly != nil {
+			o.AddTXToBlockAssembly = *reqItem.AddTxToBlockAssembly
+		}
+		if reqItem.SkipPolicyChecks != nil {
+			o.SkipPolicyChecks = *reqItem.SkipPolicyChecks
+		}
+		if reqItem.CreateConflicting != nil {
+			o.CreateConflicting = *reqItem.CreateConflicting
+		}
+		if reqItem.SkipTxmetaPublishing != nil {
+			o.SkipTxMetaPublishing = *reqItem.SkipTxmetaPublishing
+		}
+		opts[i] = o
 
-			return nil
-		})
+		if i == 0 {
+			blockHeight = reqItem.GetBlockHeight()
+		} else if canBatch {
+			// Check if options differ from the first tx
+			canBatch = reqItem.GetBlockHeight() == blockHeight &&
+				o.SkipUtxoCreation == opts[0].SkipUtxoCreation &&
+				o.AddTXToBlockAssembly == opts[0].AddTXToBlockAssembly &&
+				o.SkipPolicyChecks == opts[0].SkipPolicyChecks &&
+				o.CreateConflicting == opts[0].CreateConflicting &&
+				o.SkipTxMetaPublishing == opts[0].SkipTxMetaPublishing
+		}
 	}
 
-	// wait for all transactions to be validated, never returns error
-	_ = g.Wait()
+	if canBatch && n > 0 {
+		// Batched path: collect valid txs and call ValidateBatch
+		var batchTxs []*bt.Tx
+		var batchIndices []int
+		for i, tx := range txs {
+			if tx != nil {
+				batchTxs = append(batchTxs, tx)
+				batchIndices = append(batchIndices, i)
+			}
+		}
+
+		if len(batchTxs) > 0 {
+			batchMeta, batchErrs := v.validator.ValidateBatch(ctx, batchTxs, blockHeight, opts[0])
+			for j, idx := range batchIndices {
+				errReasons[idx] = errors.Wrap(batchErrs[j])
+				if batchMeta[j] != nil {
+					mb, err := batchMeta[j].Bytes()
+					if err != nil {
+						errReasons[idx] = errors.Wrap(errors.NewProcessingError("failed to serialize metadata", err))
+					} else {
+						metaData[idx] = mb
+					}
+				}
+			}
+		}
+	} else {
+		// Fallback: per-tx validation (different options per tx)
+		g, gCtx := errgroup.WithContext(ctx)
+
+		for idx := range txRequests {
+			idx := idx
+
+			g.Go(func() error {
+				validatorResponse, err := v.validateTransaction(gCtx, txRequests[idx])
+				metaData[idx] = validatorResponse.Metadata
+				errReasons[idx] = errors.Wrap(err)
+				return nil
+			})
+		}
+
+		_ = g.Wait()
+	}
 
 	return &validator_api.ValidateTransactionBatchResponse{
 		Valid:    true,

@@ -957,6 +957,13 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		Errors: make([]*errors.TError, len(req.Items)),
 	}
 
+	// Direct validation path: batch script verification via single CGO call.
+	// Parse + sanity + blob store in parallel, then ValidateBatch for all that passed.
+	if ps.validatorKafkaProducerClient == nil {
+		return ps.processTransactionBatchDirect(ctx, req, response)
+	}
+
+	// Kafka/HTTP path: per-tx processing as before
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for idx, item := range req.Items {
@@ -1010,6 +1017,107 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
+	}
+
+	return response, nil
+}
+
+// processTransactionBatchDirect handles the direct validation path (no Kafka) using
+// batched script verification. It runs parse + sanity + blob storage in parallel,
+// then calls validator.ValidateBatch for all txs that passed pre-processing.
+func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest, response *propagation_api.ProcessTransactionBatchResponse) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	n := len(req.Items)
+	parsedTxs := make([]*bt.Tx, n)
+
+	// Phase A: Parse, sanity check, and blob-store all txs (parallel)
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for idx := range req.Items {
+		idx := idx
+		g.Go(func() error {
+			item := req.Items[idx]
+			txBytes := item.Tx
+
+			// Size check before parsing
+			if ps.settings != nil && ps.settings.Policy != nil {
+				maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
+				if maxTxSize > 0 && len(txBytes) > maxTxSize {
+					prometheusInvalidTransactions.Inc()
+					response.Errors[idx] = errors.WrapPublic(
+						errors.NewTxInvalidError("[ProcessTransactionBatch] transaction size %d exceeds maximum %d", len(txBytes), maxTxSize))
+					return nil
+				}
+			}
+
+			// Parse with panic recovery
+			var btTx *bt.Tx
+			var parseErr error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						parseErr = errors.NewProcessingError("transaction parsing panic: %v", r)
+					}
+				}()
+				btTx, parseErr = bt.NewTxFromBytes(txBytes)
+			}()
+
+			if parseErr != nil {
+				prometheusInvalidTransactions.Inc()
+				response.Errors[idx] = errors.WrapPublic(
+					errors.NewProcessingError("[ProcessTransactionBatch] failed to parse transaction", parseErr))
+				return nil
+			}
+
+			// Coinbase check
+			if btTx.IsCoinbase() {
+				prometheusInvalidTransactions.Inc()
+				response.Errors[idx] = errors.WrapPublic(
+					errors.NewTxInvalidError("[ProcessTransactionBatch][%s] received coinbase transaction", btTx.TxID()))
+				return nil
+			}
+
+			// Sanity checks
+			if err := ps.txSanityChecks(btTx); err != nil {
+				response.Errors[idx] = errors.WrapPublic(err)
+				return nil
+			}
+
+			// Blob storage
+			serialized := btTx.SerializeBytes()
+			if err := ps.storeTransaction(gCtx, btTx, serialized); err != nil {
+				response.Errors[idx] = errors.WrapPublic(
+					errors.NewStorageError("[ProcessTransactionBatch][%s] failed to save transaction", btTx.TxIDChainHash(), err))
+				return nil
+			}
+
+			parsedTxs[idx] = btTx
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+
+	// Collect txs that passed Phase A
+	var batchTxs []*bt.Tx
+	var batchIndices []int
+
+	for i, tx := range parsedTxs {
+		if tx != nil && response.Errors[i] == nil {
+			batchTxs = append(batchTxs, tx)
+			batchIndices = append(batchIndices, i)
+		}
+	}
+
+	// Phase B: Batched validation (pre-script → batch CGO → post-script)
+	if len(batchTxs) > 0 {
+		_, batchErrs := ps.validator.ValidateBatch(ctx, batchTxs, 0, nil)
+		for j, batchErr := range batchErrs {
+			if batchErr != nil {
+				origIdx := batchIndices[j]
+				ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to validate transaction %d: %v", origIdx, batchErr)
+				response.Errors[origIdx] = errors.WrapPublic(batchErr)
+			}
+		}
 	}
 
 	return response, nil

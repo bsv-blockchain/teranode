@@ -115,6 +115,16 @@ func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx
 
 // TriggerBatcher implements the batcher trigger interface for testing.
 // This is a no-op in the mock implementation as no actual batching occurs.
+// ValidateBatch implements mock batch validation by delegating to per-tx Validate
+func (m *MockValidatorClient) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *Options) ([]*meta.Data, []error) {
+	results := make([]*meta.Data, len(txs))
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		results[i], errs[i] = m.Validate(ctx, tx, blockHeight)
+	}
+	return results, errs
+}
+
 func (m *MockValidatorClient) TriggerBatcher() {}
 
 // EnsureMTPLoaded implements mock MTP store pre-warming.

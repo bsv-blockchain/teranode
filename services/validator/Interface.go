@@ -88,6 +88,11 @@ type Interface interface {
 	//   - error: Validation errors if transaction violates consensus rules or policy constraints
 	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)
 
+	// ValidateBatch validates multiple transactions using a three-phase pipeline that batches
+	// the expensive CGO script verification into a single call to BDK's VerifyScriptBatchParallel.
+	// Returns parallel slices: results[i] and errs[i] correspond to txs[i].
+	ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *Options) ([]*meta.Data, []error)
+
 	// GetBlockHeight returns the current block height known to the validator service.
 	// This height is used for validation context and consensus rule application, and should
 	// reflect the latest confirmed block in the blockchain.
@@ -181,6 +186,16 @@ func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight ui
 //   - error: Always returns nil
 func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
 	return util.TxMetaDataFromTx(tx)
+}
+
+// ValidateBatch implements mock batch validation by delegating to per-tx Validate
+func (mv *MockValidator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *Options) ([]*meta.Data, []error) {
+	results := make([]*meta.Data, len(txs))
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		results[i], errs[i] = mv.Validate(ctx, tx, blockHeight)
+	}
+	return results, errs
 }
 
 // GetBlockHeight implements mock block height retrieval

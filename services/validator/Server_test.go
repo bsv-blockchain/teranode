@@ -466,6 +466,15 @@ func (m *TestMockValidator) TriggerBatcher() {
 	// No-op implementation for testing
 }
 
+func (m *TestMockValidator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *Options) ([]*meta.Data, []error) {
+	results := make([]*meta.Data, len(txs))
+	errs := make([]error, len(txs))
+	for i, tx := range txs {
+		results[i], errs[i] = m.Validate(ctx, tx, blockHeight)
+	}
+	return results, errs
+}
+
 func (m *TestMockValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 	return nil
 }

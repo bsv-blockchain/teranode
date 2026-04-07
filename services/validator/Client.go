@@ -281,6 +281,63 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	return result, nil
 }
 
+// ValidateBatch sends all transactions to the validator server's ValidateTransactionBatch
+// gRPC endpoint, which performs batched script verification server-side.
+func (c *Client) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts *Options) ([]*utxometa.Data, []error) {
+	n := len(txs)
+	results := make([]*utxometa.Data, n)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return results, errs
+	}
+
+	if opts == nil {
+		opts = NewDefaultOptions()
+	}
+
+	requests := make([]*validator_api.ValidateTransactionRequest, n)
+	for i, tx := range txs {
+		requests[i] = &validator_api.ValidateTransactionRequest{
+			TransactionData:      tx.SerializeBytes(),
+			BlockHeight:          blockHeight,
+			SkipUtxoCreation:     &opts.SkipUtxoCreation,
+			AddTxToBlockAssembly: &opts.AddTXToBlockAssembly,
+			SkipPolicyChecks:     &opts.SkipPolicyChecks,
+			CreateConflicting:    &opts.CreateConflicting,
+			SkipTxmetaPublishing: &opts.SkipTxMetaPublishing,
+		}
+	}
+
+	resp, err := c.client.ValidateTransactionBatch(ctx, &validator_api.ValidateTransactionBatchRequest{
+		Transactions: requests,
+	})
+	if err != nil {
+		// Batch-level error: apply to all txs
+		unwrapped := errors.UnwrapGRPC(err)
+		for i := range errs {
+			errs[i] = unwrapped
+		}
+		return results, errs
+	}
+
+	// Map per-tx results
+	for i := 0; i < n; i++ {
+		if i < len(resp.Errors) && !resp.Errors[i].IsNil() {
+			errs[i] = resp.Errors[i]
+		}
+
+		if i < len(resp.Metadata) && resp.Metadata[i] != nil {
+			results[i] = &utxometa.Data{}
+			if parseErr := utxometa.NewMetaDataFromBytes(resp.Metadata[i], results[i]); parseErr != nil {
+				c.logger.Errorf("[ValidateBatch] failed to parse metadata for tx %d: %v", i, parseErr)
+			}
+		}
+	}
+
+	return results, errs
+}
+
 // handleValidationError processes validation errors and attempts HTTP fallback if appropriate
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
 	// Check if the error is related to message size (ResourceExhausted)

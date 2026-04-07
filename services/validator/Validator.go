@@ -367,53 +367,171 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	}
 
 	if err != nil {
-		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			// TODO should this also announce transactions with missing parents etc.?
-			if errors.Is(err, errors.ErrTxInvalid) {
-				if v.blockchainClient != nil {
-					var (
-						state *blockchain.FSMStateType
-						err1  error
-					)
+		v.publishRejectedTx(ctx, tx, err)
+	}
 
-					if state, err1 = v.blockchainClient.GetFSMCurrentState(ctx); err1 != nil {
-						ctxLogger.Errorf("[ValidateWithOptions] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
+	return txMetaData, err
+}
 
-						return
-					}
+// publishRejectedTx publishes a rejected transaction to the Kafka rejected-tx topic
+// for monitoring. Only publishes for ErrTxInvalid errors and not during sync/catchup.
+func (v *Validator) publishRejectedTx(ctx context.Context, tx *bt.Tx, txErr error) {
+	if v.rejectedTxKafkaProducerClient == nil || !errors.Is(txErr, errors.ErrTxInvalid) {
+		return
+	}
 
-					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
-						// ignore notifications while syncing or catching up
-						return
-					}
-				}
+	if v.blockchainClient != nil {
+		state, err1 := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err1 != nil {
+			v.logger.WithTraceContext(ctx).Errorf("[publishRejectedTx] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
+			return
+		}
 
-				startKafka := time.Now()
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+			return
+		}
+	}
 
-				txID := tx.TxIDChainHash().String()
+	startKafka := time.Now()
 
-				m := &kafkamessage.KafkaRejectedTxTopicMessage{
-					TxHash: txID,
-					Reason: err.Error(),
-					PeerId: "", // Empty peer_id indicates internal rejection
-				}
+	txID := tx.TxIDChainHash().String()
 
-				value, err := proto.Marshal(m)
-				if err != nil {
-					return nil, err
-				}
+	m := &kafkamessage.KafkaRejectedTxTopicMessage{
+		TxHash: txID,
+		Reason: txErr.Error(),
+		PeerId: "", // Empty peer_id indicates internal rejection
+	}
 
-				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-					Key:   []byte(txID),
-					Value: value,
-				})
+	value, err := proto.Marshal(m)
+	if err != nil {
+		v.logger.WithTraceContext(ctx).Errorf("[publishRejectedTx] failed to marshal rejected tx message: %v", err)
+		return
+	}
 
-				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+	v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(txID),
+		Value: value,
+	})
+
+	prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+}
+
+// ValidateBatch validates a batch of transactions using a three-phase pipeline:
+//
+//	Phase 1 (parallel): Pre-script validation (extend, format, fees) for all txs
+//	Phase 2 (batched):  Script verification via single CGO call to BDK's VerifyScriptBatchParallel
+//	Phase 3 (parallel): Post-script finalization (spend, store, block assembly, 2PC) per tx
+//
+// Transactions that fail Phase 1 or 2 are excluded from later phases.
+// TX_LOCKED errors in Phase 3 are retried via ValidateWithOptions (full pipeline per-tx).
+// Returns parallel slices: results[i] and errs[i] correspond to txs[i].
+func (v *Validator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, validationOptions *Options) ([]*meta.Data, []error) {
+	n := len(txs)
+	results := make([]*meta.Data, n)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return results, errs
+	}
+
+	if validationOptions == nil {
+		validationOptions = NewDefaultOptions()
+	}
+
+	// --- Phase 1: Pre-script validation (parallel) ---
+	type preResult struct {
+		utxoHeights []uint32
+		blockHeight uint32
+		err         error
+	}
+
+	preResults := make([]preResult, n)
+
+	g1, gCtx1 := errgroup.WithContext(ctx)
+
+	for i := range txs {
+		i := i
+		g1.Go(func() error {
+			uh, bh, err := v.validatePreScript(gCtx1, txs[i], blockHeight, validationOptions)
+			preResults[i] = preResult{utxoHeights: uh, blockHeight: bh, err: err}
+			return nil // per-tx errors; never fail the group
+		})
+	}
+
+	_ = g1.Wait()
+
+	// Collect txs that passed Phase 1
+	var (
+		batchTxs         []*bt.Tx
+		batchUtxoHeights [][]uint32
+		batchIndices     []int
+		batchBlockHeight uint32
+	)
+
+	for i, pr := range preResults {
+		if pr.err != nil {
+			errs[i] = pr.err
+			continue
+		}
+
+		batchTxs = append(batchTxs, txs[i])
+		batchUtxoHeights = append(batchUtxoHeights, pr.utxoHeights)
+		batchIndices = append(batchIndices, i)
+		batchBlockHeight = pr.blockHeight
+	}
+
+	// --- Phase 2: Batch script verification (single CGO call) ---
+	if len(batchTxs) > 0 {
+		scriptErrs := v.txValidator.ValidateTransactionScriptsBatch(
+			batchTxs, batchBlockHeight, batchUtxoHeights, validationOptions,
+		)
+
+		for j, scriptErr := range scriptErrs {
+			if scriptErr != nil {
+				origIdx := batchIndices[j]
+				errs[origIdx] = errors.NewProcessingError(
+					"[ValidateBatch][%s] error validating transaction scripts",
+					txs[origIdx].TxIDChainHash().String(), scriptErr,
+				)
 			}
 		}
 	}
 
-	return txMetaData, err
+	// --- Phase 3: Post-script (parallel) ---
+	g3, gCtx3 := errgroup.WithContext(ctx)
+
+	for _, idx := range batchIndices {
+		idx := idx
+		if errs[idx] != nil {
+			continue // script verification failed
+		}
+
+		g3.Go(func() error {
+			txID := txs[idx].TxIDChainHash().String()
+			md, err := v.validatePostScript(gCtx3, txs[idx], txID, preResults[idx].blockHeight, validationOptions)
+
+			if err != nil && errors.Is(err, errors.ErrTxLocked) {
+				// TX_LOCKED: retry full pipeline per-tx via existing retry logic
+				md, err = v.ValidateWithOptions(gCtx3, txs[idx], preResults[idx].blockHeight, validationOptions)
+			}
+
+			results[idx] = md
+			errs[idx] = err
+
+			return nil
+		})
+	}
+
+	_ = g3.Wait()
+
+	// Publish rejected txs to Kafka
+	for i, txErr := range errs {
+		if txErr != nil {
+			v.publishRejectedTx(ctx, txs[i], txErr)
+		}
+	}
+
+	return results, errs
 }
 
 // validateInternal performs the core validation logic for a transaction.
@@ -446,134 +564,77 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 //   - *meta.Data: Transaction metadata if validation succeeds, includes fee calculations
 //   - error: Detailed validation error with specific reason if validation fails
 //
-//gocognit:ignore
-func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
-	// this caches the tx hash in the object for the duration of all operations. It's immutable, so not a problem
+// validatePreScript runs the pre-script validation phases: initialization, finality check,
+// coinbase rejection, transaction extension (UTXO lookups), and format/consensus validation.
+// It returns the UTXO block heights for each input and the resolved block height.
+// This is Phase 1 of the three-phase validation pipeline used by ValidateBatch.
+func (v *Validator) validatePreScript(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (utxoHeights []uint32, resolvedHeight uint32, err error) {
 	tx.SetTxHash(tx.TxIDChainHash())
 	txID := tx.TxIDChainHash().String()
 
-	ctx, span, deferFn := tracing.Tracer("validator").Start(
-		ctx,
-		"validateInternal",
-		tracing.WithParentStat(v.stats),
-		tracing.WithHistogram(prometheusTransactionValidateTotal),
-		tracing.WithTag("txid", txID),
-	)
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "validatePreScript")
+	defer func() { endSpan(err) }()
 
-	defer func() {
-		deferFn(err)
-	}()
-
-	if v.settings.Validator.VerboseDebug {
-		v.logger.Debugf("[Validator:ValidateInternal] called for %s", txID)
-
-		defer func() {
-			v.logger.Debugf("[Validator:ValidateInternal] called for %s DONE", txID)
-		}()
-	}
-
-	var spentUtxos []*utxo.Spend
-
-	// Get atomic block state to prevent race conditions between height and median time reads
 	blockState := v.GetBlockState()
 
 	if blockHeight == 0 {
 		blockHeight = blockState.Height + 1
 	}
 
-	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
-	// This is an exception for transactions before the media block time was used
 	if blockHeight > v.settings.ChainCfgParams.CSVHeight {
-
 		utxoStoreMedianBlockTime := blockState.MedianTime
 		if utxoStoreMedianBlockTime == 0 {
-			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
-			span.RecordError(err)
-
-			return nil, err
+			return nil, 0, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
 		}
 
-		// this function should be moved into go-bt
 		if err = util.IsTransactionFinal(tx, blockHeight, utxoStoreMedianBlockTime); err != nil {
-			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
-			span.RecordError(err)
-
-			return nil, err
+			return nil, 0, errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 		}
 	}
 
 	if tx.IsCoinbase() {
-		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
-		span.RecordError(err)
-
-		return nil, err
+		return nil, 0, errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 	}
 
-	var utxoHeights []uint32
-
-	// check whether the transaction is extended, extend it if not
-	// we also get the block heights of the inputs of the transaction since we are doing a DB lookup
 	if !tx.IsExtended() {
-		// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
-		// utxoHeights is a slice of block heights for each input
-		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-			span.RecordError(err)
-
-			return nil, err
+			return nil, 0, errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 		}
 	}
 
-	// if the transaction was extended, we still need to get the block heights of the inputs
-	// since that processing did not happen before extending the transaction
-	// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
 	if len(utxoHeights) == 0 {
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-			span.RecordError(err)
-
-			return nil, err
+			return nil, 0, errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
+		return nil, 0, errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
-	// validate the transaction scripts and signatures
-	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
-		span.RecordError(err)
+	return utxoHeights, blockHeight, nil
+}
 
-		return nil, err
-	}
+// validatePostScript runs the post-script validation phases: UTXO spending, store creation,
+// block assembly integration, Kafka metadata publishing, and two-phase commit.
+// This is Phase 3 of the three-phase validation pipeline used by ValidateBatch.
+//
+//gocognit:ignore
+func (v *Validator) validatePostScript(ctx context.Context, tx *bt.Tx, txID string, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "validatePostScript")
+	defer func() { endSpan(err) }()
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
-	decoupledCtx, _, deferFn := tracing.DecoupleTracingSpan(ctx, "validator", "decoupledSpan")
-	defer deferFn()
+	decoupledCtx, _, deferDecoupled := tracing.DecoupleTracingSpan(ctx, "validator", "decoupledPostScript")
+	defer deferDecoupled()
 
-	/*
-		Scenario where store is done before adding to assembly:
-		Parent -> spent -> tx meta -> stored                                                  -> block assembly
-		Child                                 -> spent -> tx meta -> stored -> block assembly
-
-		Scenario where store is done after adding to assembly:
-		Parent -> spent -> tx meta -> block assembly -> stored
-		Child                                                  -> spent -> tx meta -> stored -> block assembly
-	*/
+	var spentUtxos []*utxo.Spend
 
 	var (
 		tErr       *errors.Error
 		utxoMapErr error
 	)
 
-	// this will reverse the spends if there is an error
 	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked); err != nil {
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
@@ -745,6 +806,48 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	return txMetaData, nil
+}
+
+// validateInternal performs the core validation logic for a transaction.
+// It calls the three validation phases sequentially: pre-script, script, post-script.
+//
+//gocognit:ignore
+func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	txID := tx.TxIDChainHash().String()
+
+	ctx, _, deferFn := tracing.Tracer("validator").Start(
+		ctx,
+		"validateInternal",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusTransactionValidateTotal),
+		tracing.WithTag("txid", txID),
+	)
+
+	defer func() {
+		deferFn(err)
+	}()
+
+	if v.settings.Validator.VerboseDebug {
+		v.logger.Debugf("[Validator:ValidateInternal] called for %s", txID)
+
+		defer func() {
+			v.logger.Debugf("[Validator:ValidateInternal] called for %s DONE", txID)
+		}()
+	}
+
+	// Phase 1: Pre-script validation (extend, format, consensus)
+	utxoHeights, blockHeight, err := v.validatePreScript(ctx, tx, blockHeight, validationOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 2: Script verification (signatures, CGO/BDK)
+	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
+	}
+
+	// Phase 3: Post-script (spend, store, block assembly, 2PC)
+	return v.validatePostScript(ctx, tx, txID, blockHeight, validationOptions)
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
