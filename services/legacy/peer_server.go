@@ -83,10 +83,6 @@ var (
 	// userAgentName is the user agent name and is used to help identify
 	// ourselves to other bitcoin peers.
 	userAgentName = "/teranode-legacy-p2p"
-
-	// userAgentVersion is the user agent version and is used to help
-	// identify ourselves to other bitcoin peers.
-	userAgentVersion = fmt.Sprintf("%d.%d.%d", version.AppMajor, version.AppMinor, version.AppPatch)
 )
 
 // addrMe specifies the server address to send peers.
@@ -2371,7 +2367,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		HostToNetAddress:   sp.server.addrManager.HostToNetAddress,
 		Proxy:              cfg.Proxy,
 		UserAgentName:      userAgentName,
-		UserAgentVersion:   userAgentVersion,
+		UserAgentVersion:   version.String(),
 		UserAgentComments:  cfg.UserAgentComments,
 		ChainParams:        sp.server.settings.ChainCfgParams,
 		Services:           sp.server.services,
