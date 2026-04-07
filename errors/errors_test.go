@@ -118,11 +118,11 @@ func TestErrors_Standard_Is(t *testing.T) {
 // context.Canceled sentinel for errors.Is matching.
 func TestCanceledDetectionAcrossErrorShapes(t *testing.T) {
 	tests := []struct {
-		name                 string
-		err                  error
+		name                  string
+		err                   error
 		wantIsContextCanceled bool
-		wantIsContextError   bool
-		wantGrpcCanceledCode bool
+		wantIsContextError    bool
+		wantGrpcCanceledCode  bool
 	}{
 		{
 			name:                  "stdlib context canceled sentinel",
