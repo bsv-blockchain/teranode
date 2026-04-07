@@ -408,29 +408,39 @@ func TestClampBatchMaxBytes(t *testing.T) {
 		want       int32
 	}{
 		{
-			name:       "small value clamped to minimum 512",
+			name:       "small value uses default 1MiB",
 			flushBytes: 64,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "zero clamped to minimum 512",
+			name:       "zero uses default 1MiB",
 			flushBytes: 0,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "negative clamped to minimum 512",
+			name:       "negative uses default 1MiB",
 			flushBytes: -1,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "exactly minimum unchanged",
+			name:       "512 uses default 1MiB",
 			flushBytes: 512,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "valid value unchanged",
+			name:       "1024 uses default 1MiB",
+			flushBytes: 1024,
+			want:       defaultBatchMaxBytes,
+		},
+		{
+			name:       "exactly 1MiB uses default",
 			flushBytes: 1024 * 1024,
-			want:       1024 * 1024,
+			want:       defaultBatchMaxBytes,
+		},
+		{
+			name:       "above 1MiB respected as explicit override",
+			flushBytes: 2 * 1024 * 1024,
+			want:       2 * 1024 * 1024,
 		},
 		{
 			name:       "max int32 unchanged",
