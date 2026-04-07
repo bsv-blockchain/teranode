@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	"golang.org/x/sync/errgroup"
 )
 
 // batchLocked represents a batch operation to set the locked flag on a transaction
@@ -23,28 +22,42 @@ type batchLocked struct {
 }
 
 func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	g, ctx := errgroup.WithContext(ctx)
+	if len(txHashes) == 0 {
+		return nil
+	}
 
-	for _, txHash := range txHashes {
-		txHash := txHash
-
-		g.Go(func() error {
-			errCh := make(chan error, 1)
-
-			s.lockedBatcher.Put(&batchLocked{
-				ctx:      ctx,
-				txHash:   txHash,
-				setValue: setValue,
-				errCh:    errCh,
-			})
-
-			// Now we need to get totalRecords and do all the child records if necessary...
-
-			return <-errCh
+	// Submit all items to the batcher upfront, then drain results sequentially.
+	// batcher.Put() is non-blocking; all items land in the same batch and
+	// results arrive together — no goroutines needed.
+	errChs := make([]chan error, len(txHashes))
+	for i, txHash := range txHashes {
+		errChs[i] = acquireErrCh()
+		s.lockedBatcher.Put(&batchLocked{
+			ctx:      ctx,
+			txHash:   txHash,
+			setValue: setValue,
+			errCh:    errChs[i],
 		})
 	}
 
-	return g.Wait()
+	var firstErr error
+	for i, ch := range errChs {
+		select {
+		case err := <-ch:
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			releaseErrCh(ch)
+		case <-ctx.Done():
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			// don't release ch — batcher still holds a reference; buffer absorbs the write, GC collects.
+		}
+		errChs[i] = nil
+	}
+
+	return firstErr
 }
 
 // setLockedBatch sets the locked flag on the given transactions in a batch
@@ -114,27 +127,27 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				continue
 			}
 
-			// We need to do the child records...
-			g, _ := errgroup.WithContext(batch[idx].ctx)
-
+			// Submit all child records, then drain — no goroutines
+			childChs := make([]chan error, extraRecords)
 			for i := 1; i <= extraRecords; i++ {
-				i := i
-
-				g.Go(func() error {
-					errCh := make(chan error, 1)
-
-					s.lockedBatcher.Put(&batchLocked{
-						txHash:     batch[idx].txHash,
-						childIndex: uint32(i), // nolint:gosec
-						setValue:   batch[idx].setValue,
-						errCh:      errCh,
-					})
-
-					return <-errCh
+				childChs[i-1] = acquireErrCh()
+				s.lockedBatcher.Put(&batchLocked{
+					txHash:     batch[idx].txHash,
+					childIndex: uint32(i), // nolint:gosec
+					setValue:   batch[idx].setValue,
+					errCh:      childChs[i-1],
 				})
 			}
 
-			batch[idx].errCh <- g.Wait()
+			var childErr error
+			for _, ch := range childChs {
+				if err := <-ch; err != nil && childErr == nil {
+					childErr = err
+				}
+				releaseErrCh(ch)
+			}
+
+			batch[idx].errCh <- childErr
 		}
 	}
 }

@@ -57,7 +57,6 @@ package aerospike
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -71,7 +70,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 )
 
 // Spend operations in the Aerospike UTXO store handle spending UTXOs through
@@ -284,109 +282,102 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, err
 	}
 
-	var (
-		mu sync.Mutex
-		g  = errgroup.Group{}
-
-		spentSpends     = make([]*utxo.Spend, 0, len(spends))
-		txAlreadyExists bool
-	)
-
+	// Submit all spends to batcher upfront, then drain results sequentially.
+	// batcher.Put() is non-blocking; all items land in the same batch and
+	// results arrive together — no goroutines needed.
+	errChs := make([]chan error, len(spends))
 	for idx, spend := range spends {
 		if spend == nil {
 			return nil, errors.NewProcessingError("spend should not be nil")
 		}
 
-		idx := idx
-		spend := spend
+		if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+			spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
+			continue
+		}
 
-		g.Go(func() error {
-			// Fast-fail check: if circuit breaker is already open, reject immediately
-			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
-				return nil
-			}
-
-			errCh := make(chan error, 1)
-			s.spendBatcher.Put(&batchSpend{
-				spend:             spend,
-				blockHeight:       blockHeight,
-				errCh:             errCh,
-				ignoreConflicting: useIgnoreConflicting,
-				ignoreLocked:      useIgnoreLocked,
-			})
-
-			// Wait for batch response with timeout to prevent indefinite blocking
-			var batchErr error
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
-			}
-
-			timer := time.NewTimer(spendTimeout)
-			defer timer.Stop()
-
-			select {
-			case batchErr = <-errCh:
-				// Batch completed successfully or with error
-			case <-ctx.Done():
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-				return nil
-			case <-timer.C:
-				if prometheusUtxoMapErrors != nil {
-					prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				}
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
-				return nil
-			}
-
-			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
-				mu.Lock()
-				exists := txAlreadyExists
-				mu.Unlock()
-				// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
-				// the utxo store. We can check whether the tx already exists, which means it has been validated and
-				// blessed. In this case we can just return early.
-				if exists {
-					// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
-					batchErr = nil
-				} else if _, batchErr = s.Get(ctx, tx.TxIDChainHash()); batchErr == nil {
-					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
-
-					batchErr = nil
-
-					mu.Lock()
-					txAlreadyExists = true
-					mu.Unlock()
-				}
-			}
-
-			if batchErr != nil {
-				spends[idx].Err = batchErr
-
-				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
-
-				var errSpent *errors.UtxoSpentErrData
-				if errors.AsData(batchErr, &errSpent) {
-					spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
-				}
-
-				// s.logger.Errorf("error in aerospike spend (batched mode) %s: %v\n", spends[idx].TxID.String(), spends[idx].Err)
-
-				// don't stop processing the rest of the batch, we want to see all errors
-				return nil
-			}
-
-			mu.Lock()
-			spentSpends = append(spentSpends, spend)
-			mu.Unlock()
-
-			return nil
+		errChs[idx] = acquireErrCh()
+		s.spendBatcher.Put(&batchSpend{
+			spend:             spend,
+			blockHeight:       blockHeight,
+			errCh:             errChs[idx],
+			ignoreConflicting: useIgnoreConflicting,
+			ignoreLocked:      useIgnoreLocked,
 		})
 	}
 
-	if err = g.Wait(); err != nil {
-		return nil, errors.NewError("error in aerospike spend (batched mode)", err)
+	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+	if spendTimeout <= 0 {
+		spendTimeout = 30 * time.Second
+	}
+	timer := time.NewTimer(spendTimeout)
+	defer timer.Stop()
+
+	var (
+		spentSpends     = make([]*utxo.Spend, 0, len(spends))
+		txAlreadyExists bool
+	)
+
+	for idx, ch := range errChs {
+		if ch == nil {
+			continue // circuit breaker rejected or nil spend
+		}
+
+		// Reset timer so each spend gets its own full timeout window.
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(spendTimeout)
+
+		var batchErr error
+		select {
+		case batchErr = <-ch:
+			// Batch completed successfully or with error
+		case <-ctx.Done():
+			spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spends[idx].TxID.String(), spends[idx].Vout)
+			// don't release ch — batcher still holds a reference; buffer absorbs the write, GC collects.
+			continue
+		case <-timer.C:
+			if prometheusUtxoMapErrors != nil {
+				prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+			}
+			spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spends[idx].TxID.String(), spends[idx].Vout, spendTimeout)
+			// don't release ch — batcher still holds a reference; buffer absorbs the write, GC collects.
+			continue
+		}
+		releaseErrCh(ch)
+
+		if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
+			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
+			// the utxo store. We can check whether the tx already exists, which means it has been validated and
+			// blessed. In this case we can just return early.
+			if txAlreadyExists {
+				// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
+				batchErr = nil
+			} else if _, batchErr = s.Get(ctx, tx.TxIDChainHash()); batchErr == nil {
+				s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
+				txAlreadyExists = true
+			}
+		}
+
+		if batchErr != nil {
+			spends[idx].Err = batchErr
+
+			s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spends[idx].TxID.String(), spends[idx].Vout, spends[idx].Err)
+
+			var errSpent *errors.UtxoSpentErrData
+			if errors.AsData(batchErr, &errSpent) {
+				spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
+			}
+
+			// don't stop processing the rest of the batch, we want to see all errors
+			continue
+		}
+
+		spentSpends = append(spentSpends, spends[idx])
 	}
 
 	if len(spends) != len(spentSpends) { // there must have been failures
@@ -829,33 +820,25 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 
 // SetDAHForChildRecords sets DAH for all child records of a transaction
 func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah uint32) error {
-	errs := make([]error, childCount)
-
+	// Submit all child records upfront, then drain results
+	errChs := make([]chan error, childCount)
 	for i := uint32(0); i < uint32(childCount); i++ { // nolint: gosec
-		errCh := make(chan error)
-
-		go func() {
-			s.setDAHBatcher.Put(&batchDAH{
-				txID:           txID,
-				childIdx:       i + 1, // We want to set DAH for child record i+1
-				deleteAtHeight: dah,
-				errCh:          errCh,
-			})
-		}()
-
-		errs[i] = <-errCh
-		if errs[i] != nil {
-			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, errs[i])
-		}
+		errChs[i] = acquireErrCh()
+		s.setDAHBatcher.Put(&batchDAH{
+			txID:           txID,
+			childIdx:       i + 1, // We want to set DAH for child record i+1
+			deleteAtHeight: dah,
+			errCh:          errChs[i],
+		})
 	}
 
 	var errorsFound bool
-
-	for _, err := range errs {
-		if err != nil {
+	for i, ch := range errChs {
+		if err := <-ch; err != nil {
+			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, err)
 			errorsFound = true
-			break
 		}
+		releaseErrCh(ch)
 	}
 
 	if errorsFound {
@@ -909,14 +892,16 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 							s.logger.Warnf("[handleExtraRecords][%s] spentExtraRecs triggered DAH but not all children are spent — counter drift detected, clearing master DAH", txID.String())
 							// Lua already set DAH on the master record inline.
 							// Clear it since children aren't actually all-spent.
-							errCh := make(chan error, 1)
+							errCh := acquireErrCh()
 							s.setDAHBatcher.Put(&batchDAH{
 								txID:           txID,
 								childIdx:       0, // master record
 								deleteAtHeight: 0, // clear DAH
 								errCh:          errCh,
 							})
-							if dahErr := <-errCh; dahErr != nil {
+							dahErr := <-errCh
+							releaseErrCh(errCh)
+							if dahErr != nil {
 								s.logger.Errorf("[handleExtraRecords][%s] failed to clear drifted master DAH: %v", txID.String(), dahErr)
 							}
 							return nil

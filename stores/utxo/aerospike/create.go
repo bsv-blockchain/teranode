@@ -176,8 +176,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
-	errCh := make(chan error)
-	defer close(errCh)
+	errCh := acquireErrCh()
+	defer releaseErrCh(errCh)
 
 	var txHash *chainhash.Hash
 	if createOptions.TxID != nil {

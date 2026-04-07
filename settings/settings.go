@@ -42,6 +42,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Context:             settingsContext,
 		ServiceName:         getString("SERVICE_NAME", "teranode", alternativeContext...),
 		TracingEnabled:      getBool("tracing_enabled", false, alternativeContext...),
+		StatsEnabled:        getBool("stats_enabled", true, alternativeContext...),
 		TracingSampleRate:   getFloat64("tracing_SampleRate", 0.01, alternativeContext...),
 		TracingCollectorURL: getURL("tracing_collector_url", "http://localhost:4318", alternativeContext...),
 		ClientName:          getString("clientName", "defaultClientName", alternativeContext...),

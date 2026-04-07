@@ -95,6 +95,25 @@ func IsTracingEnabled() bool {
 // When false, all tracing operations become no-ops with minimal overhead.
 func SetTracingEnabled(enabled bool) {
 	tracingEnabled.Store(enabled)
+	// Invalidate the tracer cache so stale OTel tracers from a previous
+	// TracerProvider don't persist across enable/disable cycles.
+	tracerCache.Range(func(key, _ any) bool {
+		tracerCache.Delete(key)
+		return true
+	})
+}
+
+// SetStatsEnabled controls whether gocore.Stat hierarchy is built per span.
+// When false, Start() skips NewStatFromContext, eliminating Stat allocation
+// and context.WithValue overhead. Must be called before starting any tracing
+// (e.g., during service initialization). Not safe to change at runtime.
+func SetStatsEnabled(enabled bool) {
+	statsEnabled.Store(enabled)
+}
+
+// StatsEnabled returns whether gocore.Stat collection is enabled.
+func StatsEnabled() bool {
+	return statsEnabled.Load()
 }
 
 // InitTracer initializes the global tracer. Safe to call multiple times.
@@ -313,7 +332,26 @@ var (
 		name:   "noop",
 		tracer: noopTracerProvider.Tracer("noop"),
 	}
+
+	// tracerCache caches UTracer instances by name to avoid repeated
+	// otel.Tracer() mutex + map lookup and UTracer heap allocation.
+	// There are only ~28 distinct tracer names across the codebase,
+	// making sync.Map ideal (small, read-heavy workload).
+	tracerCache sync.Map
+
+	// statsEnabled controls whether gocore.Stat hierarchy is built per span.
+	// When false, NewStatFromContext is skipped, eliminating Stat allocation,
+	// context.WithValue, and AddTime overhead. Default true for backward compat.
+	statsEnabled atomic.Bool
+
+	// noopEndFn is a singleton no-op end function returned when all span
+	// features (tracing, stats, metrics, logging, timeout) are inactive.
+	noopEndFn = func(...error) {}
 )
+
+func init() {
+	statsEnabled.Store(true)
+}
 
 // Tracer creates a new unified tracer with the given name.
 // The name typically represents the service or component being traced.
@@ -323,15 +361,28 @@ var (
 //   - otelOpts: OpenTelemetry tracer options passed directly to otel.Tracer
 func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 	// Fast path: return singleton no-op tracer when tracing is disabled
-	// This eliminates the overhead of:
-	// - Global otel.Tracer lookup (~expensive)
-	// - UTracer allocation (~700ms/3.5% CPU in profiles)
-	// - Option processing
 	if !IsTracingEnabled() {
 		return noopTracer
 	}
 
-	// Filter out nil options to prevent panic in OpenTelemetry
+	// Fast path: return cached tracer when no custom options are passed.
+	// There are ~28 distinct tracer names across the codebase; caching
+	// eliminates the otel.Tracer() mutex + map lookup and UTracer heap
+	// allocation on every call.
+	if len(otelOpts) == 0 {
+		if cached, ok := tracerCache.Load(name); ok {
+			return cached.(*UTracer)
+		}
+
+		tracer := otel.Tracer(name)
+		ut := &UTracer{name: name, tracer: tracer}
+		tracerCache.Store(name, ut)
+
+		return ut
+	}
+
+	// Slow path: custom options — bypass cache.
+	// Filter out nil options to prevent panic in OpenTelemetry.
 	var validOpts []trace.TracerOption
 
 	for _, opt := range otelOpts {
@@ -340,7 +391,6 @@ func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 		}
 	}
 
-	// Create OpenTelemetry tracer with valid options
 	tracer := otel.Tracer(name, validOpts...)
 
 	return &UTracer{
@@ -379,16 +429,22 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		ctx, cancelFunc = context.WithTimeout(ctx, options.Timeout)
 	}
 
-	// Create gocore.Stat (only if enabled)
+	// Create gocore.Stat only when stats collection is enabled.
+	// When disabled, this skips NewStat allocation, context.WithValue,
+	// and the subsequent stat.AddTime in endFn.
 	var (
 		start time.Time
 		stat  *gocore.Stat
 	)
 
-	if options.ParentStat != nil {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+	if statsEnabled.Load() {
+		if options.ParentStat != nil {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
+		} else {
+			start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		}
 	} else {
-		start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
+		start = gocore.CurrentTime()
 	}
 
 	// add the start time to the context
@@ -460,6 +516,17 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		}
 	}
 
+	// Fast path: return singleton no-op endFn when all span features are inactive.
+	// This eliminates the closure heap allocation (captures 9 variables) on the
+	// common path where tracing is disabled/short-circuited and stats are off.
+	needsSpanEnd := tracingEnabled && !shortCircuited
+	needsMetrics := options.Histogram != nil || options.Counter != nil
+	needsLogging := options.Logger != nil && len(options.LogMessages) > 0
+
+	if !needsSpanEnd && stat == nil && !needsMetrics && !needsLogging && cancelFunc == nil {
+		return ctx, span, noopEndFn
+	}
+
 	endFn := func(optionalError ...error) {
 		var err error
 		if len(optionalError) > 0 {
@@ -468,7 +535,7 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 		// Only interact with the OTel span if we own it (not short-circuited).
 		// When short-circuited, span points to the parent — we must not End() it.
-		if tracingEnabled && !shortCircuited {
+		if needsSpanEnd {
 			if err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -481,10 +548,14 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 			stat.AddTime(start)
 		}
 
-		u.recordMetrics(options, start)
-		u.logEndMessage(ctx, options, start, err)
+		if needsMetrics {
+			u.recordMetrics(options, start)
+		}
 
-		// Ensure the cancelCtx function is called when the span ends
+		if needsLogging {
+			u.logEndMessage(ctx, options, start, err)
+		}
+
 		if cancelFunc != nil {
 			cancelFunc()
 		}

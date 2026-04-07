@@ -292,7 +292,7 @@ func TestTracer_Disabled(t *testing.T) {
 	assert.Equal(t, "noop", tracer1.name, "should be no-op tracer")
 }
 
-// TestTracer_Enabled verifies that Tracer() returns different instances when enabled
+// TestTracer_Enabled verifies that Tracer() returns cached instances when enabled
 func TestTracer_Enabled(t *testing.T) {
 	// Save and restore state
 	originalState := IsTracingEnabled()
@@ -311,14 +311,43 @@ func TestTracer_Enabled(t *testing.T) {
 	// Get multiple tracers
 	tracer1 := Tracer("service1")
 	tracer2 := Tracer("service2")
+	tracer3 := Tracer("service1") // same name as tracer1
 
-	// Should return different instances (not singleton)
-	assert.NotSame(t, tracer1, tracer2, "should return different tracer instances when enabled")
+	// Different names should return different instances
+	assert.NotSame(t, tracer1, tracer2, "should return different tracer instances for different names")
 	assert.NotSame(t, tracer1, noopTracer, "should not return no-op tracer when enabled")
+
+	// Same name should return the same cached instance
+	assert.Same(t, tracer1, tracer3, "should return cached tracer for same name")
 
 	// Names should match
 	assert.Equal(t, "service1", tracer1.name)
 	assert.Equal(t, "service2", tracer2.name)
+}
+
+// TestTracer_CacheInvalidation verifies that SetTracingEnabled clears the tracer cache
+func TestTracer_CacheInvalidation(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	err := initTestTracer()
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	SetTracingEnabled(true)
+
+	// Get a cached tracer
+	tracer1 := Tracer("cache-test")
+
+	// Toggle tracing off and back on — cache should be invalidated
+	SetTracingEnabled(false)
+	SetTracingEnabled(true)
+
+	// Get the same name again — should be a new instance (cache was cleared)
+	tracer2 := Tracer("cache-test")
+	assert.NotSame(t, tracer1, tracer2, "cache should be invalidated after SetTracingEnabled toggle")
 }
 
 // TestStart_Disabled verifies that Start() returns no-op span when tracing is disabled
@@ -772,4 +801,82 @@ func TestWithSampleRate_ChildSpanInheritsOverride(t *testing.T) {
 	_, childSpan, endChild := tracer.Start(ctx, "child")
 	defer endChild()
 	assert.True(t, childSpan.IsRecording(), "child should be recording due to inherited context override")
+}
+
+// TestStatsEnabled_Default verifies stats are enabled by default
+func TestStatsEnabled_Default(t *testing.T) {
+	require.True(t, StatsEnabled(), "stats should be enabled by default")
+}
+
+// TestStatsEnabled_Toggle verifies SetStatsEnabled controls stat collection
+func TestStatsEnabled_Toggle(t *testing.T) {
+	// Save and restore
+	original := StatsEnabled()
+	defer SetStatsEnabled(original)
+
+	SetStatsEnabled(false)
+	require.False(t, StatsEnabled())
+
+	SetStatsEnabled(true)
+	require.True(t, StatsEnabled())
+}
+
+// TestStart_StatsDisabled verifies no stat allocation when stats are disabled
+func TestStart_StatsDisabled(t *testing.T) {
+	originalTracing := IsTracingEnabled()
+	originalStats := StatsEnabled()
+	defer SetTracingEnabled(originalTracing)
+	defer SetStatsEnabled(originalStats)
+
+	SetTracingEnabled(false)
+	SetStatsEnabled(false)
+
+	tracer := Tracer("test-service")
+	ctx := context.Background()
+
+	// Start a span with no metrics/logging — should get noopEndFn
+	_, span, endFn := tracer.Start(ctx, "test-operation")
+
+	require.NotNil(t, span)
+	require.False(t, span.IsRecording())
+
+	// endFn should not panic
+	endFn()
+	endFn(errors.NewProcessingError("test error"))
+
+	// Context should NOT contain a stat key (stats were disabled)
+	val := ctx.Value(statsKey{})
+	assert.Nil(t, val, "context should not contain stat when stats disabled")
+}
+
+// TestStart_StatsDisabledMetricsStillWork verifies metrics work with stats disabled
+func TestStart_StatsDisabledMetricsStillWork(t *testing.T) {
+	originalTracing := IsTracingEnabled()
+	originalStats := StatsEnabled()
+	defer SetTracingEnabled(originalTracing)
+	defer SetStatsEnabled(originalStats)
+
+	SetTracingEnabled(false)
+	SetStatsEnabled(false)
+
+	histogram := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "test_stats_disabled_histogram",
+		Help: "Test histogram when stats disabled",
+	})
+
+	tracer := Tracer("test-service")
+
+	_, _, endFn := tracer.Start(context.Background(), "test-operation",
+		WithHistogram(histogram),
+	)
+
+	time.Sleep(5 * time.Millisecond)
+	endFn()
+
+	// Histogram should still be observed
+	metric := &dto.Metric{}
+	err := histogram.Write(metric)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), metric.Histogram.GetSampleCount(),
+		"histogram should be observed even when stats disabled")
 }

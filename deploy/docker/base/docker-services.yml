@@ -169,7 +169,7 @@ services:
   # Aerospike TN, single node in evaluation mode
   aerospike-tn:
     container_name: aerospike
-    image: ghcr.io/bsv-blockchain/aerospike-server:8.0.0-3
+    image: 434394763103.dkr.ecr.eu-central-1.amazonaws.com/aerospike-server:8.1.3-3
     networks:
       - teranode-network
     ports:

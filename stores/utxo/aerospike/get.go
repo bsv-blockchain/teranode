@@ -344,7 +344,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Da
 // The method creates a batchGetItem with the request parameters and sends it to the
 // getBatcher for processing. It then waits on a done channel for the result.
 func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
-	done := make(chan batchGetItemData, 1)
+	done := acquireBatchGetCh()
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
 	if s.getBatcher != nil {
@@ -358,6 +358,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 
 	select {
 	case data := <-done:
+		releaseBatchGetCh(done)
 		if data.Err != nil {
 			if e, ok := data.Err.(*errors.Error); ok {
 				prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", e.Code().Enum().String()).Inc()
@@ -369,6 +370,8 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		}
 		return data.Data, data.Err
 	case <-ctx.Done():
+		// don't release done — batcher still holds a reference and will write
+		// later; the buffer (cap 1) absorbs the write and GC collects the channel.
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "ContextCanceled").Inc()
 		return nil, ctx.Err()
 	}
@@ -1157,7 +1160,7 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 			continue
 		}
 
-		errChan := make(chan error, 1)
+		errChan := acquireErrCh()
 		errChans = append(errChans, errChan)
 
 		// Wrap the outpoint in OutpointRequest and put it in the batcher
@@ -1167,9 +1170,13 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 		})
 	}
 
-	// Wait for all error channels to receive a result
+	// Wait for all error channels to receive a result.
+	// On early error return, remaining channels escape to GC; batcher writes
+	// to their buffers (cap 1) without blocking, then they are collected.
 	for _, errChan := range errChans {
-		if err := <-errChan; err != nil {
+		err := <-errChan
+		releaseErrCh(errChan)
+		if err != nil {
 			return err
 		}
 	}
@@ -1220,7 +1227,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 		if err != nil {
 			for _, item := range batch {
-				sendErrorAndClose(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta", err))
+				sendError(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta", err))
 			}
 
 			return
@@ -1238,7 +1245,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records", err))
+			sendError(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records", err))
 		}
 
 		return
@@ -1290,9 +1297,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		previousTx := txs[*batchItem.outpoint.PreviousTxIDChainHash()]
 		if previousTx == nil {
 			if err, ok := txErrors[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
-				sendErrorAndClose(batchItem.errCh, err)
+				sendError(batchItem.errCh, err)
 			} else {
-				sendErrorAndClose(batchItem.errCh, errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
+				sendError(batchItem.errCh, errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
 			}
 
 			continue
@@ -1301,7 +1308,6 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].Satoshis
 		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].LockingScript
 		batchItem.errCh <- nil
-		close(batchItem.errCh)
 	}
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
@@ -1518,20 +1524,12 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 	}
 }
 
-// sendErrorAndClose sends an error to a channel and closes it safely.
-// This utility function handles the common pattern of sending an error result
-// and closing the channel, with protection against blocking on a full channel.
-//
-// The function uses a non-blocking select to avoid deadlocks when the receiving
+// sendError sends an error to a buffered channel without blocking.
+// Uses a non-blocking select to avoid deadlocks when the receiving
 // goroutine has already stopped listening on the channel.
-//
-// Parameters:
-//   - errCh: Error channel to send the error to and close
-//   - err: Error to send (may be nil)
-func sendErrorAndClose(errCh chan error, err error) {
+func sendError(errCh chan error, err error) {
 	select {
 	case errCh <- err:
 	default:
 	}
-	close(errCh)
 }

@@ -105,6 +105,9 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		tracing.SetTracingEnabled(false)
 	}
 
+	// Configure gocore.Stat collection
+	tracing.SetStatsEnabled(appSettings.StatsEnabled)
+
 	// Create a slice of service starters
 	starters := []serviceStarter{
 		{startBlockchain, func() error { return d.startBlockchainService(ctx, appSettings, args, createLogger) }},
