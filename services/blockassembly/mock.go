@@ -269,6 +269,14 @@ func (m *mockBlockAssemblyAPIClient) ResetBlockAssemblyValidateInputs(ctx contex
 	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
 }
 
+func (m *mockBlockAssemblyAPIClient) CheckBlockAssemblyValidateInputs(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
+}
+
 func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.StateMessage, error) {
 	args := m.Called(ctx, in, opts)
 	if args.Get(0) == nil {

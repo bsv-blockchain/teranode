@@ -62,6 +62,10 @@ service BlockAssemblyAPI {
   // Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
   rpc ResetBlockAssemblyValidateInputs (EmptyMessage) returns (EmptyMessage) {}
 
+  // CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+  // Returns an error if any unmined transactions have inputs spent by different transactions.
+  rpc CheckBlockAssemblyValidateInputs (EmptyMessage) returns (EmptyMessage) {}
+
   // GetBlockAssemblyState retrieves the current state of block assembly.
   // Provides detailed information about the assembly process status.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
