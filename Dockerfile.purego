@@ -23,15 +23,18 @@ ENV CGO_ENABLED=0
 
 RUN echo "Building Git SHA: ${GIT_SHA} (purego, CGO_ENABLED=0)"
 
-# Build with purego and prod tags
+# 'bdk_purego' activates BDK's dynamic (.so) loader path (//go:build !cgo || bdk_purego).
+# Unlike the old 'purego' tag, it does not conflict with Go stdlib's SIMD guards
+# (crypto/sha256 etc. use //go:build !purego), so SHA-NI and other hardware
+# acceleration remain active.
 RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
   GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly \
-    -tags prod,purego,aerospike,testtxmetacache \
+    -tags prod,bdk_purego,aerospike,testtxmetacache \
     --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" \
     -o teranode.run . ; \
   else \
   GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly \
-    -tags prod,purego,aerospike \
+    -tags prod,bdk_purego,aerospike \
     --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" \
     -o teranode.run . ; \
   fi
