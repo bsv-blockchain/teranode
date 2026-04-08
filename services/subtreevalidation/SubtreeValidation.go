@@ -1092,12 +1092,14 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 								u.logger.Warnf("[validateSubtree][%s] Failed to add transaction %s to orphanage - orphanage is full", subtreeHash.String(), tx.TxIDChainHash().String())
 							}
 						}
-					} else if (errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy)) ||
-						errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrUtxoError) {
-						// Report invalid subtree - contains truly invalid transaction or double-spend
+					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
+						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
 
-						return err
+						// return the error, so that the caller can handle it
+						if errors.Is(err, errors.ErrTxInvalid) {
+							return err
+						}
 					} else {
 						// If the error is not a policy error, we log it as a processing error
 						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)

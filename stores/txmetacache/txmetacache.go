@@ -381,8 +381,8 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *m
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
-	// add to cache, but only if the blockIDs have not been set
-	if len(data.BlockIDs) == 0 {
+	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
+	if len(data.BlockIDs) == 0 && !data.Conflicting {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
 	}
@@ -433,6 +433,11 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 
 	for _, data := range hashes {
 		if data == nil || data.Data == nil {
+			continue
+		}
+
+		if len(data.Data.BlockIDs) > 0 || data.Data.Conflicting {
+			// Skip transactions that have already been mined or are marked as conflicting
 			continue
 		}
 
@@ -915,7 +920,17 @@ func (t *TxMetaCache) GetConflictingChildren(ctx context.Context, txHash chainha
 // - Array of transaction hashes that were successfully marked
 // - Error if the operation fails
 func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return t.utxoStore.SetConflicting(ctx, txHashes, setValue)
+	_, _, err := t.utxoStore.SetConflicting(ctx, txHashes, setValue)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// remove from cache to ensure consistency, as conflicting transactions are not cached
+	for _, txHash := range txHashes {
+		_ = t.Delete(ctx, &txHash)
+	}
+
+	return nil, txHashes, nil
 }
 
 // SetLocked marks transactions as locked and not spendable.
