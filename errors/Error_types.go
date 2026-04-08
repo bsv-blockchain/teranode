@@ -51,7 +51,6 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
-	ErrTxConsensus                = New(ERR_TX_CONSENSUS, "fail consensus check")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
@@ -221,11 +220,6 @@ func NewTxCoinbaseImmatureError(message string, params ...interface{}) *Error {
 // NewTxError creates a new error with the transaction error code.
 func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)
-}
-
-// NewTxConsensusError creates a new error with the transaction consensus error code.
-func NewTxConsensusError(message string, params ...interface{}) *Error {
-	return New(ERR_TX_CONSENSUS, message, params...)
 }
 
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
