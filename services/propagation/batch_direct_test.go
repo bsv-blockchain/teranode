@@ -16,6 +16,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -162,4 +164,40 @@ func TestProcessTransactionBatchDirect_ErrorsMatchPerTxPath(t *testing.T) {
 	assert.NotNil(t, respBatched.Errors[1], "coinbase")
 	assert.NotNil(t, respBatched.Errors[2], "bad script")
 	assert.Nil(t, respBatched.Errors[3], "valid tx")
+}
+
+func histogramSampleCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+
+	m := &dto.Metric{}
+	require.NoError(t, h.Write(m))
+
+	return m.GetHistogram().GetSampleCount()
+}
+
+// TestProcessTransactionBatchDirect_Metrics checks that the batched path records
+// the per-transaction metrics processTransaction records: size and processing time
+// for each accepted transaction, nothing for a rejected one.
+func TestProcessTransactionBatchDirect_Metrics(t *testing.T) {
+	ps, txs := setupBatchDirectTestServer(t, true, 3)
+
+	sizeBefore := histogramSampleCount(t, prometheusTransactionSize)
+	processedBefore := histogramSampleCount(t, prometheusProcessedTransactions)
+
+	req := &propagation_api.ProcessTransactionBatchRequest{
+		Items: []*propagation_api.BatchTransactionItem{
+			{Tx: txs[1].ExtendedBytes()},
+			{Tx: []byte{0xba, 0xad, 0xf0, 0x0d}},
+			{Tx: txs[2].ExtendedBytes()},
+		},
+	}
+
+	resp, err := ps.ProcessTransactionBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Nil(t, resp.Errors[0])
+	require.NotNil(t, resp.Errors[1])
+	require.Nil(t, resp.Errors[2])
+
+	assert.Equal(t, sizeBefore+2, histogramSampleCount(t, prometheusTransactionSize))
+	assert.Equal(t, processedBefore+2, histogramSampleCount(t, prometheusProcessedTransactions))
 }

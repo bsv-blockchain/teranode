@@ -1320,6 +1320,7 @@ func (ps *PropagationServer) directBatchValidator() (validator.BatchValidator, b
 func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest,
 	response *propagation_api.ProcessTransactionBatchResponse, batchValidator validator.BatchValidator) (*propagation_api.ProcessTransactionBatchResponse, error) {
 	parsed := make([]*bt.Tx, len(req.Items))
+	starts := make([]time.Time, len(req.Items))
 
 	// Phase A: parse, check and store every item.
 	g, gCtx := errgroup.WithContext(ctx)
@@ -1343,6 +1344,8 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 			if len(item.TraceContext) > 0 {
 				txCtx = otel.GetTextMapPropagator().Extract(gCtx, propagation.MapCarrier(item.TraceContext))
 			}
+
+			starts[idx] = time.Now()
 
 			btTx, err := ps.parseTransaction(txCtx, item.Tx)
 			if err == nil {
@@ -1395,7 +1398,14 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 			ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
 
 			response.Errors[idx] = errors.WrapPublic(err)
+
+			continue
 		}
+
+		// Same observations processTransaction makes for an accepted transaction:
+		// its raw size, and the time from the start of its processing.
+		prometheusTransactionSize.Observe(float64(len(req.Items[idx].Tx)))
+		prometheusProcessedTransactions.Observe(float64(time.Since(starts[idx]).Microseconds()) / 1_000_000)
 	}
 
 	return response, nil
