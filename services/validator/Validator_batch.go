@@ -7,6 +7,7 @@ package validator
 
 import (
 	"context"
+	"runtime"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -43,15 +44,182 @@ type batchTx struct {
 	err         error
 }
 
+// batchPhase identifies the per-transaction phase a batchJob runs.
+type batchPhase uint8
+
+const (
+	batchPhasePreDecision batchPhase = iota + 1
+	batchPhasePostDecision
+)
+
+// batchJob is one per-transaction unit of work for the batch worker pool. Jobs are
+// recycled through batchJobPool so a warm pool allocates nothing per transaction.
+type batchJob struct {
+	phase             batchPhase
+	ctx               context.Context
+	ctxLogger         ulogger.Logger
+	st                *batchTx
+	blockHeight       uint32
+	validationOptions *Options
+	results           []*meta.Data
+	errs              []error
+	wg                *sync.WaitGroup
+}
+
+var batchJobPool = sync.Pool{New: func() any { return &batchJob{} }}
+
+// batchWorkerPool is the set of persistent goroutines that run Phase 1 and Phase 3
+// of ValidateBatch, replacing one goroutine per transaction per phase.
+//
+// mu orders submissions against stop: a job is only ever queued while the pool is
+// not stopped, and workers drain whatever is queued before exiting, so a job can
+// never be stranded in the channel buffer by a concurrent Close.
+type batchWorkerPool struct {
+	mu      sync.RWMutex
+	stopped bool
+	jobs    chan *batchJob
+	stop    chan struct{}
+}
+
+// batchWorkers returns the validator's batch worker pool, starting it on first use
+// with validator_batchPhaseWorkers workers (0 = 2x GOMAXPROCS). It returns nil when
+// the validator was closed before any batch; callers then run jobs inline.
+func (v *Validator) batchWorkers() *batchWorkerPool {
+	v.batchPoolOnce.Do(func() {
+		nWorkers := v.settings.Validator.BatchPhaseWorkers
+		if nWorkers <= 0 {
+			nWorkers = 2 * runtime.GOMAXPROCS(0)
+		}
+
+		pool := &batchWorkerPool{
+			// The buffer lets a batch queue its jobs ahead of the workers.
+			jobs: make(chan *batchJob, nWorkers*4),
+			stop: make(chan struct{}),
+		}
+
+		for range nWorkers {
+			go v.batchWorker(pool)
+		}
+
+		v.batchPool = pool
+	})
+
+	return v.batchPool
+}
+
+// batchWorker runs jobs until the pool is stopped, then drains what is queued.
+func (v *Validator) batchWorker(pool *batchWorkerPool) {
+	for {
+		select {
+		case job := <-pool.jobs:
+			v.runBatchJob(job)
+		case <-pool.stop:
+			for {
+				select {
+				case job := <-pool.jobs:
+					v.runBatchJob(job)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// stopBatchWorkers stops the batch worker pool, if it was started, and prevents it
+// from being started afterwards. Called from Close.
+func (v *Validator) stopBatchWorkers() {
+	// Claim the once so a later batchWorkers call does not start a pool.
+	v.batchPoolOnce.Do(func() {})
+
+	pool := v.batchPool
+	if pool == nil {
+		return
+	}
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	if !pool.stopped {
+		pool.stopped = true
+		close(pool.stop)
+	}
+}
+
+// submitBatchJob hands job to the worker pool, or runs it on the calling goroutine
+// when there is no pool or the pool has been stopped. A cancelled ctx makes the job
+// fail with ctx.Err() instead of waiting for a worker.
+func (v *Validator) submitBatchJob(pool *batchWorkerPool, job *batchJob) {
+	if pool == nil {
+		v.runBatchJob(job)
+		return
+	}
+
+	pool.mu.RLock()
+
+	if pool.stopped {
+		pool.mu.RUnlock()
+		v.runBatchJob(job)
+
+		return
+	}
+
+	// The workers are running for as long as the read lock is held, so this send
+	// always completes or the context ends.
+	select {
+	case pool.jobs <- job:
+		pool.mu.RUnlock()
+	case <-job.ctx.Done():
+		pool.mu.RUnlock()
+		v.failBatchJob(job, job.ctx.Err())
+	}
+}
+
+// runBatchJob runs one job, signals its WaitGroup and recycles it.
+func (v *Validator) runBatchJob(job *batchJob) {
+	switch job.phase {
+	case batchPhasePreDecision:
+		v.validateBatchPhase1(job.ctx, job.st, job.blockHeight, job.validationOptions)
+	case batchPhasePostDecision:
+		st := job.st
+		job.results[st.idx], job.errs[st.idx] = v.validateBatchPhase3(job.ctx, job.ctxLogger, st, job.blockHeight, job.validationOptions)
+	}
+
+	v.releaseBatchJob(job)
+}
+
+// failBatchJob completes a job that never ran with err.
+func (v *Validator) failBatchJob(job *batchJob, err error) {
+	switch job.phase {
+	case batchPhasePreDecision:
+		job.st.err = err
+	case batchPhasePostDecision:
+		job.errs[job.st.idx] = err
+
+		if job.st.end != nil {
+			job.st.end(err)
+		}
+	}
+
+	v.releaseBatchJob(job)
+}
+
+func (v *Validator) releaseBatchJob(job *batchJob) {
+	wg := job.wg
+	*job = batchJob{}
+	batchJobPool.Put(job)
+	wg.Done()
+}
+
 // ValidateBatch validates a batch of transactions with the same options using a
 // three-phase pipeline:
 //
-//	Phase 1 (parallel, per tx): validateBeforeDecision and the extension /
+//	Phase 1 (worker pool, per tx): validateBeforeDecision and the extension /
 //	        unconfirmed-height preparation of validateTransaction.
 //	Phase 2 (batched):          txValidator.ValidateTransactionBatch - the
 //	        Teranode-owned checks per tx, then BDK in sub-batches (one CGO call
 //	        per validator_scriptBatchThreads chunk instead of one per tx).
-//	Phase 3 (parallel, per tx): BIP68 and validateAfterDecision (spend-and-create,
+//	Phase 3 (worker pool, per tx): BIP68 and validateAfterDecision (spend-and-create,
 //	        block-assembly hand-off with shed retry / unwind / deadline handling,
 //	        txmeta publish, 2PC unlock).
 //
@@ -178,22 +346,27 @@ func batchWaves(txs []*bt.Tx, errs []error) [][]int {
 func (v *Validator) validateBatchWave(ctx context.Context, ctxLogger ulogger.Logger, txs []*bt.Tx, idxs []int, blockHeight uint32, validationOptions *Options,
 	results []*meta.Data, errs []error) {
 	states := make([]batchTx, len(idxs))
+	pool := v.batchWorkers()
 
-	// Phase 1: pre-decision checks, per transaction in parallel.
+	// Phase 1: pre-decision checks, per transaction on the worker pool.
 	var wg sync.WaitGroup
+
+	wg.Add(len(idxs))
 
 	for k, idx := range idxs {
 		st := &states[k]
 		st.idx = idx
 		st.tx = txs[idx]
 
-		wg.Add(1)
+		job := batchJobPool.Get().(*batchJob)
+		job.phase = batchPhasePreDecision
+		job.ctx = ctx
+		job.st = st
+		job.blockHeight = blockHeight
+		job.validationOptions = validationOptions
+		job.wg = &wg
 
-		go func() {
-			defer wg.Done()
-
-			v.validateBatchPhase1(ctx, st, blockHeight, validationOptions)
-		}()
+		v.submitBatchJob(pool, job)
 	}
 
 	wg.Wait()
@@ -201,7 +374,8 @@ func (v *Validator) validateBatchWave(ctx context.Context, ctxLogger ulogger.Log
 	// Phase 2: Teranode-owned checks and BDK, batched.
 	v.validateBatchPhase2(states, validationOptions)
 
-	// Phase 3: BIP68 and the post-decision store work, per transaction in parallel.
+	// Phase 3: BIP68 and the post-decision store work, per transaction on the
+	// worker pool.
 	for k := range states {
 		st := &states[k]
 		if st.err != nil {
@@ -211,11 +385,18 @@ func (v *Validator) validateBatchWave(ctx context.Context, ctxLogger ulogger.Log
 
 		wg.Add(1)
 
-		go func() {
-			defer wg.Done()
+		job := batchJobPool.Get().(*batchJob)
+		job.phase = batchPhasePostDecision
+		job.ctx = ctx
+		job.ctxLogger = ctxLogger
+		job.st = st
+		job.blockHeight = blockHeight
+		job.validationOptions = validationOptions
+		job.results = results
+		job.errs = errs
+		job.wg = &wg
 
-			results[st.idx], errs[st.idx] = v.validateBatchPhase3(ctx, ctxLogger, st, blockHeight, validationOptions)
-		}()
+		v.submitBatchJob(pool, job)
 	}
 
 	wg.Wait()

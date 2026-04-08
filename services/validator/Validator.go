@@ -301,6 +301,11 @@ type Validator struct {
 	// goroutines start, and per-tx readers only contend with each other on the read lock.
 	mtpMu    sync.RWMutex
 	mtpStore []uint32
+
+	// batchPool is the persistent worker pool of ValidateBatch, started on first use
+	// by batchWorkers and stopped by Close. batchPoolOnce guards both.
+	batchPoolOnce sync.Once
+	batchPool     *batchWorkerPool
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -452,6 +457,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 // the same bound: a wedged broker flush can't block shutdown, and the outstanding
 // Stop() finishes the flush later if it can.
 func (v *Validator) Close() error {
+	v.stopBatchWorkers()
+
 	if v.txmetaKafkaBatcher != nil {
 		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, v.txmetaKafkaBatcher.Close)
 	}

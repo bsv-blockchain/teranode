@@ -166,3 +166,34 @@ func TestValidateBatch_CancelledContext(t *testing.T) {
 	_, errs := v.ValidateBatch(ctx, []*bt.Tx{txs[1]}, 0, NewDefaultOptions())
 	require.ErrorIs(t, errs[0], context.Canceled)
 }
+
+// TestValidateBatch_WorkerPool runs a batch larger than the worker pool, then
+// closes the validator and checks that a later batch still completes (inline).
+func TestValidateBatch_WorkerPool(t *testing.T) {
+	v, txs := setupBatchTestValidatorWithChain(t, 6)
+	v.settings.Validator.BatchPhaseWorkers = 1
+
+	_, errs := v.ValidateBatch(context.Background(), []*bt.Tx{txs[1], txs[2], txs[3]}, 0, NewDefaultOptions())
+	for i, err := range errs {
+		require.NoError(t, err, "tx %d", i)
+	}
+
+	require.NotNil(t, v.batchPool)
+
+	require.NoError(t, v.Close())
+
+	_, errs = v.ValidateBatch(context.Background(), []*bt.Tx{txs[4], txs[5]}, 0, NewDefaultOptions())
+	for i, err := range errs {
+		require.NoError(t, err, "tx %d after Close", i)
+	}
+}
+
+func TestValidateBatch_CloseBeforeFirstBatch(t *testing.T) {
+	v, txs := setupBatchTestValidatorWithChain(t, 2)
+
+	require.NoError(t, v.Close())
+	require.Nil(t, v.batchWorkers(), "a closed validator must not start a pool")
+
+	_, errs := v.ValidateBatch(context.Background(), []*bt.Tx{txs[1]}, 0, NewDefaultOptions())
+	require.NoError(t, errs[0])
+}
