@@ -1026,6 +1026,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 // batched script verification. It runs parse + sanity + blob storage in parallel,
 // then calls validator.ValidateBatch for all txs that passed pre-processing.
 func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest, response *propagation_api.ProcessTransactionBatchResponse) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	batchStart := time.Now()
 	n := len(req.Items)
 	parsedTxs := make([]*bt.Tx, n)
 
@@ -1080,6 +1081,7 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 
 			// Sanity checks
 			if err := ps.txSanityChecks(btTx); err != nil {
+				prometheusInvalidTransactions.Inc()
 				response.Errors[idx] = errors.WrapPublic(err)
 				return nil
 			}
@@ -1087,6 +1089,7 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 			// Blob storage
 			serialized := btTx.SerializeBytes()
 			if err := ps.storeTransaction(gCtx, btTx, serialized); err != nil {
+				prometheusInvalidTransactions.Inc()
 				response.Errors[idx] = errors.WrapPublic(
 					errors.NewStorageError("[ProcessTransactionBatch][%s] failed to save transaction", btTx.TxIDChainHash(), err))
 				return nil
@@ -1113,11 +1116,15 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 	// Phase B: Batched validation (pre-script → batch CGO → post-script)
 	if len(batchTxs) > 0 {
 		_, batchErrs := ps.validator.ValidateBatch(ctx, batchTxs, 0, nil)
+		elapsedSecs := float64(time.Since(batchStart).Microseconds()) / 1_000_000
 		for j, batchErr := range batchErrs {
+			origIdx := batchIndices[j]
 			if batchErr != nil {
-				origIdx := batchIndices[j]
 				ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to validate transaction %d: %v", origIdx, batchErr)
 				response.Errors[origIdx] = errors.WrapPublic(batchErr)
+			} else {
+				prometheusTransactionSize.Observe(float64(len(req.Items[origIdx].Tx)))
+				prometheusProcessedTransactions.Observe(elapsedSecs)
 			}
 		}
 	}
