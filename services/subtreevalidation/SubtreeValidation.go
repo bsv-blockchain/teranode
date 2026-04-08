@@ -1096,10 +1096,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
 
-						// return the error, so that the caller can handle it
-						if errors.Is(err, errors.ErrTxInvalid) {
-							return err
-						}
+						return err
 					} else {
 						// If the error is not a policy error, we log it as a processing error
 						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
