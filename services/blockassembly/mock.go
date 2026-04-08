@@ -142,6 +142,11 @@ func (m *Mock) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
 	return nil
 }
 
+func (m *Mock) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	args := m.Called(ctx)
 

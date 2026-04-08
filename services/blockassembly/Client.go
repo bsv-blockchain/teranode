@@ -591,6 +591,12 @@ func (s *Client) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
 	return unwrappedErr
 }
 
+// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+func (s *Client) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	_, err := s.client.CheckBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+	return errors.UnwrapGRPC(err)
+}
+
 // GetBlockAssemblyState retrieves the current state of block assembly.
 //
 // Parameters:
