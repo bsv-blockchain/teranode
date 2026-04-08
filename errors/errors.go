@@ -11,6 +11,7 @@
 package errors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -894,11 +895,18 @@ func Join(errs ...error) error {
 
 // Is checks if the error matches the target error.
 func Is(err, target error) bool {
+	origErr := err
+
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
 	}
 
-	return errors.Is(err, target)
+	if errors.Is(err, target) {
+		return true
+	}
+
+	// we have additional control for GRPC context errors
+	return checkGRPCContextError(origErr, err, target)
 }
 
 // AsData attempts to assign the error data to the target if types are compatible.
@@ -947,6 +955,34 @@ func As(err error, target any) bool {
 func isGRPCWrappedError(err error) bool {
 	_, ok := status.FromError(err)
 	return ok
+}
+
+// hasGRPCCode checks whether any error in the unwrap chain is a gRPC status
+// with the specified code.
+func hasGRPCCode(err error, code codes.Code) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if st, ok := status.FromError(current); ok && st.Code() == code {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkGRPCContextError maps Go context sentinels to equivalent gRPC status
+// codes and checks both original and normalized error shapes.
+func checkGRPCContextError(origErr error, normalizedErr error, target error) bool {
+	var code codes.Code
+	switch target {
+	case context.Canceled:
+		code = codes.Canceled
+	case context.DeadlineExceeded:
+		code = codes.DeadlineExceeded
+	default:
+		return false
+	}
+
+	return hasGRPCCode(origErr, code) || hasGRPCCode(normalizedErr, code)
 }
 
 // buildStackTrace returns just the stack trace portion of the error message.

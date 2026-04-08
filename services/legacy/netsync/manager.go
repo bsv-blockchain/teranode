@@ -1263,9 +1263,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			return nil
-		} else if errors.Is(err, context.Canceled) {
-			return nil
 		} else {
+			if errors.Is(err, context.Canceled) || errors.IsContextError(err) {
+				return nil
+			}
+
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
@@ -1273,8 +1275,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
 
-			// TODO TEMPORARY: we should not panic here, but return the error
-			panic(err)
+			// Never panic in sync processing goroutines; bubble error to caller.
+			return err
 		}
 	}
 

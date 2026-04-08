@@ -410,7 +410,7 @@ RETURNING id
 	}
 
 	// Calculate Median Time Past (MTP) for this block
-	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height)
+	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height, previousBlockID)
 	if err != nil {
 		s.logger.Errorf("[StoreBlock] Failed to calculate MTP for height %d (CSVHeight=%d): %v", height, s.chainParams.CSVHeight, err)
 		return 0, 0, nil, false, err
@@ -780,11 +780,12 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 // Parameters:
 //   - ctx: Context for the database operation
 //   - height: The block height to calculate MTP for
+//   - parentBlockID: The database ID of the parent block, used to walk the correct chain
 //
 // Returns:
 //   - uint32: The MTP value as Unix timestamp, or 0 if height < CSVHeight or height < 11
 //   - error: Error if block timestamps cannot be retrieved
-func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
+func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint32, parentBlockID uint64) (uint32, error) {
 	// BIP113 is only active from CSVHeight onwards
 	// Before CSVHeight, MTP was not used
 	if height < s.chainParams.CSVHeight {
@@ -808,8 +809,10 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 		return calculateMTPFromTimestamps(cached)
 	}
 
-	// Slow path: fetch from database.
-	timestamps, err := s.fetchBlockTimestamps(ctx, startHeight, endHeight)
+	// Slow path: walk back through the parent chain from the parent block.
+	// This ensures we only get timestamps from the actual chain being extended,
+	// not from fork blocks that happen to share the same height range.
+	timestamps, err := s.fetchBlockTimestampsByParentChain(ctx, parentBlockID, medianTimeBlocks)
 	if err != nil {
 		return 0, err
 	}
@@ -817,27 +820,30 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 	return calculateMTPFromTimestamps(timestamps)
 }
 
-// fetchBlockTimestamps retrieves block timestamps from the database for the given
-// height range [startHeight, endHeight] (inclusive). Returns an error if the
-// number of rows returned does not match the expected count derived from the
-// range (indicating missing or duplicate blocks).
-func (s *SQL) fetchBlockTimestamps(ctx context.Context, startHeight, endHeight uint32) ([]uint32, error) {
-	expectedCount := int(endHeight-startHeight) + 1
-
+// fetchBlockTimestampsByParentChain retrieves block timestamps by walking back through
+// the parent_id chain starting from the given block. This correctly handles forks by
+// only following the chain that the current block is being built on, rather than
+// querying by height range which can return timestamps from competing fork blocks.
+func (s *SQL) fetchBlockTimestampsByParentChain(ctx context.Context, startBlockID uint64, count int) ([]uint32, error) {
 	q := `
-		SELECT block_time
-		FROM blocks
-		WHERE height >= $1 AND height <= $2
-		  AND invalid = FALSE
-		ORDER BY height ASC
+		WITH RECURSIVE chain AS (
+			SELECT block_time, parent_id, 1 AS depth
+			FROM blocks WHERE id = $1
+			UNION ALL
+			SELECT b.block_time, b.parent_id, c.depth + 1
+			FROM blocks b
+			JOIN chain c ON b.id = c.parent_id
+			WHERE c.depth < $2
+		)
+		SELECT block_time FROM chain ORDER BY depth DESC
 	`
-	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
+	rows, err := s.db.QueryContext(ctx, q, startBlockID, count)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to fetch block timestamps from %d to %d", startHeight, endHeight, err)
+		return nil, errors.NewStorageError("failed to walk parent chain from block ID %d for %d blocks", startBlockID, count, err)
 	}
 	defer rows.Close()
 
-	timestamps := make([]uint32, 0, expectedCount)
+	timestamps := make([]uint32, 0, count)
 	for rows.Next() {
 		var blockTime uint32
 		if err := rows.Scan(&blockTime); err != nil {
@@ -850,8 +856,8 @@ func (s *SQL) fetchBlockTimestamps(ctx context.Context, startHeight, endHeight u
 		return nil, errors.NewStorageError("error iterating block timestamps", err)
 	}
 
-	if len(timestamps) != expectedCount {
-		return nil, errors.NewStorageError("expected %d timestamps, got %d", expectedCount, len(timestamps))
+	if len(timestamps) != count {
+		return nil, errors.NewStorageError("expected %d timestamps walking parent chain from block ID %d, got %d", count, startBlockID, len(timestamps))
 	}
 
 	return timestamps, nil

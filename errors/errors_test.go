@@ -113,6 +113,59 @@ func TestErrors_Standard_Is(t *testing.T) {
 	require.True(t, serviceError.Is(fmtError))
 }
 
+// TestCanceledDetectionAcrossErrorShapes demonstrates that "canceled" semantics
+// can be represented in different error shapes, and only some include the
+// context.Canceled sentinel for errors.Is matching.
+func TestCanceledDetectionAcrossErrorShapes(t *testing.T) {
+	tests := []struct {
+		name                  string
+		err                   error
+		wantIsContextCanceled bool
+		wantIsContextError    bool
+		wantGrpcCanceledCode  bool
+	}{
+		{
+			name:                  "stdlib context canceled sentinel",
+			err:                   context.Canceled,
+			wantIsContextCanceled: true,
+			wantIsContextError:    true,
+			wantGrpcCanceledCode:  false,
+		},
+		{
+			name:                  "raw grpc canceled status",
+			err:                   status.Error(codes.Canceled, "grpc: the client connection is closing"),
+			wantIsContextCanceled: true,
+			wantIsContextError:    true,
+			wantGrpcCanceledCode:  true,
+		},
+		{
+			name:                  "wrapped grpc canceled status",
+			err:                   fmt.Errorf("rpc failed: %w", status.Error(codes.Canceled, "transport closing")),
+			wantIsContextCanceled: true,
+			wantIsContextError:    true,
+			wantGrpcCanceledCode:  true,
+		},
+		{
+			name:                  "teranode context-classified error",
+			err:                   New(ERR_CONTEXT, "operation aborted during shutdown"),
+			wantIsContextCanceled: false,
+			wantIsContextError:    true,
+			wantGrpcCanceledCode:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wantIsContextCanceled, Is(tc.err, context.Canceled))
+			require.Equal(t, tc.wantIsContextError, IsContextError(tc.err))
+
+			st, ok := status.FromError(tc.err)
+			grpcCanceled := ok && st.Code() == codes.Canceled
+			require.Equal(t, tc.wantGrpcCanceledCode, grpcCanceled)
+		})
+	}
+}
+
 // TestErrorWrapWithAdditionalContext tests wrapping an error with additional context.
 func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	originalErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "original error")

@@ -587,19 +587,26 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	inputs := make([]bsvjson.Vin, len(tx.Inputs))
 
 	for i, txIn := range tx.Inputs {
-		asm, err := txscript.DisasmString(txIn.UnlockingScript.Bytes())
-		if err != nil {
-			return nil, errors.NewServiceError("Error disassembling script", err)
-		}
+		if tx.IsCoinbase() {
+			inputs[i] = bsvjson.Vin{
+				Coinbase: txIn.UnlockingScript.String(),
+				Sequence: txIn.SequenceNumber,
+			}
+		} else {
+			asm, err := txscript.DisasmString(txIn.UnlockingScript.Bytes())
+			if err != nil {
+				return nil, errors.NewServiceError("Error disassembling script", err)
+			}
 
-		inputs[i] = bsvjson.Vin{
-			Txid: txIn.PreviousTxIDStr(),
-			Vout: txIn.PreviousTxOutIndex,
-			ScriptSig: &bsvjson.ScriptSig{
-				Asm: asm,
-				Hex: txIn.UnlockingScript.String(),
-			},
-			Sequence: txIn.SequenceNumber,
+			inputs[i] = bsvjson.Vin{
+				Txid: txIn.PreviousTxIDStr(),
+				Vout: txIn.PreviousTxOutIndex,
+				ScriptSig: &bsvjson.ScriptSig{
+					Asm: asm,
+					Hex: txIn.UnlockingScript.String(),
+				},
+				Sequence: txIn.SequenceNumber,
+			}
 		}
 	}
 
@@ -623,7 +630,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		}
 
 		outputs[i] = bsvjson.Vout{
-			Value: float64(txOut.Satoshis),
+			Value: bsvjson.BTCValue(float64(txOut.Satoshis) / 1e8),
 			N:     uint32(i),
 			ScriptPubKey: bsvjson.ScriptPubKeyResult{
 				Addresses: addressStrings,

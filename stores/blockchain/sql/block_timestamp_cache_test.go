@@ -258,6 +258,15 @@ func storeMTPChain(t *testing.T, s *SQL, count int, baseTimestamp uint32) []*cha
 	return hashes
 }
 
+// getBlockIDAtHeight returns the database ID of the block at the given height.
+func getBlockIDAtHeight(t *testing.T, s *SQL, height uint32) uint64 {
+	t.Helper()
+	var id uint64
+	err := s.db.QueryRow("SELECT id FROM blocks WHERE height = $1 ORDER BY chain_work DESC LIMIT 1", height).Scan(&id)
+	require.NoError(t, err, "failed to get block ID at height %d", height)
+	return id
+}
+
 func TestMTPCache_SequentialInserts_CacheHit(t *testing.T) {
 	s := newMTPTestStore(t)
 
@@ -278,9 +287,12 @@ func TestMTPCache_MTPValueCorrectness(t *testing.T) {
 
 	storeMTPChain(t, s, 15, 1600000000)
 
+	// Get the parent block ID (block at height 14) for chain-walking MTP
+	parentBlockID := getBlockIDAtHeight(t, s, 14)
+
 	// Clear cache and compute MTP from DB (ground truth)
 	s.blockTimestampCache.Clear()
-	mtpFromDB, err := s.calculateMedianTimePastForHeight(ctx, 15)
+	mtpFromDB, err := s.calculateMedianTimePastForHeight(ctx, 15, parentBlockID)
 	require.NoError(t, err)
 
 	// Re-populate cache with the same timestamps the blocks were stored with
@@ -288,8 +300,8 @@ func TestMTPCache_MTPValueCorrectness(t *testing.T) {
 		s.blockTimestampCache.Add(h, 1600000000+h)
 	}
 
-	// Compute MTP from cache
-	mtpFromCache, err := s.calculateMedianTimePastForHeight(ctx, 15)
+	// Compute MTP from cache (parentBlockID not used when cache hits)
+	mtpFromCache, err := s.calculateMedianTimePastForHeight(ctx, 15, parentBlockID)
 	require.NoError(t, err)
 
 	assert.Equal(t, mtpFromDB, mtpFromCache, "MTP from cache should match MTP from database")
@@ -301,10 +313,13 @@ func TestMTPCache_DBFallbackOnCacheMiss(t *testing.T) {
 
 	storeMTPChain(t, s, 15, 1600000000)
 
+	// Get parent block ID for chain-walking MTP
+	parentBlockID := getBlockIDAtHeight(t, s, 14)
+
 	// Clear cache to force DB fallback
 	s.blockTimestampCache.Clear()
 
-	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15)
+	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15, parentBlockID)
 	require.NoError(t, err)
 	assert.Greater(t, mtp, uint32(0), "MTP should be non-zero for height 15")
 }
@@ -386,7 +401,8 @@ func TestMTPCache_BelowCSVHeight_NoCache(t *testing.T) {
 
 	storeMTPChain(t, s, 15, 1600000000)
 
-	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15)
+	// parentBlockID=0 is fine here since the function returns early (below CSVHeight)
+	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15, 0)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(0), mtp, "MTP should be 0 below CSVHeight")
 }
@@ -397,9 +413,47 @@ func TestMTPCache_HeightBelow11_ReturnsZero(t *testing.T) {
 
 	storeMTPChain(t, s, 10, 1600000000)
 
-	mtp, err := s.calculateMedianTimePastForHeight(ctx, 10)
+	// parentBlockID=0 is fine here since the function returns early (height < 11)
+	mtp, err := s.calculateMedianTimePastForHeight(ctx, 10, 0)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(0), mtp, "MTP should be 0 for height < 11")
+}
+
+// TestMTPCache_ForkBlocks_ParentChainWalk verifies that MTP calculation
+// correctly walks the parent chain instead of querying by height range.
+// This is a regression test for a bug where fork blocks (two valid blocks
+// at the same height) caused "expected N timestamps, got N+1" errors.
+func TestMTPCache_ForkBlocks_ParentChainWalk(t *testing.T) {
+	s := newMTPTestStore(t)
+	ctx := context.Background()
+
+	// Store a main chain of 14 blocks (heights 1-14)
+	mainHashes := storeMTPChain(t, s, 14, 1600000000)
+
+	// Store a fork block at height 5 (same parent as main-chain block 5)
+	// This creates two valid (non-invalid) blocks at height 5
+	forkBlock := makeMTPTestBlock(t, 5, mainHashes[3], 1700000000)
+	_, _, err := s.StoreBlock(ctx, forkBlock, "fork-peer")
+	require.NoError(t, err)
+
+	// Get the main-chain parent block ID (block at height 14)
+	mainParentID := getBlockIDAtHeight(t, s, 14)
+
+	// Clear cache to force the DB fallback path
+	s.blockTimestampCache.Clear()
+
+	// This would fail with the old height-range query ("expected 11 timestamps, got 12")
+	// because height 5 has two valid blocks. The parent chain walk correctly follows
+	// only the main chain.
+	block15 := makeMTPTestBlock(t, 15, mainHashes[13], 1600000015)
+	_, _, err = s.StoreBlock(ctx, block15, "test")
+	require.NoError(t, err)
+
+	// Also verify direct call works
+	s.blockTimestampCache.Clear()
+	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15, mainParentID)
+	require.NoError(t, err)
+	assert.Greater(t, mtp, uint32(0), "MTP should be non-zero")
 }
 
 func TestCalculateMTPFromTimestamps(t *testing.T) {
