@@ -67,6 +67,9 @@ type KafkaProducerConfig struct {
 
 	// Debug logging
 	EnableDebugLogging bool // Enable verbose debug logging
+
+	// Transfer rate monitoring
+	SlowTransfer SlowTransferConfig // Thresholds for slow-send detection (zero value uses defaults)
 }
 
 // MessageStatus represents the status of a produced message.
@@ -221,6 +224,14 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	if cfg.EnableDebugLogging {
 		opts = append(opts, kgo.WithLogger(&franzLoggerAdapter{logger: logger}))
 	}
+
+	// Wire transfer-rate monitoring hooks
+	slowCfg := cfg.SlowTransfer
+	if slowCfg.ThresholdBps == 0 {
+		slowCfg = DefaultSlowTransferConfig()
+	}
+	hook := newProducerMetricsHook(logger, cfg.Topic, slowCfg)
+	opts = append(opts, kgo.WithHooks(hook))
 
 	// Create the franz-go client
 	client, err := kgo.NewClient(opts...)
