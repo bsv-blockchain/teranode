@@ -323,18 +323,6 @@ func TestNewTxError(t *testing.T) {
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }
 
-// TestNewTxConsensusError tests the NewTxConsensusError function to ensure it creates an error with the correct code and message.
-func TestNewTxConsensusError(t *testing.T) {
-	message := "test tx consensus error %s %d"
-	params := []interface{}{"param1", 42}
-	err := NewTxConsensusError(message, params...)
-
-	assert.Equal(t, ERR_TX_CONSENSUS, err.Code(), "error code should be ERR_TX_CONSENSUS")
-	assert.Equal(t, "test tx consensus error param1 42", err.Message(), "error message should match")
-
-	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
-}
-
 // TestNewServiceUnavailableError tests the NewServiceUnavailableError function to ensure it creates an error with the correct code and message.
 func TestNewServiceUnavailableError(t *testing.T) {
 	message := "test service unavailable error %s %d"
