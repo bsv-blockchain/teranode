@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
+	"github.com/bsv-blockchain/teranode/cmd/checkblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
 	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
@@ -48,6 +49,7 @@ var commandHelp = map[string]string{
 	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
 	"reconsiderblock":         "Reconsider a block that was previously marked as invalid",
 	"resetblockassembly":      "Reset block assembly state",
+	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
@@ -387,6 +389,14 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Failed to reset block assembly", err)
 			}
 
+			return nil
+		}
+	case "checkblockassembly":
+		cmd.Execute = func(args []string) error {
+			if err := checkblockassembly.CheckBlockAssembly(logger, tSettings); err != nil {
+				return errors.NewProcessingError("Failed to check block assembly", err)
+			}
+			fmt.Println("Block assembly validation passed: all unmined transactions have valid inputs")
 			return nil
 		}
 	case "fix-chainwork":
