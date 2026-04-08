@@ -12,7 +12,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher"
@@ -95,6 +97,39 @@ type txmetaBatchItem struct {
 // - Coordinating with block assembly for transaction inclusion
 // - Handling both individual and batch validation scenarios
 
+// preResult holds the output of Phase 1 (pre-script validation) for a single transaction.
+type preResult struct {
+	utxoHeights []uint32
+	blockHeight uint32
+	err         error
+}
+
+// phase1Job is a unit of work for a Phase 1 (pre-script) worker.
+type phase1Job struct {
+	ctx         context.Context
+	tx          *bt.Tx
+	idx         int
+	blockHeight uint32
+	options     *Options
+	preResults  []preResult
+	wg          *sync.WaitGroup
+}
+
+// phase3Job is a unit of work for a Phase 3 (post-script) worker.
+type phase3Job struct {
+	ctx         context.Context
+	tx          *bt.Tx
+	idx         int
+	blockHeight uint32
+	options     *Options
+	results     []*meta.Data
+	errs        []error
+	wg          *sync.WaitGroup
+}
+
+var phase1JobPool = sync.Pool{New: func() any { return &phase1Job{} }}
+var phase3JobPool = sync.Pool{New: func() any { return &phase3Job{} }}
+
 type Validator struct {
 	// logger provides structured logging capabilities for the validator, enabling comprehensive
 	// monitoring and debugging of validation operations. All validation activities, errors, and
@@ -149,6 +184,12 @@ type Validator struct {
 	// EnsureMTPLoaded must be called (once, serially) before concurrent per-tx goroutines
 	// access this slice, so no locking is required for reads.
 	mtpStore []uint32
+
+	// phase1JobCh and phase3JobCh feed the persistent worker pools for ValidateBatch.
+	// Workers run for the validator's lifetime, eliminating per-batch goroutine churn.
+	// Pointer types allow structs to be pooled via phase1JobPool / phase3JobPool.
+	phase1JobCh chan *phase1Job
+	phase3JobCh chan *phase3Job
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -188,6 +229,60 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	// Start persistent worker pools for ValidateBatch Phase 1 and Phase 3.
+	nWorkers := tSettings.Validator.BatchPhaseWorkers
+	if nWorkers <= 0 {
+		nWorkers = 2 * runtime.GOMAXPROCS(0)
+	}
+	// Buffer allows the batch goroutine to pipeline job submission ahead of workers.
+	bufSize := nWorkers * 4
+	v.phase1JobCh = make(chan *phase1Job, bufSize)
+	v.phase3JobCh = make(chan *phase3Job, bufSize)
+
+	for range nWorkers {
+		go func() {
+			for {
+				select {
+				case job := <-v.phase1JobCh:
+					if job.ctx.Err() != nil {
+						job.preResults[job.idx] = preResult{err: job.ctx.Err()}
+					} else {
+						uh, bh, err := v.validatePreScript(job.ctx, job.tx, job.blockHeight, job.options)
+						job.preResults[job.idx] = preResult{utxoHeights: uh, blockHeight: bh, err: err}
+					}
+					job.wg.Done()
+					*job = phase1Job{}
+					phase1JobPool.Put(job)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		go func() {
+			for {
+				select {
+				case job := <-v.phase3JobCh:
+					if job.ctx.Err() != nil {
+						job.errs[job.idx] = job.ctx.Err()
+					} else {
+						txID := job.tx.TxIDChainHash().String()
+						md, err := v.validatePostScript(job.ctx, job.tx, txID, job.blockHeight, job.options)
+						if err != nil && errors.Is(err, errors.ErrTxLocked) {
+							md, err = v.ValidateWithOptions(job.ctx, job.tx, job.blockHeight, job.options)
+						}
+						job.results[job.idx] = md
+						job.errs[job.idx] = err
+					}
+					job.wg.Done()
+					*job = phase3Job{}
+					phase3JobPool.Put(job)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// Initialize TxMeta Kafka batcher if batch size is configured
@@ -438,27 +533,38 @@ func (v *Validator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight
 		validationOptions = NewDefaultOptions()
 	}
 
-	// --- Phase 1: Pre-script validation (parallel) ---
-	type preResult struct {
-		utxoHeights []uint32
-		blockHeight uint32
-		err         error
-	}
-
+	// --- Phase 1: Pre-script validation (persistent worker pool) ---
 	preResults := make([]preResult, n)
 
-	g1, gCtx1 := errgroup.WithContext(ctx)
-
-	for i := range txs {
-		i := i
-		g1.Go(func() error {
-			uh, bh, err := v.validatePreScript(gCtx1, txs[i], blockHeight, validationOptions)
-			preResults[i] = preResult{utxoHeights: uh, blockHeight: bh, err: err}
-			return nil // per-tx errors; never fail the group
-		})
+	{
+		var wg1 sync.WaitGroup
+		wg1.Add(n)
+		cancelled := false
+		for i := range txs {
+			if cancelled {
+				preResults[i] = preResult{err: ctx.Err()}
+				wg1.Done()
+				continue
+			}
+			job := phase1JobPool.Get().(*phase1Job)
+			job.ctx = ctx
+			job.tx = txs[i]
+			job.idx = i
+			job.blockHeight = blockHeight
+			job.options = validationOptions
+			job.preResults = preResults
+			job.wg = &wg1
+			select {
+			case v.phase1JobCh <- job:
+			case <-ctx.Done():
+				cancelled = true
+				phase1JobPool.Put(job)
+				preResults[i] = preResult{err: ctx.Err()}
+				wg1.Done()
+			}
+		}
+		wg1.Wait()
 	}
-
-	_ = g1.Wait()
 
 	// Collect txs that passed Phase 1
 	var (
@@ -497,32 +603,39 @@ func (v *Validator) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight
 		}
 	}
 
-	// --- Phase 3: Post-script (parallel) ---
-	g3, gCtx3 := errgroup.WithContext(ctx)
-
-	for _, idx := range batchIndices {
-		idx := idx
-		if errs[idx] != nil {
-			continue // script verification failed
-		}
-
-		g3.Go(func() error {
-			txID := txs[idx].TxIDChainHash().String()
-			md, err := v.validatePostScript(gCtx3, txs[idx], txID, preResults[idx].blockHeight, validationOptions)
-
-			if err != nil && errors.Is(err, errors.ErrTxLocked) {
-				// TX_LOCKED: retry full pipeline per-tx via existing retry logic
-				md, err = v.ValidateWithOptions(gCtx3, txs[idx], preResults[idx].blockHeight, validationOptions)
+	// --- Phase 3: Post-script (persistent worker pool) ---
+	{
+		var wg3 sync.WaitGroup
+		cancelled := false
+		for _, idx := range batchIndices {
+			if errs[idx] != nil {
+				continue
 			}
-
-			results[idx] = md
-			errs[idx] = err
-
-			return nil
-		})
+			if cancelled {
+				errs[idx] = ctx.Err()
+				continue
+			}
+			wg3.Add(1)
+			job := phase3JobPool.Get().(*phase3Job)
+			job.ctx = ctx
+			job.tx = txs[idx]
+			job.idx = idx
+			job.blockHeight = preResults[idx].blockHeight
+			job.options = validationOptions
+			job.results = results
+			job.errs = errs
+			job.wg = &wg3
+			select {
+			case v.phase3JobCh <- job:
+			case <-ctx.Done():
+				cancelled = true
+				phase3JobPool.Put(job)
+				errs[idx] = ctx.Err()
+				wg3.Done()
+			}
+		}
+		wg3.Wait()
 	}
-
-	_ = g3.Wait()
 
 	// Publish rejected txs to Kafka
 	for i, txErr := range errs {

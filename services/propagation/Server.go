@@ -1068,6 +1068,8 @@ func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, 
 				return nil
 			}
 
+			btTx.SetTxHash(btTx.TxIDChainHash())
+
 			// Coinbase check
 			if btTx.IsCoinbase() {
 				prometheusInvalidTransactions.Inc()
