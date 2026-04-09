@@ -6890,7 +6890,7 @@
 <tr>
 <td>OnRestartRemoveInvalidParentChainTxs</td>
 <td>bool</td>
-<td>false</td>
+<td>true</td>
 <td>blockassembly_onRestartRemoveInvalidParentChainTxs</td>
 <td>Filters transactions with invalid parent chains</td>
 </tr>
@@ -7013,8 +7013,8 @@
 <ul>
 <li><code>OnRestartValidateParentChain = true</code>: Validates transaction parent chains after service restart</li>
 <li><code>ParentValidationBatchSize</code>: Controls batch processing size (default: 1000)</li>
-<li><code>OnRestartRemoveInvalidParentChainTxs = true</code>: Filters out transactions with invalid parent chains</li>
-<li><code>OnRestartRemoveInvalidParentChainTxs = false</code> (default): Keeps transactions despite invalid parents</li>
+<li><code>OnRestartRemoveInvalidParentChainTxs = true</code> (default): Filters out transactions with invalid parent chains</li>
+<li><code>OnRestartRemoveInvalidParentChainTxs = false</code>: Keeps transactions despite invalid parents</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
