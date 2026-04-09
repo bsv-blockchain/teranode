@@ -145,6 +145,19 @@ type ClientI interface {
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error)
 
+	// GetCandidateBlock retrieves block metadata for an existing mining candidate.
+	// Returns the 80-byte header, coinbase tx, subtree hashes, and tx count
+	// needed to assemble a standard Bitcoin wire format block.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//   - candidateID: The mining candidate ID (from a prior GetMiningCandidate call)
+	//
+	// Returns:
+	//   - *blockassembly_api.GetCandidateBlockResponse: Block metadata for wire format assembly
+	//   - error: NotFound if candidate has expired or ID is invalid
+	GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error)
+
 	// GetTransactionHashes retrieves all transaction hashes in block assembly.
 	//
 	// Parameters:

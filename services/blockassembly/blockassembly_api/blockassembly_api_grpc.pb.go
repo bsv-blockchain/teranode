@@ -37,6 +37,7 @@ const (
 	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
 	BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName              = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyTxs"
+	BlockAssemblyAPI_GetCandidateBlock_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/GetCandidateBlock"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -104,6 +105,12 @@ type BlockAssemblyAPIClient interface {
 	// This provides visibility into the transactions that are candidates for inclusion in the next block.
 	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
 	GetBlockAssemblyTxs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyTxsResponse, error)
+	// GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+	// Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+	// coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+	// The response contains everything needed to assemble a standard Bitcoin wire format block.
+	// Returns NotFound if the candidate ID has expired or is invalid.
+	GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -284,6 +291,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyTxs(ctx context.Context, in *Em
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCandidateBlockResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetCandidateBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility.
@@ -349,6 +366,12 @@ type BlockAssemblyAPIServer interface {
 	// This provides visibility into the transactions that are candidates for inclusion in the next block.
 	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
 	GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error)
+	// GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+	// Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+	// coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+	// The response contains everything needed to assemble a standard Bitcoin wire format block.
+	// Returns NotFound if the candidate ID has expired or is invalid.
+	GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -409,6 +432,9 @@ func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyBlockCandidate(contex
 }
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyTxs not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCandidateBlock not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -737,6 +763,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetCandidateBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCandidateBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetCandidateBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetCandidateBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetCandidateBlock(ctx, req.(*GetCandidateBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -811,6 +855,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockAssemblyTxs",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler,
+		},
+		{
+			MethodName: "GetCandidateBlock",
+			Handler:    _BlockAssemblyAPI_GetCandidateBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -181,6 +181,16 @@ func (m *Mock) GetTransactionHashes(ctx context.Context) ([]string, error) {
 	return args.Get(0).([]string), nil
 }
 
+func (m *Mock) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	args := m.Called(ctx, candidateID)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), nil
+}
+
 // mockBlockAssemblyAPIClient is a mock implementation of BlockAssemblyAPIClient
 type mockBlockAssemblyAPIClient struct {
 	mock.Mock
@@ -320,4 +330,12 @@ func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyTxs(ctx context.Context, in
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*blockassembly_api.GetBlockAssemblyTxsResponse), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *blockassembly_api.GetCandidateBlockRequest, opts ...grpc.CallOption) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), args.Error(1)
 }
