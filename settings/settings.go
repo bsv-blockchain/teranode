@@ -267,7 +267,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockchainSubscriptionTimeout:        getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
 			OnRestartValidateParentChain:         getBool("blockassembly_onRestartValidateParentChain", true, alternativeContext...),
 			ParentValidationBatchSize:            getInt("blockassembly_parentValidationBatchSize", 1000, alternativeContext...),
-			OnRestartRemoveInvalidParentChainTxs: getBool("blockassembly_onRestartRemoveInvalidParentChainTxs", false, alternativeContext...),
+			OnRestartRemoveInvalidParentChainTxs: getBool("blockassembly_onRestartRemoveInvalidParentChainTxs", true, alternativeContext...),
 			UseColumnarBatch:                     getBool("blockassembly_useColumnarBatch", false, alternativeContext...),
 			UnminedTxDiskSortPath:                getString("blockassembly_unminedTxDiskSortPath", "", alternativeContext...),
 			UnminedTxDiskSortEnabled:             getBool("blockassembly_unminedTxDiskSortEnabled", false, alternativeContext...),
