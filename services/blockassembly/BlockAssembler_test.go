@@ -2400,3 +2400,142 @@ func TestProcessNewBlockAnnouncementCoverage(t *testing.T) {
 		assert.True(t, true, "processNewBlockAnnouncement should complete successfully")
 	})
 }
+
+// TestReset_ConflictDetectionViaValidateInputs verifies that after a Reset, a transaction
+// whose input is already spent by a different (mined) transaction must NOT be loaded back
+// into block assembly.
+//
+// Root cause of the bug: BlockAssembler.reset() calls loadUnminedTransactions with
+// validateInputs=false, so the input-spend conflict is never checked.
+// The getConflictingNodes step only reads pre-stored conflicting markers from block
+// subtree files — if the conflict was not stored there (e.g. because the moveForward block
+// was validated before the conflicting assembly tx was added), the conflict is silently
+// missed and the tx is incorrectly re-added to block assembly.
+//
+// The fix: BlockAssembler.reset() must always use validateInputs=true so that
+// validateUnminedTxInputs() catches any tx whose input's SpendingData points to a
+// different tx. This test is RED before the fix (txA is wrongly in assembly) and GREEN
+// after it (txA is correctly excluded).
+func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t)
+	require.NotNil(t, items)
+
+	// Disable parent-chain validation — we only test input-spend conflict detection here.
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+	// --- Build the UTXO store state ---
+
+	// txParent: a regular (non-coinbase) tx with one spendable output.
+	// Its own input references a nonexistent tx (Create() does not validate inputs);
+	// PreviousTxSatoshis is set large enough for the fee check to pass.
+	txParent := bt.NewTx()
+	txParent.LockTime = 0
+	parentIn := &bt.Input{
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: 200000, // > output.Satoshis → positive fee
+		SequenceNumber:     0xFFFFFFFF,
+		UnlockingScript:    bscript.NewFromBytes([]byte{}),
+	}
+	_ = parentIn.PreviousTxIDAdd(&chainhash.Hash{1, 2, 3}) // nonexistent — not validated by Create()
+	txParent.Inputs = []*bt.Input{parentIn}
+	txParent.Outputs = []*bt.Output{
+		{Satoshis: 100000, LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x14, 0x00, 0x88, 0xac})},
+	}
+	_, err := items.utxoStore.Create(ctx, txParent, 1)
+	require.NoError(t, err)
+	parentHash := txParent.TxIDChainHash()
+	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parentHash}, true))
+
+	// txA: the LOSING tx that spends txParent output[0].
+	// It is in the unmined pool (unmined_since set, conflicting=false) — simulating the state
+	// where getConflictingNodes() missed it because the moveForward block's subtree file had
+	// no conflicting marker for txA.
+	txA := bt.NewTx()
+	_ = txA.From(parentHash.String(), 0, txParent.Outputs[0].LockingScript.String(), txParent.Outputs[0].Satoshis)
+	txA.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+	txA.Outputs = []*bt.Output{{Satoshis: 90000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
+	const assemblyHeight = uint32(5)
+	require.NoError(t, items.utxoStore.SetBlockHeight(assemblyHeight))
+	_, err = items.utxoStore.Create(ctx, txA, assemblyHeight)
+	require.NoError(t, err)
+	txAHash := txA.TxIDChainHash()
+
+	// Directly write SpendingData for txParent output[0] to point to a "winner tx" (not txA).
+	// This bypasses utxoStore.Spend() to avoid coinbase-maturity / UTXO-hash complications
+	// while still exercising the exact check inside validateUnminedTxInputs:
+	//   spendingData.TxID != txAHash  →  txA is conflicting → NOT loaded.
+	// Format: 32 bytes txID + 4 bytes vin (little-endian, vin=0 → four zero bytes).
+	winnerHash := chainhash.HashH([]byte("mined-winner-tx"))
+	sdBytes := make([]byte, 36)
+	copy(sdBytes[:32], winnerHash.CloneBytes())
+
+	sqlStore, ok := items.utxoStore.(*utxostoresql.Store)
+	require.True(t, ok, "test requires SQLite store")
+	_, err = sqlStore.RawDB().Exec(
+		"UPDATE outputs SET spending_data = ? WHERE transaction_id = (SELECT id FROM transactions WHERE hash = ?) AND idx = 0",
+		sdBytes, parentHash[:],
+	)
+	require.NoError(t, err)
+
+	// Sanity-check the preconditions.
+	txAMeta, err := items.utxoStore.Get(ctx, txAHash, utxofields.UnminedSince, utxofields.Conflicting)
+	require.NoError(t, err)
+	require.NotZero(t, txAMeta.UnminedSince, "txA must be in the unmined pool")
+	require.False(t, txAMeta.Conflicting, "txA must not be pre-marked conflicting")
+
+	// --- Set up blockchain client mock so reset() can run without a real blockchain store ---
+	//
+	// reset() calls: GetBestBlockHeader, IsFSMCurrentState, GetBlockLocator (×2),
+	// GetBlockHeader (common ancestor), GetBlockHeaders (×2), and GetBlockHeaderIDs.
+	// With BA and blockchain both at genesis (height 0), getReorgBlocks() returns
+	// empty moveBack and moveForward → reset runs with no block movement.
+	genesisHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+	genesisMeta := &model.BlockHeaderMeta{Height: 0, ID: 1}
+	genesisHash := genesisHeader.Hash()
+	genesisHashSlice := []*chainhash.Hash{genesisHash}
+
+	mockBC := &blockchain.Mock{}
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(genesisHeader, genesisMeta, nil)
+	mockBC.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
+	// getReorgBlockHeaders: two GetBlockLocator calls, one GetBlockHeader (common ancestor),
+	// two GetBlockHeaders (moveBack count=1, moveForward count=0).
+	mockBC.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(genesisHashSlice, nil)
+	mockBC.On("GetBlockHeader", mock.Anything, mock.Anything).Return(genesisHeader, genesisMeta, nil)
+	mockBC.On("GetBlockHeaders", mock.Anything, mock.Anything, uint64(1)).
+		Return([]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{genesisMeta}, nil)
+	mockBC.On("GetBlockHeaders", mock.Anything, mock.Anything, uint64(0)).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	// loadUnminedTransactions: GetBlockHeaderIDs for best-chain check.
+	mockBC.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil)
+	// reset() calls SetState to persist the new block assembly tip after reset completes.
+	mockBC.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	items.blockAssembler.blockchainClient = mockBC
+
+	// Initialize the block assembly's best block header so CurrentBlock() is non-nil.
+	items.blockAssembler.setBestBlockHeader(genesisHeader, 0)
+	items.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(genesisHeader)
+
+	// Call reset() — this is the path that currently uses validateInputs=false (the bug).
+	// After the fix, reset() must use validateInputs=true so that validateUnminedTxInputs()
+	// catches that txA's input is already spent by another tx.
+	//
+	// RED before fix:  txA IS in assembly  → require.False fails.
+	// GREEN after fix: txA NOT in assembly → require.False passes.
+	// Mirrors handleReorg's call after the fix: reset(ctx, false, true).
+	err = items.blockAssembler.reset(ctx, false, true)
+	require.NoError(t, err)
+
+	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	require.False(t, containsHash(hashes, *txAHash),
+		"after reset(validateInputs=true), a tx whose input is spent by another tx must NOT be in block assembly")
+}
