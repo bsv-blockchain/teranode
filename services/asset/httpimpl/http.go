@@ -32,13 +32,13 @@ var AssetStat = gocore.NewStat("Asset")
 //
 // Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
-	logger               ulogger.Logger
-	settings             *settings.Settings
-	repository           repository.Interface
-	blockAssemblyClient  blockassembly.ClientI
-	e                    *echo.Echo
-	startTime            time.Time
-	privKey              crypto.PrivKey
+	logger              ulogger.Logger
+	settings            *settings.Settings
+	repository          repository.Interface
+	blockAssemblyClient blockassembly.ClientI
+	e                   *echo.Echo
+	startTime           time.Time
+	privKey             crypto.PrivKey
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -256,7 +256,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
 
 	apiGroup.GET("/block_legacy/miningcandidate/:id", h.GetMiningCandidateLegacyBlock()) // BINARY_STREAM
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock())                              // BINARY_STREAM
 
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))

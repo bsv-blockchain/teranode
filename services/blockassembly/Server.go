@@ -1509,7 +1509,7 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassembly_api.GetCandidateBlockRequest) (*blockassembly_api.GetCandidateBlockResponse, error) {
 	candidateID := util.ReverseAndHexEncodeSlice(req.Id)
 
-	ctx, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetCandidateBlock",
+	_, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetCandidateBlock",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithLogMessage(ba.logger, "[GetCandidateBlock] called for candidate %s", candidateID),
 	)

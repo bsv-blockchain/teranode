@@ -5827,6 +5827,12 @@ func (m *mockBlockAssemblyClient) GetTransactionHashes(ctx context.Context) ([]s
 	}
 	return nil, nil
 }
+func (m *mockBlockAssemblyClient) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	return nil
+}
+func (m *mockBlockAssemblyClient) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	return nil, nil
+}
 
 // TestHandleGetMiningInfoComprehensive tests the complete handleGetMiningInfo functionality
 func TestHandleGetMiningInfoComprehensive(t *testing.T) {
