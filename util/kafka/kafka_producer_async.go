@@ -90,6 +90,7 @@ type KafkaAsyncProducer struct {
 	Config         KafkaProducerConfig // Producer configuration
 	client         *kgo.Client         // Underlying franz-go client
 	publishChannel chan *Message       // Channel for publishing messages
+	shuttingDown   atomic.Bool         // Flag indicating shutdown has started (reject new publishes)
 	closed         atomic.Bool         // Flag indicating if producer is closed
 	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
 	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
@@ -258,6 +259,8 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
+	c.shuttingDown.Store(false)
+	c.closed.Store(false)
 
 	// Handle in-memory case
 	if c.isInMemory {
@@ -401,11 +404,15 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
-	if c.closed.Load() {
+	if c.shuttingDown.Load() {
 		return nil
 	}
 
-	c.closed.Store(true)
+	c.shuttingDown.Store(true)
+
+	if c.closed.Load() {
+		return nil
+	}
 
 	c.channelMu.Lock()
 	ch := c.publishChannel
@@ -416,6 +423,7 @@ func (c *KafkaAsyncProducer) Stop() error {
 	c.channelMu.Unlock()
 
 	c.publishWg.Wait()
+	c.closed.Store(true)
 
 	if c.isInMemory {
 		if c.inMemoryProducer != nil {
@@ -455,7 +463,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.channelMu.RLock()
 	defer c.channelMu.RUnlock()
 
-	if c.closed.Load() || c.publishChannel == nil {
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 
