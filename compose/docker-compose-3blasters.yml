@@ -579,7 +579,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf
       - ./settings_test.conf:/app/settings_local.conf
-      - ../data/blaster-tui-1:/app/data
+      - ../data/blaster-tui-2:/app/data
 
   blaster-tui-3:
     profiles:
@@ -608,7 +608,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf
       - ./settings_test.conf:/app/settings_local.conf
-      - ../data/blaster-tui-1:/app/data
+      - ../data/blaster-tui-3:/app/data
   tx-blaster-2:
     <<: *teranode-coinbase-base
     profiles:
