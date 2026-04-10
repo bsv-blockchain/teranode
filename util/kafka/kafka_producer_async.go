@@ -407,6 +407,18 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 				lingerCh = lingerTimer.C
 			}
 
+			flushBufferedFinal := func() {
+				if len(buffered) == 0 {
+					return
+				}
+				// Use a fresh context so final drain still runs after parent cancellation.
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer flushCancel()
+				c.flushBuffered(flushCtx, buffered)
+				buffered = buffered[:0]
+				bufferedGauge.Set(0)
+			}
+
 			for {
 				if c.closed.Load() || c.shuttingDown.Load() {
 					break
@@ -460,9 +472,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 				select {
 				case msgBytes, ok := <-ch:
 					if !ok {
-						c.flushBuffered(internalCtx, buffered)
-						buffered = buffered[:0]
-						bufferedGauge.Set(0)
+						flushBufferedFinal()
 						return
 					}
 					if msgBytes != nil {
@@ -474,9 +484,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					buffered = buffered[:0]
 					bufferedGauge.Set(0)
 				case <-internalCtx.Done():
-					c.flushBuffered(internalCtx, buffered)
-					buffered = buffered[:0]
-					bufferedGauge.Set(0)
+					flushBufferedFinal()
 					return
 				}
 			}
