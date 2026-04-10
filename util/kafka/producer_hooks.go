@@ -74,6 +74,7 @@ type producerMetricsHook struct {
 	slowOngoing   bool
 	slowOnsetTime time.Time
 	nowFunc       func() time.Time // pluggable clock for testing
+	onSlowState   func(slow bool, rateBps float64)
 }
 
 func newProducerMetricsHook(logger ulogger.Logger, topic string, cfg SlowTransferConfig) *producerMetricsHook {
@@ -85,6 +86,12 @@ func newProducerMetricsHook(logger ulogger.Logger, topic string, cfg SlowTransfe
 		samples: make([]writeSample, maxWriteSamples),
 		nowFunc: time.Now,
 	}
+}
+
+func (h *producerMetricsHook) setSlowStateHandler(handler func(slow bool, rateBps float64)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onSlowState = handler
 }
 
 // --- kgo.HookBrokerConnect ---
@@ -147,9 +154,12 @@ func (h *producerMetricsHook) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ stri
 // whether the rolling transfer rate falls below the slow-send threshold.
 func (h *producerMetricsHook) recordSample(bytes int, dur time.Duration) {
 	now := h.nowFunc()
+	var callback func(bool, float64)
+	var callbackSlow bool
+	var callbackRate float64
+	var fireCallback bool
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	h.samples[h.sampleIdx] = writeSample{ts: now, bytes: bytes, dur: dur}
 	h.sampleIdx = (h.sampleIdx + 1) % maxWriteSamples
@@ -157,12 +167,18 @@ func (h *producerMetricsHook) recordSample(bytes int, dur time.Duration) {
 		h.sampleCount++
 	}
 
-	h.evaluateSlowTransfer(now)
+	fireCallback, callbackSlow, callbackRate = h.evaluateSlowTransfer(now)
+	callback = h.onSlowState
+	h.mu.Unlock()
+
+	if fireCallback && callback != nil {
+		callback(callbackSlow, callbackRate)
+	}
 }
 
 // evaluateSlowTransfer checks if the rolling average transfer rate over the
 // configured window is below the threshold. Must be called with h.mu held.
-func (h *producerMetricsHook) evaluateSlowTransfer(now time.Time) {
+func (h *producerMetricsHook) evaluateSlowTransfer(now time.Time) (bool, bool, float64) {
 	cutoff := now.Add(-h.cfg.Window)
 
 	var totalBytes int
@@ -182,30 +198,40 @@ func (h *producerMetricsHook) evaluateSlowTransfer(now time.Time) {
 	}
 
 	if count == 0 || totalDur == 0 {
+		wasSlow := h.slowOngoing
 		h.slowOngoing = false
-		return
+		if wasSlow {
+			h.logger.Infof("[kafka] transfer recovered on topic %s", h.topic)
+			return true, false, 0
+		}
+		return false, false, 0
 	}
 
 	rateBps := float64(totalBytes) / totalDur.Seconds()
 
 	if rateBps >= h.cfg.ThresholdBps {
+		wasSlow := h.slowOngoing
 		h.slowOngoing = false
-		return
+		if wasSlow {
+			h.logger.Infof("[kafka] transfer recovered on topic %s: %.1f KB/s", h.topic, rateBps/1024)
+			return true, false, rateBps
+		}
+		return false, false, rateBps
 	}
 
 	if !h.slowOngoing {
 		h.slowOngoing = true
 		h.slowOnsetTime = now
-		return
+		return true, true, rateBps
 	}
 
 	sustainedFor := now.Sub(h.slowOnsetTime)
 	if sustainedFor < h.cfg.Window {
-		return
+		return false, true, rateBps
 	}
 
 	if now.Sub(h.lastSlowAlert) < h.cfg.Cooldown {
-		return
+		return false, true, rateBps
 	}
 
 	h.lastSlowAlert = now
@@ -214,6 +240,7 @@ func (h *producerMetricsHook) evaluateSlowTransfer(now time.Time) {
 	prometheusSlowTransferDetected.WithLabelValues(h.topic).Inc()
 	h.logger.Warnf("[kafka] slow transfer detected on topic %s: %.1f KB/s (threshold %.1f KB/s) sustained for %v over %d writes",
 		h.topic, rateKBps, h.cfg.ThresholdBps/1024, sustainedFor.Round(time.Millisecond), count)
+	return false, true, rateBps
 }
 
 // compile-time interface assertions
