@@ -373,6 +373,19 @@ func (s *Client) GenerateBlocks(ctx context.Context, req *blockassembly_api.Gene
 	return unwrappedErr
 }
 
+// GetCandidateBlock retrieves block metadata for an existing mining candidate.
+// Returns the 80-byte header, coinbase tx, subtree hashes, and tx count.
+func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	res, err := s.client.GetCandidateBlock(ctx, &blockassembly_api.GetCandidateBlockRequest{
+		Id: candidateID,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return res, nil
+}
+
 // sendBatchToBlockAssembly sends a batch of transactions to block assembly.
 // Uses columnar format if enabled in settings, otherwise uses traditional row format.
 //

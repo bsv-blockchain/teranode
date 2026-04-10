@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ui/dashboard"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -31,12 +32,13 @@ var AssetStat = gocore.NewStat("Asset")
 //
 // Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
-	logger     ulogger.Logger
-	settings   *settings.Settings
-	repository repository.Interface
-	e          *echo.Echo
-	startTime  time.Time
-	privKey    crypto.PrivKey
+	logger              ulogger.Logger
+	settings            *settings.Settings
+	repository          repository.Interface
+	blockAssemblyClient blockassembly.ClientI
+	e                   *echo.Echo
+	startTime           time.Time
+	privKey             crypto.PrivKey
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -103,7 +105,7 @@ type HTTP struct {
 //   - Custom request logging in debug mode
 //   - Prometheus metrics
 //   - Statistical tracking with reset capability
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface) (*HTTP, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface, blockAssemblyClient ...blockassembly.ClientI) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -156,6 +158,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		repository: repo,
 		e:          e,
 		startTime:  time.Now(),
+	}
+
+	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
+		h.blockAssemblyClient = blockAssemblyClient[0]
 	}
 
 	// add the private key for signing responses
@@ -249,7 +255,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
 	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM (also supports ?type=miningcandidate)
 
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))

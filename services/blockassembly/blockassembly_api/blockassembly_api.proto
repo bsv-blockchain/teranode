@@ -86,6 +86,13 @@ service BlockAssemblyAPI {
   // This provides visibility into the transactions that are candidates for inclusion in the next block.
   // NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
   rpc GetBlockAssemblyTxs (EmptyMessage) returns (GetBlockAssemblyTxsResponse) {}
+
+  // GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+  // Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+  // coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+  // The response contains everything needed to assemble a standard Bitcoin wire format block.
+  // Returns NotFound if the candidate ID has expired or is invalid.
+  rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -242,4 +249,17 @@ message GetBlockAssemblyBlockCandidateResponse {
 message GetBlockAssemblyTxsResponse {
   uint64 txCount = 1; // the number of transactions in the block assembly
   repeated string txs = 2; // the transactions currently being assembled in the block assembly
+}
+
+// Request for retrieving block data for an existing mining candidate.
+message GetCandidateBlockRequest {
+  bytes id = 1; // the mining candidate ID (from a prior GetMiningCandidate call)
+}
+
+// Response containing all data needed to assemble a standard Bitcoin wire format block.
+message GetCandidateBlockResponse {
+  bytes header = 1;                    // 80-byte block header (version + prevhash + merkle root + time + bits + nonce=0)
+  bytes coinbase_tx = 2;               // serialized coinbase transaction
+  repeated bytes subtree_hashes = 3;   // subtree hashes for streaming transactions from the subtree store
+  uint64 transaction_count = 4;        // total number of transactions including coinbase
 }

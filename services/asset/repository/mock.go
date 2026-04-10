@@ -44,6 +44,16 @@ func (m *Mock) GetLegacyBlockReader(_ context.Context, hash *chainhash.Hash, _ .
 	return args.Get(0).(*io.PipeReader), args.Error(1)
 }
 
+func (m *Mock) GetMiningCandidateLegacyBlockReader(_ context.Context, _ []byte, _ []byte, _ [][]byte, _ uint64) (*io.PipeReader, error) {
+	args := m.Called()
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*io.PipeReader), args.Error(1)
+}
+
 func (m *Mock) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "", nil
 }

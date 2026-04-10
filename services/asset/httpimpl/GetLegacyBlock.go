@@ -48,6 +48,11 @@ import (
 //	GET /block/legacy/<hash>
 func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 	return func(c echo.Context) error {
+		// Dispatch to mining candidate handler when ?type=miningcandidate
+		if c.QueryParam("type") == "miningcandidate" {
+			return h.handleMiningCandidateLegacyBlock(c)
+		}
+
 		hashStr := c.Param("hash")
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetLegacyBlock_http",
