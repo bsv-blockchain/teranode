@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/retry"
 )
@@ -174,10 +173,13 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				}
 			}
 
-			// Wait for block to be mined (only in OnBlockMined trigger mode AND when block assembly is running)
-			// OnBlockPersisted mode receives notifications after block is already mined
-			// OnBlockMined mode needs to wait for mined_set=true before proceeding
-			if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockMined && s.blockAssemblyClient != nil {
+			// Wait for block to have mined_set=true before pruning.
+			// Both trigger modes need this: OnBlockMined notifications arrive before
+			// setTxMined completes, and OnBlockPersisted notifications arrive before
+			// setTxMined completes because block persister doesn't check mined_set.
+			// Without this wait, the pruner can delete transactions via DAH that
+			// setTxMined still needs to process.
+			if s.blockAssemblyClient != nil {
 				s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true", blockHashStr, blockHeight)
 				if !s.waitForBlockMinedStatus(ctx, &sig.blockHash) {
 					continue

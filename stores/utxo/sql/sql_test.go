@@ -72,6 +72,7 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true // batcher fires immediately in tests
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
 		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
@@ -483,6 +484,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true        // batcher fires immediately in tests
 	tSettings.GlobalBlockHeightRetention = 5 // Use low retention but compatible with child stability checks
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
@@ -647,6 +649,72 @@ func Test_SmokeTests(t *testing.T) {
 
 		tests.Conflicting(t, db)
 	})
+
+	t.Run("spend error types", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendErrorTypes(t, db)
+	})
+
+	t.Run("get spend not found", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.GetSpendNotFound(t, db)
+	})
+
+	t.Run("set block height zero", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockHeightZero(t, db)
+	})
+
+	t.Run("set locked behavior", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetLockedBehavior(t, db)
+	})
+
+	t.Run("set conflicting behavior", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetConflictingBehavior(t, db)
+	})
+
+	t.Run("set mined unmined since", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMinedUnminedSince(t, db)
+	})
+
+	t.Run("spend idempotent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendIdempotent(t, db)
+	})
+
+	t.Run("set mined with spent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMinedWithSpent(t, db)
+	})
 }
 
 func TestSetTTL(t *testing.T) {
@@ -686,7 +754,7 @@ func TestSetTTL(t *testing.T) {
 
 	assert.Nil(t, tombstoneMillis)
 
-	// update all outputs to be spent
+	// update all outputs to be spent (but tx is NOT mined yet)
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = $1 WHERE transaction_id = $2", spendpkg.NewSpendingData(tx.TxIDChainHash(), 1).Bytes(), transactionID)
 	require.NoError(t, err)
 
@@ -696,7 +764,69 @@ func TestSetTTL(t *testing.T) {
 	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
+	// DAH should NOT be set for unmined tx (mirrors aerospike: requires hasBlockIDs AND isOnLongestChain)
+	assert.Nil(t, tombstoneMillis)
+
+	// Now mark the tx as mined (add block_id and clear unmined_since) to simulate being on longest chain
+	_, err = txn.ExecContext(ctx, "INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx) VALUES ($1, $2, $3, $4)", transactionID, 100, 100, 0)
+	require.NoError(t, err)
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = NULL WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	// Now DAH should be set: all outputs spent AND mined AND on longest chain
 	assert.NotNil(t, tombstoneMillis)
+
+	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
+	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	expectedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
+
+	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
+	oldDAH := *tombstoneMillis
+	store.blockHeight.Store(store.blockHeight.Load() + 100) // advance 100 blocks
+	expectedBumpedDAH := int64(store.blockHeight.Load() + 1 + retention)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+	assert.Greater(t, *tombstoneMillis, oldDAH, "DAH should increase when block height advances")
+	require.Equal(t, expectedBumpedDAH, *tombstoneMillis, "bumped DAH should be new blockHeight + 1 + retention")
+
+	// Verify DAH clear on lock: set locked=true → setDAH should NOT clear DAH (that's done by SetLocked directly).
+	// However, when conditions no longer met (e.g., mark as unmined_since), setDAH should clear it.
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = 100 WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	// DAH should be cleared because isOnLongestChain is now false (unmined_since IS NOT NULL)
+	assert.Nil(t, tombstoneMillis, "DAH should be cleared when tx is no longer on longest chain")
+
+	// Restore on longest chain
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = NULL WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis, "DAH should be restored when tx is back on longest chain")
 
 	// unset one of the outputs to be unspent
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
@@ -710,7 +840,7 @@ func TestSetTTL(t *testing.T) {
 
 	assert.Nil(t, tombstoneMillis)
 
-	// mark the tx as conflicting, should set a tombstone
+	// mark the tx as conflicting, should set a tombstone (conflicting doesn't need to be mined)
 	_, err = txn.ExecContext(ctx, "UPDATE transactions SET conflicting = true WHERE id = $1", transactionID)
 	require.NoError(t, err)
 
@@ -721,6 +851,19 @@ func TestSetTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotNil(t, tombstoneMillis)
+
+	// Verify conflicting COALESCE: DAH is already set, calling setDAH again should NOT overwrite it
+	existingConflictingDAH := *tombstoneMillis
+	store.blockHeight.Store(store.blockHeight.Load() + 50) // advance more
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+	assert.Equal(t, existingConflictingDAH, *tombstoneMillis, "conflicting DAH should not be overwritten (COALESCE behavior)")
 }
 
 func TestUnmined(t *testing.T) {
@@ -1080,6 +1223,7 @@ func TestCreatePostgresSchemaWithMockConnection(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 1 * time.Second // Short timeout for quick failure
+	tSettings.BatcherDrainMode = true
 
 	// Attempt to create with PostgreSQL - this should fail quickly if PG is not available
 	// but it exercises the code path that calls createPostgresSchema
@@ -1167,6 +1311,7 @@ func TestCreateSqliteSchemaDirectly(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true // batcher fires immediately in tests
 
 	// Create a fresh SQLite in-memory database to test schema creation
 	utxoStoreURL, err := url.Parse("sqlitememory:///test_sqlite_schema")
@@ -1346,6 +1491,7 @@ func TestNewFunctionErrorPaths(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
 
 	// Test with invalid URL scheme
 	invalidURL := &url.URL{Scheme: "invalid", Host: "test"}
@@ -1433,6 +1579,90 @@ func TestPreviousOutputsDecorateEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Logf("PreviousOutputsDecorate on coinbase transaction returned: %v", err)
 	}
+}
+
+func TestBatchPreviousOutputsDecorate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, childTx := setup(ctx, t)
+
+	// Create a parent transaction that the child tx references
+	parentTx, err := bt.NewTxFromString("010000000000000000ef012935b177236ec1cb75cd9fba86d84acac9d76ced9c1b22ba8de4cd2de85a8393000000004948304502200f653627aff050093a83dabc12a2a9b627041d424f2eb18849a2d587f1acd38f022100a23f94acd94a4d24049140d5fbe12448a880fd8f8c1c2b4141f83bef2be409be01ffffffff00f2052a01000000434104ed83808a903a7e25be91349815f5d545f0c9dbec60b8ea914a6d6cbe9f830628039641231e2dbc1c0ca809f13405eb01f3a06614717f7859b788bd1305d9a3f2ac0100f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac00000000")
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, parentTx, 0)
+	require.NoError(t, err)
+
+	t.Run("single tx batch", func(t *testing.T) {
+		// Reset input decoration
+		childTx.Inputs[0].PreviousTxScript = nil
+		childTx.Inputs[0].PreviousTxSatoshis = 0
+
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript, "Input should have previous tx script")
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{})
+		require.NoError(t, err)
+
+		err = store.BatchPreviousOutputsDecorate(ctx, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("already decorated inputs are skipped", func(t *testing.T) {
+		// childTx was already decorated above, calling again should be a no-op
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("multiple txs referencing same parent", func(t *testing.T) {
+		// Create a second child that also references the same parent tx
+		childTx2, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+			"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+			"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+			"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+			"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+			"2f6b52de3d7c88ac00000000")
+		require.NoError(t, err)
+
+		// Clear decoration
+		childTx.Inputs[0].PreviousTxScript = nil
+		childTx.Inputs[0].PreviousTxSatoshis = 0
+		childTx2.Inputs[0].PreviousTxScript = nil
+		childTx2.Inputs[0].PreviousTxSatoshis = 0
+
+		err = store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx, childTx2})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+		assert.NotNil(t, childTx2.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx2.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("missing parent returns error", func(t *testing.T) {
+		// Build a tx with an input that references a non-existent parent
+		fakeHash := chainhash.HashH([]byte("non-existent-parent-tx"))
+		missingParentTx := bt.NewTx()
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     0xffffffff,
+		}
+		require.NoError(t, input.PreviousTxIDAdd(&fakeHash))
+		missingParentTx.Inputs = append(missingParentTx.Inputs, input)
+
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{missingParentTx})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decorate previous outputs")
+	})
 }
 
 func TestSpendAndUnspendEdgeCases(t *testing.T) {
@@ -1535,12 +1765,9 @@ func TestGetSpendEdgeCases(t *testing.T) {
 	}
 
 	result, err = store.GetSpend(ctx, nonExistentSpend)
-	// Should handle non-existent spends gracefully
-	if err != nil {
-		t.Logf("GetSpend for non-existent UTXO returned error: %v", err)
-	} else {
-		assert.NotNil(t, result)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int(utxo.Status_NOT_FOUND), result.Status)
 }
 
 func TestCreateCoinbaseAndFeeCalculation(t *testing.T) {

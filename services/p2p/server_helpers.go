@@ -352,6 +352,11 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
 	}
 
+	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)
+	if s != nil && s.settings != nil && s.settings.P2P.AllowPrivateIPs {
+		return nil
+	}
+
 	if ip := net.ParseIP(hostname); ip != nil {
 		if reason := isUnsafeIP(ip); reason != "" {
 			return errors.NewInvalidArgumentError("DataHubURL points to %s", reason)

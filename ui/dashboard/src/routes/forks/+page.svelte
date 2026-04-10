@@ -5,18 +5,30 @@
   import { treeBoxes } from './helpers'
   import * as api from '$internal/api'
   import { page } from '$app/stores'
+  import { goto } from '$app/navigation'
+  import { Button } from '$lib/components'
 
-  let vis // binding with div for visualization
-  let tree // tree data
+  let vis: HTMLDivElement
+  let tree: any
   let pageSize = 20
+  let mounted = false
+  let lastLoadedHash = ''
+
+  let nearestForks: {
+    current_height: number
+    prev_fork: { height: number; parent_hash: string } | null
+    next_fork: { height: number; parent_hash: string } | null
+  } | null = null
 
   $: hash = $page.url.searchParams.get('hash') || ''
   $: orientation = $page.url.searchParams.get('orientation') || checkOrientation()
 
-  //let hash = "0048b884a7098dc33b7ef4a7ff1cd22fce98de9e0d0801f247351df947f97c21"
+  $: if (mounted && hash && hash !== lastLoadedHash) {
+    loadData(hash)
+  }
 
   function checkOrientation() {
-    let orientation = 'left-to-right' // Default value
+    let orientation = 'left-to-right'
 
     if (window.matchMedia('(orientation: portrait)').matches) {
       orientation = 'top-to-bottom'
@@ -27,10 +39,18 @@
     return orientation
   }
 
-  async function getStatsData() {
+  async function loadData(h: string) {
+    lastLoadedHash = h
+    nearestForks = null
+    tree = null
+    if (vis) vis.innerHTML = ''
+    await Promise.all([loadForkTree(h), loadNearestForks(h)])
+  }
+
+  async function loadForkTree(h: string) {
     try {
       const result: any = await api.getBlockForks({
-        hash,
+        hash: h,
         limit: pageSize,
       })
       if (result.ok) {
@@ -42,22 +62,61 @@
     }
   }
 
+  async function loadNearestForks(h: string) {
+    try {
+      const result: any = await api.getNearestForkHeights({ hash: h })
+      if (result.ok) {
+        nearestForks = result.data
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   function redraw() {
-    console.log(tree)
-    // treeBoxes(vis, tree, 'left-to-right')
-    // treeBoxes(vis, tree, 'right-to-left')
-    // treeBoxes(vis, tree, 'bottom-to-top')
+    if (vis) {
+      vis.innerHTML = ''
+    }
     treeBoxes(vis, tree, orientation)
   }
 
+  function goToFork(blockHash: string) {
+    goto(`/forks/?hash=${blockHash}`)
+  }
+
   onMount(() => {
-    getStatsData()
-    //window.addEventListener('resize', redraw);
+    mounted = true
+    if (hash) {
+      loadData(hash)
+    }
   })
 </script>
 
 <PageWithMenu>
   <div class="content">
+    <div class="fork-nav">
+      <Button
+        size="small"
+        disabled={!nearestForks?.prev_fork}
+        on:click={() => nearestForks?.prev_fork && goToFork(nearestForks.prev_fork.parent_hash)}
+      >
+        &larr; Prev fork{nearestForks?.prev_fork ? ` (h: ${nearestForks.prev_fork.height})` : ''}
+      </Button>
+
+      <div class="fork-info">
+        {#if nearestForks}
+          Height {nearestForks.current_height}
+        {/if}
+      </div>
+
+      <Button
+        size="small"
+        disabled={!nearestForks?.next_fork}
+        on:click={() => nearestForks?.next_fork && goToFork(nearestForks.next_fork.parent_hash)}
+      >
+        Next fork{nearestForks?.next_fork ? ` (h: ${nearestForks.next_fork.height})` : ''} &rarr;
+      </Button>
+    </div>
     <div id="vis" bind:this={vis}></div>
   </div>
 </PageWithMenu>
@@ -71,6 +130,22 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  .fork-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    gap: 16px;
+  }
+
+  .fork-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.88);
   }
 
   #vis {

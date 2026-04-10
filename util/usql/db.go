@@ -33,6 +33,15 @@ func Open(driverName, dataSourceName string) (*DB, error) {
 	}, nil
 }
 
+// WrapDB wraps an existing *sql.DB with retry and circuit breaker support.
+func WrapDB(db *sql.DB) *DB {
+	return &DB{
+		DB:             db,
+		retryConfig:    DefaultRetryConfig(),
+		circuitBreaker: nil,
+	}
+}
+
 // SetRetryConfig sets the retry configuration for this database connection.
 func (db *DB) SetRetryConfig(config RetryConfig) {
 	db.retryConfig = config

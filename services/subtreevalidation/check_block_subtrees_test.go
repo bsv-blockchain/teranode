@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -968,6 +969,81 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 
 		assert.Equal(t, 0, count)
 		assert.Len(t, allTransactions, 0)
+	})
+
+	t.Run("CoinbasePlaceholderAtIndex0", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Create a coinbase transaction (input from all-zero hash with 0xffffffff index)
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From(
+			"0000000000000000000000000000000000000000000000000000000000000000",
+			0xffffffff,
+			"03640000", // minimal coinbase script with block height
+			0,
+		)
+		require.NoError(t, err)
+		coinbaseTx.AddOutput(&bt.Output{
+			Satoshis: 5000000000,
+			LockingScript: func() *bscript.Script {
+				s, _ := bscript.NewFromHexString("76a914389ffce9cd9ae88dcc0631e88a821ffdbe9bfe2688ac")
+				return s
+			}(),
+		})
+		require.True(t, coinbaseTx.IsCoinbase(), "test tx must be coinbase")
+
+		// Create a regular transaction
+		tx1, err := createTestTransaction("tx1")
+		require.NoError(t, err)
+
+		// Build subtree with coinbase placeholder at index 0 (simulating the real scenario
+		// where the coinbase hash is not yet known when the subtree is built)
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddCoinbaseNode()) // places CoinbasePlaceholderHashValue at index 0
+		require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), 1, 1))
+
+		// Write coinbase + tx1 to the data stream
+		subtreeData := bytes.Buffer{}
+		subtreeData.Write(coinbaseTx.Bytes())
+		subtreeData.Write(tx1.Bytes())
+
+		var allTransactions []*bt.Tx
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		require.NoError(t, err)
+
+		// Should succeed — the coinbase placeholder at index 0 is allowed when the tx is coinbase
+		require.Equal(t, 2, count)
+		require.Len(t, allTransactions, 2)
+	})
+
+	t.Run("PlaceholderAtNonZeroIndexFails", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Create two regular transactions
+		tx1, err := createTestTransaction("tx1")
+		require.NoError(t, err)
+		tx2, err := createTestTransaction("tx2")
+		require.NoError(t, err)
+
+		// Build subtree with placeholder hash at index 1 (not index 0) — this should fail
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), 1, 0))
+		require.NoError(t, subtree.AddNode(*tx2.TxIDChainHash(), 1, 1))
+		// Manually overwrite node 1 to the placeholder hash to simulate an invalid subtree
+		subtree.Nodes[1] = subtreepkg.Node{Hash: subtreepkg.CoinbasePlaceholderHashValue}
+
+		subtreeData := bytes.Buffer{}
+		subtreeData.Write(tx1.Bytes())
+		subtreeData.Write(tx2.Bytes())
+
+		var allTransactions []*bt.Tx
+		_, err = server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction hash mismatch")
 	})
 }
 

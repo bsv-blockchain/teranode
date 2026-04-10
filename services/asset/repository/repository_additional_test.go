@@ -302,10 +302,11 @@ func TestRepository_GetUtxo(t *testing.T) {
 		Vout:     0,
 	}
 
-	// Should return an error for non-existent UTXO
+	// Should return Status_NOT_FOUND for non-existent UTXO (matches aerospike behavior)
 	response, err := repo.GetUtxo(context.Background(), spend)
-	assert.Error(t, err)
-	assert.Nil(t, response)
+	assert.NoError(t, err)
+	assert.NotNil(t, response)
+	assert.Equal(t, int(utxo.Status_NOT_FOUND), response.Status)
 }
 
 // Test GetBestBlockHeader method

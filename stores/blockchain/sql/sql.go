@@ -39,7 +39,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
-	_ "github.com/lib/pq"
 	"golang.org/x/sync/singleflight"
 	_ "modernc.org/sqlite"
 )

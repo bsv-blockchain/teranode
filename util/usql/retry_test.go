@@ -83,22 +83,22 @@ func TestIsRetriable(t *testing.T) {
 		},
 		{
 			name:     "PostgreSQL serialization failure",
-			err:      &pq.Error{Code: "40001"},
+			err:      &pq.Error{Code: pq.ErrorCode(PgErrSerializationFail)},
 			expected: true,
 		},
 		{
 			name:     "PostgreSQL deadlock",
-			err:      &pq.Error{Code: "40P01"},
+			err:      &pq.Error{Code: pq.ErrorCode(PgErrDeadlockDetected)},
 			expected: true,
 		},
 		{
 			name:     "PostgreSQL lock not available",
-			err:      &pq.Error{Code: "55P03"},
+			err:      &pq.Error{Code: pq.ErrorCode(PgErrLockNotAvailable)},
 			expected: true,
 		},
 		{
 			name:     "PostgreSQL cannot connect now",
-			err:      &pq.Error{Code: "57P03"},
+			err:      &pq.Error{Code: pq.ErrorCode(PgErrCannotConnectNow)},
 			expected: true,
 		},
 		{
@@ -481,8 +481,8 @@ func TestRetryOperation_PostgreSQLErrors(t *testing.T) {
 
 	retriablePGErrors := []string{
 		"08000", "08003", "08006", // Connection errors
-		"40001", "40P01", // Transaction conflicts
-		"55P03", "57P03", // Lock/connect errors
+		PgErrSerializationFail, PgErrDeadlockDetected, // Transaction conflicts
+		PgErrLockNotAvailable, PgErrCannotConnectNow, // Lock/connect errors
 	}
 
 	for _, code := range retriablePGErrors {
