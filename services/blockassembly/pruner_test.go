@@ -27,6 +27,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Setup expectations in order
 		var iteratorCalled bool
@@ -109,6 +110,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Create mock transactions - only normal transaction should be returned by iterator
 		normalTxHash := chainhash.DoubleHashH([]byte("normal-tx"))
