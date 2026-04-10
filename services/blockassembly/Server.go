@@ -1539,7 +1539,6 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 	subtreesInJob := make([]*subtreepkg.Subtree, len(job.Subtrees))
 	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
-	var sizeInBytes uint64
 
 	if len(job.Subtrees) > 0 {
 		for i, st := range job.Subtrees {
@@ -1554,7 +1553,6 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 			subtreeHashes[i] = chainhash.Hash(rootHash[:])
 
 			transactionCount += uint64(st.Length())
-			sizeInBytes += st.SizeInBytes
 		}
 	} else {
 		transactionCount = 1
