@@ -95,9 +95,17 @@ func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 
-func (m *MockStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (m *MockStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	args := m.Called()
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(utxo.ConsistencyScanIterator), args.Error(1)
 }
 
 func (m *MockStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
@@ -548,7 +556,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, expectedErr)
 
-	iterator, err := store.GetUnminedTxIterator(false)
+	iterator, err := store.GetUnminedTxIterator()
 
 	assert.Equal(t, mockIterator, iterator)
 	assert.Equal(t, expectedErr, err)
@@ -1019,7 +1027,7 @@ func TestGetUnminedTxIteratorPassthrough(t *testing.T) {
 	mockIterator := &MockIterator{}
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
 
-	iterator, err := store.GetUnminedTxIterator(false)
+	iterator, err := store.GetUnminedTxIterator()
 
 	assert.Equal(t, mockIterator, iterator)
 	assert.NoError(t, err)
