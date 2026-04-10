@@ -7,7 +7,6 @@ package blockchain
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -52,7 +51,8 @@ type Client struct {
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
 	lastHeartbeat         atomic.Int64                       // Unix nano timestamp of last heartbeat
-	createdAt             int64                              // Unix nano timestamp — used for startup grace period
+	subscriptionReady     chan struct{}                      // Closed when first subscription + FSM state fetch completes
+	subscriptionReadyOnce sync.Once                          // Ensures subscriptionReady is closed exactly once
 }
 
 // BestBlockHeader represents the best block header in the blockchain.
@@ -146,39 +146,19 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	running.Store(true)
 
 	c := &Client{
-		client:      blockchain_api.NewBlockchainAPIClient(baConn),
-		logger:      logger,
-		settings:    tSettings,
-		running:     &running,
-		conn:        baConn,
-		subscribers: make([]clientSubscriber, 0),
-		createdAt:   time.Now().UnixNano(),
+		client:            blockchain_api.NewBlockchainAPIClient(baConn),
+		logger:            logger,
+		settings:          tSettings,
+		running:           &running,
+		conn:              baConn,
+		subscribers:       make([]clientSubscriber, 0),
+		subscriptionReady: make(chan struct{}),
 	}
 
-	// start a subscription to the blockchain service and wait for it to be ready
-	subscriptionCh, ready, err := c.SubscribeToServer(ctx, source)
+	// start a subscription to the blockchain service
+	subscriptionCh, err := c.SubscribeToServer(ctx, source)
 	if err != nil {
 		return nil, err
-	}
-
-	// Wait for subscription to establish and FSM state to be fetched before
-	// returning the client. Without this, callers (e.g. RPC) may start serving
-	// requests before the blockchain subscription is ready, causing stale state
-	// (e.g. getinfo returning block height 0).
-	subscriptionTimeout := tSettings.BlockChain.SubscriptionTimeout
-	subscriptionTimer := time.NewTimer(subscriptionTimeout)
-	select {
-	case <-ready:
-		subscriptionTimer.Stop()
-		// Reset grace period so heartbeat timeout starts from subscription
-		// readiness, not client creation (avoids false 503 after slow subscribe).
-		c.createdAt = time.Now().UnixNano()
-		logger.Infof("[Blockchain] Subscription ready for %s", source)
-	case <-subscriptionTimer.C:
-		logger.Warnf("[Blockchain] Subscription not ready after %v for %s, proceeding anyway", subscriptionTimeout, source)
-	case <-ctx.Done():
-		subscriptionTimer.Stop()
-		return nil, ctx.Err()
 	}
 
 	// start a go routine to listen for notifications
@@ -187,7 +167,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 			select {
 			case <-ctx.Done():
 				return
-			case notification := <-subscriptionCh:
+			case notification, ok := <-subscriptionCh:
+				if !ok {
+					// Channel closed, exit the listener
+					return
+				}
 				if notification == nil {
 					continue
 				}
@@ -236,10 +220,17 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
-	// Add readiness checks here. Include dependency checks.
-	// If any dependency is not ready, return http.StatusServiceUnavailable
-	// If all dependencies are ready, return http.StatusOK
-	// A failed dependency check does not imply the service needs restarting
+	// Check subscription readiness — prevents serving stale state before
+	// the first subscription + FSM state fetch completes.
+	if c.subscriptionReady != nil {
+		select {
+		case <-c.subscriptionReady:
+			// ready
+		default:
+			return http.StatusServiceUnavailable, "subscription not yet established", nil
+		}
+	}
+
 	resp, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
 	if err != nil {
 		return http.StatusFailedDependency, err.Error(), errors.UnwrapGRPC(err)
@@ -248,41 +239,7 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusFailedDependency, resp.GetDetails(), nil
 	}
 
-	// Check subscription health via heartbeat recency
-	if code, msg := c.checkSubscriptionHealth(); code != http.StatusOK {
-		return code, msg, nil
-	}
-
 	return http.StatusOK, resp.GetDetails(), nil
-}
-
-// checkSubscriptionHealth verifies the blockchain subscription is active by
-// checking heartbeat recency. Returns 503 if the subscription appears stale.
-func (c *Client) checkSubscriptionHealth() (int, string) {
-	if c.createdAt == 0 {
-		// Client not created via constructor (e.g. test mock) — skip subscription check
-		return http.StatusOK, "subscription check skipped (no createdAt)"
-	}
-
-	lastHB := c.lastHeartbeat.Load()
-	heartbeatTimeout := 3 * c.settings.BlockChain.HeartbeatInterval
-
-	if lastHB == 0 {
-		// No heartbeat yet — check if still within startup grace period
-		if time.Since(time.Unix(0, c.createdAt)) > heartbeatTimeout {
-			return http.StatusServiceUnavailable,
-				fmt.Sprintf("subscription not established (no heartbeat received after %v)", heartbeatTimeout)
-		}
-		return http.StatusOK, "subscription: waiting for first heartbeat"
-	}
-
-	heartbeatAge := time.Since(time.Unix(0, lastHB))
-	if heartbeatAge > heartbeatTimeout {
-		return http.StatusServiceUnavailable,
-			fmt.Sprintf("subscription stale (last heartbeat %v ago, timeout %v)", heartbeatAge.Round(time.Second), heartbeatTimeout)
-	}
-
-	return http.StatusOK, fmt.Sprintf("subscription healthy (last heartbeat %v ago)", heartbeatAge.Round(time.Second))
 }
 
 // AddBlock sends a request to add a new block to the blockchain.
@@ -1258,15 +1215,10 @@ func (c *Client) GetSubscribers(ctx context.Context) ([]string, error) {
 //
 // Returns:
 //   - chan *blockchain_api.Notification: Channel for receiving blockchain notifications
-//   - <-chan struct{}: Ready channel that closes when subscription is established and FSM state fetched
 //   - error: Any error encountered during subscription establishment
-func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *blockchain_api.Notification, <-chan struct{}, error) {
+func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	// Use a buffered channel to prevent blocking on sends
 	ch := make(chan *blockchain_api.Notification, 100)
-
-	// ready is signalled after the first successful subscription + FSM state fetch
-	ready := make(chan struct{})
-	var readyOnce sync.Once
 
 	// Heartbeat timeout: 3x the server's broadcast interval (allows 3 missed heartbeats)
 	heartbeatTimeout := 3 * c.settings.BlockChain.HeartbeatInterval
@@ -1320,10 +1272,19 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 			// Subscription established successfully - fetch current FSM state
 			c.logger.Infof("[Blockchain] Subscription established, fetching current FSM state for %s", source)
-			c.fetchAndRestoreFSMState(ctx, source)
+			if c.fetchAndRestoreFSMState(ctx, source) {
+				c.logger.Infof("[Blockchain] Initial FSM state restored for %s", source)
+			} else {
+				c.logger.Warnf("[Blockchain] Initial FSM state fetch failed for %s; continuing with subscription and fallback state", source)
+			}
 
-			// Signal readiness on first successful subscription
-			readyOnce.Do(func() { close(ready) })
+			// Signal readiness once the subscription is established and the initial FSM fetch attempt has completed.
+			c.subscriptionReadyOnce.Do(func() {
+				if c.subscriptionReady != nil {
+					close(c.subscriptionReady)
+				}
+				c.logger.Infof("[Blockchain] Subscription ready for %s", source)
+			})
 
 			// Don't initialize heartbeat here - let it remain 0 until first PING is received.
 			// This ensures staleness detection works correctly: if connection breaks before
@@ -1412,13 +1373,14 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 		}
 	}()
 
-	return ch, ready, nil
+	return ch, nil
 }
 
 // fetchAndRestoreFSMState queries the blockchain service for the current FSM state
 // and updates the local cached state. This is called after successful reconnection
-// to ensure the client has the correct FSM state.
-func (c *Client) fetchAndRestoreFSMState(ctx context.Context, source string) {
+// to ensure the client has the correct FSM state. Returns true if the state was
+// successfully fetched, false if it fell back to IDLE due to an error.
+func (c *Client) fetchAndRestoreFSMState(ctx context.Context, source string) bool {
 	stateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -1427,12 +1389,13 @@ func (c *Client) fetchAndRestoreFSMState(ctx context.Context, source string) {
 		c.logger.Warnf("[Blockchain] Failed to fetch FSM state, setting to IDLE for safety: %v", err)
 		idleState := FSMStateIDLE
 		c.fmsState.Store(&idleState)
-		return
+		return false
 	}
 
 	newState := state.State
 	c.fmsState.Store(&newState)
 	c.logger.Infof("[Blockchain] FSM state restored to %s for %s", newState.String(), source)
+	return true
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.

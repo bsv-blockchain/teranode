@@ -224,6 +224,7 @@ func newMTPTestStore(t *testing.T) *SQL {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams.CSVHeight = 0
+	tSettings.BlockChain.UseInMemoryChainCheck = false
 
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)

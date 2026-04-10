@@ -121,6 +121,10 @@ type ClientI interface {
 	// Verifies each unmined tx's inputs are still spent by this tx, marks invalid ones as conflicting.
 	ResetBlockAssemblyValidateInputs(ctx context.Context) error
 
+	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+	// Returns an error if any unmined transactions have inputs spent by different transactions.
+	CheckBlockAssemblyValidateInputs(ctx context.Context) error
+
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	//
 	// Parameters:

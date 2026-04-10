@@ -65,7 +65,10 @@ import (
 var rpcCallCache = newRPCCache()
 
 func newRPCCache() *ttlcache.Cache[string, any] {
-	c := ttlcache.New[string, any](ttlcache.WithTTL[string, any](10 * time.Second))
+	c := ttlcache.New[string, any](
+		ttlcache.WithTTL[string, any](10*time.Second),
+		ttlcache.WithDisableTouchOnHit[string, any](),
+	)
 	go c.Start()
 	return c
 }

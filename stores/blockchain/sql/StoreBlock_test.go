@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -330,7 +331,7 @@ func TestParseSQLError_PostgreSQLConstraint(t *testing.T) {
 
 	// Create a PostgreSQL constraint violation error
 	pqErr := &pq.Error{
-		Code: "23505", // Unique constraint violation
+		Code: usql.PgErrUniqueViolation,
 	}
 
 	result := s.parseSQLError(pqErr, block1)

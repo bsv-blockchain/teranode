@@ -1575,6 +1575,35 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
+// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+// Iterates all unmined transactions and verifies each input is still spent by that transaction.
+// Unlike ResetBlockAssemblyValidateInputs, this method makes no changes to the UTXO store.
+// Returns an error if any unmined transactions are found with invalid inputs.
+func (ba *BlockAssembly) CheckBlockAssemblyValidateInputs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "CheckBlockAssemblyValidateInputs",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithLogMessage(ba.logger, "[CheckBlockAssemblyValidateInputs] called"),
+	)
+	defer deferFn()
+
+	if ba.blockAssembler.unminedTransactionsLoading.Load() {
+		ba.logger.Warnf("[CheckBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+	}
+
+	invalidCount, err := ba.blockAssembler.CheckInputValidation(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if invalidCount > 0 {
+		return nil, errors.NewProcessingError("found %d unmined transactions with invalid inputs", invalidCount)
+	}
+
+	ba.logger.Infof("[CheckBlockAssemblyValidateInputs] all unmined transactions have valid inputs")
+	return &blockassembly_api.EmptyMessage{}, nil
+}
+
 // GetBlockAssemblyState retrieves the current operational state of the block assembly service.
 //
 // This method provides comprehensive diagnostic information about the current state

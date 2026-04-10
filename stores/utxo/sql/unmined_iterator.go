@@ -155,14 +155,16 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 	for rows.Next() {
 		input := &bt.Input{}
+		var previousTxIdx int64
 
-		if err = rows.Scan(&previousTxHashBytes, &input.PreviousTxOutIndex, &input.PreviousTxSatoshis, &input.PreviousTxScript, &input.UnlockingScript, &input.SequenceNumber); err != nil {
+		if err = rows.Scan(&previousTxHashBytes, &previousTxIdx, &input.PreviousTxSatoshis, &input.PreviousTxScript, &input.UnlockingScript, &input.SequenceNumber); err != nil {
 			if err = it.Close(); err != nil {
 				it.store.logger.Warnf("failed to close iterator: %v", err)
 			}
 
 			return nil, err
 		}
+		input.PreviousTxOutIndex = uint32(previousTxIdx)
 
 		previousTxHash, err = chainhash.NewHash(previousTxHashBytes)
 		if err != nil {

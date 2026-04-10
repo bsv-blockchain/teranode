@@ -1907,7 +1907,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 							b.logger.Infof("[loadUnminedTransactions] input validation progress: %d txs checked, %d invalid", validatedCount, invalidInputCount.Load())
 						}
 
-						if !b.validateUnminedTxInputs(ctx, unminedTransaction.Hash, bestBlockHeaderIDsMap) {
+						if !b.validateUnminedTxInputs(ctx, unminedTransaction.Hash, bestBlockHeaderIDsMap, false) {
 							invalidInputCount.Add(1)
 							continue
 						}
@@ -2141,7 +2141,7 @@ type sortEntry struct {
 //     (e.g. ProcessConflicting incorrectly made this tx the winner over a confirmed tx)
 //
 // Returns true if the transaction is valid for inclusion in block assembly.
-func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool) bool {
+func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) bool {
 	// Load only inputs and conflicting flag — NOT full Tx (avoids loading heavy output data)
 	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Inputs, fields.Conflicting)
 	if err != nil || txMeta == nil || txMeta.Tx == nil || txMeta.Tx.Inputs == nil {
@@ -2175,7 +2175,9 @@ func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash cha
 			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
 				txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
 
-			b.markAsConflicting(ctx, txHash)
+			if !dryRun {
+				b.markAsConflicting(ctx, txHash)
+			}
 			return false
 		}
 
@@ -2203,7 +2205,9 @@ func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash cha
 					b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
 						txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
 
-					b.markAsConflicting(ctx, txHash)
+					if !dryRun {
+						b.markAsConflicting(ctx, txHash)
+					}
 					return false
 				}
 			}
@@ -2217,6 +2221,63 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 	if _, _, err := b.utxoStore.SetConflicting(ctx, []chainhash.Hash{txHash}, true); err != nil {
 		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
 	}
+}
+
+// CheckInputValidation iterates all unmined transactions and checks whether their inputs
+// are still validly spent by those transactions, without modifying any state.
+// Unlike ResetWithInputValidation, this method is read-only — it does not mark
+// any transactions as conflicting. Returns the count of unmined transactions
+// found to have invalid inputs, or an error if the check cannot be performed.
+func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) {
+	bestBlockHeader, _ := b.CurrentBlock()
+	if bestBlockHeader == nil {
+		return 0, errors.NewProcessingError("current block header is not initialized", nil)
+	}
+	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), 1000)
+	if err != nil {
+		return 0, errors.NewProcessingError("error getting best block headers", err)
+	}
+
+	bestBlockHeaderIDsMap := make(map[uint32]bool, len(bestBlockHeaderIDs))
+	for _, id := range bestBlockHeaderIDs {
+		bestBlockHeaderIDsMap[id] = true
+	}
+
+	it, err := b.utxoStore.GetUnminedTxIterator(false)
+	if err != nil {
+		return 0, errors.NewProcessingError("error getting unmined tx iterator", err)
+	}
+	defer it.Close()
+
+	invalidCount := 0
+	for {
+		batch, err := it.Next(ctx)
+		if err != nil {
+			return 0, errors.NewProcessingError("error iterating unmined transactions", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, tx := range batch {
+			if tx.Skip {
+				continue
+			}
+			alreadyMined := false
+			for _, blockID := range tx.BlockIDs {
+				if bestBlockHeaderIDsMap[blockID] {
+					alreadyMined = true
+					break
+				}
+			}
+			if alreadyMined {
+				continue
+			}
+			if !b.validateUnminedTxInputs(ctx, tx.Hash, bestBlockHeaderIDsMap, true) {
+				invalidCount++
+			}
+		}
+	}
+	return invalidCount, nil
 }
 
 // loadUnminedTransactionsWithDiskSort loads unmined transactions using disk-based sorting
