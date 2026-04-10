@@ -20,11 +20,11 @@ func CheckBlockAssembly(logger ulogger.Logger, settings *settings.Settings) erro
 
 	ba, err := blockassembly.NewClient(ctx, logger, settings)
 	if err != nil {
-		return errors.NewConfigurationError("failed to create block assembly client: %w", err)
+		return errors.NewConfigurationError("failed to create block assembly client", err)
 	}
 
 	if err = ba.CheckBlockAssemblyValidateInputs(ctx); err != nil {
-		return errors.NewProcessingError("block assembly validation failed: %w", err)
+		return errors.NewProcessingError("block assembly validation failed", err)
 	}
 
 	return nil
