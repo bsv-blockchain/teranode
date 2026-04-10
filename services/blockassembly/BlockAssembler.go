@@ -2230,6 +2230,9 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 // found to have invalid inputs, or an error if the check cannot be performed.
 func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) {
 	bestBlockHeader, _ := b.CurrentBlock()
+	if bestBlockHeader == nil {
+		return 0, errors.NewProcessingError("current block header is not initialized", nil)
+	}
 	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), 1000)
 	if err != nil {
 		return 0, errors.NewProcessingError("error getting best block headers", err)
