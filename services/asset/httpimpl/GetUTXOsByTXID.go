@@ -19,6 +19,8 @@ import (
 
 // UTXOItem represents detailed information about an Unspent Transaction Output (UTXO).
 // It contains both the output details and its current status in the UTXO set.
+//
+// swagger:model UTXOItem
 type UTXOItem struct {
 	// Txid is the hash of the transaction that created this UTXO
 	Txid *chainhash.Hash `json:"txid"`

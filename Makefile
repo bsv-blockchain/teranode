@@ -867,6 +867,18 @@ show-hashes:
 	fi
 	@echo ""
 
+# Generate Swagger spec for Asset service from go-swagger annotations
+.PHONY: swagger-asset
+swagger-asset:
+	@echo "Generating Swagger spec for Asset service..."
+	swagger generate spec -m -o services/asset/httpimpl/swagger.json -w services/asset/httpimpl/
+	@echo "Swagger spec generated at services/asset/httpimpl/swagger.json"
+
+# Validate generated Swagger spec
+.PHONY: swagger-validate
+swagger-validate: swagger-asset
+	swagger validate services/asset/httpimpl/swagger.json
+
 # Quick chain integrity test (shorter wait times for faster testing)
 .PHONY: chain-integrity-test-quick
 chain-integrity-test-quick:
