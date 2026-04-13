@@ -8,9 +8,9 @@ x-teranode-base: &teranode-base
   volumes:
     - ../data/test/${TEST_ID:-chainintegrity}:/app/data
 
-x-teranode-coinbase-base:
-  &teranode-coinbase-base # image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
-  image: teranode-coinbase:local
+x-teranode-coinbase-base: &teranode-coinbase-base
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
+  # image: teranode-coinbase:local
   networks:
     - teranode-network
   depends_on:
