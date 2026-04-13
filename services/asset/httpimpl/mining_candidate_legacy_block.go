@@ -1,10 +1,10 @@
 package httpimpl
 
 import (
-	"encoding/hex"
 	"net/http"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
@@ -40,7 +40,9 @@ func (h *HTTP) handleMiningCandidateLegacyBlock(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotImplemented, "block assembly client not configured")
 	}
 
-	candidateID, err := hex.DecodeString(idStr)
+	// The RPC returns candidate IDs in reversed hex (Bitcoin display convention).
+	// We need to reverse back to internal byte order for the job store lookup.
+	candidateID, err := util.DecodeAndReverseHexString(idStr)
 	if err != nil || len(candidateID) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid candidate ID format").Error())
 	}
