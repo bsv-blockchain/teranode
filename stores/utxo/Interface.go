@@ -259,8 +259,16 @@ type Store interface {
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
-	// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
-	GetUnminedTxIterator(fullScan bool) (UnminedTxIterator, error)
+	// GetUnminedTxIterator returns an iterator for unmined transactions in the store.
+	// Uses the unmined_since secondary index to query only transactions with unmined_since set,
+	// and does NOT scan all records. For full consistency checking that scans all records
+	// regardless of unmined_since, see ScanInconsistentUnminedTxs.
+	GetUnminedTxIterator() (UnminedTxIterator, error)
+
+	// ScanInconsistentUnminedTxs returns a lightweight iterator that scans all records
+	// to detect unmined_since inconsistencies (mined txs with unmined_since still set).
+	// Only fetches txid, block_ids, and unmined_since — no heavy data like TxInpoints.
+	ScanInconsistentUnminedTxs() (ConsistencyScanIterator, error)
 
 	// GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner's needs.
 	// Unlike GetUnminedTxIterator, this iterator:

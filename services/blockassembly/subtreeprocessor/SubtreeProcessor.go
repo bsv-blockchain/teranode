@@ -1068,6 +1068,47 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	defer deferFn()
 
+	ctx := context.Background()
+
+	// Mark all currently-in-assembly transactions as NOT on longest chain before clearing state.
+	//
+	// Some assembly transactions may have unmined_since=NULL in the UTXO store if a competing
+	// fork's BlockValidation processed them (it inserts them with UnminedSince=0, i.e. "mined").
+	// Without this step, loadUnminedTransactions() — which uses the unmined_since index
+	// (WHERE unmined_since IS NOT NULL) — will not find them, and they will be silently dropped
+	// from block assembly after the reset.
+	//
+	// This mirrors exactly what reorgBlocks() does at lines 2665-2710 before it finalises a reorg.
+	// The call is idempotent: for transactions that already have unmined_since set, it is a no-op.
+	{
+		currentSubtree := stp.currentSubtree.Load()
+		subtreeNodeCount := len(currentSubtree.Nodes)
+		for _, st := range stp.chainedSubtrees {
+			subtreeNodeCount += len(st.Nodes)
+		}
+
+		assemblyTxHashes := make([]chainhash.Hash, 0, subtreeNodeCount)
+		for _, st := range stp.chainedSubtrees {
+			for _, node := range st.Nodes {
+				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+				}
+			}
+		}
+		for _, node := range currentSubtree.Nodes {
+			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+			}
+		}
+
+		if len(assemblyTxHashes) > 0 {
+			stp.logger.Infof("[SubtreeProcessor][reset] marking %d assembly txs as not on longest chain before clearing state", len(assemblyTxHashes))
+			if err := stp.markNotOnLongestChain(ctx, assemblyTxHashes); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset", err)
+			}
+		}
+	}
+
 	stp.closeChainedSubtrees()
 
 	itemsPerFile := int(stp.currentItemsPerFile.Load())
@@ -1090,8 +1131,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	// reset tx count
 	stp.setTxCountFromSubtrees()
-
-	ctx := context.Background()
 
 	// the processed conflicting hashes map keeps track of all the conflicting hashes we've already processed
 	// this is to avoid processing the same conflicting hash multiple times if it appears in multiple blocks
@@ -3227,9 +3266,16 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 // processRemainderTransactionsAndDequeue processes remaining transactions from the block
 func (stp *SubtreeProcessor) processRemainderTransactionsAndDequeue(ctx context.Context, params *RemainderTransactionParams) error {
 	if params.TransactionMap != nil && params.TransactionMap.Length() > 0 {
+		txCount := stp.TxCount()
+		mapLen := uint64(params.TransactionMap.Length())
+		var remainderCount uint64
+		if txCount > mapLen {
+			remainderCount = txCount - mapLen
+		}
+
 		_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "processRemainderTransactionsAndDequeue",
 			tracing.WithParentStat(stp.stats),
-			tracing.WithLogMessage(stp.logger, "[moveForwardBlock][%s] processing %d remainder tx hashes into subtrees", params.Block.String(), stp.TxCount()-uint64(params.TransactionMap.Length())),
+			tracing.WithLogMessage(stp.logger, "[moveForwardBlock][%s] processing %d remainder tx hashes into subtrees", params.Block.String(), remainderCount),
 		)
 
 		defer deferFn()

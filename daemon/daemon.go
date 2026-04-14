@@ -319,7 +319,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 				return
 			}
 
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(status)
 			_, _ = w.Write([]byte(details))
 		}
 	}

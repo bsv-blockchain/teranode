@@ -673,29 +673,36 @@ func (b *Blockchain) startSubscriptions() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
 				b.subscribersMu.RLock()
+				// Collect dead subscribers to remove after releasing the read lock
+				var dead []subscriber
 				for sub := range b.subscribers {
-					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s: %s", sub.source, notification.Stringify())
 
-					go func(s subscriber) {
-						b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s: %s", s.source, notification.Stringify())
-
-						if err := s.subscription.Send(notification); err != nil {
-							b.deadSubscriptions <- s
-						}
-					}(sub)
+					// Send synchronously — NOT in a goroutine. Concurrent Send() calls
+					// on the same gRPC ServerStream corrupt the stream, causing the
+					// subscriber to be silently dropped and never receive notifications.
+					if err := sub.subscription.Send(notification); err != nil {
+						dead = append(dead, sub)
+					}
 				}
 				b.subscribersMu.RUnlock()
+
+				// Queue dead subscribers for removal
+				for _, s := range dead {
+					b.deadSubscriptions <- s
+				}
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 		case s := <-b.newSubscriptions:
+			// Send initial notification BEFORE adding to the subscribers map.
+			// This prevents concurrent Send() between sendInitialNotification
+			// and the notification delivery loop above.
+			b.sendInitialNotification(s)
+
 			b.subscribersMu.Lock()
 			b.subscribers[s] = true
 			b.subscribersMu.Unlock()
-
-			// Send initial notification to let the subscriber know the subscription is ready
-			// and provide the current blockchain state
-			go b.sendInitialNotification(s)
 
 		case s := <-b.deadSubscriptions:
 			b.subscribersMu.Lock()

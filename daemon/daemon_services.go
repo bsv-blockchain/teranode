@@ -413,6 +413,15 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 	// Create ban list for the Asset service
 	banList := createBanList(ctx, createLogger("asset_banlist"), appSettings)
 
+	// Create block assembly client for the Asset service (for mining candidate legacy block endpoint)
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(
+		ctx, createLogger(loggerBlockAssembly), appSettings,
+	)
+	if err != nil {
+		// Non-fatal: the mining candidate legacy block endpoint will return 501 if unavailable
+		blockAssemblyClient = nil
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -425,6 +434,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockvalidationClient,
 		p2pClient,
 		banList,
+		blockAssemblyClient,
 	))
 }
 

@@ -990,7 +990,10 @@ func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagA
 func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }

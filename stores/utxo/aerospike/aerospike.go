@@ -445,6 +445,32 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 		return http.StatusServiceUnavailable, details, err
 	}
 
+	nodes := s.client.GetNodes()
+	if len(nodes) == 0 {
+		return http.StatusServiceUnavailable, details, errors.NewStorageUnavailableError("no aerospike nodes available")
+	}
+
+	infoPolicy := aerospike.NewInfoPolicy()
+	if timeout > 0 {
+		infoPolicy.Timeout = timeout
+	}
+
+	nsKey := "namespace/" + s.namespace
+	for _, node := range nodes {
+		infoMap, err := node.RequestInfo(infoPolicy, nsKey)
+		if err != nil {
+			return http.StatusServiceUnavailable, details, errors.NewStorageError("failed to get namespace info from node %s: %v", node.GetName(), err)
+		}
+
+		if nsStr, ok := infoMap[nsKey]; ok {
+			for pair := range strings.SplitSeq(nsStr, ";") {
+				if pair == "stop_writes=true" || pair == "clock_skew_stop_writes=true" {
+					return http.StatusServiceUnavailable, details, errors.NewStorageUnavailableError("aerospike namespace %s on node %s has %s", s.namespace, node.GetName(), pair)
+				}
+			}
+		}
+	}
+
 	return http.StatusOK, details, nil
 }
 

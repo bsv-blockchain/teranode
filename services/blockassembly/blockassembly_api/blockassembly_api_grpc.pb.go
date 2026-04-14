@@ -31,11 +31,13 @@ const (
 	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
 	BlockAssemblyAPI_ResetBlockAssemblyFully_FullMethodName          = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssemblyFully"
 	BlockAssemblyAPI_ResetBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssemblyValidateInputs"
+	BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssemblyValidateInputs"
 	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName            = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
 	BlockAssemblyAPI_GenerateBlocks_FullMethodName                   = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
 	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
 	BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName              = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyTxs"
+	BlockAssemblyAPI_GetCandidateBlock_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/GetCandidateBlock"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -84,6 +86,9 @@ type BlockAssemblyAPIClient interface {
 	// transaction. If an input is spent by a different tx, marks the tx as conflicting.
 	// Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
 	ResetBlockAssemblyValidateInputs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+	// Returns an error if any unmined transactions have inputs spent by different transactions.
+	CheckBlockAssemblyValidateInputs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error)
@@ -100,6 +105,12 @@ type BlockAssemblyAPIClient interface {
 	// This provides visibility into the transactions that are candidates for inclusion in the next block.
 	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
 	GetBlockAssemblyTxs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyTxsResponse, error)
+	// GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+	// Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+	// coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+	// The response contains everything needed to assemble a standard Bitcoin wire format block.
+	// Returns NotFound if the candidate ID has expired or is invalid.
+	GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -220,6 +231,16 @@ func (c *blockAssemblyAPIClient) ResetBlockAssemblyValidateInputs(ctx context.Co
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) CheckBlockAssemblyValidateInputs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StateMessage)
@@ -264,6 +285,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyTxs(ctx context.Context, in *Em
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockAssemblyTxsResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCandidateBlockResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetCandidateBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +347,9 @@ type BlockAssemblyAPIServer interface {
 	// transaction. If an input is spent by a different tx, marks the tx as conflicting.
 	// Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
 	ResetBlockAssemblyValidateInputs(context.Context, *EmptyMessage) (*EmptyMessage, error)
+	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+	// Returns an error if any unmined transactions have inputs spent by different transactions.
+	CheckBlockAssemblyValidateInputs(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	// Provides detailed information about the assembly process status.
 	GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error)
@@ -332,6 +366,12 @@ type BlockAssemblyAPIServer interface {
 	// This provides visibility into the transactions that are candidates for inclusion in the next block.
 	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
 	GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error)
+	// GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+	// Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+	// coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+	// The response contains everything needed to assemble a standard Bitcoin wire format block.
+	// Returns NotFound if the candidate ID has expired or is invalid.
+	GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -375,6 +415,9 @@ func (UnimplementedBlockAssemblyAPIServer) ResetBlockAssemblyFully(context.Conte
 func (UnimplementedBlockAssemblyAPIServer) ResetBlockAssemblyValidateInputs(context.Context, *EmptyMessage) (*EmptyMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResetBlockAssemblyValidateInputs not implemented")
 }
+func (UnimplementedBlockAssemblyAPIServer) CheckBlockAssemblyValidateInputs(context.Context, *EmptyMessage) (*EmptyMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckBlockAssemblyValidateInputs not implemented")
+}
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyState not implemented")
 }
@@ -389,6 +432,9 @@ func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyBlockCandidate(contex
 }
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockAssemblyTxs not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCandidateBlock not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -609,6 +655,24 @@ func _BlockAssemblyAPI_ResetBlockAssemblyValidateInputs_Handler(srv interface{},
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).CheckBlockAssemblyValidateInputs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).CheckBlockAssemblyValidateInputs(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_GetBlockAssemblyState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
@@ -699,6 +763,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetCandidateBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCandidateBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetCandidateBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetCandidateBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetCandidateBlock(ctx, req.(*GetCandidateBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -751,6 +833,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockAssemblyAPI_ResetBlockAssemblyValidateInputs_Handler,
 		},
 		{
+			MethodName: "CheckBlockAssemblyValidateInputs",
+			Handler:    _BlockAssemblyAPI_CheckBlockAssemblyValidateInputs_Handler,
+		},
+		{
 			MethodName: "GetBlockAssemblyState",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyState_Handler,
 		},
@@ -769,6 +855,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockAssemblyTxs",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler,
+		},
+		{
+			MethodName: "GetCandidateBlock",
+			Handler:    _BlockAssemblyAPI_GetCandidateBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

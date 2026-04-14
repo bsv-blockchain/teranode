@@ -103,9 +103,18 @@ func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 
 // GetUnminedTxIterator mocks the creation of an iterator for unmined transactions.
 // Returns the configured mock response for unmined transaction iteration.
-func (m *MockUtxostore) GetUnminedTxIterator(bool) (UnminedTxIterator, error) {
+func (m *MockUtxostore) GetUnminedTxIterator() (UnminedTxIterator, error) {
 	args := m.Called()
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
+// ScanInconsistentUnminedTxs mocks the consistency scan iterator.
+func (m *MockUtxostore) ScanInconsistentUnminedTxs() (ConsistencyScanIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(ConsistencyScanIterator), args.Error(1)
 }
 
 // GetPrunableUnminedTxIterator mocks the creation of a pruner-specific lightweight iterator.
@@ -265,6 +274,34 @@ func (m *MockUnminedTxIterator) Err() error {
 }
 
 func (m *MockUnminedTxIterator) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// MockConsistencyScanIterator is a mock implementation of utxo.ConsistencyScanIterator for testing
+type MockConsistencyScanIterator struct {
+	mock.Mock
+}
+
+func (m *MockConsistencyScanIterator) Next(ctx context.Context) ([]*InconsistentTxRecord, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*InconsistentTxRecord), args.Error(1)
+}
+
+func (m *MockConsistencyScanIterator) TotalScanned() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockConsistencyScanIterator) Err() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+func (m *MockConsistencyScanIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
 }

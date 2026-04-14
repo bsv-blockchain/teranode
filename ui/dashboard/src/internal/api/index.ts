@@ -237,6 +237,12 @@ export function getBlockForks(data: { hash: string; limit: number }): Promise<Ap
   return get<any>(`${baseUrl}/block/${data.hash}/forks`, { query: { limit: String(data.limit) } })
 }
 
+export function getNearestForkHeights(data: { hash: string; range?: number }): Promise<ApiResponse<any>> {
+  const query: Record<string, string> = {}
+  if (data.range) query.range = String(data.range)
+  return get<any>(`${baseUrl}/block/${data.hash}/nearestforks`, { query })
+}
+
 export function getBlockGraphData(data: { period: string }): Promise<ApiResponse<any>> {
   return get<any>(`${baseUrl}/blockgraphdata/${data.period}`, { credentials: 'include' })
     .then((response) => {

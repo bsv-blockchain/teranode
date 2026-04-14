@@ -546,6 +546,30 @@ func TestShouldHandleReorg(t *testing.T) {
 }
 
 // waitForBestBlockHash waits for the best block to match the expected hash
+// waitForAssemblerBlock polls until the block assembler's current block matches the
+// expected hash or the timeout elapses. This is used after a reorg to ensure the
+// assembler has finished processing (including reloading unmined transactions) before
+// assertions are made about the mining candidate.
+func waitForAssemblerBlock(ctx context.Context, assembler *BlockAssembler, expectedHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			header, _ := assembler.CurrentBlock()
+			if header != nil && header.Hash().IsEqual(expectedHash) {
+				return nil
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return errors.NewProcessingError("timeout waiting for block assembler to adopt block %s", expectedHash)
+}
+
 func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.ClientI, expectedHash *chainhash.Hash, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -747,8 +771,11 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for reorganization to complete")
 
-	// Additional wait to ensure block assembly has processed the reorg
-	time.Sleep(500 * time.Millisecond)
+	// Wait for block assembly to adopt Chain B as its current block, then wait for it
+	// to finish reloading unmined transactions. Polling is more reliable than a fixed
+	// sleep on slow CI runners where 500ms is not sufficient.
+	err = waitForAssemblerBlock(ctx, ba.blockAssembler, chainBHeader1.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for block assembler to adopt Chain B")
 
 	// Verify transactions are still present after reorg
 	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())

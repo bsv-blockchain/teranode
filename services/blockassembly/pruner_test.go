@@ -27,13 +27,14 @@ func TestCleanupDuringStartup(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Setup expectations in order
 		var iteratorCalled bool
 
 		// Then iterator should be called
 		mockIterator := new(MockUnminedTxIterator)
-		mockStore.On("GetUnminedTxIterator", mock.Anything).
+		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Run(func(args mock.Arguments) {
 				iteratorCalled = true
@@ -65,7 +66,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 
 		require.NoError(t, err)
 		assert.True(t, iteratorCalled)
@@ -109,6 +110,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Create mock transactions - only normal transaction should be returned by iterator
 		normalTxHash := chainhash.DoubleHashH([]byte("normal-tx"))
@@ -125,7 +127,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
 		mockIterator := new(MockUnminedTxIterator)
-		mockStore.On("GetUnminedTxIterator", mock.Anything).
+		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Once()
 
@@ -165,7 +167,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)

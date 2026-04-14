@@ -1216,11 +1216,12 @@ func TestMultistreamLongestChainSelection(t *testing.T) {
 
 	t.Logf("SVNode2 (multistream) generated %d blocks", longerChainHeight)
 
-	// wait for svnode2 to reach the height
-	err = sv2.WaitForBlockHeight(ctx, longerChainHeight, 30*time.Second)
+	// Wait a bit longer here to avoid flaky near-target stalls (e.g. 44/45)
+	// on slower local environments and under race detector overhead.
+	err = sv2.WaitForBlockHeight(ctx, longerChainHeight, 60*time.Second)
 	require.NoError(t, err, "SVNode2 should reach height %d", longerChainHeight)
 	// wait for svnode1 to reach the height
-	err = sv1.WaitForBlockHeight(ctx, longerChainHeight, 30*time.Second)
+	err = sv1.WaitForBlockHeight(ctx, longerChainHeight, 60*time.Second)
 	require.NoError(t, err, "SVNode1 should reach height %d", longerChainHeight)
 
 	// Start teranode connecting to BOTH peers (shorter standard + longer multistream)

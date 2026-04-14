@@ -10,6 +10,7 @@ x-teranode-base: &teranode-base
 
 x-teranode-coinbase-base: &teranode-coinbase-base
   image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
+  # image: teranode-coinbase:local
   networks:
     - teranode-network
   depends_on:
@@ -97,10 +98,13 @@ services:
     container_name: svnode1-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
-    profiles:
-      - svnode1
+    depends_on:
+      - block-generator-1
+    # profiles:
+    #   - svnode1
     ports:
       - "18332:18332"
+      - "18333:18333"
     expose:
       - "18332"
       - "18333"
@@ -500,9 +504,11 @@ services:
       - teranode1
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      COINBASE_RPC_URL: "http://teranode1:9292"
       startCoinbase: "false"
       startFaucet: "false"
       LOG_LEVEL: "debug"
+      clientName: "teranode1"
     entrypoint: ["./blaster.run"]
     command:
       [
@@ -519,6 +525,90 @@ services:
       - ../data/txblaster1:/app/data
       # - ../data/txblaster.log:/app/data/txblaster.log
 
+  blaster-tui-1:
+    <<: *teranode-coinbase-base
+    container_name: blaster-tui-1
+    depends_on:
+      - teranode1
+    entrypoint: ["./blaster-tui.run"]
+    command:
+      [
+        "-headless",
+        "-workers=10",
+        "-embedded-coinbase=true",
+        "-rpc-url=http://teranode1:9292",
+        "-propagation-addr=teranode1:8084",
+        "-rpc-user=bitcoin",
+        "-rpc-pass=bitcoin",
+        "-stats-interval=5s",
+        "-utxo-buffer=100000",
+      ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      LOG_LEVEL: "debug"
+      COINBASE_WALLET_PRIVATE_KEY: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
+      - ../data/blaster-tui-1:/app/data
+
+  blaster-tui-2:
+    <<: *teranode-coinbase-base
+    profiles:
+      - with-coinbase
+    container_name: blaster-tui-2
+    depends_on:
+      - teranode1
+    entrypoint: ["./blaster-tui.run"]
+    command:
+      [
+        "-headless",
+        "-workers=10",
+        "-embedded-coinbase=true",
+        "-rpc-url=http://teranode2:9292",
+        "-propagation-addr=teranode2:8084",
+        "-rpc-user=bitcoin",
+        "-rpc-pass=bitcoin",
+        "-stats-interval=5s",
+        "-utxo-buffer=100000",
+      ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      LOG_LEVEL: "debug"
+      COINBASE_WALLET_PRIVATE_KEY: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
+      - ../data/blaster-tui-2:/app/data
+
+  blaster-tui-3:
+    profiles:
+      - with-coinbase
+    <<: *teranode-coinbase-base
+    container_name: blaster-tui-3
+    depends_on:
+      - teranode1
+    entrypoint: ["./blaster-tui.run"]
+    command:
+      [
+        "-headless",
+        "-workers=10",
+        "-embedded-coinbase=true",
+        "-rpc-url=http://teranode3:9292",
+        "-propagation-addr=teranode3:8084",
+        "-rpc-user=bitcoin",
+        "-rpc-pass=bitcoin",
+        "-stats-interval=5s",
+        "-utxo-buffer=100000",
+      ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      LOG_LEVEL: "debug"
+      COINBASE_WALLET_PRIVATE_KEY: "L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL"
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
+      - ../data/blaster-tui-3:/app/data
   tx-blaster-2:
     <<: *teranode-coinbase-base
     profiles:

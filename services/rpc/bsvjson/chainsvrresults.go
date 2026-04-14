@@ -4,7 +4,10 @@
 
 package bsvjson
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // GetBlockHeaderVerboseResult models the data from the getblockheader command when
 // the verbose flag is set.  When the verbose flag is not set, getblockheader
@@ -438,10 +441,18 @@ func (v *VinPrevOut) MarshalJSON() ([]byte, error) {
 	return json.Marshal(txStruct)
 }
 
+// BTCValue represents a bitcoin value that always marshals to JSON with exactly
+// 8 decimal places, matching bitcoin-sv's ValueFromAmount output.
+type BTCValue float64
+
+func (v BTCValue) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%.8f", float64(v))), nil
+}
+
 // Vout models parts of the tx data.  It is defined separately since both
 // getrawtransaction and decoderawtransaction use the same structure.
 type Vout struct {
-	Value        float64            `json:"value"`
+	Value        BTCValue           `json:"value"`
 	N            uint32             `json:"n"`
 	ScriptPubKey ScriptPubKeyResult `json:"scriptPubKey"`
 }

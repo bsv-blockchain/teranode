@@ -6,10 +6,14 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	blockassembly_api "github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,5 +161,149 @@ func TestMinBlockHeightAboveThresholdProceeds(t *testing.T) {
 		require.Equal(t, uint32(101), sig.blockHeight, "blob worker should be notified at height 101")
 	case <-time.After(time.Second):
 		t.Fatal("blob deletion worker should have been notified when blockHeight > MinBlockHeight")
+	}
+}
+
+// TestWaitForBlockMinedStatusProceeds verifies that when blockAssemblyClient is non-nil
+// and GetBlockIsMined returns true, pruning proceeds past the mined_set wait.
+func TestWaitForBlockMinedStatusProceeds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.New("test")
+
+	blockchainMock := &blockchain.Mock{}
+	blockAssemblyMock := &blockassembly.Mock{}
+
+	server := &Server{
+		ctx:                 ctx,
+		logger:              logger,
+		pruneNotify:         make(chan pruneSignal, 1),
+		blobNotify:          make(chan pruneSignal, 1),
+		blockchainClient:    blockchainMock,
+		blockAssemblyClient: blockAssemblyMock,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				MinBlockHeight:           0,
+				BlockAssemblyWaitTimeout: 5 * time.Second,
+			},
+		},
+	}
+
+	blockHash := chainhash.Hash{0x01}
+
+	// GetBlockIsMined returns true immediately
+	blockchainMock.On("GetBlockIsMined", mock.Anything, &blockHash).Return(true, nil)
+
+	// Block assembly safety check: return running state at correct height
+	blockAssemblyMock.On("GetBlockAssemblyState", mock.Anything).Return(
+		&blockassembly_api.StateMessage{
+			BlockAssemblyState: "running",
+			CurrentHeight:      200,
+		}, nil,
+	)
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 200, blockHash: blockHash}
+
+	// The pruner should proceed through both the mined_set wait and the BA safety check,
+	// then notify the blob deletion worker.
+	select {
+	case sig := <-server.blobNotify:
+		require.Equal(t, uint32(200), sig.blockHeight, "blob worker should be notified at height 200")
+	case <-time.After(3 * time.Second):
+		t.Fatal("pruning should have proceeded when GetBlockIsMined returns true")
+	}
+}
+
+// TestWaitForBlockMinedStatusTimeout verifies that when blockAssemblyClient is non-nil
+// and GetBlockIsMined consistently returns false, the pruner skips the block after timeout.
+func TestWaitForBlockMinedStatusTimeout(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.New("test")
+
+	blockchainMock := &blockchain.Mock{}
+	blockAssemblyMock := &blockassembly.Mock{}
+
+	server := &Server{
+		ctx:                 ctx,
+		logger:              logger,
+		pruneNotify:         make(chan pruneSignal, 1),
+		blobNotify:          make(chan pruneSignal, 1),
+		blockchainClient:    blockchainMock,
+		blockAssemblyClient: blockAssemblyMock,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				MinBlockHeight:           0,
+				BlockAssemblyWaitTimeout: 1 * time.Second, // Short timeout for test
+			},
+		},
+	}
+
+	blockHash := chainhash.Hash{0x02}
+
+	// GetBlockIsMined always returns false - block never gets mined_set=true
+	blockchainMock.On("GetBlockIsMined", mock.Anything, &blockHash).Return(false, nil)
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 300, blockHash: blockHash}
+
+	// The pruner should time out waiting for mined_set and skip, so blob worker
+	// should NOT be notified.
+	select {
+	case <-server.blobNotify:
+		t.Fatal("blob deletion worker should NOT be notified when mined_set wait times out")
+	case <-time.After(3 * time.Second):
+		// Expected: no blob notification after timeout
+	}
+
+	// Verify lastProcessedHeight was NOT updated (pruning was skipped)
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(),
+		"lastProcessedHeight should remain 0 when mined_set wait times out")
+}
+
+// TestWaitForBlockMinedStatusSkippedWhenNoBAClient verifies that without a
+// blockAssemblyClient, the mined_set wait is skipped and pruning proceeds.
+func TestWaitForBlockMinedStatusSkippedWhenNoBAClient(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.New("test")
+
+	server := &Server{
+		ctx:                 ctx,
+		logger:              logger,
+		pruneNotify:         make(chan pruneSignal, 1),
+		blobNotify:          make(chan pruneSignal, 1),
+		blockchainClient:    nil,
+		blockAssemblyClient: nil, // No BA client - mined_set wait should be skipped
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				MinBlockHeight: 0,
+			},
+		},
+	}
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 400, blockHash: chainhash.Hash{0x03}}
+
+	// Without blockAssemblyClient, both the mined_set wait and the BA safety check
+	// are skipped, so blob worker should be notified.
+	select {
+	case sig := <-server.blobNotify:
+		require.Equal(t, uint32(400), sig.blockHeight, "blob worker should be notified at height 400")
+	case <-time.After(time.Second):
+		t.Fatal("pruning should proceed without blockAssemblyClient")
 	}
 }

@@ -154,7 +154,7 @@ func waitForTransactionInIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx
 	checkInterval := 100 * time.Millisecond
 
 	for time.Now().Before(deadline) {
-		it, err := td.UtxoStore.GetUnminedTxIterator(true)
+		it, err := td.UtxoStore.GetUnminedTxIterator()
 		if err != nil {
 			t.Logf("Failed to get unmined tx iterator, will retry: %v", err)
 			time.Sleep(checkInterval)
@@ -195,7 +195,7 @@ func waitForTransactionInIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx
 func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx, expectedParentTxHash *chainhash.Hash) {
 	t.Helper()
 
-	it, err := td.UtxoStore.GetUnminedTxIterator(true)
+	it, err := td.UtxoStore.GetUnminedTxIterator()
 	require.NoError(t, err, "Should be able to get unmined tx iterator")
 	defer it.Close()
 
