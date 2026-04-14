@@ -234,8 +234,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			u.logger.Infof("[Block Persister Service] Shutting down during FSM wait")
+			return ctx.Err()
+		}
 		u.logger.Errorf("[Block Persister Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 

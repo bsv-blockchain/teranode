@@ -319,6 +319,10 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	// Blocks until the FSM transitions from the IDLE state
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			ps.logger.Infof("[Propagation Service] Shutting down during FSM wait")
+			return ctx.Err()
+		}
 		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}

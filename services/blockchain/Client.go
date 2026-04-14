@@ -1760,6 +1760,10 @@ func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error 
 	cancelWait()
 
 	if err != nil {
+		if ctx.Err() != nil {
+			c.logger.Infof("[Blockchain Client] FSM wait interrupted by shutdown")
+			return ctx.Err()
+		}
 		c.logger.Errorf("[Blockchain Client] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}

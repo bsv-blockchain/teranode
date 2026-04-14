@@ -501,8 +501,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			u.logger.Infof("[Subtree Validation Service] Shutting down during FSM wait")
+			return ctx.Err()
+		}
 		u.logger.Errorf("[Subtree Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
