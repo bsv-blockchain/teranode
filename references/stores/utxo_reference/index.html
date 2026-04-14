@@ -6920,10 +6920,14 @@
 <span class="w">    </span><span class="c1">// ensuring consistency during validation operations.</span>
 <span class="w">    </span><span class="nx">GetBlockState</span><span class="p">()</span><span class="w"> </span><span class="nx">BlockState</span>
 
-<span class="w">    </span><span class="c1">// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.</span>
-<span class="w">    </span><span class="c1">// This is used by the Block Assembly service to recover transactions on startup.</span>
-<span class="w">    </span><span class="c1">// The fullScan parameter determines whether to perform a full scan of all transactions.</span>
-<span class="w">    </span><span class="nx">GetUnminedTxIterator</span><span class="p">(</span><span class="nx">fullScan</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// GetUnminedTxIterator returns an iterator for unmined transactions in the store.</span>
+<span class="w">    </span><span class="c1">// Uses the unmined_since index to efficiently query only unmined transactions.</span>
+<span class="w">    </span><span class="nx">GetUnminedTxIterator</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// ScanInconsistentUnminedTxs returns a lightweight iterator that scans all records</span>
+<span class="w">    </span><span class="c1">// to detect unmined_since inconsistencies (mined txs with unmined_since still set).</span>
+<span class="w">    </span><span class="c1">// Only fetches txid, block_ids, and unmined_since — no heavy data like TxInpoints.</span>
+<span class="w">    </span><span class="nx">ScanInconsistentUnminedTxs</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">ConsistencyScanIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
 <span class="w">    </span><span class="c1">// GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner&#39;s needs.</span>
 <span class="w">    </span><span class="c1">// Unlike GetUnminedTxIterator, this iterator:</span>
