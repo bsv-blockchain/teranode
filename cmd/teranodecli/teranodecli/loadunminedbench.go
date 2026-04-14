@@ -22,11 +22,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func runLoadUnminedBenchmark(txCount int, fullScan bool, cpuProfile, memProfile, aerospikeURL string) error {
+func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL string) error {
 	fmt.Printf("LoadUnmined Benchmark\n")
 	fmt.Printf("=====================\n")
 	fmt.Printf("Transaction Count:      %d\n", txCount)
-	fmt.Printf("Full Scan:              %t\n", fullScan)
 	fmt.Printf("CPU Cores:              %d\n", runtime.NumCPU())
 	fmt.Printf("GOMAXPROCS:             %d\n", runtime.GOMAXPROCS(0))
 	fmt.Println()
@@ -72,21 +71,19 @@ func runLoadUnminedBenchmark(txCount int, fullScan bool, cpuProfile, memProfile,
 		return err
 	}
 
-	// Wait for index if not full scan
-	if !fullScan {
-		if indexWaiter, ok := aerospikeStore.(interface {
-			WaitForIndexReady(ctx context.Context, indexName string) error
-		}); ok {
-			fmt.Printf("[Setup] Waiting for UnminedSince index...\n")
-			start := time.Now()
-			err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex")
-			duration := time.Since(start)
+	// Wait for index to be ready
+	if indexWaiter, ok := aerospikeStore.(interface {
+		WaitForIndexReady(ctx context.Context, indexName string) error
+	}); ok {
+		fmt.Printf("[Setup] Waiting for UnminedSince index...\n")
+		start := time.Now()
+		err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex")
+		duration := time.Since(start)
 
-			if err != nil {
-				fmt.Printf("[Setup] Index wait failed after %.2fs: %v\n", duration.Seconds(), err)
-			} else {
-				fmt.Printf("[Setup] Index ready (%.0fms)\n", duration.Seconds()*1000)
-			}
+		if err != nil {
+			fmt.Printf("[Setup] Index wait failed after %.2fs: %v\n", duration.Seconds(), err)
+		} else {
+			fmt.Printf("[Setup] Index ready (%.0fms)\n", duration.Seconds()*1000)
 		}
 	}
 
@@ -108,7 +105,7 @@ func runLoadUnminedBenchmark(txCount int, fullScan bool, cpuProfile, memProfile,
 	fmt.Printf("[Benchmark] Running GetUnminedTxIterator...\n")
 	benchmarkStart := time.Now()
 
-	iterator, err := aerospikeStore.GetUnminedTxIterator(fullScan)
+	iterator, err := aerospikeStore.GetUnminedTxIterator()
 	if err != nil {
 		pprof.StopCPUProfile()
 		return errors.NewProcessingError("failed to get iterator: %w", err)

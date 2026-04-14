@@ -45,7 +45,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Run the disk sort function
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 
 		// Verify transactions were added to subtree processor
@@ -74,7 +74,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 	})
 
@@ -108,7 +108,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 	})
 
@@ -135,7 +135,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err = ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		err = ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 
 		// Verify locked transactions were unlocked after load
@@ -156,11 +156,11 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Should handle empty store gracefully
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 	})
 
-	t.Run("disk sort with fullScan=true", func(t *testing.T) {
+	t.Run("disk sort with populated store", func(t *testing.T) {
 		ba, utxoStore, cleanup := setupDiskSortTest(t)
 		defer cleanup()
 
@@ -176,8 +176,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		// Test with fullScan=true
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx, true)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
 		require.NoError(t, err)
 	})
 
@@ -202,7 +201,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		cancel()
 
 		// Should handle cancellation gracefully
-		_ = ba.loadUnminedTransactionsWithDiskSort(ctx, false)
+		_ = ba.loadUnminedTransactionsWithDiskSort(ctx)
 		// We don't assert on error since behavior depends on timing
 	})
 
@@ -224,7 +223,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Call the main loadUnminedTransactions - should dispatch to disk sort
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 		require.NoError(t, err)
 	})
 
@@ -246,7 +245,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = true
 
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 		require.NoError(t, err)
 	})
 }

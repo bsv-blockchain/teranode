@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2003,7 +2004,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
 
 	// Now force the assembler to reload unmined transactions
-	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
+	err = items.blockAssembler.loadUnminedTransactions(ctx)
 	require.NoError(t, err)
 
 	// Verify the transaction was (incorrectly) re-added to the assembler
@@ -2050,7 +2051,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	}
 
 	// Reload unmined transactions as would happen after reset/reorg
-	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
+	err = items.blockAssembler.loadUnminedTransactions(ctx)
 	require.NoError(t, err)
 
 	// The mined tx should now be present in the assembler due to the incorrect flip
@@ -2122,7 +2123,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	items.blockAssembler.subtreeProcessor.SetCurrentBlockHeader(blockHeader1)
 
 	// Load unmined transactions
-	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
+	err = items.blockAssembler.loadUnminedTransactions(ctx)
 	require.NoError(t, err)
 
 	// Verify results
@@ -2148,22 +2149,22 @@ func TestResetCoverage(t *testing.T) {
 		cancel() // Cancel immediately
 
 		// Test reset with cancelled context
-		_ = ba.reset(ctx, false)
+		_ = ba.reset(ctx)
 
 		// Should handle cancelled context gracefully
 		assert.True(t, true, "reset should handle cancelled context")
 	})
 
-	t.Run("reset with force flag", func(t *testing.T) {
+	t.Run("reset with validateInputs", func(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
-		// Test reset with force flag
+		// Test reset with validateInputs=true
 		_ = ba.reset(t.Context(), true)
 
-		// Should handle forced reset
-		assert.True(t, true, "reset should handle forced reset")
+		// Should handle reset with input validation
+		assert.True(t, true, "reset should handle validateInputs flag")
 	})
 
 	t.Run("reset multiple times", func(t *testing.T) {
@@ -2174,9 +2175,9 @@ func TestResetCoverage(t *testing.T) {
 		ctx := t.Context()
 
 		// Reset multiple times
-		_ = ba.reset(ctx, false)
+		_ = ba.reset(ctx)
 		_ = ba.reset(ctx, true)
-		_ = ba.reset(ctx, false)
+		_ = ba.reset(ctx)
 
 		// Should handle multiple resets gracefully
 		assert.True(t, true, "reset should handle multiple calls gracefully")
@@ -2258,22 +2259,22 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions
-		_ = ba.loadUnminedTransactions(t.Context(), false)
+		_ = ba.loadUnminedTransactions(t.Context())
 
 		// Should complete loading
 		assert.True(t, true, "loadUnminedTransactions should complete successfully")
 	})
 
-	t.Run("loadUnminedTransactions with reseed flag", func(t *testing.T) {
+	t.Run("loadUnminedTransactions with validateInputs", func(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
-		// Test loadUnminedTransactions with reseed
+		// Test loadUnminedTransactions with validateInputs=true
 		_ = ba.loadUnminedTransactions(t.Context(), true)
 
-		// Should complete loading with reseed
-		assert.True(t, true, "loadUnminedTransactions should handle reseed flag")
+		// Should complete loading with input validation
+		assert.True(t, true, "loadUnminedTransactions should handle validateInputs flag")
 	})
 
 	t.Run("loadUnminedTransactions with context cancellation", func(t *testing.T) {
@@ -2285,7 +2286,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		cancel() // Cancel immediately
 
 		// Test loadUnminedTransactions with cancelled context
-		_ = ba.loadUnminedTransactions(ctx, false)
+		_ = ba.loadUnminedTransactions(ctx)
 
 		// Should handle cancellation gracefully
 		assert.True(t, true, "loadUnminedTransactions should handle cancelled context")
@@ -2398,6 +2399,460 @@ func TestProcessNewBlockAnnouncementCoverage(t *testing.T) {
 
 		// Should process announcement successfully
 		assert.True(t, true, "processNewBlockAnnouncement should complete successfully")
+	})
+}
+
+// TestFixUnminedSinceInconsistencies tests the fixUnminedSinceInconsistencies method
+// which performs a lightweight consistency scan to fix unmined_since issues.
+func TestFixUnminedSinceInconsistencies(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("nil utxoStore returns error", func(t *testing.T) {
+		ba := &BlockAssembler{
+			logger: ulogger.TestLogger{},
+		}
+
+		err := ba.fixUnminedSinceInconsistencies(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no utxostore")
+	})
+
+	t.Run("store returns nil iterator (SQL path) skips gracefully", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		// Setup blockchain client mocks
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		// Store returns nil iterator (SQL store behavior)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(nil, nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.NoError(t, err)
+
+		mockStore.AssertExpectations(t)
+		blockchainClient.AssertExpectations(t)
+	})
+
+	t.Run("store returns error creating iterator", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockStore.On("ScanInconsistentUnminedTxs").Return(nil, errors.NewProcessingError("scan failed"))
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "error creating consistency scan iterator")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("no inconsistencies found", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		// Return records with UnminedSince=0 (no fix needed) then end iteration
+		hash1 := chainhash.DoubleHashH([]byte("tx1"))
+		batch := []*utxoStore.InconsistentTxRecord{
+			{Hash: hash1, BlockIDs: []uint32{1}, UnminedSince: 0}, // already correct
+		}
+		mockIterator.On("Next", mock.Anything).Return(batch, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(nil, nil).Once() // end iteration
+		mockIterator.On("TotalScanned").Return(int64(1))
+		mockIterator.On("Close").Return(nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.NoError(t, err)
+
+		// MarkTransactionsOnLongestChain should NOT be called since no inconsistencies
+		mockStore.AssertNotCalled(t, "MarkTransactionsOnLongestChain", mock.Anything, mock.Anything, mock.Anything)
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
+	})
+
+	t.Run("some inconsistencies found and fixed", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		// Best chain has block IDs 1, 2, 3
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		hash1 := chainhash.DoubleHashH([]byte("inconsistent-tx"))
+		batch := []*utxoStore.InconsistentTxRecord{
+			{Hash: hash1, BlockIDs: []uint32{2}, UnminedSince: 5}, // on best chain + unmined_since set = inconsistent
+		}
+		mockIterator.On("Next", mock.Anything).Return(batch, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(nil, nil).Once()
+		mockIterator.On("TotalScanned").Return(int64(1))
+		mockIterator.On("Close").Return(nil)
+
+		// Should be called to fix the inconsistency
+		mockStore.On("MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hash1}, true).Return(nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.NoError(t, err)
+
+		mockStore.AssertCalled(t, "MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hash1}, true)
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
+	})
+
+	t.Run("mixed batch: some need fixing, some do not", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		// Best chain has block IDs 1, 2, 3
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		hashInconsistent := chainhash.DoubleHashH([]byte("inconsistent"))
+		hashCorrectMined := chainhash.DoubleHashH([]byte("correct-mined"))
+		hashNoBlockIDs := chainhash.DoubleHashH([]byte("no-block-ids"))
+		hashOffChain := chainhash.DoubleHashH([]byte("off-chain"))
+
+		batch := []*utxoStore.InconsistentTxRecord{
+			{Hash: hashInconsistent, BlockIDs: []uint32{1}, UnminedSince: 8}, // on best chain + unmined_since set = FIX
+			{Hash: hashCorrectMined, BlockIDs: []uint32{2}, UnminedSince: 0}, // on best chain + unmined_since=0 = OK
+			{Hash: hashNoBlockIDs, BlockIDs: []uint32{}, UnminedSince: 5},    // no block IDs = skip
+			{Hash: hashOffChain, BlockIDs: []uint32{99}, UnminedSince: 5},    // block ID not on best chain = skip
+		}
+		mockIterator.On("Next", mock.Anything).Return(batch, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(nil, nil).Once()
+		mockIterator.On("TotalScanned").Return(int64(4))
+		mockIterator.On("Close").Return(nil)
+
+		// Only hashInconsistent should be fixed
+		mockStore.On("MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hashInconsistent}, true).Return(nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.NoError(t, err)
+
+		mockStore.AssertCalled(t, "MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hashInconsistent}, true)
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
+	})
+
+	t.Run("iterator Next returns error", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		mockIterator.On("Next", mock.Anything).Return(nil, errors.NewProcessingError("scan error"))
+		mockIterator.On("TotalScanned").Return(int64(0)).Maybe()
+		mockIterator.On("Close").Return(nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "error during consistency scan")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("GetBestBlockHeader error propagates", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			(*model.BlockHeader)(nil),
+			(*model.BlockHeaderMeta)(nil),
+			errors.NewProcessingError("blockchain unavailable"),
+		)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "error getting best block header meta")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("MarkTransactionsOnLongestChain error propagates", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		hash1 := chainhash.DoubleHashH([]byte("bad-tx"))
+		batch := []*utxoStore.InconsistentTxRecord{
+			{Hash: hash1, BlockIDs: []uint32{1}, UnminedSince: 5},
+		}
+		mockIterator.On("Next", mock.Anything).Return(batch, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(nil, nil).Once()
+		mockIterator.On("TotalScanned").Return(int64(1))
+		mockIterator.On("Close").Return(nil)
+
+		mockStore.On("MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hash1}, true).Return(
+			errors.NewProcessingError("mark failed"),
+		)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "error marking transactions as mined on longest chain")
+
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
+	})
+
+	t.Run("multiple batches with inconsistencies across batches", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxoStore.MockUtxostore)
+		blockchainClient := &blockchain.Mock{}
+		tSettings := test.CreateBaseTestSettings(t)
+
+		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			blockchainClient: blockchainClient,
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
+			subtreeProcessor: subtreeProcessor,
+		}
+
+		ba.setBestBlockHeader(blockHeader1, 10)
+
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			blockHeader1,
+			&model.BlockHeaderMeta{Height: 10},
+			nil,
+		)
+		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]uint32{1, 2, 3},
+			nil,
+		)
+
+		mockIterator := new(utxoStore.MockConsistencyScanIterator)
+		mockStore.On("ScanInconsistentUnminedTxs").Return(mockIterator, nil)
+
+		hash1 := chainhash.DoubleHashH([]byte("batch1-fix"))
+		hash2 := chainhash.DoubleHashH([]byte("batch2-fix"))
+
+		batch1 := []*utxoStore.InconsistentTxRecord{
+			{Hash: hash1, BlockIDs: []uint32{1}, UnminedSince: 3},
+		}
+		batch2 := []*utxoStore.InconsistentTxRecord{
+			{Hash: hash2, BlockIDs: []uint32{3}, UnminedSince: 7},
+		}
+
+		mockIterator.On("Next", mock.Anything).Return(batch1, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(batch2, nil).Once()
+		mockIterator.On("Next", mock.Anything).Return(nil, nil).Once()
+		mockIterator.On("TotalScanned").Return(int64(2))
+		mockIterator.On("Close").Return(nil)
+
+		// Both hashes should be collected and fixed in one call
+		mockStore.On("MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hash1, hash2}, true).Return(nil)
+
+		err := ba.fixUnminedSinceInconsistencies(ctx)
+		require.NoError(t, err)
+
+		mockStore.AssertCalled(t, "MarkTransactionsOnLongestChain", mock.Anything, []chainhash.Hash{hash1, hash2}, true)
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
 	})
 }
 
@@ -2532,7 +2987,7 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 	// RED before fix:  txA IS in assembly  → require.False fails.
 	// GREEN after fix: txA NOT in assembly → require.False passes.
 	// Mirrors handleReorg's call after the fix: reset(ctx, false, true).
-	err = items.blockAssembler.reset(ctx, false, true)
+	err = items.blockAssembler.reset(ctx, true)
 	require.NoError(t, err)
 
 	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()

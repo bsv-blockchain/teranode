@@ -89,7 +89,11 @@ func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 	return nil, nil
 }
 
-func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (m *MockUTXOStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	return nil, nil
 }
 

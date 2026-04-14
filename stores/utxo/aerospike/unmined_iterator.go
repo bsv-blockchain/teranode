@@ -23,7 +23,6 @@ import (
 // Uses multiple workers to read from Aerospike in parallel for improved throughput
 type unminedTxIterator struct {
 	store            *Store
-	fullScan         bool
 	prunerMode       bool   // when true, uses pruner-specific bins and filter
 	prunerCutoff     uint32 // cutoff block height for pruner mode
 	err              error
@@ -43,20 +42,19 @@ type unminedTxIterator struct {
 //
 // Parameters:
 //   - store: The Aerospike store instance to iterate over
-//   - fullScan: If true, performs a full scan of all records; if false, applies a filter to limit results
 //
 // Returns:
 //   - *unminedTxIterator: A new iterator instance ready for use
 //   - error: Any error encountered during iterator initialization
-func newUnminedTxIterator(store *Store, fullScan bool) (*unminedTxIterator, error) {
+func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 	numPartitionQueries, err := calculatePartitionQueries(store)
 	if err != nil {
 		return nil, err
 	}
 
-	store.logger.Infof("[newUnminedTxIterator] Using %d parallel Aerospike partition queries for unmined transactions (fullScan=%t)", numPartitionQueries, fullScan)
+	store.logger.Infof("[newUnminedTxIterator] Using %d parallel Aerospike partition queries for unmined transactions", numPartitionQueries)
 
-	return launchPartitionIterator(store, numPartitionQueries, fullScan, false, 0)
+	return launchPartitionIterator(store, numPartitionQueries, false, 0)
 }
 
 // calculatePartitionQueries determines the optimal number of parallel partition queries
@@ -124,7 +122,7 @@ func getConfigValue(store *Store, configParam string) (string, error) {
 
 // launchPartitionIterator creates and starts a partition-parallel iterator.
 // Both the block assembly and pruner iterators use this shared setup.
-func launchPartitionIterator(store *Store, numPartitionQueries int, fullScan, prunerMode bool, prunerCutoff uint32) (*unminedTxIterator, error) {
+func launchPartitionIterator(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32) (*unminedTxIterator, error) {
 	const totalPartitions = 4096 // Aerospike has 4096 partitions
 
 	if numPartitionQueries < 1 {
@@ -148,7 +146,6 @@ func launchPartitionIterator(store *Store, numPartitionQueries int, fullScan, pr
 
 	it := &unminedTxIterator{
 		store:            store,
-		fullScan:         fullScan,
 		prunerMode:       prunerMode,
 		prunerCutoff:     prunerCutoff,
 		resultChan:       make(chan []*utxo.UnminedTransaction, resultChanSize),
@@ -203,18 +200,16 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.Inputs.String(),
 		}
 	} else {
-		// Non-pruner mode: apply unmined filter unless full scan
-		if !it.fullScan {
-			if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
-				select {
-				case it.errorChan <- err:
-				default:
-				}
-				return
+		// Non-pruner mode: always apply unmined filter (index-based query)
+		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
+			select {
+			case it.errorChan <- err:
+			default:
 			}
+			return
 		}
 
-		// Full bin set for block assembly / full scan
+		// Full bin set for block assembly
 		stmt.BinNames = []string{
 			fields.TxID.String(),
 			fields.Fee.String(),
@@ -436,19 +431,6 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 		txInpoints, err = it.processTransactionInpoints(ctx, txData, bins)
 		if err != nil {
-			if it.fullScan && txData.unminedSince == 0 {
-				// In full scan mode, if we encounter an error processing inpoints and the transaction
-				// is mined (unminedSince == 0), we can skip it since it's already on the main chain.
-				return &utxo.UnminedTransaction{
-					Node: &subtree.Node{
-						Hash:        *txData.hash,
-						Fee:         txData.fee,
-						SizeInBytes: txData.size,
-					},
-					Skip: true,
-				}, nil
-			}
-
 			return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
 		}
 	} else {
@@ -758,13 +740,14 @@ func toUint64(val interface{}) (uint64, error) {
 	}
 }
 
-// GetUnminedTxIterator implements utxo.Store for Aerospike
-func (s *Store) GetUnminedTxIterator(fullScan bool) (utxo.UnminedTxIterator, error) {
+// GetUnminedTxIterator implements utxo.Store for Aerospike.
+// Uses the unmined_since index to efficiently query only unmined transactions.
+func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
 		return nil, errors.NewProcessingError("aerospike client not initialized")
 	}
 
-	return newUnminedTxIterator(s, fullScan)
+	return newUnminedTxIterator(s)
 }
 
 // GetPrunableUnminedTxIterator returns a lightweight iterator optimized for pruner use.
@@ -789,5 +772,5 @@ func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unmi
 
 	store.logger.Infof("[newPrunableUnminedTxIterator] Using %d parallel partition queries (cutoff=%d)", numPartitionQueries, cutoffBlockHeight)
 
-	return launchPartitionIterator(store, numPartitionQueries, false, true, cutoffBlockHeight)
+	return launchPartitionIterator(store, numPartitionQueries, true, cutoffBlockHeight)
 }

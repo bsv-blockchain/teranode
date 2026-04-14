@@ -473,13 +473,12 @@ func Start(args []string, version, commit string) {
 		}
 	case "loadunminedbench":
 		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
-		fullScan := cmd.FlagSet.Bool("full-scan", false, "Use full scan mode")
 		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
 		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
 		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
 
 		cmd.Execute = func(args []string) error {
-			return runLoadUnminedBenchmark(*txCount, *fullScan, *cpuProfile, *memProfile, *aerospikeURL)
+			return runLoadUnminedBenchmark(*txCount, *cpuProfile, *memProfile, *aerospikeURL)
 		}
 	case "txmapbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
