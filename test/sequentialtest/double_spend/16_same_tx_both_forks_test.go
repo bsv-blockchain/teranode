@@ -139,7 +139,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Create block5a with tx1Conflicting (not tx1!)
 	// This tests the scenario where a miner includes the conflicting tx instead of the mempool tx
-	_, block5a := td.CreateTestBlock(t, block4, 50001, tx1)
+	_, block5a := td.CreateTestBlock(t, block4, 50001, tx1Conflicting)
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", true),
 		"Failed to process block5a")
 
@@ -159,19 +159,23 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 	// Verify chain A (block5a) is winning
 	td.WaitForBlockHeight(t, block5a, blockWait, true)
 
-	// Verify conflict status:
-	// - tx1 should be conflicting (lost to tx1Conflicting which is mined)
-	// - tx1Conflicting should NOT be conflicting (it's in the winning chain)
-	td.VerifyConflictingInUtxoStore(t, false, tx1)
-	td.VerifyConflictingInUtxoStore(t, true, tx1Conflicting)
+	// After chain A wins (block5a has tx1Conflicting):
+	// - tx1Conflicting is mined in block5a → non-conflicting
+	// - tx1 conflicts with tx1Conflicting on outputs 2,3 → conflicting
+	td.VerifyConflictingInUtxoStore(t, true, tx1)
+	td.VerifyConflictingInUtxoStore(t, false, tx1Conflicting)
 
-	// Both blocks contain the same tx1Conflicting - verify subtrees
-	td.VerifyConflictingInSubtrees(t, block5a.Subtrees[0])
+	// block5a subtree: tx1Conflicting was stored as conflicting during initial validation
+	// (tx1 was first-seen in propagation), so ConflictingNodes=[tx1Conflicting] at storage time.
+	// After ProcessConflicting, tx1Conflicting is the winner but the stored subtree still
+	// reflects the historical conflict state.
+	td.VerifyConflictingInSubtrees(t, block5a.Subtrees[0], tx1Conflicting)
+	// block5b subtree: tx1Conflicting is also conflicting here (same tx, second processing)
 	td.VerifyConflictingInSubtrees(t, block5b.Subtrees[0], tx1Conflicting)
 
-	// tx1 should not be in block assembly (conflicting with mined tx)
+	// tx1 is conflicting — not in block assembly
 	td.VerifyNotInBlockAssembly(t, tx1)
-	// tx1Conflicting should not be in block assembly (already mined)
+	// tx1Conflicting is mined — not in block assembly
 	td.VerifyNotInBlockAssembly(t, tx1Conflicting)
 
 	t.Log("Before reorg: tx1 conflicting, tx1Conflicting valid (in both forks)")

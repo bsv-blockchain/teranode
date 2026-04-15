@@ -46,7 +46,7 @@ type dpsDiskShard struct {
 	done         chan struct{}
 	path         string
 	prefix       string
-	bytesWritten int64 // only touched by the single writer goroutine — no atomic needed
+	bytesWritten atomic.Int64 // written by writer goroutine, read by Stats() — must be atomic
 }
 
 // DiskParentSpendsMap tracks spent inpoints using sharded cuckoo filters for fast
@@ -155,7 +155,7 @@ func (m *DiskParentSpendsMap) writerLoop(diskIdx int) {
 		}
 
 		_ = d.batch.Set(entry.key[:], existsMarker)
-		d.bytesWritten += int64(dpsInpointKeySize + 1)
+		d.bytesWritten.Add(int64(dpsInpointKeySize + 1))
 		pending++
 
 		if pending >= dpsWriterFlushThreshold {
@@ -314,7 +314,7 @@ func (m *DiskParentSpendsMap) existsInStore(inpoint subtreepkg.Inpoint) bool {
 func (m *DiskParentSpendsMap) Stats() DiskMapStats {
 	var diskBytes int64
 	for i := range m.disks {
-		diskBytes += m.disks[i].bytesWritten
+		diskBytes += m.disks[i].bytesWritten.Load()
 	}
 	return DiskMapStats{
 		Entries:          m.count.Load(),
