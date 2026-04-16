@@ -60,7 +60,7 @@ var commandHelp = map[string]string{
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
-	"repair-conflicts":        "Repair conflicting transaction chains in the UTXO store (offline — run with node stopped)",
+	"repair-conflicts":        "Repair conflicting transaction chains in the UTXO store (run with node up, FSM in IDLE)",
 }
 
 var dangerousCommands = map[string]bool{}

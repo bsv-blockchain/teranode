@@ -1233,6 +1233,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// promote block to the block validation via kafka (p2p -> blockvalidation message),
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
+		if errors.Is(err, errors.ErrRepairNeeded) {
+			// FSM is IDLE — block was deliberately dropped pending operator repair.
+			// Skip accept bookkeeping: do NOT log "accepted block", clear rejectedTxns,
+			// advance peer height, or call blockchainClient.Run (which would transition FSM out of IDLE).
+			return nil
+		}
 		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)

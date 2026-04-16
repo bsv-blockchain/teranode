@@ -1,5 +1,8 @@
 // Package repairconflicts repairs inconsistent conflicting transaction state in the UTXO store.
-// It must be run while the node is stopped (offline repair).
+// Run this while the node is running with the FSM in IDLE (e.g. after BlockAssembler
+// transitions to IDLE due to a parent-chain repair request). The command connects to the
+// live blockchain gRPC service, so the node process must be up; after the repair completes,
+// restart the node (or transition the FSM back out of IDLE) to resume block assembly.
 package repairconflicts
 
 import (
@@ -36,7 +39,9 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 }
 
 // RepairConflicts detects and fixes inconsistent conflicting transaction state in the UTXO store.
-// Run this command while the node is stopped.
+// Run this while the node is up and the FSM is in IDLE — the command dials the blockchain gRPC
+// service to fetch header data, so stopping the node first will cause startup to fail with a
+// connection error. After the repair completes, restart the node to resume block assembly.
 // dryRun=true reports issues without writing any changes.
 func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun bool) error {
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "RepairConflicts", false)

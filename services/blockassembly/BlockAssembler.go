@@ -1632,13 +1632,18 @@ func (b *BlockAssembler) validateParentChain(
 	return nil
 }
 
-// idleAndError logs an error, sets the blockchain FSM to IDLE, and returns a ProcessingError.
+// idleAndError logs an error, sets the blockchain FSM to IDLE, and returns an ErrRepairNeeded.
 // Used by validateParentChain to halt startup on any data-integrity problem.
+// If the FSM Idle() transition itself fails, a StorageError is returned instead so Start
+// fails loudly — silently continuing would leave the FSM running while block assembly is
+// half-initialized (subtree processor and channel listeners never started), defeating the
+// IDLE-coordination scheme other services rely on.
 func (b *BlockAssembler) idleAndError(ctx context.Context, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
 	b.logger.Errorf("%s — setting FSM to IDLE. Run 'teranode-cli repair-conflicts' to fix.", msg)
 	if fsmErr := b.blockchainClient.Idle(ctx); fsmErr != nil {
 		b.logger.Errorf("[validateParentChain] failed to set FSM to IDLE: %v", fsmErr)
+		return errors.NewStorageError("%s — ALSO failed to set FSM to IDLE: %v — run 'teranode-cli repair-conflicts' to fix UTXO store state", msg, fsmErr)
 	}
 	return errors.NewRepairNeededError("%s — run 'teranode-cli repair-conflicts' to fix UTXO store state", msg)
 }
