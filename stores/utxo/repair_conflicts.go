@@ -28,21 +28,22 @@ type RepairReport struct {
 	Errors            []error // Non-fatal errors encountered during repair
 }
 
+// RepairProgressFunc is called by RepairConflictingChains to report progress.
+type RepairProgressFunc func(format string, args ...interface{})
+
 // RepairConflictingChains detects and fixes inconsistent conflicting transaction state in the UTXO store.
-// It must be called when the node is stopped (offline repair).
-//
-// Steps:
-//
-//  0. Fix unmined_since inconsistencies: txs with block_ids on main chain but unmined_since > 0 (prerequisite — mined txs must not appear in iterator)
-//  1. Detect Case A (loser not marked) and Case C (inverted winner/loser confirmed on best chain)
-//  2. Fix Case C first via ProcessConflicting (corrects SpendingData before Case A sweep)
-//  3. Fix remaining Case A via MarkConflictingRecursively
-//
-// dryRun=true reports without writing any changes.
-func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool) (RepairReport, error) {
+// progressFn is optional — pass nil to suppress progress output.
+func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn ...RepairProgressFunc) (RepairReport, error) {
 	var report RepairReport
 
+	logProgress := func(format string, args ...interface{}) {
+		if len(progressFn) > 0 && progressFn[0] != nil {
+			progressFn[0](format, args...)
+		}
+	}
+
 	// Step 0: fix unmined_since inconsistencies — prerequisite so mined txs don't appear in the iterator.
+	logProgress("[step 0/3] fixing unmined_since inconsistencies...")
 	bestHeader, err := blockchainClient.GetBestBlockHeaderInfo(ctx)
 	if err != nil {
 		return report, err
@@ -68,6 +69,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	if scanIt != nil {
 		defer scanIt.Close()
 
+		scannedBatches := 0
 		for {
 			batch, bErr := scanIt.Next(ctx)
 			if bErr != nil {
@@ -75,6 +77,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			}
 			if batch == nil {
 				break
+			}
+			scannedBatches++
+			if scannedBatches%100 == 0 {
+				logProgress("[step 0/3] scanned %d batches, fixed %d unmined_since inconsistencies so far", scannedBatches, report.UnminedSinceFixed)
 			}
 
 			var toMark []chainhash.Hash
@@ -100,6 +106,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			}
 		}
 	}
+	logProgress("[step 0/3] done — fixed %d unmined_since inconsistencies", report.UnminedSinceFixed)
 
 	// Steps 1-3: conflict detection and repair.
 	type caseCPair struct {
@@ -111,12 +118,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	var caseCPairs []caseCPair
 	processedMap := map[chainhash.Hash]bool{}
 
+	logProgress("[step 1/3] scanning unmined transactions for conflicts...")
 	unminedIt, err := s.GetUnminedTxIterator()
 	if err != nil {
 		return report, err
 	}
 	defer unminedIt.Close()
 
+	unminedScanned := 0
 	for {
 		batch, bErr := unminedIt.Next(ctx)
 		if bErr != nil {
@@ -124,6 +133,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 		if batch == nil {
 			break
+		}
+		unminedScanned += len(batch)
+		if unminedScanned%10000 == 0 {
+			logProgress("[step 1/3] scanned %d unmined txs, found %d Case A, %d Case C so far", unminedScanned, len(caseALosers), len(caseCPairs))
 		}
 
 		for _, tx := range batch {
@@ -205,9 +218,12 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 	}
 
+	logProgress("[step 1/3] done — scanned %d unmined txs, found %d Case A, %d Case C", unminedScanned, len(caseALosers), len(caseCPairs))
+
 	// Fix Case C first so SpendingData is corrected before the Case A sweep.
 	// Dedup key is pair.loser (the fake winner tx being corrected): each unmined loser should be
 	// processed at most once even if multiple inputs point to the same real winner.
+	logProgress("[step 2/3] fixing %d Case C (inverted winner/loser) pairs...", len(caseCPairs))
 	currentBlockHeight := bestHeader.Height
 	for _, pair := range caseCPairs {
 		if processedMap[pair.loser] {
@@ -223,6 +239,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		processedMap[pair.loser] = true
 	}
 
+	logProgress("[step 3/3] fixing %d Case A (unmarked losers)...", len(caseALosers))
 	// Fix Case A, skipping any already resolved by Case C.
 	for _, loser := range caseALosers {
 		freshMeta, gErr := s.Get(ctx, &loser, fields.Conflicting)
@@ -242,5 +259,6 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		report.CaseAFixed++
 	}
 
+	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed)
 	return report, nil
 }

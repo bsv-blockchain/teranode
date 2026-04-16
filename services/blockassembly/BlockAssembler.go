@@ -739,8 +739,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
 	if err = b.loadUnminedTransactions(ctx); err != nil {
-		if strings.Contains(err.Error(), "repair-conflicts") {
-			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranodecli repair-conflicts' then restart.")
+		if errors.Is(err, errors.ErrRepairNeeded) {
+			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranode-cli repair-conflicts' then restart.")
 			return nil
 		}
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
@@ -1571,11 +1571,11 @@ func (b *BlockAssembler) validateParentChain(
 // Used by validateParentChain to halt startup on any data-integrity problem.
 func (b *BlockAssembler) idleAndError(ctx context.Context, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
-	b.logger.Errorf("%s — setting FSM to IDLE. Run 'teranodecli repair-conflicts' to fix.", msg)
+	b.logger.Errorf("%s — setting FSM to IDLE. Run 'teranode-cli repair-conflicts' to fix.", msg)
 	if fsmErr := b.blockchainClient.Idle(ctx); fsmErr != nil {
 		b.logger.Errorf("[validateParentChain] failed to set FSM to IDLE: %v", fsmErr)
 	}
-	return errors.NewProcessingError("%s — run 'teranodecli repair-conflicts' to fix UTXO store state", msg)
+	return errors.NewRepairNeededError("%s — run 'teranode-cli repair-conflicts' to fix UTXO store state", msg)
 }
 
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store

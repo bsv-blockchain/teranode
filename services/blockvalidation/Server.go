@@ -795,7 +795,7 @@ func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) err
 		if err != nil {
 			u.logger.Warnf("[blockHandler] failed to check FSM state: %v", err)
 		} else if isIdle {
-			u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer to preserve unread blocks. Run 'teranodecli repair-conflicts' to fix.")
+			u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer to preserve unread blocks. Run 'teranode-cli repair-conflicts' to fix.")
 			if u.kafkaConsumerClient != nil {
 				u.kafkaConsumerClient.PauseAll()
 				// Resume when FSM leaves IDLE (e.g. after repair + setfsmstate running without restart).

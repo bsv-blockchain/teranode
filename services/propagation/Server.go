@@ -1030,7 +1030,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		if isIdle, fsmErr := ps.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateIDLE); fsmErr != nil {
 			ps.logger.Warnf("[processTransaction] failed to check FSM state: %v", fsmErr)
 		} else if isIdle {
-			ps.logger.Warnf("[processTransaction] node is in IDLE state — rejecting transaction. Run 'teranodecli repair-conflicts' to fix.")
+			ps.logger.Warnf("[processTransaction] node is in IDLE state — rejecting transaction. Run 'teranode-cli repair-conflicts' to fix.")
 			return errors.NewProcessingError("node is in IDLE state")
 		}
 	}

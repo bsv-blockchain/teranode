@@ -67,6 +67,7 @@ var (
 	ErrNetworkConnectionRefused   = New(ERR_NETWORK_CONNECTION_REFUSED, "network connection refused")
 	ErrNetworkInvalidResponse     = New(ERR_NETWORK_INVALID_RESPONSE, "network invalid response")
 	ErrNetworkPeerMalicious       = New(ERR_NETWORK_PEER_MALICIOUS, "network peer malicious")
+	ErrRepairNeeded               = New(ERR_REPAIR_NEEDED, "repair needed")
 )
 
 // NewUnknownError creates a new error with the unknown error code.
@@ -301,6 +302,11 @@ func NewStateInitializationError(message string, params ...interface{}) *Error {
 // NewCatchupInProgressError creates a new error with the catchup in progress error code.
 func NewCatchupInProgressError(message string, params ...interface{}) *Error {
 	return New(ERR_CATCHUP_IN_PROGRESS, message, params...)
+}
+
+// NewRepairNeededError creates a new error indicating data integrity issues that require offline repair.
+func NewRepairNeededError(message string, params ...interface{}) *Error {
+	return New(ERR_REPAIR_NEEDED, message, params...)
 }
 
 // NewStateError creates a new error with the state error code.

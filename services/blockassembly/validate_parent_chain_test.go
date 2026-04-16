@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -142,7 +143,7 @@ func TestValidateParentChain_HardFailsWithFSMIdle_UnminedParentNotInList(t *test
 	// validateParentChain should fail because TX_PARENT is unmined but not in list.
 	err = ba.validateParentChain(ctx, []*utxoStore.UnminedTransaction{unminedChild}, bestBlockHeaderIDsMap)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "repair-conflicts")
+	require.ErrorIs(t, err, errors.ErrRepairNeeded)
 
 	// Idle must have been called to transition FSM.
 	blockchainClientMock.AssertCalled(t, "Idle", mock.Anything)

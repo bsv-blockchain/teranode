@@ -51,7 +51,11 @@ func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *sett
 
 	adapter := &blockchainAdapter{client: blockchainClient}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, adapter, dryRun)
+	progress := func(format string, args ...interface{}) {
+		fmt.Printf(format+"\n", args...)
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, adapter, dryRun, progress)
 	if err != nil {
 		return errors.NewProcessingError("repair failed", err)
 	}

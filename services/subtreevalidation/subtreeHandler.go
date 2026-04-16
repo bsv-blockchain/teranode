@@ -68,7 +68,7 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		}
 
 		if *state == blockchain.FSMStateIDLE {
-			u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers to preserve unread subtrees. Run 'teranodecli repair-conflicts' to fix.")
+			u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers to preserve unread subtrees. Run 'teranode-cli repair-conflicts' to fix.")
 			if u.subtreeConsumerClient != nil {
 				u.subtreeConsumerClient.PauseAll()
 			}

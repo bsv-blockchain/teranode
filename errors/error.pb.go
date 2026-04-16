@@ -94,6 +94,7 @@ const (
 	// State errors 100-109
 	ERR_STATE_INITIALIZATION ERR = 100
 	ERR_CATCHUP_IN_PROGRESS  ERR = 101
+	ERR_REPAIR_NEEDED        ERR = 102
 	ERR_STATE_ERROR          ERR = 109
 	// Network errors 110-119
 	ERR_NETWORK_ERROR              ERR = 110
@@ -168,6 +169,7 @@ var (
 		99:  "BLOB_ERROR",
 		100: "STATE_INITIALIZATION",
 		101: "CATCHUP_IN_PROGRESS",
+		102: "REPAIR_NEEDED",
 		109: "STATE_ERROR",
 		110: "NETWORK_ERROR",
 		111: "INVALID_SUBNET",
@@ -238,6 +240,7 @@ var (
 		"BLOB_ERROR":                    99,
 		"STATE_INITIALIZATION":          100,
 		"CATCHUP_IN_PROGRESS":           101,
+		"REPAIR_NEEDED":                 102,
 		"STATE_ERROR":                   109,
 		"NETWORK_ERROR":                 110,
 		"INVALID_SUBNET":                111,
@@ -380,7 +383,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\x95\v\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xa8\v\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -447,7 +450,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\n" +
 	"BLOB_ERROR\x10c\x12\x18\n" +
 	"\x14STATE_INITIALIZATION\x10d\x12\x17\n" +
-	"\x13CATCHUP_IN_PROGRESS\x10e\x12\x0f\n" +
+	"\x13CATCHUP_IN_PROGRESS\x10e\x12\x11\n" +
+	"\rREPAIR_NEEDED\x10f\x12\x0f\n" +
 	"\vSTATE_ERROR\x10m\x12\x11\n" +
 	"\rNETWORK_ERROR\x10n\x12\x12\n" +
 	"\x0eINVALID_SUBNET\x10o\x12\x0e\n" +
