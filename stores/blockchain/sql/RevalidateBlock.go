@@ -42,7 +42,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	}
 
 	// Rebuild on_main_chain flags to reflect the potentially new canonical chain.
-	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
+	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
 		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 	}
 

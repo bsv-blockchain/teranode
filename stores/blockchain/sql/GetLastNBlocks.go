@@ -93,7 +93,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	`
 		args = []any{n}
 	} else if fromHeight > 0 {
-		if s.mainChainRebuilding.Load() {
+		if s.mainChainRebuilding.Load() > 0 {
 			// When paginating, cap CTE walk depth to the lower of tip height and fromHeight,
 			// so that fromHeight > tip is handled gracefully (behaves like fromHeight = tip).
 			// Uses CASE instead of LEAST/MIN for cross-database compatibility (PostgreSQL + SQLite).
@@ -157,7 +157,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		}
 		args = []any{n, fromHeight}
 	} else {
-		if s.mainChainRebuilding.Load() {
+		if s.mainChainRebuilding.Load() > 0 {
 			q = `
 		WITH RECURSIVE tip_block AS (
 			SELECT id, parent_id, height

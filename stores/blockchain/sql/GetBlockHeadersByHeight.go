@@ -86,7 +86,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	var q string
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height

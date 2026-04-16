@@ -100,13 +100,13 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		hash      *chainhash.Hash
 	)
 
-	// Set guard before the UPDATE so concurrent queries fall back to the CTE for
-	// the entire window: from when invalid flags change until on_main_chain is
-	// corrected by rebuildOnMainChainFlag (which clears the guard on return).
-	s.mainChainRebuilding.Store(true)
+	// Guard the entire window: from when invalid flags change until on_main_chain
+	// is corrected by rebuildOnMainChainFlag. Balanced by the defer so all exit
+	// paths (including the early error below) decrement.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
 
 	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
-		s.mainChainRebuilding.Store(false)
 		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
 	}
 
@@ -124,7 +124,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		// Rebuild on_main_chain flags to reflect the new canonical chain after invalidation.
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
 			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
 

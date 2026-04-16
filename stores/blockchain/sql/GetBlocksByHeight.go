@@ -82,7 +82,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	blocks := make([]*model.Block, 0, capacity)
 
 	var q string
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height

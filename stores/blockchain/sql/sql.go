@@ -105,11 +105,14 @@ type SQL struct {
 	// in-memory off-chain set (true) or the original SQL recursive CTE (false).
 	// Read once at construction from settings; not changed at runtime.
 	useInMemoryChainCheck bool
-	// mainChainRebuilding is set to true while the on_main_chain column is being
-	// updated (during reorgs, invalidations, revalidations). While true, all queries
-	// that use on_main_chain fall back to the original recursive CTE to ensure they
-	// never read a partially-updated flag. Cleared to false once the rebuild is done.
-	mainChainRebuilding atomic.Bool
+	// mainChainRebuilding is a reference counter: each caller that is about to (or
+	// currently is) mutating the on_main_chain column Adds 1 on entry and Adds -1 on
+	// exit. While the counter is > 0, all queries that use on_main_chain fall back to
+	// the authoritative CTE so they never read a partially-updated flag. A counter
+	// rather than a bool is required because multiple callers (reorg + invalidation,
+	// startup + concurrent RPC) may overlap: a bool would be cleared by the first to
+	// finish, exposing readers while later callers are still mid-update.
+	mainChainRebuilding atomic.Int32
 	// blockTimestampCache is a sliding-window cache of recent block timestamps,
 	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
 	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
@@ -207,10 +210,10 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		blockTimestampCache:   newBlockTimestampCache(),
 	}
 
+	s.backgroundDone = make(chan struct{})
 	if useInMemory {
 		s.chainWalkCache = NewGenerationalCache()
 		s.offChainBlockIDs = make(map[uint32]struct{})
-		s.backgroundDone = make(chan struct{})
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -218,20 +221,36 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
+	// Hold the rebuild guard synchronously until the background goroutine has started
+	// and incremented it itself. This ensures concurrent queries fall back to the CTE
+	// from the moment New() returns, even before the goroutine is scheduled — without
+	// this, there is a narrow window where maps/flags are unpopulated but the guard is 0.
+	s.mainChainRebuilding.Add(1)
+
 	// Rebuild the on_main_chain column and (if applicable) the in-memory off-chain set
-	// asynchronously so startup is not blocked. Concurrent queries fall back to the
-	// authoritative CTE via mainChainRebuilding for the duration of the rebuild.
-	// The rebuild covers only the last 10×CoinbaseMaturity blocks (fast), so the
-	// fallback window is brief.
+	// asynchronously so startup is not blocked. The first rebuild after the column is
+	// added (migration) walks the whole chain; subsequent starts walk only the last
+	// 10×CoinbaseMaturity blocks.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer s.mainChainRebuilding.Add(-1) // release the guard held by New()
+
+		ctx, cancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
 		defer cancel()
-		if rebuildErr := s.rebuildOnMainChainFlag(ctx); rebuildErr != nil {
+
+		full, err := s.needsFullOnMainChainRebuild(ctx)
+		if err != nil {
+			s.logger.Errorf("startup: needsFullOnMainChainRebuild: %v", err)
+			// Fall through with full=false; bounded rebuild still covers recent blocks.
+		}
+		if full {
+			s.logger.Infof("startup: on_main_chain appears unpopulated — running full-chain rebuild (migration)")
+		}
+		if rebuildErr := s.rebuildOnMainChainFlag(ctx, full); rebuildErr != nil {
 			s.logger.Errorf("startup: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
 
 		if useInMemory {
-			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			rebuildCtx, rebuildCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
 			defer rebuildCancel()
 			if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("startup: rebuildOffChainSet: %v", rebuildErr)
@@ -929,21 +948,70 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 	return err
 }
 
+// shutdownAwareContext returns a context that is cancelled either when the timeout
+// expires or when Close() is called (s.backgroundDone is closed). Callers must call
+// the returned cancel function to release resources.
+func (s *SQL) shutdownAwareContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		select {
+		case <-s.backgroundDone:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+// needsFullOnMainChainRebuild returns true when the on_main_chain column looks
+// unpopulated relative to the canonical chain. The canonical chain has exactly
+// bestHeight+1 blocks (genesis through tip), so count(on_main_chain=true) must
+// equal that. Any other value indicates either a fresh migration (count << expected)
+// or a corrupt state — both require a full-chain rebuild.
+func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
+	var bestHeight int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(height), -1) FROM blocks WHERE invalid = false`,
+	).Scan(&bestHeight)
+	if err != nil {
+		return false, errors.NewStorageError("needsFullOnMainChainRebuild: failed to get best height", err)
+	}
+	if bestHeight < 0 {
+		return false, nil // empty DB
+	}
+
+	var onMainChainCount int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM blocks WHERE on_main_chain = true`,
+	).Scan(&onMainChainCount)
+	if err != nil {
+		return false, errors.NewStorageError("needsFullOnMainChainRebuild: failed to count on_main_chain", err)
+	}
+
+	return onMainChainCount != bestHeight+1, nil
+}
+
 // rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
 // current canonical chain. It walks the main chain backward from the best block via
-// parent_id, limited to a window of 10×CoinbaseMaturity blocks above the tip.
+// parent_id.
 //
-// The window bound is safe because a reorg deeper than CoinbaseMaturity is
+// When full is false, the walk is bounded to the last 10×CoinbaseMaturity blocks above
+// the tip. The bound is safe because a reorg deeper than CoinbaseMaturity is
 // consensus-invalid — blocks beyond that depth have immutable on_main_chain status.
+// When full is true, the walk covers the entire chain back to genesis. Full rebuild
+// is required once after the on_main_chain column is first added to an existing DB
+// (migration), since default values need to be corrected chain-wide.
+//
 // Two UPDATEs run inside a single transaction so readers never see a partial state:
 //   - Step 1: clear on_main_chain for blocks in the window no longer on the chain
 //   - Step 2: set on_main_chain for blocks in the window not yet marked
 //
-// mainChainRebuilding is set for the duration of the call so concurrent queries fall
-// back to the authoritative CTE rather than reading partially-updated flags.
-func (s *SQL) rebuildOnMainChainFlag(ctx context.Context) error {
-	s.mainChainRebuilding.Store(true)
-	defer s.mainChainRebuilding.Store(false)
+// mainChainRebuilding is incremented for the duration of the call so concurrent
+// queries fall back to the authoritative CTE rather than reading partially-updated
+// flags. The counter-based guard is safe under reentrant/overlapping callers.
+func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) error {
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -966,12 +1034,15 @@ func (s *SQL) rebuildOnMainChainFlag(ctx context.Context) error {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to get best block", err)
 	}
 
-	// Walk only the last 10×CoinbaseMaturity blocks. Reorgs deeper than CoinbaseMaturity
-	// are consensus-invalid; blocks outside this window already have correct flags.
-	windowSize := int64(10) * int64(s.chainParams.CoinbaseMaturity)
-	windowBottom := bestHeight - windowSize
-	if windowBottom < 0 {
-		windowBottom = 0
+	// Compute the walk bound. full=true walks to genesis (windowBottom=0); otherwise
+	// limit to 10×CoinbaseMaturity blocks above the tip.
+	var windowBottom int64
+	if !full {
+		windowSize := int64(10) * int64(s.chainParams.CoinbaseMaturity)
+		windowBottom = bestHeight - windowSize
+		if windowBottom < 0 {
+			windowBottom = 0
+		}
 	}
 
 	// Step 1: clear on_main_chain for blocks in the window no longer on the main chain.
@@ -1038,7 +1109,7 @@ func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
 		err  error
 	)
 
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		// on_main_chain flags may be mid-update — fall back to the authoritative CTE walk.
 		// Walk the main chain from bestBlockID backward to genesis via parent_id,
 		// then find all block IDs NOT on that path. This is provably correct for all

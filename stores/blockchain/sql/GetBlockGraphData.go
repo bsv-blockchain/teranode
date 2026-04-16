@@ -56,7 +56,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	// through parent links. The final WHERE clause filters to only blocks within
 	// the requested time period.
 	var q string
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT

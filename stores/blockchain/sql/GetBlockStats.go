@@ -73,7 +73,7 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	}
 
 	var q string
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		q = fmt.Sprintf(`
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT

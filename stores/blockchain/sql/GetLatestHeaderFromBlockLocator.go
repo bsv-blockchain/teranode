@@ -91,7 +91,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	var q string
 	var args []interface{}
 
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		baseQuery := `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height

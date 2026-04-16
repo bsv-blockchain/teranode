@@ -36,7 +36,7 @@ func (s *SQL) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chai
 	}
 
 	var q string
-	if s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() > 0 {
 		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height

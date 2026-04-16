@@ -170,7 +170,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
 			s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
 		if s.useInMemoryChainCheck {

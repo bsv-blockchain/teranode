@@ -187,7 +187,7 @@ func TestOnMainChain_StartupRebuild(t *testing.T) {
 
 	// Startup rebuild should restore correct flags
 	s.responseCache.DeleteAll()
-	err = s.rebuildOnMainChainFlag(context.Background())
+	err = s.rebuildOnMainChainFlag(context.Background(), false)
 	require.NoError(t, err)
 
 	assert.True(t, getOnMainChain(t, s, tSettings.ChainCfgParams.GenesisHash[:]), "genesis on_main_chain after rebuild")
@@ -330,17 +330,91 @@ func TestOnMainChain_ConsistentWithGetBlockByHeight(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, height := range []uint32{1, 2, 3} {
-		// Fast path (mainChainRebuilding = false by default)
+		// Fast path (mainChainRebuilding = 0 by default)
 		fastBlock, err := s.GetBlockByHeight(context.Background(), height)
 		require.NoError(t, err, "height=%d fast path", height)
 
 		// CTE fallback
-		s.mainChainRebuilding.Store(true)
+		s.mainChainRebuilding.Add(1)
 		cteBlock, err := s.GetBlockByHeight(context.Background(), height)
-		s.mainChainRebuilding.Store(false)
+		s.mainChainRebuilding.Add(-1)
 		require.NoError(t, err, "height=%d CTE path", height)
 
 		assert.Equal(t, fastBlock.Hash().String(), cteBlock.Hash().String(),
 			"fast path and CTE must return the same block at height %d", height)
 	}
+}
+
+// TestOnMainChain_BoundedWindowRespected verifies that rebuildOnMainChainFlag with
+// full=false does NOT touch blocks whose height is below the window floor. This is
+// the safety property that makes the optimization valid: blocks deeper than
+// 10×CoinbaseMaturity are never rewritten.
+func TestOnMainChain_BoundedWindowRespected(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	// CoinbaseMaturity=0 → window size 0 → windowBottom == bestHeight.
+	// With bestHeight=3, only the tip (block3) is in the window; block1 and block2
+	// are outside it.
+	tSettings.ChainCfgParams.CoinbaseMaturity = 0
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close()
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "peer")
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(context.Background(), block2, "peer")
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(context.Background(), block3, "peer")
+	require.NoError(t, err)
+
+	// Corrupt block1's flag via direct SQL — this simulates a deep inconsistency
+	// (e.g., from migration) that bounded rebuild must leave untouched.
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block1.Hash().CloneBytes())
+	require.NoError(t, err)
+	require.False(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "pre-condition: block1 flag cleared")
+
+	// Bounded rebuild must NOT fix block1 (it is below windowBottom).
+	err = s.rebuildOnMainChainFlag(context.Background(), false)
+	require.NoError(t, err)
+	assert.False(t, getOnMainChain(t, s, block1.Hash().CloneBytes()),
+		"bounded rebuild must not touch blocks below windowBottom")
+
+	// Full rebuild must fix block1 (walks all the way to genesis).
+	err = s.rebuildOnMainChainFlag(context.Background(), true)
+	require.NoError(t, err)
+	assert.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()),
+		"full rebuild must correct deep flags")
+}
+
+// TestOnMainChain_MigrationDetection verifies that needsFullOnMainChainRebuild
+// returns true when on_main_chain is unpopulated relative to the canonical chain.
+func TestOnMainChain_MigrationDetection(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close()
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "peer")
+	require.NoError(t, err)
+	_, _, err = s.StoreBlock(context.Background(), block2, "peer")
+	require.NoError(t, err)
+
+	// With all flags correct, no full rebuild needed.
+	needsFull, err := s.needsFullOnMainChainRebuild(context.Background())
+	require.NoError(t, err)
+	assert.False(t, needsFull, "consistent state requires no full rebuild")
+
+	// Simulate migration: clear all flags.
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false`)
+	require.NoError(t, err)
+
+	needsFull, err = s.needsFullOnMainChainRebuild(context.Background())
+	require.NoError(t, err)
+	assert.True(t, needsFull, "unpopulated state requires full rebuild")
 }

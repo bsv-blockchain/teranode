@@ -25,7 +25,11 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 		return false, nil
 	}
 
-	if !s.useInMemoryChainCheck {
+	// Fall back to SQL when:
+	//   - in-memory mode is disabled, OR
+	//   - a rebuild is in progress: offChainBlockIDs may be empty (startup) or stale
+	//     (ongoing reorg/invalidation) and the SQL path has its own CTE fallback.
+	if !s.useInMemoryChainCheck || s.mainChainRebuilding.Load() > 0 {
 		return s.checkBlockIsInCurrentChainSQL(ctx, blockIDs)
 	}
 
@@ -56,7 +60,7 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 // useInMemoryChainCheck is false. Uses the on_main_chain column when flags are
 // consistent; falls back to the recursive CTE when a rebuild is in progress.
 func (s *SQL) checkBlockIsInCurrentChainSQL(ctx context.Context, blockIDs []uint32) (bool, error) {
-	if !s.mainChainRebuilding.Load() {
+	if s.mainChainRebuilding.Load() == 0 {
 		// Fast path: on_main_chain flags are reliable — check them directly.
 		for _, id := range blockIDs {
 			var onMainChain bool
