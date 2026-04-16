@@ -70,9 +70,11 @@ func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *sett
 	}
 
 	fmt.Printf("Repair report:\n")
-	fmt.Printf("  UnminedSince inconsistencies fixed: %d\n", report.UnminedSinceFixed)
-	fmt.Printf("  Case A (loser not marked) fixed:    %d\n", report.CaseAFixed)
+	fmt.Printf("  UnminedSince inconsistencies fixed:   %d\n", report.UnminedSinceFixed)
+	fmt.Printf("  Case A (loser not marked) fixed:      %d\n", report.CaseAFixed)
 	fmt.Printf("  Case C (inverted winner/loser) fixed: %d\n", report.CaseCFixed)
+	fmt.Printf("  Case D (orphan conflicting) unmarked: %d\n", report.CaseDFixed)
+	fmt.Printf("  Case D (legit conflicting) cascaded:  %d\n", report.CaseDCascaded)
 
 	if len(report.Errors) > 0 {
 		fmt.Printf("  Non-fatal errors encountered: %d\n", len(report.Errors))
