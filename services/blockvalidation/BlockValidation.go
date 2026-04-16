@@ -1103,9 +1103,20 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // Returns an error if validation fails or nil on success.
 
 // buildAddBlockOpts returns AddBlock options for the block.
-// When block.ID is pre-assigned (by legacy netsync in LEGACYSYNCING mode), it uses that ID
+//
+// When block.ID is pre-assigned (set by legacy netsync in LEGACYSYNCING mode), it uses that ID
 // and sets mined_set=true upfront. This causes the setMinedChan worker to skip setTxMinedStatus
-// via its existing MinedSet guard, eliminating redundant SetMinedMulti calls for every UTXO.
+// via its existing MinedSet guard (BlockValidation.go setMinedChan worker, MinedSet check),
+// eliminating redundant SetMinedMulti calls for every UTXO.
+//
+// Trade-off: skipping setTxMinedStatus also skips its post-storage double-spend cross-check
+// (UpdateTxMinedStatus → SetMinedMulti). This is safe for LEGACYSYNCING because:
+//  1. block.Valid() performs pre-storage double-spend detection via checkParentExistsOnChain
+//     before AddBlock is called.
+//  2. LEGACYSYNCING processes a canonical chain with trusted historical blocks.
+//
+// For any block arriving without a pre-assigned ID (block.ID == 0), this function returns nil
+// and AddBlock behaves exactly as before — setTxMinedStatus runs normally.
 func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
 	if block.ID == 0 {
 		return nil

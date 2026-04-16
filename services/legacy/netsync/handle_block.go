@@ -330,6 +330,12 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			// mined info from creation. This ID is threaded through to blockvalidation via
 			// ProcessBlock so it can call AddBlock(WithID, WithMinedSet(true)) and cause the
 			// setMinedChan worker to skip setTxMinedStatus (MinedSet guard in BlockValidation.go).
+			//
+			// Note on ID gaps: GetNextBlockID advances the sequence atomically. If anything fails
+			// after this point (createUtxos error, network error, context cancellation), the ID
+			// is consumed and a gap appears in block IDs. This is acceptable — the blockchain
+			// store tolerates non-contiguous IDs; the sequence is used only as a monotonic counter,
+			// not a contiguous index.
 			id, idErr := sm.blockchainClient.GetNextBlockID(ctx)
 			if idErr != nil {
 				return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to get next block ID", idErr)
