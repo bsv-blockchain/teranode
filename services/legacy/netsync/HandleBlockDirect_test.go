@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -131,6 +132,9 @@ func Test_HandleBlockDirect(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// FSM is mocked as IDLE — HandleBlockDirect must return ErrRepairNeeded so the
+	// caller skips the accept-bookkeeping path (clearing rejectedTxns, advancing peer
+	// height, calling blockchainClient.Run) that would otherwise defeat the IDLE guard.
 	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash(), nil)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errors.ErrRepairNeeded)
 }
