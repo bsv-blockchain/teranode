@@ -144,6 +144,12 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 			LIMIT 1`, strings.Join(placeholders, ","))
 		}
 	} else {
+		// Fast path: use on_main_chain flag instead of the recursive CTE walk.
+		// We still enforce the bestBlockHash height constraint so that only blocks
+		// that are ancestors-of or equal-to bestBlockHash are considered — matching
+		// the CTE's walk-from-bestBlockHash semantics exactly.
+		// If bestBlockHash is not in the DB the subquery returns NULL and the height
+		// comparison yields no rows, producing the same ErrNoRows as the CTE path.
 		fastBase := `
 		SELECT
 	   	 b.version
@@ -160,7 +166,8 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		,b.chain_work
 		,b.median_time_past
 		FROM blocks b
-		WHERE b.on_main_chain = true`
+		WHERE b.on_main_chain = true
+		  AND b.height <= (SELECT height FROM blocks WHERE hash = $1 LIMIT 1)`
 
 		if s.engine == util.Postgres {
 			hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
@@ -168,16 +175,17 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 				hashBytes[i] = hash[:]
 			}
 			q = fastBase + `
-			AND b.hash = ANY($1)
+			AND b.hash = ANY($2)
 			ORDER BY b.height DESC
 			LIMIT 1`
-			args = []interface{}{hashBytes}
+			args = []interface{}{bestBlockHash[:], hashBytes}
 		} else {
 			placeholders := make([]string, len(blockLocator))
-			args = make([]interface{}, len(blockLocator))
+			args = make([]interface{}, len(blockLocator)+1)
+			args[0] = bestBlockHash[:]
 			for i, hash := range blockLocator {
-				placeholders[i] = fmt.Sprintf("$%d", i+1)
-				args[i] = hash[:]
+				placeholders[i] = fmt.Sprintf("$%d", i+2)
+				args[i+1] = hash[:]
 			}
 			q = fastBase + fmt.Sprintf(`
 			AND b.hash IN (%s)
