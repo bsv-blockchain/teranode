@@ -69,7 +69,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	if scanIt != nil {
 		defer scanIt.Close()
 
-		scannedBatches := 0
+		lastReported := int64(0)
 		for {
 			batch, bErr := scanIt.Next(ctx)
 			if bErr != nil {
@@ -78,9 +78,11 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			if batch == nil {
 				break
 			}
-			scannedBatches++
-			if scannedBatches%100 == 0 {
-				logProgress("[step 0/3] scanned %d batches, fixed %d unmined_since inconsistencies so far", scannedBatches, report.UnminedSinceFixed)
+
+			scanned := scanIt.TotalScanned()
+			if scanned-lastReported >= 500_000 {
+				logProgress("[step 0/3] scanned %d records, fixed %d unmined_since inconsistencies so far", scanned, report.UnminedSinceFixed)
+				lastReported = scanned
 			}
 
 			var toMark []chainhash.Hash
@@ -105,8 +107,8 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				report.UnminedSinceFixed += len(toMark)
 			}
 		}
+		logProgress("[step 0/3] done — scanned %d total records, fixed %d unmined_since inconsistencies", scanIt.TotalScanned(), report.UnminedSinceFixed)
 	}
-	logProgress("[step 0/3] done — fixed %d unmined_since inconsistencies", report.UnminedSinceFixed)
 
 	// Steps 1-3: conflict detection and repair.
 	type caseCPair struct {

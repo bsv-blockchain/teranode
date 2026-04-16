@@ -2009,6 +2009,9 @@ func (c *Client) Idle(ctx context.Context) error {
 		return errors.UnwrapGRPC(err)
 	}
 
+	idleState := FSMStateIDLE
+	c.fmsState.Store(&idleState)
+
 	return nil
 }
 
