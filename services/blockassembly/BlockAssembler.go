@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 )
@@ -408,6 +409,27 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		return errors.NewProcessingError("[Reset] error waiting for pending blocks", err)
 	}
 
+	// Best-effort wait for BlockValidation to finish processing any invalid moveBack blocks.
+	// InvalidateBlock sets mined_set=false and sends a BlockMinedUnset notification.
+	// BlockValidation's setTxMinedStatus(unsetMined=true) processes that notification
+	// asynchronously — it unsets the mined status for the block's transactions (sets
+	// unmined_since) and then sets mined_set=true. We wait for that to complete before
+	// loadUnminedTransactions so those txs have unmined_since set and can be recovered.
+	// On failure (except context cancellation), we proceed anyway — some txs may not
+	// be recovered in this reset cycle but will be picked up on subsequent resets.
+	for _, blockWithMeta := range moveBackBlocksWithMeta {
+		if blockWithMeta.meta.Invalid {
+			blockHash := blockWithMeta.block.Hash()
+			b.logger.Infof("[BlockAssembler][Reset] waiting for invalid block %s to be processed by BlockValidation", blockHash.String())
+			if waitErr := b.waitForBlockMinedSet(ctx, blockHash); waitErr != nil {
+				if ctx.Err() != nil {
+					return errors.NewProcessingError("[Reset] context cancelled while waiting for invalid block mined_set", waitErr)
+				}
+				b.logger.Warnf("[BlockAssembler][Reset] gave up waiting for invalid block %s mined_set: %v (proceeding anyway — txs may be recovered on next reset)", blockHash.String(), waitErr)
+			}
+		}
+	}
+
 	// Mark moveBack transactions as unmined (set unmined_since)
 	//
 	// Division of Responsibility During Reorg:
@@ -460,7 +482,8 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 
 		for _, blockWithMeta := range moveBackBlocksWithMeta {
 			if blockWithMeta.meta.Invalid {
-				// Skip invalid blocks - BlockValidation already handled them via unsetMined=true
+				// Skip invalid blocks — BlockValidation has already handled them via
+				// setTxMinedStatus(unsetMined=true) which we waited for above.
 				continue
 			}
 
@@ -549,6 +572,48 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
 	return nil
+}
+
+// waitForBlockMinedSet polls until the given block has mined_set=true, indicating
+// that BlockValidation's setTxMinedStatus has completed for it.
+// Non-retriable errors (e.g., block not found) cause an immediate return rather
+// than burning the full retry budget.
+func (b *BlockAssembler) waitForBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	retryCtx, retryCancel := context.WithCancel(ctx)
+	defer retryCancel()
+
+	var nonRetriableErr error
+
+	_, err := retry.Retry(retryCtx, b.logger, func() (bool, error) {
+		isMined, err := b.blockchainClient.GetBlockIsMined(retryCtx, blockHash)
+		if err != nil {
+			// Short-circuit on non-retriable errors (block doesn't exist in DB)
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				nonRetriableErr = errors.NewProcessingError(
+					"[waitForBlockMinedSet] block %s not found — cannot wait for mined_set", blockHash.String(), err)
+				retryCancel()
+				return false, nonRetriableErr
+			}
+			return false, err
+		}
+		if !isMined {
+			return false, errors.NewBlockParentNotMinedError(
+				"[waitForBlockMinedSet] block %s mined_set not yet true", blockHash.String())
+		}
+		return true, nil
+	},
+		retry.WithMessage("[BlockAssembler][Reset] waitForBlockMinedSet "+blockHash.String()),
+		retry.WithBackoffDurationType(b.settings.BlockValidation.IsParentMinedRetryBackoffDuration),
+		retry.WithRetryCount(b.settings.BlockValidation.IsParentMinedRetryMaxRetry),
+		retry.WithExponentialBackoff(),
+		retry.WithBackoffFactor(2.0),
+		retry.WithMaxBackoff(2*time.Second),
+	)
+
+	if nonRetriableErr != nil {
+		return nonRetriableErr
+	}
+	return err
 }
 
 // processNewBlockAnnouncement updates the best block information.

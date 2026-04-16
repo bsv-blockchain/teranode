@@ -778,6 +778,10 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 	transactionMap := make(map[chainhash.Hash]*bt.Tx, len(subtreeData.Txs))
 
 	for _, tx := range subtreeData.Txs {
+		if tx == nil {
+			continue
+		}
+
 		transactionMap[*tx.TxIDChainHash()] = tx
 	}
 
