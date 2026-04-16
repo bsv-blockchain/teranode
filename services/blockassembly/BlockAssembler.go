@@ -1309,6 +1309,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		if err = b.reset(ctx, reorgFailed); err != nil {
 			return errors.NewProcessingError("error resetting block assembly after reorg with invalid block", err)
 		}
+
+		prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+
+		// Return ErrBlockAssemblyReset so that processNewBlockAnnouncement knows not to
+		// overwrite the reset's setBestBlockHeader with a potentially stale value.
+		// This matches the large-reorg path above which also returns ErrBlockAssemblyReset.
+		return errors.NewBlockAssemblyResetError("reorg fallback reset, moveBackBlocks: %d, moveForwardBlocks: %d", len(moveBackBlocks), len(moveForwardBlocks))
 	}
 
 	prometheusBlockAssemblerReorgDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)

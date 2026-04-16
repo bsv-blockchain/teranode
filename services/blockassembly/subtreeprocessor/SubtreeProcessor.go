@@ -1158,6 +1158,21 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		}
 	}
 
+	// Clear processed_at for all moveBack blocks concurrently — these blocks are
+	// being "un-processed" during the reset so their timestamps must be removed.
+	if len(moveBackBlocks) > 0 {
+		g, gCtx := errgroup.WithContext(ctx)
+		for _, block := range moveBackBlocks {
+			g.Go(func() error {
+				if err := stp.blockchainClient.SetBlockProcessedAt(gCtx, block.Header.Hash(), true); err != nil {
+					stp.logger.Warnf("[SubtreeProcessor][Reset] error clearing block processed_at for %s: %v", block.String(), err)
+				}
+				return nil // non-critical, don't fail reset
+			})
+		}
+		_ = g.Wait()
+	}
+
 	// optimized version for legacy sync
 	if isLegacySync {
 		coinbaseTxsAdded := sync.Map{}
@@ -1190,9 +1205,19 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 		}
 
-		stp.currentBlockHeader.Store(blockHeader)
-		// Update pre-computed mining data after legacy sync reset
-		stp.updatePrecomputedMiningData()
+		// Mark processed_at for all blocks. For intermediate blocks use a lightweight
+		// direct SetBlockProcessedAt call to avoid running adjustSubtreeSize and
+		// updatePrecomputedMiningData on stale stats repeatedly during fast-forward.
+		// Only the final block gets full finalizeBlockProcessing.
+		for i, block := range moveForwardBlocks {
+			if i < len(moveForwardBlocks)-1 {
+				if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
+					stp.logger.Warnf("[SubtreeProcessor][Reset] error setting block processed_at for %s: %v", block.String(), err)
+				}
+			} else {
+				stp.finalizeBlockProcessing(ctx, block)
+			}
+		}
 	} else {
 		for _, block := range moveForwardBlocks {
 			// A block has potentially some conflicting transactions that need to be processed when we move forward the block
@@ -1229,18 +1254,37 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 			}
 		}
+
+		// Mark processed_at for all blocks. For intermediate blocks use a lightweight
+		// direct SetBlockProcessedAt call to avoid running adjustSubtreeSize and
+		// updatePrecomputedMiningData on stale stats repeatedly during fast-forward.
+		// Only the final block gets full finalizeBlockProcessing.
+		for i, block := range moveForwardBlocks {
+			if i < len(moveForwardBlocks)-1 {
+				if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
+					stp.logger.Warnf("[SubtreeProcessor][Reset] error setting block processed_at for %s: %v", block.String(), err)
+				}
+			} else {
+				stp.finalizeBlockProcessing(ctx, block)
+			}
+		}
 	}
 
-	// persist the current state
-	if len(moveForwardBlocks) > 0 {
-		stp.finalizeBlockProcessing(ctx, moveForwardBlocks[len(moveForwardBlocks)-1])
-	} else if len(moveBackBlocks) > 0 {
+	// persist the current state — only needed when there are NO moveForward blocks
+	// (moveForward blocks are now finalized individually in the loop above)
+	if len(moveForwardBlocks) == 0 && len(moveBackBlocks) > 0 {
 		// we only moved back, finalize with the parent of the last block we moved back
 		block, err := stp.blockchainClient.GetBlock(ctx, moveBackBlocks[len(moveBackBlocks)-1].Header.HashPrevBlock)
 		if err != nil {
 			return errors.NewProcessingError("[SubtreeProcessor][Reset] error getting parent block of last block we moved back", err)
 		}
 		stp.finalizeBlockProcessing(ctx, block)
+	} else if len(moveForwardBlocks) == 0 && len(moveBackBlocks) == 0 {
+		// no-op reset: block assembly is already at the target block, but chainedSubtrees
+		// and currentSubtree were just cleared above. Refresh precomputedMiningData so it
+		// no longer references the old (now-closed) subtrees.
+		stp.currentBlockHeader.Store(blockHeader)
+		stp.updatePrecomputedMiningData()
 	}
 
 	if postProcess != nil {

@@ -315,6 +315,49 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	switch blockTrigger {
 	case settings.PrunerBlockTriggerOnBlockPersisted:
 		currentHeight = s.lastPersistedHeight.Load()
+		// Look up the actual block hash for the persisted height using headers only.
+		// GetBlockHeadersByHeight walks the main chain (highest chainwork), so this
+		// remains fork-safe while avoiding full block reconstruction/transfer when
+		// only the hash is needed for the initial pruning signal.
+		// Retries with backoff to handle transient blockchain-client unavailability
+		// during startup, since in OnBlockPersisted mode there may be no subsequent
+		// notification to trigger pruning if this fails.
+		if currentHeight > 0 {
+			const (
+				maxHeaderLookupAttempts = 3
+				headerLookupBackoff     = 500 * time.Millisecond
+			)
+
+			for attempt := 1; attempt <= maxHeaderLookupAttempts; attempt++ {
+				headers, _, err := s.blockchainClient.GetBlockHeadersByHeight(ctx, currentHeight, currentHeight)
+				if err == nil && len(headers) > 0 && headers[0] != nil {
+					blockHash = *headers[0].Hash()
+					break
+				}
+
+				if err != nil {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): %v", currentHeight, attempt, maxHeaderLookupAttempts, err)
+				} else if len(headers) == 0 {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): header not found", currentHeight, attempt, maxHeaderLookupAttempts)
+				} else {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): header was nil", currentHeight, attempt, maxHeaderLookupAttempts)
+				}
+
+				if attempt == maxHeaderLookupAttempts {
+					return
+				}
+
+				timer := time.NewTimer(headerLookupBackoff)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
+			}
+		}
 	case settings.PrunerBlockTriggerOnBlockMined:
 		tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil || tipHeader == nil || tipMeta == nil {
