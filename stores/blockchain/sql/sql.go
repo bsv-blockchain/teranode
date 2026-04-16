@@ -511,7 +511,9 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 
 		// === MAIN CHAIN INDEX ===
 		// Partial index for fast main-chain height lookups (replaces recursive CTEs).
-		// Only indexes the small fraction of blocks on the canonical chain.
+		// Scoped to on_main_chain = true blocks; on mainnet where forks are rare this
+		// covers nearly all blocks, but still provides fast B-tree height lookups
+		// without including fork/orphan blocks.
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_on_main_chain_height ON blocks (height ASC) WHERE on_main_chain = true;`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
@@ -792,7 +794,9 @@ func createSqliteSchema(db *usql.DB) error {
 
 	// === MAIN CHAIN INDEX ===
 	// Partial index for fast main-chain height lookups (replaces recursive CTEs).
-	// Only indexes the small fraction of blocks on the canonical chain.
+	// Scoped to on_main_chain = true blocks; on mainnet where forks are rare this
+	// covers nearly all blocks, but still provides fast B-tree height lookups
+	// without including fork/orphan blocks.
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_on_main_chain_height ON blocks (height ASC) WHERE on_main_chain = true;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
@@ -929,23 +933,18 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 }
 
 // rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
-// current canonical chain. It walks the main chain from the best block backward via
-// parent_id (using the same recursive CTE as rebuildOffChainSet), then:
-//   - Clears on_main_chain for any block that was marked true but is no longer on the chain
-//   - Sets on_main_chain for any block that should be true but isn't yet
+// current canonical chain. It walks the main chain backward from the best block via
+// parent_id, limited to a window of 10×CoinbaseMaturity blocks above the tip.
 //
-// Both UPDATEs run inside a single transaction so readers never see a partial state.
-// On typical block extensions only 0-1 rows change (Step 1: 0 rows, Step 2: 0 rows because
-// on_main_chain was already set in the INSERT). On a reorg only the diverging blocks change.
+// The window bound is safe because a reorg deeper than CoinbaseMaturity is
+// consensus-invalid — blocks beyond that depth have immutable on_main_chain status.
+// Two UPDATEs run inside a single transaction so readers never see a partial state:
+//   - Step 1: clear on_main_chain for blocks in the window no longer on the chain
+//   - Step 2: set on_main_chain for blocks in the window not yet marked
 //
 // Callers must set mainChainRebuilding = true before calling this and reset it to false
 // after it returns, so that concurrent queries fall back to the CTE during the rebuild.
 func (s *SQL) rebuildOnMainChainFlag(ctx context.Context) error {
-	bestBlockID, _, err := s.getBestBlockID(ctx)
-	if err != nil {
-		return errors.NewStorageError("rebuildOnMainChainFlag: failed to get best block ID", err)
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to begin transaction", err)
@@ -956,39 +955,58 @@ func (s *SQL) rebuildOnMainChainFlag(ctx context.Context) error {
 		}
 	}()
 
-	// Step 1: clear on_main_chain for blocks that are no longer on the main chain.
+	// Fetch best block ID and height inside the transaction for a consistent snapshot.
+	var bestBlockID uint32
+	var bestHeight int64
+	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
+	if err = tx.QueryRowContext(ctx, bestQ).Scan(&bestBlockID, &bestHeight); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // empty DB — nothing to rebuild
+		}
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to get best block", err)
+	}
+
+	// Walk only the last 10×CoinbaseMaturity blocks. Reorgs deeper than CoinbaseMaturity
+	// are consensus-invalid; blocks outside this window already have correct flags.
+	windowSize := int64(10) * int64(s.chainParams.CoinbaseMaturity)
+	windowBottom := bestHeight - windowSize
+	if windowBottom < 0 {
+		windowBottom = 0
+	}
+
+	// Step 1: clear on_main_chain for blocks in the window no longer on the main chain.
 	// These are blocks that were previously on_main_chain = true but whose path from
 	// the best block does not reach them anymore (e.g. after a reorg).
 	q1 := `
 		WITH RECURSIVE main_chain AS (
-			SELECT id, parent_id FROM blocks WHERE id = $1
+			SELECT id, parent_id, height FROM blocks WHERE id = $1
 			UNION ALL
-			SELECT b.id, b.parent_id FROM blocks b
+			SELECT b.id, b.parent_id, b.height FROM blocks b
 			INNER JOIN main_chain m ON b.id = m.parent_id
-			WHERE b.id != m.id
+			WHERE b.id != m.id AND b.height >= $2
 		)
 		UPDATE blocks SET on_main_chain = false
-		WHERE on_main_chain = true AND id NOT IN (SELECT id FROM main_chain)
+		WHERE on_main_chain = true AND height >= $2 AND id NOT IN (SELECT id FROM main_chain)
 	`
-	if _, err = tx.ExecContext(ctx, q1, bestBlockID); err != nil {
+	if _, err = tx.ExecContext(ctx, q1, bestBlockID, windowBottom); err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to clear stale on_main_chain flags", err)
 	}
 
-	// Step 2: set on_main_chain for blocks now on the main chain that aren't marked yet.
+	// Step 2: set on_main_chain for blocks in the window now on the main chain.
 	// In the normal extend case this updates the newly inserted block (1 row).
 	// In the reorg case this updates the blocks on the new winning branch.
 	q2 := `
 		WITH RECURSIVE main_chain AS (
-			SELECT id, parent_id FROM blocks WHERE id = $1
+			SELECT id, parent_id, height FROM blocks WHERE id = $1
 			UNION ALL
-			SELECT b.id, b.parent_id FROM blocks b
+			SELECT b.id, b.parent_id, b.height FROM blocks b
 			INNER JOIN main_chain m ON b.id = m.parent_id
-			WHERE b.id != m.id
+			WHERE b.id != m.id AND b.height >= $2
 		)
 		UPDATE blocks SET on_main_chain = true
-		WHERE on_main_chain = false AND id IN (SELECT id FROM main_chain)
+		WHERE on_main_chain = false AND height >= $2 AND id IN (SELECT id FROM main_chain)
 	`
-	if _, err = tx.ExecContext(ctx, q2, bestBlockID); err != nil {
+	if _, err = tx.ExecContext(ctx, q2, bestBlockID, windowBottom); err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
 	}
 
