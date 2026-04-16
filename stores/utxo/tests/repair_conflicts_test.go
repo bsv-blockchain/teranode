@@ -671,12 +671,84 @@ func TestRepairConflictingChains_CaseD_LegitConflictNotUnmarked(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
+	// Pre-check: verify parentLoser.SpendingData[0] actually records childOfLoser.
+	// If Spend didn't record it, the cascade has nothing to follow.
+	preCheck, err := store.Get(ctx, parentLoserHash, fields.Utxos)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(preCheck.SpendingDatas), 1)
+	require.NotNil(t, preCheck.SpendingDatas[0], "precondition: parentLoser.SpendingDatas[0] must be set")
+	require.NotNil(t, preCheck.SpendingDatas[0].TxID)
+	require.Equal(t, *childOfLoser.TxIDChainHash(), *preCheck.SpendingDatas[0].TxID,
+		"precondition: parentLoser.SpendingDatas[0] must name childOfLoser")
+
 	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.CaseDFixed, "legit conflicting parent must NOT be unmarked by Case D")
+	require.Equal(t, 1, report.CaseDCascaded, "legit conflicting parent with non-conflicting child must cascade")
 
 	// parentLoser must stay Conflicting=true — grandparent evidence showed it was a legit loser.
 	parentMeta, err := store.Get(ctx, parentLoserHash, fields.Conflicting)
 	require.NoError(t, err)
 	require.True(t, parentMeta.Conflicting, "legit conflicting parent must remain marked")
+
+	// childOfLoser must now be Conflicting=true — cascaded from parentLoser.
+	childMeta, err := store.Get(ctx, childOfLoser.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, childMeta.Conflicting, "child of legit conflicting parent must be cascaded to Conflicting=true")
+}
+
+// TestRepairConflictingChains_CaseD_CascadeDryRun verifies that dryRun reports the
+// cascade case without writing anything.
+func TestRepairConflictingChains_CaseD_CascadeDryRun(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	parentWinner := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/3)
+	_, err = store.Create(ctx, parentWinner, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentWinner, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	parentLoser := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/4)
+	_, err = store.Create(ctx, parentLoser, 100)
+	require.NoError(t, err)
+
+	childOfLoser := makeTxSpendingOutput(t, parentLoser, 0, 5000)
+	_, err = store.Create(ctx, childOfLoser, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, childOfLoser, store.GetBlockHeight()+1, utxo.IgnoreFlags{
+		IgnoreConflicting: true,
+	})
+	require.NoError(t, err)
+
+	parentLoserHash := parentLoser.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentLoserHash}, true)
+	require.NoError(t, err)
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.CaseDCascaded, "dryRun must still report cascade")
+
+	// childOfLoser must remain Conflicting=false — dryRun writes nothing.
+	childMeta, err := store.Get(ctx, childOfLoser.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, childMeta.Conflicting, "dryRun must not cascade")
 }

@@ -26,6 +26,7 @@ type RepairReport struct {
 	CaseAFixed        int     // Losers fixed (missing Conflicting=true mark, cascaded to subtree)
 	CaseCFixed        int     // Inverted winner/loser pairs fixed via ProcessConflicting
 	CaseDFixed        int     // Orphan-conflicting parents unmarked (Conflicting=true with non-conflicting recorded spender and no evidence of a real conflict)
+	CaseDCascaded     int     // Legit-conflicting parents whose non-conflicting children were cascaded via MarkConflictingRecursively
 	Errors            []error // Non-fatal errors encountered during repair
 }
 
@@ -331,6 +332,23 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 
 		if legitConflict {
+			// Parent is genuinely a loser (some grandparent's SpendingData names a different
+			// spender). Cascade the conflicting mark down via SpendingData so the non-conflicting
+			// child we scanned — and any descendants — also become conflicting. Without this the
+			// child stays visible to GetUnminedTxIterator and validateParentChain still trips.
+			//
+			// Why not MarkConflictingRecursively: its cascade relies on SetConflicting's return
+			// value, which is built from GetSpend. GetSpend reports Status=CONFLICTING on a
+			// parent's outputs once the parent is flagged, masking the real spender and returning
+			// an empty child list — so the recursion stops at the parent. We walk SpendingData
+			// directly here to bypass that filter.
+			if !dryRun {
+				if cErr := cascadeConflictingViaSpendingData(ctx, s, parentHash); cErr != nil {
+					report.Errors = append(report.Errors, cErr)
+					continue
+				}
+			}
+			report.CaseDCascaded++
 			continue
 		}
 
@@ -343,6 +361,48 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		report.CaseDFixed++
 	}
 
-	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d Case D", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDFixed)
+	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d Case D (unmark), %d Case D (cascade)", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDFixed, report.CaseDCascaded)
 	return report, nil
+}
+
+// cascadeConflictingViaSpendingData walks SpendingData descendants of rootHash and marks
+// each one Conflicting=true. Unlike MarkConflictingRecursively, this traversal reads
+// SpendingData directly from each tx's Utxos field, so it is not blocked by GetSpend
+// returning Status_CONFLICTING once a parent is flagged — which stops the standard
+// cascade the moment the root is already conflicting.
+func cascadeConflictingViaSpendingData(ctx context.Context, s Store, rootHash chainhash.Hash) error {
+	visited := map[chainhash.Hash]struct{}{rootHash: {}}
+	frontier := []chainhash.Hash{rootHash}
+
+	for len(frontier) > 0 {
+		var next []chainhash.Hash
+		for _, h := range frontier {
+			h := h
+			meta, err := s.Get(ctx, &h, fields.Utxos)
+			if err != nil {
+				return err
+			}
+			if meta == nil {
+				continue
+			}
+			for _, sd := range meta.SpendingDatas {
+				if sd == nil || sd.TxID == nil {
+					continue
+				}
+				childHash := *sd.TxID
+				if _, seen := visited[childHash]; seen {
+					continue
+				}
+				visited[childHash] = struct{}{}
+
+				if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{childHash}, true); sErr != nil {
+					return sErr
+				}
+				next = append(next, childHash)
+			}
+		}
+		frontier = next
+	}
+
+	return nil
 }
