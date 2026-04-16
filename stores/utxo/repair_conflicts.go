@@ -25,6 +25,7 @@ type RepairReport struct {
 	UnminedSinceFixed int     // Txs fixed in step 0 (had block_ids on main chain but unmined_since still set)
 	CaseAFixed        int     // Losers fixed (missing Conflicting=true mark, cascaded to subtree)
 	CaseCFixed        int     // Inverted winner/loser pairs fixed via ProcessConflicting
+	CaseDFixed        int     // Orphan-conflicting parents unmarked (Conflicting=true with non-conflicting recorded spender and no evidence of a real conflict)
 	Errors            []error // Non-fatal errors encountered during repair
 }
 
@@ -118,6 +119,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 	var caseALosers []chainhash.Hash
 	var caseCPairs []caseCPair
+	var caseDOrphans []chainhash.Hash
 	processedMap := map[chainhash.Hash]bool{}
 
 	logProgress("[step 1/3] scanning unmined transactions for conflicts...")
@@ -138,7 +140,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 		unminedScanned += len(batch)
 		if unminedScanned%10000 == 0 {
-			logProgress("[step 1/3] scanned %d unmined txs, found %d Case A, %d Case C so far", unminedScanned, len(caseALosers), len(caseCPairs))
+			logProgress("[step 1/4] scanned %d unmined txs, found %d Case A, %d Case C, %d Case D so far", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
 		}
 
 		for _, tx := range batch {
@@ -165,10 +167,12 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				parentHash := input.PreviousTxIDChainHash()
 				vout := input.PreviousTxOutIndex
 
-				// Fetch parent SpendingDatas + ConflictingChildren in one call.
+				// Fetch parent SpendingDatas + ConflictingChildren + Conflicting in one call.
 				// ConflictingChildren is needed for Case C: siblings of txHash that are
 				// recorded as (PARENT, sibling) in conflicting_children — not (txHash, sibling).
-				parentMeta, pErr := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren)
+				// Conflicting is needed for Case D: parent is marked Conflicting=true but
+				// the recorded spender (txHash) is not — indicates an orphan conflicting mark.
+				parentMeta, pErr := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren, fields.Conflicting)
 				if pErr != nil {
 					report.Errors = append(report.Errors, pErr)
 					continue
@@ -215,17 +219,26 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 					}
 				}
 
+				// Case D: parent is marked Conflicting=true, but its own SpendingData records
+				// txHash (the non-conflicting unmined tx currently being scanned) as the spender
+				// of this output, and parent has no ConflictingChildren. The iterator would skip
+				// parent (conflicting filter), so validateParentChain later fails with "parent is
+				// unmined but not in processing list". Collect for step 4 validation + unmarking.
+				if parentMeta.Conflicting && len(parentMeta.ConflictingChildren) == 0 {
+					caseDOrphans = append(caseDOrphans, *parentHash)
+				}
+
 				break inputLoop
 			}
 		}
 	}
 
-	logProgress("[step 1/3] done — scanned %d unmined txs, found %d Case A, %d Case C", unminedScanned, len(caseALosers), len(caseCPairs))
+	logProgress("[step 1/4] done — scanned %d unmined txs, found %d Case A, %d Case C, %d Case D", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
 
 	// Fix Case C first so SpendingData is corrected before the Case A sweep.
 	// Dedup key is pair.loser (the fake winner tx being corrected): each unmined loser should be
 	// processed at most once even if multiple inputs point to the same real winner.
-	logProgress("[step 2/3] fixing %d Case C (inverted winner/loser) pairs...", len(caseCPairs))
+	logProgress("[step 2/4] fixing %d Case C (inverted winner/loser) pairs...", len(caseCPairs))
 	currentBlockHeight := bestHeader.Height
 	for _, pair := range caseCPairs {
 		if processedMap[pair.loser] {
@@ -241,7 +254,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		processedMap[pair.loser] = true
 	}
 
-	logProgress("[step 3/3] fixing %d Case A (unmarked losers)...", len(caseALosers))
+	logProgress("[step 3/4] fixing %d Case A (unmarked losers)...", len(caseALosers))
 	// Fix Case A, skipping any already resolved by Case C.
 	for _, loser := range caseALosers {
 		freshMeta, gErr := s.Get(ctx, &loser, fields.Conflicting)
@@ -261,6 +274,75 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		report.CaseAFixed++
 	}
 
-	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed)
+	// Step 4: Case D — unmark orphan-conflicting parents.
+	// An orphan conflicting parent is a tx with Conflicting=true whose recorded spender
+	// (per its own SpendingData) is a non-conflicting unmined tx, and which has no entries
+	// in ConflictingChildren. Such a parent is invisible to GetUnminedTxIterator (filtered
+	// by Conflicting=true) yet still has unminedSince set, so BlockAssembler's parent-chain
+	// validation fails with "parent is unmined but not in processing list" on every restart.
+	//
+	// Before unmarking, we verify there is no legitimate reason for parent to be conflicting
+	// by checking each of parent's inputs: if any grandparent's SpendingData[vout] names a
+	// different tx, parent is a legit loser and we leave it alone.
+	logProgress("[step 4/4] fixing %d Case D (orphan conflicting parents)...", len(caseDOrphans))
+	seenCaseD := map[chainhash.Hash]bool{}
+	for _, parentHash := range caseDOrphans {
+		parentHash := parentHash
+		if seenCaseD[parentHash] {
+			continue
+		}
+		seenCaseD[parentHash] = true
+
+		// Re-fetch fresh. Previous steps may have cascaded conflict marks that change the picture.
+		freshParent, gErr := s.Get(ctx, &parentHash, fields.Conflicting, fields.ConflictingChildren, fields.Tx)
+		if gErr != nil {
+			report.Errors = append(report.Errors, gErr)
+			continue
+		}
+		if freshParent == nil || !freshParent.Conflicting || len(freshParent.ConflictingChildren) > 0 {
+			continue
+		}
+		if freshParent.Tx == nil {
+			// Cannot verify without inputs — skip for safety.
+			continue
+		}
+
+		legitConflict := false
+		for _, pin := range freshParent.Tx.Inputs {
+			gpHash := pin.PreviousTxIDChainHash()
+			gpVout := pin.PreviousTxOutIndex
+			gpMeta, gpErr := s.Get(ctx, gpHash, fields.Utxos)
+			if gpErr != nil {
+				// Cannot verify this input — be conservative and treat parent as legit.
+				legitConflict = true
+				break
+			}
+			if gpMeta == nil || int(gpVout) >= len(gpMeta.SpendingDatas) {
+				continue
+			}
+			gpSD := gpMeta.SpendingDatas[gpVout]
+			if gpSD == nil || gpSD.TxID == nil {
+				continue
+			}
+			if !gpSD.TxID.IsEqual(&parentHash) {
+				legitConflict = true
+				break
+			}
+		}
+
+		if legitConflict {
+			continue
+		}
+
+		if !dryRun {
+			if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{parentHash}, false); sErr != nil {
+				report.Errors = append(report.Errors, sErr)
+				continue
+			}
+		}
+		report.CaseDFixed++
+	}
+
+	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d Case D", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDFixed)
 	return report, nil
 }

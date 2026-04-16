@@ -488,3 +488,195 @@ func TestRepairConflictingChains_CaseASkippedAfterCaseC(t *testing.T) {
 	require.Equal(t, 1, report.CaseCFixed)
 	require.Equal(t, 0, report.CaseAFixed, "TX_A must not be double-counted: Case C ProcessConflicting already fixed it")
 }
+
+// TestRepairConflictingChains_CaseD_OrphanConflictingParent reproduces the production
+// state seen on mainnet-eu-1: a parent tx is marked Conflicting=true with UnminedSince>0
+// and its recorded spender (per SpendingData) is a non-conflicting unmined child, but the
+// parent has no ConflictingChildren. The unmined iterator filters parent out
+// (conflicting=true), so BlockAssembler.validateParentChain fails every restart with
+// "parent is unmined but not in processing list". Case D detects this orphan mark (no real
+// conflict evidence) and unmarks the parent so the iterator re-includes it.
+func TestRepairConflictingChains_CaseD_OrphanConflictingParent(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	// rootTx is a known mined tx on the best chain so grandparent-SpendingData validation passes.
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	// parentTx spends rootTx[0] — Create+Spend so rootTx.SpendingData[0] = parentTx.
+	parentTx := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/2)
+	_, err = store.Create(ctx, parentTx, 100) // unmined
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// childTx spends parentTx[0] — Create+Spend so parentTx.SpendingData[0] = childTx.
+	childTx := makeTxSpendingOutput(t, parentTx, 0, 10000)
+	_, err = store.Create(ctx, childTx, 100) // unmined
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, childTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// The bug: parentTx is marked Conflicting=true with no real conflict (no sibling, no
+	// ConflictingChildren). SetConflicting does not cascade, so childTx stays non-conflicting.
+	parentHash := parentTx.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentHash}, true)
+	require.NoError(t, err)
+
+	// Sanity: parent is orphan-conflicting, child is not.
+	parentMeta, err := store.Get(ctx, parentHash, fields.Conflicting, fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.True(t, parentMeta.Conflicting, "precondition: parent must be Conflicting=true")
+	require.Empty(t, parentMeta.ConflictingChildren, "precondition: parent has no ConflictingChildren")
+
+	childMeta, err := store.Get(ctx, childTx.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, childMeta.Conflicting, "precondition: child must be Conflicting=false")
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.CaseDFixed, "parent orphan-conflicting must be detected and unmarked")
+	require.Equal(t, 0, report.CaseAFixed, "child is the recorded winner; no Case A")
+	require.Equal(t, 0, report.CaseCFixed, "no sibling on best chain; no Case C")
+
+	// Parent must be Conflicting=false after repair.
+	parentMeta, err = store.Get(ctx, parentHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, parentMeta.Conflicting, "parent must be unmarked after Case D repair")
+
+	// Child must remain Conflicting=false — no cascade.
+	childMeta, err = store.Get(ctx, childTx.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, childMeta.Conflicting, "child must remain non-conflicting")
+}
+
+// TestRepairConflictingChains_CaseD_DryRun verifies dryRun reports Case D without writing.
+func TestRepairConflictingChains_CaseD_DryRun(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	parentTx := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/2)
+	_, err = store.Create(ctx, parentTx, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	childTx := makeTxSpendingOutput(t, parentTx, 0, 10000)
+	_, err = store.Create(ctx, childTx, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, childTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	parentHash := parentTx.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentHash}, true)
+	require.NoError(t, err)
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.CaseDFixed, "dryRun must still report Case D")
+
+	// Parent must remain Conflicting=true — dryRun writes nothing.
+	parentMeta, err := store.Get(ctx, parentHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, parentMeta.Conflicting, "dryRun must not unmark parent")
+}
+
+// TestRepairConflictingChains_CaseD_LegitConflictNotUnmarked verifies the safety check:
+// a parent that is legitimately conflicting (its own input was won by a different tx per
+// grandparent's SpendingData) must NOT be unmarked by Case D even if it otherwise looks
+// like an orphan (no ConflictingChildren, recorded spender is non-conflicting).
+func TestRepairConflictingChains_CaseD_LegitConflictNotUnmarked(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	// parentWinner spends rootTx[0] — Create+Spend so rootTx.SpendingData[0] = parentWinner.
+	// This parent is the true spender of rootTx[0].
+	parentWinner := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/3)
+	_, err = store.Create(ctx, parentWinner, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentWinner, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// parentLoser also claims rootTx[0] but loses — Create only (no Spend), so
+	// rootTx.SpendingData[0] still equals parentWinner.
+	parentLoser := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/4)
+	_, err = store.Create(ctx, parentLoser, 100)
+	require.NoError(t, err)
+
+	// childOfLoser spends parentLoser[0] — Create+Spend so parentLoser.SpendingData[0] = childOfLoser.
+	// childOfLoser is non-conflicting for the Case D scan to pick up parentLoser as a candidate.
+	childOfLoser := makeTxSpendingOutput(t, parentLoser, 0, 5000)
+	_, err = store.Create(ctx, childOfLoser, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, childOfLoser, store.GetBlockHeight()+1, utxo.IgnoreFlags{
+		IgnoreConflicting: true,
+	})
+	require.NoError(t, err)
+
+	// Mark parentLoser Conflicting=true. Unlike the orphan case, this mark is correct:
+	// rootTx.SpendingData[0] = parentWinner, so parentLoser IS a legit loser.
+	parentLoserHash := parentLoser.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentLoserHash}, true)
+	require.NoError(t, err)
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, report.CaseDFixed, "legit conflicting parent must NOT be unmarked by Case D")
+
+	// parentLoser must stay Conflicting=true — grandparent evidence showed it was a legit loser.
+	parentMeta, err := store.Get(ctx, parentLoserHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, parentMeta.Conflicting, "legit conflicting parent must remain marked")
+}
