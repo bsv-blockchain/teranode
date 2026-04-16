@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
@@ -149,7 +150,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// validate all subtrees and store all subtree data
 	// this also should spend and create all utxos
-	subtrees, err := sm.prepareSubtrees(ctx, block)
+	subtrees, blockID, err := sm.prepareSubtrees(ctx, block)
 	if err != nil {
 		return err
 	}
@@ -162,7 +163,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return err
 	}
 
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), blockSizeUint64, blockHeight, 0)
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), blockSizeUint64, blockHeight, blockID)
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
@@ -174,7 +175,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.ProcessBlock(ctx, teranodeBlock)
+	err = sm.ProcessBlock(ctx, teranodeBlock, blockID)
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 	return err
 }
 
-func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, blockID uint32) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -239,7 +240,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy"); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", blockID); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
@@ -257,7 +258,7 @@ type TxMapWrapper struct {
 	ChildLevelInBlock  uint32
 }
 
-func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, err error) {
+func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, blockID uint32, err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareSubtrees",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -287,11 +288,11 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// then validate the subtree through the subtreeValidation service
 	if len(block.Transactions()) > 1 {
 		if subtree, err = subtreepkg.NewIncompleteTreeByLeafCount(len(block.Transactions())); err != nil {
-			return nil, errors.NewSubtreeError("[prepareSubtrees] failed to create subtree", err)
+			return nil, 0, errors.NewSubtreeError("[prepareSubtrees] failed to create subtree", err)
 		}
 
 		if err = subtree.AddCoinbaseNode(); err != nil {
-			return nil, errors.NewSubtreeError("[prepareSubtrees] failed to add coinbase placeholder", err)
+			return nil, 0, errors.NewSubtreeError("[prepareSubtrees] failed to add coinbase placeholder", err)
 		}
 
 		// subtreeData contains the extended tx bytes of all transactions references in the subtree
@@ -303,17 +304,17 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
 		if err = sm.createTxMap(ctx, block, txMap); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// extend all the transactions in the block
 		if err = sm.extendTransactions(ctx, block, txMap); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// create the subtree and subtreeData for the block
 		if err = sm.createSubtree(ctx, block, txMap, subtree, subtreeData, subtreeMetaData); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		if legacyMode, err = sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_LEGACYSYNCING); err != nil {
@@ -325,30 +326,40 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		quickValidationMode := legacyMode
 
 		if quickValidationMode {
+			// Only in LEGACYSYNCING (LEGACY_SYNC mode) — fetch block ID upfront so UTXOs carry
+			// mined info from creation. This ID is threaded through to blockvalidation via
+			// ProcessBlock so it can call AddBlock(WithID, WithMinedSet(true)) and cause the
+			// setMinedChan worker to skip setTxMinedStatus (MinedSet guard in BlockValidation.go).
+			id, idErr := sm.blockchainClient.GetNextBlockID(ctx)
+			if idErr != nil {
+				return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to get next block ID", idErr)
+			}
+			blockID = uint32(id) // nolint:gosec
+
 			// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
-			if err = sm.ValidateTransactionsLegacyMode(ctx, txMap, block); err != nil {
-				return nil, err
+			if err = sm.ValidateTransactionsLegacyMode(ctx, txMap, block, blockID); err != nil {
+				return nil, 0, err
 			}
 		}
 
 		// write all the subtree data to the subtree store
 		if err = sm.writeSubtree(ctx, block, subtree, subtreeData, subtreeMetaData, quickValidationMode); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// we don't need to check the subtree in the subtree validation in legacy or catching blocks mode,
 		// since we already validated the transactions and created all the subtree files needed
 		if !quickValidationMode {
 			if err = sm.checkSubtreeFromBlock(ctx, block, subtree); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 		}
 
 		subtrees = append(subtrees, subtree.RootHash())
 	}
 
-	return subtrees, nil
+	return subtrees, blockID, nil
 }
 
 func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree) error {
@@ -541,7 +552,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 }
 
 func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
-	block *bsvutil.Block) (err error) {
+	block *bsvutil.Block, blockID uint32) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
 		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
@@ -551,7 +562,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 		deferFn(err)
 	}()
 
-	if err = sm.createUtxos(ctx, txMap, block); err != nil {
+	if err = sm.createUtxos(ctx, txMap, block, blockID); err != nil {
 		return err
 	}
 
@@ -573,7 +584,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 // createUtxos creates all the utxos for the transactions in the block in parallel
 // before any spending is done. This only occurs in legacy mode when we assume the
 // block is valid.
-func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], block *bsvutil.Block) (err error) {
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], block *bsvutil.Block, blockID uint32) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createUtxos",
 		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
@@ -608,7 +619,11 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 				return errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
 			}
 
-			if _, err := sm.utxoStore.Create(gCtx, txWrapper.Tx, blockHeightUint32); err != nil {
+			if _, err := sm.utxoStore.Create(gCtx, txWrapper.Tx, blockHeightUint32, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+				BlockID:     blockID,
+				BlockHeight: blockHeightUint32,
+				SubtreeIdx:  0, // legacy path produces a single subtree at index 0
+			})); err != nil {
 				if errors.Is(err, errors.ErrTxExists) {
 					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
 				} else {

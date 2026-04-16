@@ -378,7 +378,7 @@ func TestSyncManager_createUtxos(t *testing.T) {
 	block.SetHeight(100)
 
 	// Test createUtxos
-	utxos := sm.createUtxos(context.Background(), txMap, block)
+	utxos := sm.createUtxos(context.Background(), txMap, block, 0)
 	assert.NotNil(t, utxos)
 }
 
@@ -469,9 +469,10 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 	}
 
 	// For single transaction blocks, prepareSubtrees returns empty
-	subtrees, err := sm.prepareSubtrees(context.Background(), block)
+	subtrees, blockID, err := sm.prepareSubtrees(context.Background(), block)
 	assert.NoError(t, err)
 	assert.NotNil(t, subtrees)
+	assert.Equal(t, uint32(0), blockID) // single-tx block exits early, IsFSMCurrentState=false → blockID stays 0
 
 	blockchainClient.AssertExpectations(t)
 }

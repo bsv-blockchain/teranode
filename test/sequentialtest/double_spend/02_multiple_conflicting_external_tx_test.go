@@ -58,7 +58,7 @@ func testMarkAsConflictingMultipleExternalTx(t *testing.T, utxoStore string) {
 	// create 103A with txA0
 	// 0 -> 1 ... 101 -> 102a -> 103a (*)
 	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	// Create block 103b with a double spend external transaction
@@ -79,7 +79,7 @@ func testMarkAsConflictingMultipleExternalTx(t *testing.T, utxoStore string) {
 
 	// Create block 104b to make chain b the longest
 	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	td.WaitForBlockHeight(t, block104b, blockWait, true)

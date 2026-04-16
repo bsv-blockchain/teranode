@@ -40,6 +40,7 @@ message ProcessBlockRequest {
   uint32 height = 2;
   string base_url = 3;
   string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
+  uint32 block_id = 5; // Pre-assigned block ID from legacy netsync (0 = not pre-assigned, blockchain will auto-assign)
 }
 
 // swagger:model ValidateBlockRequest

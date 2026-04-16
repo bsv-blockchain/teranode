@@ -133,7 +133,7 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 	td.VerifyInBlockAssembly(t, tx1)
 
 	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
-	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", ""))
+	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", "", 0))
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false, true), "Failed to process block")
 	td.WaitForBlock(t, block4a, blockWait)
 	td.WaitForBlockBeingMined(t, block4a)

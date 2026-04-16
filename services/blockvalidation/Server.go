@@ -1261,6 +1261,13 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
+	// If a block ID was pre-assigned by the caller (e.g. legacy netsync in LEGACYSYNCING mode),
+	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
+	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	if request.BlockId != 0 {
+		block.ID = request.BlockId
+	}
+
 	baseURL := request.BaseUrl
 	if baseURL == "" {
 		baseURL = "legacy" // default to legacy if not provided

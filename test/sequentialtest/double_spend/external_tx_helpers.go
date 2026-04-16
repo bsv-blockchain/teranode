@@ -202,12 +202,12 @@ func createConflictingBlockUseExternalRecords(t *testing.T, td *daemon.TestDaemo
 	newBlockSubtree, newBlock := td.CreateTestBlock(t, previousBlock, nonce, blockTxs...)
 
 	if len(expectBlockError) > 0 && expectBlockError[0] {
-		require.Error(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
+		require.Error(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy", 0),
 			"Expected block with double spend transaction to be rejected")
 		return nil
 	}
 
-	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
+	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy", 0),
 	// 	"Failed to process block with double spend transaction")
 
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy"),

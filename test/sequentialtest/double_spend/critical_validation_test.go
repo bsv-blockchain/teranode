@@ -91,7 +91,7 @@ func testNilSubtreeStoreBypass(t *testing.T, utxoStore string) {
 	// 3. Mock the validation dependencies
 	//
 	// For now, we verify that blocks with duplicates are rejected normally.
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicate transactions should be rejected")
 
 	t.Logf("SECURITY NOTE: This test documents a potential bypass at Block.go:500")
@@ -153,7 +153,7 @@ func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 	_, block102 := td.CreateTestBlock(t, block101, 10401)
 
 	// Process the block - should handle empty subtrees gracefully
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.NoError(t, err, "Block with minimal/empty subtrees should be accepted")
 
 	t.Logf("✓ Block with minimal subtrees handled correctly")
@@ -217,7 +217,7 @@ func testConcurrencyConfigurationEdgeCases(t *testing.T, utxoStore string) {
 	// Test with concurrency = 0
 	_, block102 := td.CreateTestBlock(t, block101, 10402, duplicateTx, duplicateTx)
 
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicates should be rejected even with concurrency=0")
 }
 
@@ -298,7 +298,7 @@ func testRaceDetectorDuplicateDetection(t *testing.T, utxoStore string) {
 	)
 
 	// Process with high concurrency - race detector will catch issues
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicates should be rejected")
 
 	t.Logf("✓ Race detector test completed")
