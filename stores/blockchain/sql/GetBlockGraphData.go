@@ -55,7 +55,9 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	// The query starts from both genesis (id=0) and the best block, walking back
 	// through parent links. The final WHERE clause filters to only blocks within
 	// the requested time period.
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() {
+		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
 			 id
@@ -82,6 +84,16 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 		SELECT block_time, tx_count FROM ChainBlocks
 		WHERE block_time >= $1
 	`
+	} else {
+		// id > 0 excludes genesis (id=0), matching the original CTE behaviour.
+		q = `
+		SELECT block_time, tx_count
+		FROM blocks
+		WHERE on_main_chain = true
+		  AND id > 0
+		  AND block_time >= $1
+	`
+	}
 
 	blockDataPoints := &model.BlockDataPoints{}
 

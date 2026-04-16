@@ -106,10 +106,13 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
+	// Capture the best block hash before insert. Used both for:
+	//   1. Reorg detection after insert (existing logic, gated on useInMemoryChainCheck)
+	//   2. Determining whether to set on_main_chain = true directly in the INSERT
+	//      (avoids a post-insert UPDATE for the common extend-chain case)
+	// getBestBlockID is cached, so this is essentially free.
 	var preBestHash *chainhash.Hash
-	if s.useInMemoryChainCheck {
-		// Capture the current best block hash before insert for reorg detection.
-		// getBestBlockID is cached, so this is essentially free.
+	{
 		var preBestErr error
 		_, preBestHash, preBestErr = s.getBestBlockID(ctx)
 		if preBestErr != nil {
@@ -117,7 +120,16 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	}
 
-	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
+	// A block is on the main chain at insert time if it extends the current best block.
+	// If preBestHash is nil (empty DB, or getBestBlockID failed) we insert as false and
+	// let rebuildOnMainChainFlag correct it (genesis case, or startup recovery).
+	// Invalid blocks are never on the main chain.
+	onMainChain := !storeBlockOptions.Invalid &&
+		preBestHash != nil &&
+		block.Header.HashPrevBlock != nil &&
+		*block.Header.HashPrevBlock == *preBestHash
+
+	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
 	if err != nil {
 		return 0, height, err
 	}
@@ -125,31 +137,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// Reset response cache to invalidate cached best block ID and headers
 	s.ResetResponseCache()
 
-	if s.useInMemoryChainCheck {
-		// Track the highest block ID for the maxBlockID upper-bound check.
-		s.updateMaxBlockID(newBlockID)
-
-		// Detect forks and reorgs by comparing the newly inserted block against
-		// the post-insert best block.
-		postBestCtx, postBestCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-		defer postBestCancel()
-		postBestID, _, bestErr := s.getBestBlockID(postBestCtx)
-		if bestErr != nil {
-			s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
-		} else if uint64(postBestID) != newBlockID {
+	// Detect forks and reorgs by comparing the newly inserted block against
+	// the post-insert best block. This drives both on_main_chain flag maintenance
+	// and the in-memory off-chain set (when useInMemoryChainCheck is enabled).
+	postBestCtx, postBestCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+	defer postBestCancel()
+	postBestID, _, bestErr := s.getBestBlockID(postBestCtx)
+	if bestErr != nil {
+		s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
+	} else if uint64(postBestID) != newBlockID {
+		// Case 1: fork — new block is not the best. on_main_chain is already false
+		// from the INSERT, so no DB update needed. Just update the in-memory set.
+		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
-			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-			defer rebuildCancel()
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
-				s.logger.Errorf("StoreBlock: %v", rebuildErr)
-			} else {
-				s.lastSuccessfulRebuild.Store(time.Now().Unix())
-			}
-		} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
-			// Case 2: new block is the best but doesn't extend the old best (reorg),
-			// or preBestHash was unavailable — take the conservative path and rebuild.
-			s.blockTimestampCache.Clear()
-			s.resetChainWalkCache()
+			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
@@ -158,6 +159,33 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
 			}
 		}
+	} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
+		// Case 2: new block is the best but doesn't extend the old best (reorg),
+		// or preBestHash was unavailable — rebuild on_main_chain flags in the DB
+		// and the in-memory off-chain set.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer rebuildCancel()
+		if s.useInMemoryChainCheck {
+			s.blockTimestampCache.Clear()
+			s.updateMaxBlockID(newBlockID)
+			s.resetChainWalkCache()
+		}
+		// Set guard: concurrent queries fall back to CTE while flags are being corrected.
+		s.mainChainRebuilding.Store(true)
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
+			s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		}
+		s.mainChainRebuilding.Store(false)
+		if s.useInMemoryChainCheck {
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	} else if s.useInMemoryChainCheck {
+		// Case 3: normal extend — update maxBlockID for the in-memory upper-bound check.
+		s.updateMaxBlockID(newBlockID)
 	}
 
 	return newBlockID, height, nil
@@ -257,7 +285,7 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - error: Any error encountered during the operation, including validation failures
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions) (uint64, uint32, []byte, bool, error) {
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -274,6 +302,12 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 	}
 
 	storeAsInvalid := previousBlockInvalid || storeBlockOptions.Invalid
+
+	// Genesis is always on the main chain (it IS the chain). Override the caller's
+	// value, which may be false when the DB was empty and getBestBlockID returned nothing.
+	if genesis {
+		onMainChain = !storeAsInvalid
+	}
 
 	// Determine if we should use a custom ID or auto-increment
 	// ID=0 is special: it means "not set" for regular blocks, but "use ID=0" for genesis
@@ -314,7 +348,8 @@ INSERT INTO blocks (
 	,subtrees_set
 	,persisted_at
 	,coinbase_bump
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+	,on_main_chain
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id
 			`
 		} else {
@@ -343,7 +378,8 @@ INSERT INTO blocks (
 	,subtrees_set
 	,persisted_at
 	,coinbase_bump
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
+	,on_main_chain
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		}
@@ -375,7 +411,8 @@ INSERT INTO blocks (
 	,subtrees_set
 	,persisted_at
 	,coinbase_bump
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+	,on_main_chain
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id
 			`
 		} else {
@@ -404,7 +441,8 @@ INSERT INTO blocks (
 	,subtrees_set
 	,persisted_at
 	,coinbase_bump
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22)
+	,on_main_chain
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		}
@@ -479,6 +517,7 @@ RETURNING id
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
 			coinbaseBump,
+			onMainChain,
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
@@ -505,6 +544,7 @@ RETURNING id
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
 			coinbaseBump,
+			onMainChain,
 		)
 	}
 

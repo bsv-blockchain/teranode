@@ -52,9 +52,29 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 	return false, nil
 }
 
-// checkBlockIsInCurrentChainSQL is the original SQL recursive CTE implementation.
-// Used when useInMemoryChainCheck is false.
+// checkBlockIsInCurrentChainSQL is the SQL fallback implementation used when
+// useInMemoryChainCheck is false. Uses the on_main_chain column when flags are
+// consistent; falls back to the recursive CTE when a rebuild is in progress.
 func (s *SQL) checkBlockIsInCurrentChainSQL(ctx context.Context, blockIDs []uint32) (bool, error) {
+	if !s.mainChainRebuilding.Load() {
+		// Fast path: on_main_chain flags are reliable — check them directly.
+		for _, id := range blockIDs {
+			var onMainChain bool
+			err := s.db.QueryRowContext(ctx, `SELECT on_main_chain FROM blocks WHERE id = $1`, id).Scan(&onMainChain)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return false, errors.NewStorageError("failed to check on_main_chain for block", err)
+			}
+			if onMainChain {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// CTE fallback when on_main_chain is being rebuilt.
 	_, bestBlockMeta, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return false, errors.NewStorageError("failed to get best block header", err)

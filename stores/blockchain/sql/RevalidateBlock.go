@@ -30,12 +30,28 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
+	// Set guard: concurrent queries fall back to the CTE while we fix on_main_chain flags.
+	s.mainChainRebuilding.Store(true)
+
+	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+	defer rebuildCancel()
+
+	// Invalidate caches FIRST so that rebuildOnMainChainFlag's getBestBlockID call
+	// sees the freshly revalidated state rather than the pre-revalidation cached value.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-		defer rebuildCancel()
+	}
+
+	// Rebuild on_main_chain flags to reflect the potentially new canonical chain.
+	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
+		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+	}
+	// Clear guard — on_main_chain is now consistent, queries can use fast path.
+	s.mainChainRebuilding.Store(false)
+
+	if s.useInMemoryChainCheck {
 		if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("RevalidateBlock: %v", rebuildErr)
 		} else {

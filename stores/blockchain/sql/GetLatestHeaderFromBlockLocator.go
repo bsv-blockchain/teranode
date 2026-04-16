@@ -91,7 +91,8 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	var q string
 	var args []interface{}
 
-	baseQuery := `
+	if s.mainChainRebuilding.Load() {
+		baseQuery := `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -119,33 +120,70 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id`
 
-	if s.engine == util.Postgres {
-		// Convert []chainhash.Hash to pgtype.FlatArray[[]byte] for pgx driver
-		hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
-		for i, hash := range blockLocator {
-			hashBytes[i] = hash[:]
-		}
-
-		q = baseQuery + `
+		if s.engine == util.Postgres {
+			hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
+			for i, hash := range blockLocator {
+				hashBytes[i] = hash[:]
+			}
+			q = baseQuery + `
 			AND b.hash = ANY($2)
 			ORDER BY b.height DESC
 			LIMIT 1`
-		args = []interface{}{bestBlockHash[:], hashBytes}
-	} else {
-		// SQLite: Generate dynamic placeholders for IN clause
-		placeholders := make([]string, len(blockLocator))
-		args = make([]interface{}, len(blockLocator)+1)
-		args[0] = bestBlockHash[:]
-
-		for i, hash := range blockLocator {
-			placeholders[i] = fmt.Sprintf("$%d", i+2)
-			args[i+1] = hash[:]
-		}
-
-		q = baseQuery + fmt.Sprintf(`
+			args = []interface{}{bestBlockHash[:], hashBytes}
+		} else {
+			placeholders := make([]string, len(blockLocator))
+			args = make([]interface{}, len(blockLocator)+1)
+			args[0] = bestBlockHash[:]
+			for i, hash := range blockLocator {
+				placeholders[i] = fmt.Sprintf("$%d", i+2)
+				args[i+1] = hash[:]
+			}
+			q = baseQuery + fmt.Sprintf(`
 			AND b.hash IN (%s)
 			ORDER BY b.height DESC
 			LIMIT 1`, strings.Join(placeholders, ","))
+		}
+	} else {
+		fastBase := `
+		SELECT
+	   	 b.version
+		,b.block_time
+		,b.n_bits
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.peer_id
+		,b.height
+		,b.tx_count
+		,b.chain_work
+		,b.median_time_past
+		FROM blocks b
+		WHERE b.on_main_chain = true`
+
+		if s.engine == util.Postgres {
+			hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
+			for i, hash := range blockLocator {
+				hashBytes[i] = hash[:]
+			}
+			q = fastBase + `
+			AND b.hash = ANY($1)
+			ORDER BY b.height DESC
+			LIMIT 1`
+			args = []interface{}{hashBytes}
+		} else {
+			placeholders := make([]string, len(blockLocator))
+			args = make([]interface{}, len(blockLocator))
+			for i, hash := range blockLocator {
+				placeholders[i] = fmt.Sprintf("$%d", i+1)
+				args[i] = hash[:]
+			}
+			q = fastBase + fmt.Sprintf(`
+			AND b.hash IN (%s)
+			ORDER BY b.height DESC
+			LIMIT 1`, strings.Join(placeholders, ","))
+		}
 	}
 
 	blockHeader := &model.BlockHeader{}

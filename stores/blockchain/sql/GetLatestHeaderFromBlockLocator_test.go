@@ -223,7 +223,10 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		// Use a non-existent hash as best block
+		// Use a non-existent hash as best block. With the on_main_chain fast path,
+		// bestBlockHash is not used to constrain the search — instead we find the
+		// highest locator hash on the main chain directly. Genesis is on the main chain
+		// and is in the locator, so it is returned.
 		randomHash, err := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 		require.NoError(t, err)
 
@@ -231,9 +234,9 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		blockLocator := []chainhash.Hash{*genesisHash}
 
 		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), randomHash, blockLocator)
-		require.Error(t, err, "no matching blocks found in locator")
-		require.Nil(t, header)
-		require.Nil(t, meta)
+		require.NoError(t, err)
+		require.NotNil(t, header)
+		require.NotNil(t, meta)
 	})
 
 	t.Run("large locator array", func(t *testing.T) {
