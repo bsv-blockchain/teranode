@@ -218,33 +218,30 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
-	// Rebuild the on_main_chain column from authoritative chain_work ordering.
-	// This is always done at startup (regardless of useInMemoryChainCheck) to:
-	//   - Set the flag correctly for a brand-new DB (genesis block)
-	//   - Recover from a crash that occurred mid-rebuild leaving flags inconsistent
-	// No mainChainRebuilding guard is needed here: New() is synchronous and no
-	// external queries are possible until it returns.
-	startupRebuildCtx, startupRebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-	defer startupRebuildCancel()
-	if rebuildErr := s.rebuildOnMainChainFlag(startupRebuildCtx); rebuildErr != nil {
-		s.Close()
-		return nil, errors.NewStorageError("failed to rebuild on_main_chain flags during startup", rebuildErr)
-	}
+	// Rebuild the on_main_chain column and (if applicable) the in-memory off-chain set
+	// asynchronously so startup is not blocked. Concurrent queries fall back to the
+	// authoritative CTE via mainChainRebuilding for the duration of the rebuild.
+	// The rebuild covers only the last 10×CoinbaseMaturity blocks (fast), so the
+	// fallback window is brief.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer cancel()
+		if rebuildErr := s.rebuildOnMainChainFlag(ctx); rebuildErr != nil {
+			s.logger.Errorf("startup: rebuildOnMainChainFlag: %v", rebuildErr)
+		}
+
+		if useInMemory {
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("startup: rebuildOffChainSet: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	}()
 
 	if useInMemory {
-		// Rebuild the off-chain set so that CheckBlockIsInCurrentChain works correctly
-		// after a process restart. Now that on_main_chain is up-to-date, this uses
-		// the fast flat scan rather than the CTE walk.
-		// This is fatal because the in-memory lookup has no DB fallback — if the
-		// off-chain set is empty, fork/orphan blocks would incorrectly return true.
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-		defer rebuildCancel()
-		if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
-			s.Close()
-			return nil, errors.NewStorageError("failed to seed off-chain set during startup", rebuildErr)
-		}
-		s.lastSuccessfulRebuild.Store(time.Now().Unix())
-
 		// Start periodic background refresh of the off-chain set as a safety net.
 		// This catches any missed rebuilds (e.g. due to transient DB errors during
 		// event-driven rebuilds) without requiring a process restart.
@@ -942,9 +939,12 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 //   - Step 1: clear on_main_chain for blocks in the window no longer on the chain
 //   - Step 2: set on_main_chain for blocks in the window not yet marked
 //
-// Callers must set mainChainRebuilding = true before calling this and reset it to false
-// after it returns, so that concurrent queries fall back to the CTE during the rebuild.
+// mainChainRebuilding is set for the duration of the call so concurrent queries fall
+// back to the authoritative CTE rather than reading partially-updated flags.
 func (s *SQL) rebuildOnMainChainFlag(ctx context.Context) error {
+	s.mainChainRebuilding.Store(true)
+	defer s.mainChainRebuilding.Store(false)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to begin transaction", err)

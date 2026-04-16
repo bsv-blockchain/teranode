@@ -100,20 +100,15 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		hash      *chainhash.Hash
 	)
 
-	// Set guard immediately: concurrent queries fall back to the CTE while we
-	// invalidate blocks and correct the on_main_chain flags.
-	s.mainChainRebuilding.Store(true)
-
 	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
-		s.mainChainRebuilding.Store(false)
 		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
 	}
 
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
-		// Invalidate caches FIRST so that rebuildOnMainChainFlag's getBestBlockID call
-		// does not return a stale best block that included the now-invalid block.
+		// Invalidate caches FIRST so that rebuildOnMainChainFlag does not return a
+		// stale best block that included the now-invalid block.
 		s.blockTimestampCache.Clear()
 		s.ResetResponseCache()
 		if s.useInMemoryChainCheck {
@@ -126,8 +121,6 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
-		// Clear guard — on_main_chain is now consistent, queries can use fast path.
-		s.mainChainRebuilding.Store(false)
 
 		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {

@@ -170,12 +170,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		// Set guard: concurrent queries fall back to CTE while flags are being corrected.
-		s.mainChainRebuilding.Store(true)
 		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
-		s.mainChainRebuilding.Store(false)
 		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
