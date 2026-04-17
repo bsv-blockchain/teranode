@@ -1160,8 +1160,11 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	// Clear processed_at for all moveBack blocks concurrently — these blocks are
 	// being "un-processed" during the reset so their timestamps must be removed.
+	// Bound fan-out so a reset spanning hundreds of moveBack blocks doesn't launch hundreds
+	// of parallel SetBlockProcessedAt writes against the blockchain store at once.
 	if len(moveBackBlocks) > 0 {
 		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(16)
 		for _, block := range moveBackBlocks {
 			g.Go(func() error {
 				if err := stp.blockchainClient.SetBlockProcessedAt(gCtx, block.Header.Hash(), true); err != nil {

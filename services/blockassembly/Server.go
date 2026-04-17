@@ -466,6 +466,17 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 	}
 }
 
+// assertNotFrozenForRepair returns a gRPC-wrapped ErrRepairNeeded when block assembly
+// aborted startup because the UTXO store needs repair. Externally reachable methods must
+// call this before touching the subtree processor or anything else started in
+// startChannelListeners — those were never initialised in the frozen path.
+func (ba *BlockAssembly) assertNotFrozenForRepair() error {
+	if ba.blockAssembler != nil && ba.blockAssembler.FrozenForRepair() {
+		return errors.WrapGRPC(errors.NewRepairNeededError("block assembly frozen — run 'teranode-cli repair-conflicts' and restart"))
+	}
+	return nil
+}
+
 // runBlockSubmissionListener handles incoming block submission requests.
 // It processes mining solutions and submits validated blocks to the blockchain.
 func (ba *BlockAssembly) runBlockSubmissionListener(ctx context.Context) {
@@ -880,6 +891,10 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		deferFn()
 	}()
 
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
+
 	if len(req.Txid) != 32 {
 		return nil, errors.WrapGRPC(
 			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), util.ReverseAndHexEncodeSlice(req.Txid)))
@@ -940,6 +955,10 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	)
 	defer deferFn()
 
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
+
 	if len(req.Txid) != 32 {
 		return nil, errors.WrapGRPC(
 			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), util.ReverseAndHexEncodeSlice(req.Txid)))
@@ -973,6 +992,10 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	defer func() {
 		deferFn()
 	}()
+
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
 
 	requests := batch.GetTxRequests()
 	if len(requests) == 0 {
@@ -1051,6 +1074,10 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 	defer func() {
 		deferFn()
 	}()
+
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
 
 	// Validate request structure
 	if len(req.TxidsPacked)%32 != 0 {
@@ -1173,6 +1200,10 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	)
 	defer endSpan()
 
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
+
 	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
@@ -1232,6 +1263,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		tracing.WithLogMessage(ba.logger, "[SubmitMiningSolution] called"),
 	)
 	defer endSpan()
+
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
 
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
@@ -1544,6 +1579,10 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 	)
 	defer endSpan()
 
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
+
 	storeID, err := chainhash.NewHash(req.Id)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid candidate ID", err))
@@ -1653,6 +1692,10 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 		tracing.WithLogMessage(ba.logger, "[ResetBlockAssembly] called"),
 	)
 	defer deferFn()
+
+	if err := ba.assertNotFrozenForRepair(); err != nil {
+		return nil, err
+	}
 
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {

@@ -143,6 +143,13 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
 
+	// frozenForRepair is set when Start aborts due to ErrRepairNeeded: the FSM is moved to IDLE,
+	// Start returns nil to keep the process alive so the operator can run teranode-cli repair-conflicts,
+	// but subtreeProcessor and channel listeners are never started. Externally reachable gRPC
+	// methods must check this flag and reject so no call ends up interacting with a half-initialised
+	// assembler — defence-in-depth alongside the FSM IDLE guards in upstream services.
+	frozenForRepair atomic.Bool
+
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
 }
@@ -223,6 +230,14 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	b.setCurrentRunningState(StateStarting)
 
 	return b, nil
+}
+
+// FrozenForRepair reports whether block assembly aborted startup because the UTXO store
+// needs repair. Callers that would otherwise interact with the subtree processor must
+// short-circuit when this returns true — subtreeProcessor.Start and the channel listeners
+// were never invoked in this mode.
+func (b *BlockAssembler) FrozenForRepair() bool {
+	return b.frozenForRepair.Load()
 }
 
 // TxCount returns the total number of transactions in the assembler.
@@ -805,16 +820,34 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
 	if err = b.loadUnminedTransactions(ctx); err != nil {
 		if errors.Is(err, errors.ErrRepairNeeded) {
-			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranode-cli repair-conflicts' then restart.")
+			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranode-cli repair-conflicts' to fix; block assembly will resume automatically once the FSM leaves IDLE.")
+			b.frozenForRepair.Store(true)
+			b.wg.Add(1)
+			go b.watchForRepairCompletion(ctx)
 			return nil
 		}
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
+	if err = b.startAfterLoadUnmined(ctx); err != nil {
+		return err
+	}
+
+	_, height := b.CurrentBlock()
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
+
+	return nil
+}
+
+// startAfterLoadUnmined completes the parts of Start() that run once unmined-transaction
+// loading has succeeded: launching the subtree processor goroutine, starting the channel
+// listeners, and publishing the initial block-height metric. Split out so the post-repair
+// recovery path can reuse it without duplicating the sequencing.
+func (b *BlockAssembler) startAfterLoadUnmined(ctx context.Context) error {
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
 
-	if err = b.startChannelListeners(ctx); err != nil {
+	if err := b.startChannelListeners(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
 	}
 
@@ -822,6 +855,53 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
 
 	return nil
+}
+
+// watchForRepairCompletion is launched when Start() enters the frozen-for-repair path. It
+// waits for the FSM to leave IDLE (which the operator triggers once the repair CLI has run
+// and they call setfsmstate), then retries loadUnminedTransactions. On success it finishes
+// the initialisation the main Start() skipped and clears the frozen flag so gated gRPC
+// methods begin accepting traffic again — matching the live pause/resume semantics used by
+// blockvalidation and subtreevalidation so operators don't need a node restart after repair.
+//
+// If the retry again returns ErrRepairNeeded (loadUnminedTransactions already put the FSM
+// back into IDLE via idleAndError), the loop waits for the next transition. Any other error
+// stops the watcher and leaves the assembler frozen — operator intervention required, since
+// a non-repair failure is outside this recovery path's remit.
+func (b *BlockAssembler) watchForRepairCompletion(ctx context.Context) {
+	defer b.wg.Done()
+
+	for {
+		if waitErr := b.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx); waitErr != nil {
+			if errors.Is(waitErr, context.Canceled) {
+				return
+			}
+			b.logger.Errorf("[BlockAssembler] watchForRepairCompletion: wait for FSM transition failed: %v", waitErr)
+			return
+		}
+
+		b.logger.Infof("[BlockAssembler] FSM left IDLE, retrying unmined-transactions load after repair")
+
+		if err := b.loadUnminedTransactions(ctx); err != nil {
+			if errors.Is(err, errors.ErrRepairNeeded) {
+				// loadUnminedTransactions -> idleAndError has moved the FSM back to IDLE.
+				// Wait for the next non-IDLE transition and try again.
+				b.logger.Errorf("[BlockAssembler] UTXO store still needs repair after FSM transition — staying frozen, will retry on next IDLE->non-IDLE transition")
+				continue
+			}
+			b.logger.Errorf("[BlockAssembler] failed to load un-mined transactions during repair recovery: %v", err)
+			return
+		}
+
+		if err := b.startAfterLoadUnmined(ctx); err != nil {
+			b.logger.Errorf("[BlockAssembler] failed to complete startup during repair recovery: %v", err)
+			return
+		}
+
+		b.frozenForRepair.Store(false)
+		b.logger.Infof("[BlockAssembler] repair recovery complete — block assembly resumed")
+		return
+	}
 }
 
 // Wait blocks until all background goroutines have finished.
