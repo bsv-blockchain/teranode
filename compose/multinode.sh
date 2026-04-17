@@ -11,7 +11,8 @@ usage() {
 Usage: compose/multinode.sh <command> [args]
 
 Commands:
-  up <N>                   Generate and start an N-node network (3-10)
+  up <N> [--build]          Generate and start an N-node network (3-10)
+  build                    Build the teranode Docker image
   down                     Stop and remove all containers and volumes
   restart                  Restart all containers (picks up config changes)
   status                   Show container status
@@ -53,14 +54,31 @@ compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
 }
 
+cmd_build() {
+  require_stack
+  echo "building teranode image..."
+  compose build teranode-builder
+  echo "teranode:latest image built"
+}
+
 cmd_up() {
-  local n="${1:-}"
+  local n=""
+  local do_build=false
+  for arg in "$@"; do
+    case "$arg" in
+      --build) do_build=true ;;
+      *)       n="$arg" ;;
+    esac
+  done
   if [[ -z "$n" ]]; then
     echo "error: specify number of nodes, e.g. '$0 up 5'" >&2
     exit 2
   fi
   echo "generating $n-node stack..."
   (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes -n "$n" -o compose/generated)
+  if [[ "$do_build" == true ]]; then
+    cmd_build
+  fi
   echo "starting containers..."
   compose up -d
   echo ""
@@ -303,6 +321,7 @@ shift
 
 case "$command" in
   up)         cmd_up "$@" ;;
+  build)      cmd_build ;;
   down)       cmd_down ;;
   restart)    cmd_restart ;;
   status)     cmd_status ;;

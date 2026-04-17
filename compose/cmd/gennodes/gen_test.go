@@ -79,12 +79,12 @@ func TestWriteAll_RendersCompleteBundle(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(composeBytes, &doc))
 	for _, want := range []string{
-		"postgres", "kafka-shared", "jaeger",
+		"teranode-builder", "postgres", "kafka-shared", "jaeger",
 		"teranode1", "teranode2", "teranode3", "teranode4",
 		"aerospike-1", "aerospike-2", "aerospike-3", "aerospike-4",
 	} {
 		_, ok := doc.Services[want]
 		require.True(t, ok, "compose missing service %q", want)
 	}
-	require.Len(t, doc.Services, 3+4+4, "unexpected service count")
+	require.Len(t, doc.Services, 1+3+4+4, "unexpected service count")
 }

@@ -7,6 +7,19 @@ networks:
     name: teranode-network-multinode-${TEST_ID:-default}
 
 services:
+  teranode-builder:
+    container_name: teranode-builder-multinode
+    image: teranode:latest
+    networks:
+      - teranode-network
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        BASE_IMG: ghcr.io/bsv-blockchain/teranode-base:build-latest
+        RUN_IMG: ghcr.io/bsv-blockchain/teranode-base:run-latest
+    entrypoint: ["true"]
+
   postgres:
     container_name: postgres-multinode
     image: postgres:latest
