@@ -787,6 +787,95 @@ func TestRepairConflictingChains_CaseD_ChainedOrphans(t *testing.T) {
 	require.False(t, childMeta.Conflicting)
 }
 
+// TestRepairConflictingChains_CaseD_LegitCascadeWithNilParentSD reproduces the mainnet
+// pathology where a legit-losing parent has no SpendingDatas populated (spentUtxos=0)
+// because it was already Conflicting=true at the time its child ran Spend, and some
+// code paths skip the SD write. cascadeConflictingViaSpendingData(parent) walks
+// parent.SD and finds zero descendants, so the real child stays visible to the unmined
+// iterator and validateParentChain keeps tripping across restarts.
+//
+// The fix: step 1 records the direct children that spend each orphan-candidate parent.
+// If the parent turns out to be a legit loser, the cascade uses those direct children
+// as additional seeds — their own SpendingDatas are properly populated.
+func TestRepairConflictingChains_CaseD_LegitCascadeWithNilParentSD(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	// parentWinner legitimately spends rootTx[0] — Create+Spend populates rootTx.SD[0].
+	parentWinner := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/3)
+	_, err = store.Create(ctx, parentWinner, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentWinner, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// parentLoser also claims rootTx[0] — Create only, no Spend. rootTx.SD[0] stays = parentWinner.
+	parentLoser := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/4)
+	_, err = store.Create(ctx, parentLoser, 100)
+	require.NoError(t, err)
+
+	// Mark parentLoser conflicting — this is the ACTUAL conflict; parentLoser is a real
+	// double-spend loser of rootTx[0].
+	parentLoserHash := parentLoser.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentLoserHash}, true)
+	require.NoError(t, err)
+
+	// childOfLoser is an unmined non-conflicting tx whose input names parentLoser[0].
+	// Critically we do NOT call Spend — so parentLoser.SD[0] stays nil, mirroring the
+	// mainnet state where spentUtxos=0 on a conflicting parent whose children never
+	// recorded their spend on the parent side.
+	childOfLoser := makeTxSpendingOutput(t, parentLoser, 0, 5000)
+	_, err = store.Create(ctx, childOfLoser, 100)
+	require.NoError(t, err)
+
+	// Precondition: parentLoser has nil SpendingDatas for all outputs (no Spend ran).
+	preCheck, err := store.Get(ctx, parentLoserHash, fields.Utxos)
+	require.NoError(t, err)
+	for i, sd := range preCheck.SpendingDatas {
+		require.Nil(t, sd, "precondition: parentLoser.SpendingDatas[%d] must be nil", i)
+	}
+
+	// childOfLoser must start non-conflicting (otherwise step 1's iterator skips it).
+	childHash := childOfLoser.TxIDChainHash()
+	cMeta, err := store.Get(ctx, childHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, cMeta.Conflicting, "precondition: childOfLoser starts non-conflicting")
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, report.CaseDFixed, "legit loser must NOT be unmarked")
+	require.Equal(t, 1, report.CaseDCascaded, "legit loser with nil SD must still cascade via tracked direct children")
+
+	// parentLoser stays Conflicting=true.
+	pMeta, err := store.Get(ctx, parentLoserHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, pMeta.Conflicting, "legit conflicting parent must remain marked")
+
+	// childOfLoser must now be Conflicting=true — cascaded from the direct-children seed.
+	// Without the fix cascadeConflictingViaSpendingData walks parent.SD (all nil) and
+	// finds zero descendants, so childOfLoser would stay non-conflicting.
+	cMeta, err = store.Get(ctx, childHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, cMeta.Conflicting, "direct child must be cascaded even when parent.SD is empty")
+}
+
 // TestRepairConflictingChains_CaseC_StaleSiblingSkipped verifies that a ConflictingChildren
 // entry which is on the best chain but no longer Conflicting=true is skipped, not enqueued
 // as a Case C winner. Previously such an entry would cause ProcessConflicting to return

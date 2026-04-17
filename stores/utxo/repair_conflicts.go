@@ -131,6 +131,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	var caseALosers []chainhash.Hash
 	var caseCPairs []caseCPair
 	var caseDOrphans []chainhash.Hash
+	// caseDDirectChildren records, for each orphan parent candidate, the non-conflicting
+	// unmined children we saw spend it during step 1. These are needed if the parent turns
+	// out to be a legit loser in step 4: cascadeConflictingViaSpendingData walks parent.SD,
+	// which is often empty (spentUtxos=0) when the parent was already conflicting at the
+	// time the children spent it — so the real children are invisible from the parent side.
+	// We seed the cascade from these direct children instead, whose own SpendingData is
+	// properly populated.
+	caseDDirectChildren := map[chainhash.Hash][]chainhash.Hash{}
 
 	logProgress("[step 1/4] scanning unmined transactions for conflicts...")
 	unminedIt, err := s.GetUnminedTxIterator()
@@ -229,6 +237,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 							logProgress("[step 1/4]   → adding %s to Case D orphans (nil SD branch, +%d orphan children)", parentHash.String(), len(orphanChildren))
 							caseDOrphans = append(caseDOrphans, *parentHash)
 							caseDOrphans = append(caseDOrphans, orphanChildren...)
+							caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
 						} else {
 							logProgress("[step 1/4]   → NOT adding %s (legit conflicting children found)", parentHash.String())
 						}
@@ -297,6 +306,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 						logProgress("[step 1/4]   → adding %s to Case D orphans (match SD branch, +%d orphan children)", parentHash.String(), len(orphanChildren))
 						caseDOrphans = append(caseDOrphans, *parentHash)
 						caseDOrphans = append(caseDOrphans, orphanChildren...)
+						caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
 					} else {
 						logProgress("[step 1/4]   → NOT adding %s (legit conflicting children found)", parentHash.String())
 					}
@@ -442,9 +452,25 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// parent's outputs once the parent is flagged, masking the real spender and returning
 				// an empty child list — so the recursion stops at the parent. We walk SpendingData
 				// directly here to bypass that filter.
+				//
+				// Parent's own SpendingDatas can be empty (spentUtxos=0) when the parent was already
+				// conflicting at the time its children ran Spend — the SD write gets skipped. In
+				// that case cascadeConflictingViaSpendingData(parent) finds zero descendants and
+				// the real children stay visible to the iterator. Seed the cascade from the direct
+				// children we saw in step 1, whose own SpendingDatas are properly populated.
 				if !dryRun {
 					if cErr := cascadeConflictingViaSpendingData(ctx, s, parentHash); cErr != nil {
 						return report, cErr
+					}
+					if directChildren := caseDDirectChildren[parentHash]; len(directChildren) > 0 {
+						if _, _, sErr := s.SetConflicting(ctx, directChildren, true); sErr != nil {
+							return report, sErr
+						}
+						for _, childHash := range directChildren {
+							if cErr := cascadeConflictingViaSpendingData(ctx, s, childHash); cErr != nil {
+								return report, cErr
+							}
+						}
 					}
 				}
 				report.CaseDCascaded++
