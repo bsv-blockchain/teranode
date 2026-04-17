@@ -7855,8 +7855,8 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 <p><strong>Type</strong>: uint32</p>
 <p><strong>Default</strong>: <code>10</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blobDeletionSafetyWindow</code></p>
-<p><strong>Description</strong>: Number of blocks to wait after Block Persister height before deleting blobs</p>
-<p>Provides a safety margin to ensure persisted blocks are stable before deleting their associated blobs.</p>
+<p><strong>Description</strong>: Number of blocks behind the triggering block height (mined or persisted, depending on <code>pruner_block_trigger</code>) before deleting blobs</p>
+<p>Provides a safety margin by only deleting blobs whose delete-at-height is at least this many blocks behind the triggering block height. When the triggering height has not yet exceeded the safety window, all blob deletions are skipped. Prevents deletion of data that might be needed during reorg scenarios.</p>
 <h3 id="pruner_blobdeletionbatchsize">pruner_blobDeletionBatchSize</h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>1000</code></p>
