@@ -787,6 +787,77 @@ func TestRepairConflictingChains_CaseD_ChainedOrphans(t *testing.T) {
 	require.False(t, childMeta.Conflicting)
 }
 
+// TestRepairConflictingChains_CaseC_StaleSiblingSkipped verifies that a ConflictingChildren
+// entry which is on the best chain but no longer Conflicting=true is skipped, not enqueued
+// as a Case C winner. Previously such an entry would cause ProcessConflicting to return
+// "tx is not conflicting" and — now that DB errors are fatal — abort the whole repair.
+//
+// This happens when a tx was SetConflicting(true) earlier (adding it to a parent's
+// conflictingCs list) and then SetConflicting(false) later. The SQL
+// updateParentConflictingChildren helper only ever INSERTs — it never deletes — so the
+// stale back-reference lingers even after the child is unmarked.
+func TestRepairConflictingChains_CaseC_StaleSiblingSkipped(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	const bestChainBlockID uint32 = 50
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	parentTx := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/2)
+	_, err = store.Create(ctx, parentTx, 100)
+	require.NoError(t, err)
+
+	// txA is the unmined non-conflicting spender of parentTx[0].
+	txA := makeTxSpendingOutput(t, parentTx, 0, 10000)
+	_, err = store.Create(ctx, txA, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, txA, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// txB is on the best chain but not currently Conflicting=true — it WAS marked
+	// conflicting at some point (adding it to parentTx.conflictingCs) and later unmarked.
+	// SetConflicting(false) does not remove the back-reference, so the entry lingers.
+	txB := makeTxSpendingOutput(t, parentTx, 0, 20000)
+	_, err = store.Create(ctx, txB, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: bestChainBlockID, BlockHeight: 1}),
+	)
+	require.NoError(t, err)
+	txBHash := txB.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*txBHash}, true)
+	require.NoError(t, err)
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*txBHash}, false)
+	require.NoError(t, err)
+
+	// Sanity: parentTx.ConflictingChildren still lists txB, but txB.Conflicting=false.
+	pMeta, err := store.Get(ctx, parentTx.TxIDChainHash(), fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.Contains(t, pMeta.ConflictingChildren, *txBHash, "stale back-reference must still be present")
+	bMeta, err := store.Get(ctx, txBHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, bMeta.Conflicting, "txB is not currently Conflicting=true")
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{bestChainBlockID},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
+	require.NoError(t, err, "stale non-conflicting sibling must not cause a fatal error")
+	require.Equal(t, 0, report.CaseCFixed, "stale sibling must NOT be enqueued as Case C winner")
+}
+
 // TestRepairConflictingChains_CaseD_OrphanBlocksParentDetection reproduces the mainnet
 // pathology where a parent's ConflictingChildren list references a child that is itself
 // orphan-conflicting (no credible reason to be Conflicting=true). The orphan child can

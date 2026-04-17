@@ -247,7 +247,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// GetCounterConflictingTxHashes is intentionally avoided here: it traverses
 				// txHash's own ConflictingChildren, missing siblings stored as (PARENT, sibling).
 				for _, sibling := range parentMeta.ConflictingChildren {
-					siblingMeta, sErr := s.Get(ctx, &sibling, fields.BlockIDs)
+					siblingMeta, sErr := s.Get(ctx, &sibling, fields.BlockIDs, fields.Conflicting)
 					if sErr != nil {
 						if errors.Is(sErr, errors.ErrTxNotFound) {
 							continue
@@ -255,6 +255,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 						return report, sErr
 					}
 					if siblingMeta == nil {
+						continue
+					}
+					// Stale back-reference: sibling is listed in ConflictingChildren but has
+					// since been unmarked (e.g. by an earlier repair). ProcessConflicting
+					// requires Conflicting=true on the winner and would fail with "tx is not
+					// conflicting" — which since errors are fatal would abort the whole run
+					// over a leftover pointer.
+					if !siblingMeta.Conflicting {
 						continue
 					}
 					for _, blockID := range siblingMeta.BlockIDs {
