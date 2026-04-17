@@ -88,4 +88,3 @@ func TestWriteAll_RendersCompleteBundle(t *testing.T) {
 	}
 	require.Len(t, doc.Services, 3+4+4, "unexpected service count")
 }
-

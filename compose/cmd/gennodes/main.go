@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 //go:embed all:templates
@@ -51,14 +53,14 @@ var hostExposedContainerPorts = []int{
 }
 
 const (
-	minNodes             = 3
-	maxNodes             = 10
-	hostBaseFloor        = 20000
-	nodeStride           = 2000
-	aerospikeBase        = 3000
-	aerospikePerNd       = 10 // node 1: 3010/3011/3012, node 10: 3100/3101/3102
-	dashboardContPort    = 8090
-	rpcContPort          = 9292
+	minNodes          = 3
+	maxNodes          = 10
+	hostBaseFloor     = 20000
+	nodeStride        = 2000
+	aerospikeBase     = 3000
+	aerospikePerNd    = 10 // node 1: 3010/3011/3012, node 10: 3100/3101/3102
+	dashboardContPort = 8090
+	rpcContPort       = 9292
 )
 
 type peerKey struct {
@@ -125,7 +127,7 @@ func loadKeys(n int) ([]peerKey, error) {
 		return nil, err
 	}
 	if len(all) < n {
-		return nil, fmt.Errorf("peer key pool has %d entries, need %d", len(all), n)
+		return nil, errors.NewError("peer key pool has %d entries, need %d", len(all), n)
 	}
 	return all[:n], nil
 }
@@ -222,15 +224,15 @@ func writeAll(outDir string, s spec) error {
 func renderToFile(tmplPath, dst string, data any) error {
 	tmpl, err := template.ParseFS(templatesFS, tmplPath)
 	if err != nil {
-		return fmt.Errorf("parse %s: %w", tmplPath, err)
+		return errors.NewError("parse %s: %v", tmplPath, err)
 	}
 	f, err := os.Create(dst)
 	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
+		return errors.NewError("create %s: %v", dst, err)
 	}
 	defer f.Close()
 	if err := tmpl.Execute(f, data); err != nil {
-		return fmt.Errorf("execute %s: %w", tmplPath, err)
+		return errors.NewError("execute %s: %v", tmplPath, err)
 	}
 	return nil
 }
