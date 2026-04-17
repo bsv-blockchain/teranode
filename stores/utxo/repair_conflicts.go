@@ -175,13 +175,17 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// the recorded spender (txHash) is not — indicates an orphan conflicting mark.
 				parentMeta, pErr := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren, fields.Conflicting)
 				if pErr != nil {
+					logProgress("[step 1/4] child %s: Get(parent %s) error: %v", txHash.String(), parentHash.String(), pErr)
 					report.Errors = append(report.Errors, pErr)
 					continue
 				}
 				if parentMeta == nil {
+					logProgress("[step 1/4] child %s: parent %s not found in store (nil meta)", txHash.String(), parentHash.String())
 					continue
 				}
 				if int(vout) >= len(parentMeta.SpendingDatas) {
+					logProgress("[step 1/4] child %s: parent %s SpendingDatas len=%d, vout=%d out of range",
+						txHash.String(), parentHash.String(), len(parentMeta.SpendingDatas), vout)
 					continue
 				}
 
@@ -192,8 +196,15 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 					// If the parent is flagged conflicting with no active conflicting children,
 					// that's still a Case D orphan candidate — enqueue it. We can't run Case A
 					// or Case C with no SpendingData, so fall through to the next input.
-					if parentMeta.Conflicting && !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren) {
-						caseDOrphans = append(caseDOrphans, *parentHash)
+					if parentMeta.Conflicting {
+						logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD=nil, ConflictingChildren=%v",
+							txHash.String(), vout, parentHash.String(), parentMeta.ConflictingChildren)
+						if !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress) {
+							logProgress("[step 1/4]   → adding %s to Case D orphans (nil SD branch)", parentHash.String())
+							caseDOrphans = append(caseDOrphans, *parentHash)
+						} else {
+							logProgress("[step 1/4]   → NOT adding %s (active conflicting children found)", parentHash.String())
+						}
 					}
 					continue
 				}
@@ -239,8 +250,15 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// conflicting=true — after Case D unmarks a parent, its entry in a grandparent's
 				// conflictingCs becomes a stale back-reference that must not block orphan
 				// detection one level up.
-				if parentMeta.Conflicting && !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren) {
-					caseDOrphans = append(caseDOrphans, *parentHash)
+				if parentMeta.Conflicting {
+					logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD.TxID=%s, ConflictingChildren=%v",
+						txHash.String(), vout, parentHash.String(), spendingData.TxID.String(), parentMeta.ConflictingChildren)
+					if !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress) {
+						logProgress("[step 1/4]   → adding %s to Case D orphans (match SD branch)", parentHash.String())
+						caseDOrphans = append(caseDOrphans, *parentHash)
+					} else {
+						logProgress("[step 1/4]   → NOT adding %s (active conflicting children found)", parentHash.String())
+					}
 				}
 
 				break inputLoop
@@ -317,7 +335,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				report.Errors = append(report.Errors, gErr)
 				continue
 			}
-			if freshParent == nil || !freshParent.Conflicting || hasActiveConflictingChildren(ctx, s, freshParent.ConflictingChildren) {
+			if freshParent == nil || !freshParent.Conflicting || hasActiveConflictingChildren(ctx, s, freshParent.ConflictingChildren, nil) {
 				continue
 			}
 			if freshParent.Tx == nil {
@@ -403,7 +421,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				if gpMeta == nil || !gpMeta.Conflicting {
 					continue
 				}
-				if hasActiveConflictingChildren(ctx, s, gpMeta.ConflictingChildren) {
+				if hasActiveConflictingChildren(ctx, s, gpMeta.ConflictingChildren, nil) {
 					continue
 				}
 				nextWave = append(nextWave, gpHash)
@@ -419,16 +437,26 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 // hasActiveConflictingChildren returns true if any hash in children still has
 // Conflicting=true. Stale entries in ConflictingChildren (e.g. after Case D unmarks a
 // formerly-conflicting child) must not block orphan detection upstream.
-func hasActiveConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash) bool {
+//
+// If logReason is non-nil, it is invoked with a human-readable explanation whenever the
+// function returns true — useful for step-1 debug diagnostics to see why a parent was
+// NOT classified as an orphan candidate.
+func hasActiveConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason func(string, ...interface{})) bool {
 	for i := range children {
 		h := children[i]
 		m, err := s.Get(ctx, &h, fields.Conflicting)
 		if err != nil {
 			// If we cannot verify, assume the child is still active (conservative — avoids
 			// accidentally unmarking a legitimately conflicting parent).
+			if logReason != nil {
+				logReason("  hasActiveConflictingChildren: Get(%s, Conflicting) failed: %v — treating as active (conservative)", h.String(), err)
+			}
 			return true
 		}
 		if m != nil && m.Conflicting {
+			if logReason != nil {
+				logReason("  hasActiveConflictingChildren: child %s is still Conflicting=true", h.String())
+			}
 			return true
 		}
 	}
