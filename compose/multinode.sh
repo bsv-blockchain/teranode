@@ -131,13 +131,28 @@ cmd_status() {
         local health=$((base))
 
         local state_icon="x"
+        local chaos_tag=""
         if [[ "$state" == "running" ]]; then
           state_icon="+"
           nodes_ok=$((nodes_ok + 1))
+          local ctr
+          ctr=$(container_name "$idx")
+          local drop_rules
+          drop_rules=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
+          local has_netem
+          has_netem=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -c netem || true)
+          if [[ "$drop_rules" -gt 0 ]]; then chaos_tag+=" ISOLATED"; fi
+          if [[ "$has_netem" -gt 0 ]]; then
+            local delay
+            delay=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -oP '\d+\.\d+ms|\d+ms' | head -1)
+            chaos_tag+=" SLOW(${delay})"
+          fi
+        elif [[ "$state" == "paused" ]]; then
+          chaos_tag=" PAUSED"
         fi
 
-        node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d" \
-          "$state_icon" "$idx" "$status" "$dashboard" "$rpc" "$health")
+        node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s" \
+          "$state_icon" "$idx" "$status" "$dashboard" "$rpc" "$health" "$chaos_tag")
         ;;
       *)
         local state_icon="x"
