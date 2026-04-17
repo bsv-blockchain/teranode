@@ -133,6 +133,12 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
+
+	// idleConsumerPaused guards the Kafka pause/resume transition while the FSM is IDLE so
+	// only one resume goroutine exists per transition. Without it, every handler invocation
+	// during IDLE would spawn its own watcher, leak routines, and issue redundant PauseAll/
+	// ResumeAll calls. The flag is cleared by the resume goroutine after ResumeAll returns.
+	idleConsumerPaused atomic.Bool
 }
 
 // New creates a new Server instance with the provided dependencies.

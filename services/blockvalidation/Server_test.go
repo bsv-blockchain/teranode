@@ -798,7 +798,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 		assert.Nil(t, found.errCh) // errCh should be nil to avoid blocking Kafka consumer
 	}()
 
-	err := server.blockHandler(kafkaMsg)
+	err := server.blockHandler(context.Background(), kafkaMsg)
 	assert.NoError(t, err)
 }
 

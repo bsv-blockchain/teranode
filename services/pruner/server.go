@@ -315,10 +315,12 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	switch blockTrigger {
 	case settings.PrunerBlockTriggerOnBlockPersisted:
 		currentHeight = s.lastPersistedHeight.Load()
-		// Look up the actual block hash for the persisted height using headers only.
-		// GetBlockHeadersByHeight walks the main chain (highest chainwork), so this
-		// remains fork-safe while avoiding full block reconstruction/transfer when
-		// only the hash is needed for the initial pruning signal.
+		// Look up the current main-chain block hash at the persisted height.
+		// GetBlockHeadersByHeight returns the header on the highest-chainwork chain, which is
+		// the correct target to prune to. If a reorg has replaced the originally-persisted
+		// block, the hash logged below refers to the current main-chain block, not the
+		// block that was persisted on the old fork — pruning decisions are by height, so
+		// this only affects the log line, not the work performed.
 		// Retries with backoff to handle transient blockchain-client unavailability
 		// during startup, since in OnBlockPersisted mode there may be no subsequent
 		// notification to trigger pruning if this fails.

@@ -68,27 +68,32 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		}
 
 		if *state == blockchain.FSMStateIDLE {
-			u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers to preserve unread subtrees. Run 'teranode-cli repair-conflicts' to fix.")
-			if u.subtreeConsumerClient != nil {
-				u.subtreeConsumerClient.PauseAll()
-			}
-			if u.txmetaConsumerClient != nil {
-				u.txmetaConsumerClient.PauseAll()
-			}
-			// Resume both consumers when FSM leaves IDLE.
-			go func() {
-				if waitErr := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gCtx); waitErr != nil {
-					u.logger.Errorf("[subtreeMessageHandler] error waiting for FSM transition from IDLE: %v", waitErr)
-					return
-				}
-				u.logger.Infof("[subtreeMessageHandler] FSM left IDLE, resuming Kafka consumers")
+			// Only the first IDLE-observed call pauses and spawns the resume watcher; concurrent
+			// handler invocations short-circuit via the atomic guard, so we neither spawn one
+			// goroutine per message nor issue thousands of redundant PauseAll calls.
+			if u.idleConsumerPaused.CompareAndSwap(false, true) {
+				u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers until FSM leaves IDLE. Run 'teranode-cli repair-conflicts' to fix.")
 				if u.subtreeConsumerClient != nil {
-					u.subtreeConsumerClient.ResumeAll()
+					u.subtreeConsumerClient.PauseAll()
 				}
 				if u.txmetaConsumerClient != nil {
-					u.txmetaConsumerClient.ResumeAll()
+					u.txmetaConsumerClient.PauseAll()
 				}
-			}()
+				go func() {
+					defer u.idleConsumerPaused.Store(false)
+					if waitErr := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gCtx); waitErr != nil {
+						u.logger.Errorf("[subtreeMessageHandler] error waiting for FSM transition from IDLE: %v", waitErr)
+						return
+					}
+					u.logger.Infof("[subtreeMessageHandler] FSM left IDLE, resuming Kafka consumers")
+					if u.subtreeConsumerClient != nil {
+						u.subtreeConsumerClient.ResumeAll()
+					}
+					if u.txmetaConsumerClient != nil {
+						u.txmetaConsumerClient.ResumeAll()
+					}
+				}()
+			}
 			return nil
 		}
 

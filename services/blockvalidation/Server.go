@@ -226,6 +226,13 @@ type Server struct {
 	// This is used to display in the dashboard why we switched from one peer to another.
 	// Protected by activeCatchupCtxMu for thread-safe access.
 	previousCatchupAttempt *PreviousAttempt
+
+	// idleConsumerPaused guards the Kafka pause/resume transition while the FSM is IDLE.
+	// Without it, every handler invocation during IDLE would spawn its own resume goroutine,
+	// leaking routines and issuing redundant PauseAll/ResumeAll calls. The flag is set on
+	// the first IDLE-observed call and cleared by the single resume goroutine after
+	// ResumeAll returns.
+	idleConsumerPaused atomic.Bool
 }
 
 // New creates a new block validation server with the provided dependencies.
@@ -754,7 +761,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- u.blockHandler(&kafkaMsg)
+			errCh <- u.blockHandler(ctx, &kafkaMsg)
 		}()
 
 		select {
@@ -789,26 +796,37 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 	}
 }
 
-func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) error {
+func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaBlockTopicMessage) error {
 	if u.blockchainClient != nil {
-		isIdle, err := u.blockchainClient.IsFSMCurrentState(context.Background(), blockchain.FSMStateIDLE)
+		isIdle, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateIDLE)
 		if err != nil {
-			u.logger.Warnf("[blockHandler] failed to check FSM state: %v", err)
-		} else if isIdle {
-			u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer to preserve unread blocks. Run 'teranode-cli repair-conflicts' to fix.")
-			if u.kafkaConsumerClient != nil {
-				u.kafkaConsumerClient.PauseAll()
-				// Resume when FSM leaves IDLE (e.g. after repair + setfsmstate running without restart).
-				go func() {
-					if waitErr := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(context.Background()); waitErr != nil {
-						u.logger.Errorf("[blockHandler] error waiting for FSM transition from IDLE: %v", waitErr)
-						return
-					}
-					u.logger.Infof("[blockHandler] FSM left IDLE, resuming Kafka consumer")
-					u.kafkaConsumerClient.ResumeAll()
-				}()
+			// Fail closed: a transient FSM-check failure must not let a block bypass the IDLE guard
+			// and reach validation while the node is being repaired. Return a recoverable error so
+			// the Kafka consumer retries after the FSM check succeeds.
+			return errors.NewServiceError("[blockHandler] failed to check FSM state: %v", err)
+		}
+		if isIdle {
+			// Pause future Kafka fetches while the FSM is IDLE and park this message for retry by
+			// returning a recoverable error (ErrServiceError is on the retry list in
+			// consumerMessageHandler). Returning nil would commit the offset and drop the block.
+			// Only the first IDLE-observed call actually pauses and spawns the resume watcher;
+			// concurrent handler invocations short-circuit via the atomic guard.
+			if u.idleConsumerPaused.CompareAndSwap(false, true) {
+				u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer; this message will be retried after FSM leaves IDLE. Run 'teranode-cli repair-conflicts' to fix.")
+				if u.kafkaConsumerClient != nil {
+					u.kafkaConsumerClient.PauseAll()
+					go func() {
+						defer u.idleConsumerPaused.Store(false)
+						if waitErr := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx); waitErr != nil {
+							u.logger.Errorf("[blockHandler] error waiting for FSM transition from IDLE: %v", waitErr)
+							return
+						}
+						u.logger.Infof("[blockHandler] FSM left IDLE, resuming Kafka consumer")
+						u.kafkaConsumerClient.ResumeAll()
+					}()
+				}
 			}
-			return nil
+			return errors.NewServiceError("node is in IDLE state — repair required before block validation resumes")
 		}
 	}
 

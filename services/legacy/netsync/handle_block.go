@@ -40,8 +40,12 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 	isIdle, err := sm.blockchainClient.IsFSMCurrentState(ctx, teranodeblockchain.FSMStateIDLE)
 	if err != nil {
-		sm.logger.Warnf("[HandleBlockDirect] failed to check FSM state: %v", err)
-	} else if isIdle {
+		// Fail closed: if we cannot confirm the FSM state, do not process the block — the node
+		// may be mid-repair and accepting a block now would write to a store we're trying to
+		// heal. Return the check error so the caller can retry.
+		return errors.NewProcessingError("[HandleBlockDirect] failed to check FSM state: %v", err)
+	}
+	if isIdle {
 		sm.logger.Warnf("[HandleBlockDirect] node is in IDLE state — skipping block. Run 'teranode-cli repair-conflicts' to fix.")
 		return errors.ErrRepairNeeded
 	}

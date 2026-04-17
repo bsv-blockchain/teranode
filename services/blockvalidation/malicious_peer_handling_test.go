@@ -99,7 +99,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 	}()
 
 	// Process the message
-	err = server.blockHandler(kafkaMsg)
+	err = server.blockHandler(context.Background(), kafkaMsg)
 	require.NoError(t, err)
 
 	// Verify block was handled

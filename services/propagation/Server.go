@@ -1027,9 +1027,13 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 //   - error: error if any processing step fails
 func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
 	if ps.blockchainClient != nil {
-		if isIdle, fsmErr := ps.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateIDLE); fsmErr != nil {
-			ps.logger.Warnf("[processTransaction] failed to check FSM state: %v", fsmErr)
-		} else if isIdle {
+		isIdle, fsmErr := ps.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateIDLE)
+		if fsmErr != nil {
+			// Fail closed: rejecting the tx on a transient FSM check failure is safer than
+			// admitting it when the node might be in IDLE for repair.
+			return errors.NewProcessingError("[processTransaction] failed to check FSM state: %v", fsmErr)
+		}
+		if isIdle {
 			ps.logger.Warnf("[processTransaction] node is in IDLE state — rejecting transaction. Run 'teranode-cli repair-conflicts' to fix.")
 			return errors.NewProcessingError("node is in IDLE state")
 		}
