@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/asset/centrifuge_impl"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
@@ -58,6 +59,7 @@ type Server struct {
 	centrifugeServer      *centrifuge_impl.Centrifuge
 	blockchainClient      blockchain.ClientI
 	blockvalidationClient blockvalidation.Interface
+	blockAssemblyClient   blockassembly.ClientI
 	p2pClient             p2p.ClientI
 	banList               banlist.Interface
 }
@@ -83,7 +85,8 @@ type Server struct {
 //   - *Server: A fully initialized Server instance ready for use
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
-	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface) *Server {
+	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface,
+	blockAssemblyClient ...blockassembly.ClientI) *Server {
 	s := &Server{
 		logger:                logger,
 		settings:              tSettings,
@@ -95,6 +98,10 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
 		banList:               banList,
+	}
+
+	if len(blockAssemblyClient) > 0 {
+		s.blockAssemblyClient = blockAssemblyClient[0]
 	}
 
 	return s
@@ -198,7 +205,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo, v.banList)
+	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo, v.banList, v.blockAssemblyClient)
 	if err != nil {
 		return errors.NewServiceError("error creating http server", err)
 	}

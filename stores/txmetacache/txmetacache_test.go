@@ -904,7 +904,7 @@ func Test_TxMetaCache_MiningOperations(t *testing.T) {
 
 	t.Run("GetUnminedTxIterator", func(t *testing.T) {
 		// Test GetUnminedTxIterator
-		iterator, err := cache.GetUnminedTxIterator(false)
+		iterator, err := cache.GetUnminedTxIterator()
 
 		// Function should execute for coverage, may return error in test setup
 		if err != nil {

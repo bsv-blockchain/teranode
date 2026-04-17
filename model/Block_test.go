@@ -934,7 +934,32 @@ func TestBlock_Bytes(t *testing.T) {
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		assert.Equal(t, 98, len(blockBytes))
+		assert.Equal(t, 99, len(blockBytes))
+	})
+
+	t.Run("test block bytes - with coinbase bump", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		bump := []byte{0x01, 0x02, 0x03, 0x04}
+		block := &Block{
+			Header:           blockHeader,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      123,
+			Subtrees:         []*chainhash.Hash{},
+			Height:           800000,
+			CoinbaseBUMP:     bump,
+		}
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		blockFromBytes, err := NewBlockFromBytes(blockBytes)
+		require.NoError(t, err)
+
+		assert.Equal(t, bump, []byte(blockFromBytes.CoinbaseBUMP))
 	})
 
 	t.Run("test block bytes", func(t *testing.T) {

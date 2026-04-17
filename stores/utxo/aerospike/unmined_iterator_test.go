@@ -259,7 +259,7 @@ func Test_GetUnminedTxIterator(t *testing.T) {
 			client: nil,
 		}
 
-		it, err := store.GetUnminedTxIterator(false)
+		it, err := store.GetUnminedTxIterator()
 		assert.Error(t, err)
 		assert.Nil(t, it)
 		assert.Contains(t, err.Error(), "aerospike client not initialized")
@@ -326,7 +326,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 	t.Run("NilStore", func(t *testing.T) {
 		// This would panic in real usage, but test the behavior
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(nil, false)
+			_, _ = newUnminedTxIterator(nil)
 		})
 	})
 
@@ -339,7 +339,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 
 		// This will panic because client.Query is called on nil
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(store, false)
+			_, _ = newUnminedTxIterator(store)
 		})
 	})
 }

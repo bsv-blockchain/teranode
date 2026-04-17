@@ -34,12 +34,12 @@ import (
 //
 // For CPU profiling to identify hotspots:
 //
-//	go test -bench=BenchmarkLoadUnminedTransactions/txCount=10000/fullScan=false -benchmem -benchtime=3x -cpuprofile=cpu.prof
+//	go test -bench=BenchmarkLoadUnminedTransactions/txCount=10000 -benchmem -benchtime=3x -cpuprofile=cpu.prof
 //	go tool pprof -http=:8080 cpu.prof
 //
 // For memory profiling:
 //
-//	go test -bench=BenchmarkLoadUnminedTransactions/txCount=10000/fullScan=false -benchmem -benchtime=3x -memprofile=mem.prof
+//	go test -bench=BenchmarkLoadUnminedTransactions/txCount=10000 -benchmem -benchtime=3x -memprofile=mem.prof
 //	go tool pprof -http=:8080 mem.prof
 func BenchmarkLoadUnminedTransactions(b *testing.B) {
 	// Skip if running in short mode
@@ -51,15 +51,13 @@ func BenchmarkLoadUnminedTransactions(b *testing.B) {
 	txCounts := []int{1000, 10000, 50000}
 
 	for _, txCount := range txCounts {
-		for _, fullScan := range []bool{false, true} {
-			b.Run(fmt.Sprintf("txCount=%d/fullScan=%t", txCount, fullScan), func(b *testing.B) {
-				benchmarkLoadUnminedTransactions(b, txCount, fullScan)
-			})
-		}
+		b.Run(fmt.Sprintf("txCount=%d", txCount), func(b *testing.B) {
+			benchmarkLoadUnminedTransactions(b, txCount)
+		})
 	}
 }
 
-func benchmarkLoadUnminedTransactions(b *testing.B, txCount int, fullScan bool) {
+func benchmarkLoadUnminedTransactions(b *testing.B, txCount int) {
 	initPrometheusMetrics()
 
 	// Initialize Aerospike container
@@ -165,18 +163,16 @@ func benchmarkLoadUnminedTransactions(b *testing.B, txCount int, fullScan bool) 
 	populateDuration := time.Since(start)
 	b.Logf("Population completed in %s (%.2f tx/sec)", populateDuration, float64(txCount)/populateDuration.Seconds())
 
-	// If testing with index-based scan, wait for the index to be ready
-	if !fullScan {
-		b.Logf("Waiting for unmined_since index to be ready...")
-		if indexWaiter, ok := utxoStore.(interface {
-			WaitForIndexReady(ctx context.Context, indexName string) error
-		}); ok {
-			err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex")
-			if err != nil {
-				b.Logf("Warning: index wait failed: %v", err)
-			} else {
-				b.Logf("Index ready")
-			}
+	// Wait for the index to be ready
+	b.Logf("Waiting for unmined_since index to be ready...")
+	if indexWaiter, ok := utxoStore.(interface {
+		WaitForIndexReady(ctx context.Context, indexName string) error
+	}); ok {
+		err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex")
+		if err != nil {
+			b.Logf("Warning: index wait failed: %v", err)
+		} else {
+			b.Logf("Index ready")
 		}
 	}
 
@@ -189,7 +185,7 @@ func benchmarkLoadUnminedTransactions(b *testing.B, txCount int, fullScan bool) 
 		blockAssembler.subtreeProcessor.Reset(genesisBlock.Header, nil, nil, false, nil)
 
 		// Benchmark the loadUnminedTransactions function
-		err := blockAssembler.loadUnminedTransactions(ctx, fullScan)
+		err := blockAssembler.loadUnminedTransactions(ctx)
 		require.NoError(b, err)
 	}
 
@@ -376,7 +372,7 @@ func BenchmarkLoadUnminedTransactions_MixedStates(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		blockAssembler.subtreeProcessor.Reset(genesisBlock.Header, nil, nil, false, nil)
-		err := blockAssembler.loadUnminedTransactions(ctx, false)
+		err := blockAssembler.loadUnminedTransactions(ctx)
 		require.NoError(b, err)
 	}
 

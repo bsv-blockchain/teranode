@@ -300,6 +300,10 @@ func (sm *ServiceManager) HealthHandler(ctx context.Context, checkLiveness bool)
 			overallStatus = http.StatusServiceUnavailable
 		}
 
+		if !json.Valid([]byte(details)) {
+			details = fmt.Sprintf(`{"message": "%s"}`, details)
+		}
+
 		jsonStr := fmt.Sprintf(`{"service": "%s","status": "%d","dependencies": [%s]}`, service.name, status, details)
 
 		msgs = append(msgs, jsonStr)

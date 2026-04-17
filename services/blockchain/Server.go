@@ -819,6 +819,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		Subtrees:         subtreeHashes,
 		TransactionCount: request.TransactionCount,
 		SizeInBytes:      request.SizeInBytes,
+		CoinbaseBUMP:     request.CoinbaseBump,
 	}
 
 	// process options for storing
@@ -963,6 +964,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 
@@ -1033,6 +1035,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 
@@ -1068,6 +1071,7 @@ func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.G
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 

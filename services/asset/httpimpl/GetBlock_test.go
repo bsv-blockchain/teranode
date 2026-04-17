@@ -84,7 +84,7 @@ func TestGetBlockByHeight(t *testing.T) {
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
 		// Check response body
-		assert.Equal(t, 229, len(responseRecorder.Body.Bytes()))
+		assert.Equal(t, 230, len(responseRecorder.Body.Bytes()))
 
 		// check block data
 		assert.Equal(t, testBlockBytes, responseRecorder.Body.Bytes())
@@ -114,7 +114,7 @@ func TestGetBlockByHeight(t *testing.T) {
 
 		// Check response body
 		blockHex := responseRecorder.Body.String()
-		assert.Equal(t, 229*2, len(blockHex))
+		assert.Equal(t, 230*2, len(blockHex))
 		assert.Equal(t, hex.EncodeToString(testBlockBytes), blockHex)
 	})
 
@@ -284,7 +284,7 @@ func TestGetBlockByHash(t *testing.T) {
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
 		// Check response body
-		assert.Equal(t, 229, len(responseRecorder.Body.Bytes()))
+		assert.Equal(t, 230, len(responseRecorder.Body.Bytes()))
 
 		// check block data
 		assert.Equal(t, testBlockBytes, responseRecorder.Body.Bytes())
@@ -313,7 +313,7 @@ func TestGetBlockByHash(t *testing.T) {
 
 		// Check response body
 		blockHex := responseRecorder.Body.String()
-		assert.Equal(t, 229*2, len(blockHex))
+		assert.Equal(t, 230*2, len(blockHex))
 		assert.Equal(t, hex.EncodeToString(testBlockBytes), blockHex)
 	})
 

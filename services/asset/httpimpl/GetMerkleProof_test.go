@@ -618,6 +618,10 @@ func (m *MockRepositoryForMerkleProof) GetLegacyBlockReader(ctx context.Context,
 	return nil, nil
 }
 
+func (m *MockRepositoryForMerkleProof) GetMiningCandidateLegacyBlockReader(_ context.Context, _ []byte, _ []byte, _ [][]byte, _ uint64) (*io.PipeReader, error) {
+	return nil, nil
+}
+
 func (m *MockRepositoryForMerkleProof) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error) {
 	return nil, nil
 }

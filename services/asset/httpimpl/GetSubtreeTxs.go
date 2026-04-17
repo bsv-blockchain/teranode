@@ -179,7 +179,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					}
 					txMeta.Tx.SetTxHash(subtreepkg.CoinbasePlaceholderHash)
 				} else {
-					if subtreeData != nil {
+					if subtreeData != nil && subtreeData.Txs[i] != nil {
 						// Use subtreeData to get the transaction metadata
 						txMeta, err = util.TxMetaDataFromTx(subtreeData.Txs[i])
 						if err != nil {

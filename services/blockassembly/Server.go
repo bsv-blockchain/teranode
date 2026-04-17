@@ -37,6 +37,7 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/bump"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -1384,6 +1385,14 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create merkle tree", jobID, err)
 	}
 
+	// Compute coinbase BUMP (merkle proof in BRC-74 format) while subtree data is in memory.
+	// This is a best-effort operation — failure does not block block submission.
+	_, currentHeight := ba.blockAssembler.CurrentBlock()
+	var coinbaseBUMP []byte
+	if len(subtreesInJob) > 0 {
+		coinbaseBUMP = ba.computeCoinbaseBUMP(jobID, subtreesInJob, subtreeHashes, currentHeight+1)
+	}
+
 	// sizeInBytes from the subtrees, 80 byte header and varint bytes for txcount
 	blockSize := sizeInBytes + 80 + util.VarintSize(transactionCount)
 	// add the size of the coinbase tx to the blocksize
@@ -1418,6 +1427,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		SizeInBytes:      blockSize,
 		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 		SubtreeSlices:    job.Subtrees,
+		CoinbaseBUMP:     coinbaseBUMP,
 	}
 
 	// check fully valid, including whether difficulty in header is low enough
@@ -1501,6 +1511,126 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 	return hashMerkleRoot, nil
 }
 
+// computeCoinbaseBUMP computes the coinbase transaction's merkle proof in BUMP format (BRC-74).
+// It builds the proof from the coinbase (at subtree index 0, tx index 0) to the block merkle root.
+// Returns nil if any step fails — callers should treat nil as "proof not available".
+func (ba *BlockAssembly) computeCoinbaseBUMP(jobID string, subtreesInJob []*subtreepkg.Subtree, subtreeHashes []chainhash.Hash, blockHeight uint32) []byte {
+	// Convert subtree hashes to pointer slice to match bump.ComputeCoinbaseBUMP signature
+	subtreeHashPtrs := make([]*chainhash.Hash, len(subtreeHashes))
+	for i := range subtreeHashes {
+		subtreeHashPtrs[i] = &subtreeHashes[i]
+	}
+
+	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtreesInJob[0], subtreeHashPtrs, blockHeight)
+	if err != nil {
+		ba.logger.Warnf("[computeCoinbaseBUMP][%s] failed to compute coinbase BUMP: %v", jobID, err)
+		return nil
+	}
+
+	return bumpBytes
+}
+
+// GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+// It looks up the job by candidate ID, creates a default coinbase transaction,
+// computes the merkle root, and builds the 80-byte block header.
+// This is used by the asset service to stream the block in standard Bitcoin wire format
+// for pre-validation against an SVNode.
+func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassembly_api.GetCandidateBlockRequest) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	candidateID := util.ReverseAndHexEncodeSlice(req.Id)
+
+	_, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetCandidateBlock",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithLogMessage(ba.logger, "[GetCandidateBlock] called for candidate %s", candidateID),
+	)
+	defer endSpan()
+
+	storeID, err := chainhash.NewHash(req.Id)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid candidate ID", err))
+	}
+
+	jobItem := ba.jobStore.Get(*storeID)
+	if jobItem == nil {
+		return nil, errors.WrapGRPC(errors.NewNotFoundError("[GetCandidateBlock][%s] candidate not found", candidateID))
+	}
+
+	job := jobItem.Value()
+
+	// Create default coinbase transaction from the mining candidate
+	coinbaseTx, err := job.MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] failed to create coinbase tx", candidateID, err))
+	}
+
+	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
+
+	// Duplicate subtrees and replace coinbase placeholder in the first subtree
+	subtreesInJob := make([]*subtreepkg.Subtree, len(job.Subtrees))
+	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
+	transactionCount := uint64(0)
+
+	if len(job.Subtrees) > 0 {
+		for i, st := range job.Subtrees {
+			if i == 0 {
+				subtreesInJob[i] = st.Duplicate()
+				subtreesInJob[i].ReplaceRootNode(coinbaseTxIDHash, 0, uint64(coinbaseTx.Size()))
+			} else {
+				subtreesInJob[i] = st
+			}
+
+			rootHash := subtreesInJob[i].RootHash()
+			subtreeHashes[i] = chainhash.Hash(rootHash[:])
+
+			transactionCount += uint64(st.Length())
+		}
+	} else {
+		transactionCount = 1
+	}
+
+	// Compute merkle root from subtrees
+	hashMerkleRoot, err := ba.createMerkleTreeFromSubtrees(candidateID, subtreesInJob, subtreeHashes, coinbaseTxIDHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] failed to create merkle tree", candidateID, err))
+	}
+
+	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] failed to convert hashPrevBlock", candidateID, err))
+	}
+
+	bits, err := model.NewNBitFromSlice(job.MiningCandidate.NBits)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] failed to convert bits", candidateID, err))
+	}
+
+	// Build the 80-byte block header with nonce=0 (PoW is skipped in proposal mode)
+	header := &model.BlockHeader{
+		Version:        job.MiningCandidate.Version,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: hashMerkleRoot,
+		Timestamp:      job.MiningCandidate.Time,
+		Bits:           *bits,
+		Nonce:          0,
+	}
+
+	// Collect original subtree hashes (before coinbase replacement) for the response
+	// The asset service uses these to stream transactions from the subtree store
+	subtreeHashBytes := make([][]byte, len(job.Subtrees))
+	for i, st := range job.Subtrees {
+		subtreeHashBytes[i] = st.RootHash()[:]
+	}
+
+	ba.logger.Infof("[GetCandidateBlock][%s] returning candidate block with %d txs, %d subtrees",
+		candidateID, transactionCount, len(job.Subtrees))
+
+	return &blockassembly_api.GetCandidateBlockResponse{
+		Header:           header.Bytes(),
+		CoinbaseTx:       coinbaseTx.Bytes(),
+		SubtreeHashes:    subtreeHashBytes,
+		TransactionCount: transactionCount,
+	}, nil
+}
+
 // SubtreeCount returns the current number of subtrees managed by the block assembler.
 // This method provides a real-time count of active subtrees that are available for
 // inclusion in mining candidates. The count reflects the current state of the block
@@ -1572,6 +1702,35 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 
 	ba.blockAssembler.ResetWithInputValidation()
 
+	return &blockassembly_api.EmptyMessage{}, nil
+}
+
+// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+// Iterates all unmined transactions and verifies each input is still spent by that transaction.
+// Unlike ResetBlockAssemblyValidateInputs, this method makes no changes to the UTXO store.
+// Returns an error if any unmined transactions are found with invalid inputs.
+func (ba *BlockAssembly) CheckBlockAssemblyValidateInputs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "CheckBlockAssemblyValidateInputs",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithLogMessage(ba.logger, "[CheckBlockAssemblyValidateInputs] called"),
+	)
+	defer deferFn()
+
+	if ba.blockAssembler.unminedTransactionsLoading.Load() {
+		ba.logger.Warnf("[CheckBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+	}
+
+	invalidCount, err := ba.blockAssembler.CheckInputValidation(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if invalidCount > 0 {
+		return nil, errors.NewProcessingError("found %d unmined transactions with invalid inputs", invalidCount)
+	}
+
+	ba.logger.Infof("[CheckBlockAssemblyValidateInputs] all unmined transactions have valid inputs")
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 

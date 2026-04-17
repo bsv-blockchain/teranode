@@ -250,7 +250,8 @@ message AddBlockRequest {
   bool optionMinedSet = 8;                      // Option to mark block as mined
   bool optionSubtreesSet = 9;                   // Option to mark subtrees as set
   bool optionInvalid = 10;                      // Option to invalidate block when adding
-  uint64 optionID = 11;                            // Optional block ID
+  uint64 optionID = 11;                         // Optional block ID
+  bytes coinbase_bump = 12;                     // Coinbase BUMP (BRC-74 merkle proof)
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
@@ -299,6 +300,7 @@ message GetBlockResponse {
   repeated bytes subtree_hashes = 5;   // Merkle tree subtree hashes
   uint64 size_in_bytes = 6;            // Total block size in bytes
   uint32 id = 7;                       // Block identifier
+  bytes coinbase_bump = 8;             // Coinbase BUMP (BRC-74 merkle proof)
 }
 
 // GetFullBlockResponse contains a complete serialized block.

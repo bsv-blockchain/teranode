@@ -44,6 +44,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -101,6 +102,13 @@ type Store struct {
 	spendBatcher    *batcher.Batcher[batchSpend]
 	getBatcher      *batcher.Batcher[batchGetItem]
 	createBatcher   *batcher.Batcher[batchCreateItem]
+	unlockBatcher   *batcher.Batcher[batchUnlockItem]
+}
+
+// batchUnlockItem represents a single SetLocked(false) request.
+type batchUnlockItem struct {
+	hash chainhash.Hash
+	done chan error
 }
 
 // batchGetItemData holds the result of a batch get operation.
@@ -216,6 +224,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		s.createBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true)
 		if tSettings.BatcherDrainMode {
 			s.createBatcher.SetDrainMode(true)
+		}
+	}
+
+	// Initialize unlock batcher for Postgres — batches single-hash SetLocked(false) calls.
+	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.LockedBatcherSize > 1 {
+		unlockBatchSize := tSettings.UtxoStore.LockedBatcherSize
+		unlockBatchDuration := time.Duration(tSettings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond
+		s.unlockBatcher = batcher.New(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true)
+		if tSettings.BatcherDrainMode {
+			s.unlockBatcher.SetDrainMode(true)
 		}
 	}
 
@@ -973,7 +991,17 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)
 
-		// Read results and route to callers
+		// Read results — collect but don't send to callers yet.
+		// We must call br.Close() before signalling callers, because
+		// pipelined auto-committed statements may not be fully visible
+		// to other connections until the batch reader is closed.
+		type batchResult struct {
+			idx      int
+			result   batchCreateResult
+			logError bool
+		}
+		results := make([]batchResult, 0, len(validIndices))
+
 		for _, idx := range validIndices {
 			p := &prepared[idx]
 			rows, queryErr := br.Query()
@@ -986,22 +1014,47 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				rows.Close()
 			}
 			if queryErr != nil {
-				s.logger.Errorf("[sendCreateBatch] CTE failed for tx %x: %v", p.txHash[:], queryErr)
-				batch[idx].done <- batchCreateResult{
+				results = append(results, batchResult{idx: idx, result: batchCreateResult{
 					Err: errors.NewStorageError("Failed to create UTXO", queryErr),
-				}
+				}, logError: true})
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
-				batch[idx].done <- batchCreateResult{
+				results = append(results, batchResult{idx: idx, result: batchCreateResult{
 					Err: errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", p.isCoinbase),
-				}
+				}})
 			} else {
-				batch[idx].done <- batchCreateResult{Data: p.txMeta}
+				results = append(results, batchResult{idx: idx, result: batchCreateResult{Data: p.txMeta}})
 			}
 		}
 
-		if closeErr := br.Close(); closeErr != nil {
-			s.logger.Warnf("[sendCreateBatch] error closing batch results: %v", closeErr)
+		// Close the batch reader — ensures all pipelined commits are finalized
+		// and visible to other connections before callers proceed.
+		closeErr := br.Close()
+		if closeErr != nil {
+			s.logger.Errorf("[sendCreateBatch] error closing batch results: %v", closeErr)
+		}
+
+		// Now signal callers — if Close() failed, override successes with errors
+		// since the connection may be in an error state and data visibility is uncertain.
+		for _, r := range results {
+			if closeErr != nil && r.result.Err == nil {
+				batch[r.idx].done <- batchCreateResult{
+					Err: errors.NewStorageError("batch close failed, results may not be visible", closeErr),
+				}
+				continue
+			}
+			if r.logError {
+				s.logger.Errorf("[sendCreateBatch] CTE failed for tx %x: %+v", prepared[r.idx].txHash[:], r.result.Err)
+			}
+			batch[r.idx].done <- r.result
+		}
+
+		// Return driver.ErrBadConn so database/sql discards the connection
+		// from the pool rather than reusing it, and Phase 3 (conflicting
+		// children) does not run on an uncertain state. The actual closeErr
+		// is already logged above.
+		if closeErr != nil {
+			return driver.ErrBadConn
 		}
 		return nil
 	})
@@ -3564,6 +3617,22 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 		return nil
 	}
 
+	// Postgres: single-hash unlock → use batcher.
+	if s.unlockBatcher != nil && len(txHashes) == 1 {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		done := make(chan error, 1)
+		s.unlockBatcher.Put(&batchUnlockItem{hash: txHashes[0], done: done})
+		select {
+		case err := <-done:
+			return err
+		case <-ctx.Done():
+			s.logger.Warnf("[setLockedBatched] context cancelled while waiting for batcher result — unlock may or may not be applied")
+			return ctx.Err()
+		}
+	}
+
 	// Postgres: bulk unlock + DAH in chunked UPDATE statements
 	if s.engine == "postgres" {
 		return s.setUnlockedBulk(ctx, txHashes)
@@ -4547,4 +4616,26 @@ func isLockError(err error) bool {
 	return strings.Contains(errStr, "database is locked") ||
 		strings.Contains(errStr, "deadlock") ||
 		strings.Contains(errStr, "lock timeout")
+}
+
+// sendUnlockBatch processes a batch of SetLocked(false) calls via setUnlockedBulk,
+// which chunks large batches into multiple UPDATE statements (maxINClauseSize=400).
+func (s *Store) sendUnlockBatch(batch []*batchUnlockItem) {
+	ctx := s.ctx
+
+	if len(batch) == 1 {
+		hashes := []chainhash.Hash{batch[0].hash}
+		batch[0].done <- s.setUnlockedBulk(ctx, hashes)
+		return
+	}
+
+	hashes := make([]chainhash.Hash, len(batch))
+	for i, item := range batch {
+		hashes[i] = item.hash
+	}
+
+	err := s.setUnlockedBulk(ctx, hashes)
+	for _, item := range batch {
+		item.done <- err
+	}
 }

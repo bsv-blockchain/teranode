@@ -256,8 +256,14 @@ func (it *unminedTxIterator) Close() error {
 	return it.rows.Close()
 }
 
-func (s *Store) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return newUnminedTxIterator(s)
+}
+
+// ScanInconsistentUnminedTxs is a no-op for SQL — the SQL store always uses
+// index-based queries, so there's no fullScan inconsistency to fix.
+func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return nil, nil
 }
 
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {

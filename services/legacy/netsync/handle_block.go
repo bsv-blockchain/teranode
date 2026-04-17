@@ -28,6 +28,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
@@ -115,6 +116,15 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return err
 	}
 
+	// Wait for the previous block's setTxMined to complete before validating
+	// this block's transactions. Ensures BIP68 sequence lock validation can
+	// correctly look up parent transaction BlockHeights in the UTXO store.
+	if blockHeight > 1 {
+		if err = sm.waitForPreviousBlockMined(ctx, &block.MsgBlock().Header.PrevBlock, blockHeight); err != nil {
+			return err
+		}
+	}
+
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
 	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
@@ -184,6 +194,33 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}()
 
 	return nil
+}
+
+// waitForPreviousBlockMined waits for the previous block to have mined_set=true.
+// This ensures setTxMined has completed for the previous block before we validate
+// the next block's transactions, which is critical for BIP68 sequence lock validation
+// that needs correct BlockHeights from parent transactions in the UTXO store.
+func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockHash *chainhash.Hash, blockHeight uint32) error {
+	_, err := retry.Retry(ctx, sm.logger, func() (bool, error) {
+		isMined, err := sm.blockchainClient.GetBlockIsMined(ctx, prevBlockHash)
+		if err != nil {
+			return false, errors.NewServiceError(
+				"[waitForPreviousBlockMined][height:%d] parent %s mined status not available yet",
+				blockHeight, prevBlockHash.String(), err)
+		}
+		if !isMined {
+			return false, errors.NewBlockParentNotMinedError(
+				"[waitForPreviousBlockMined][height:%d] parent %s not mined yet",
+				blockHeight, prevBlockHash.String())
+		}
+		return true, nil
+	},
+		retry.WithBackoffDurationType(sm.settings.BlockValidation.IsParentMinedRetryBackoffDuration),
+		retry.WithBackoffMultiplier(sm.settings.BlockValidation.IsParentMinedRetryBackoffMultiplier),
+		retry.WithRetryCount(sm.settings.BlockValidation.IsParentMinedRetryMaxRetry),
+		retry.WithMessage("waitForPreviousBlockMined: legacy sync waiting for parent mined_set"),
+	)
+	return err
 }
 
 func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {

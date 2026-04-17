@@ -65,6 +65,7 @@ type Interface interface {
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
+	GetMiningCandidateLegacyBlockReader(ctx context.Context, header []byte, coinbaseTx []byte, subtreeHashes [][]byte, txCount uint64) (*io.PipeReader, error)
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
 	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 	GetBlockchainClient() blockchain.ClientI
@@ -777,6 +778,10 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 	transactionMap := make(map[chainhash.Hash]*bt.Tx, len(subtreeData.Txs))
 
 	for _, tx := range subtreeData.Txs {
+		if tx == nil {
+			continue
+		}
+
 		transactionMap[*tx.TxIDChainHash()] = tx
 	}
 

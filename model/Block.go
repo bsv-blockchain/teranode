@@ -72,6 +72,7 @@ type Block struct {
 	SubtreeSlices    []*subtreepkg.Subtree `json:"-"`
 	Height           uint32                `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 	ID               uint32                `json:"id"`
+	CoinbaseBUMP     HexBytes              `json:"coinbase_bump,omitempty"`
 
 	// local
 	hash            atomic.Pointer[chainhash.Hash]
@@ -297,6 +298,23 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	block.Height, err = safeconversion.Uint64ToUint32(blockHeight64)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error converting block height to uint32", err)
+	}
+
+	const maxCoinbaseBUMPSize = 1 << 20 // 1MB upper bound for coinbase BUMP
+
+	bumpLen, err := wire.ReadVarInt(buf, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, errors.NewBlockInvalidError("error reading coinbase bump length", err)
+	}
+	if bumpLen > maxCoinbaseBUMPSize {
+		return nil, errors.NewBlockInvalidError("coinbase bump length exceeds maximum", nil)
+	}
+	if bumpLen > 0 {
+		bumpBytes := make([]byte, bumpLen)
+		if _, err = io.ReadFull(buf, bumpBytes); err != nil {
+			return nil, errors.NewBlockInvalidError("error reading coinbase bump", err)
+		}
+		block.CoinbaseBUMP = bumpBytes
 	}
 
 	return block, nil
@@ -1460,6 +1478,16 @@ func (b *Block) Bytes() ([]byte, error) {
 	err = wire.WriteVarInt(buf, 0, uint64(b.Height))
 	if err != nil {
 		return nil, errors.NewProcessingError("[BLOCK][%s] error writing height", b.String(), err)
+	}
+
+	err = wire.WriteVarInt(buf, 0, uint64(len(b.CoinbaseBUMP)))
+	if err != nil {
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase bump length", b.String(), err)
+	}
+	if len(b.CoinbaseBUMP) > 0 {
+		if _, err := buf.Write(b.CoinbaseBUMP); err != nil {
+			return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase bump", b.String(), err)
+		}
 	}
 
 	return buf.Bytes(), nil

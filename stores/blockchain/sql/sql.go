@@ -309,6 +309,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 		,processed_at   TIMESTAMPTZ NULL
 		,persisted_at   TIMESTAMPTZ NULL
 		,median_time_past BIGINT NOT NULL DEFAULT 0
+		,coinbase_bump  BYTEA NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -357,6 +358,21 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for median_time_past column in blocks table", err)
+		}
+	}
+
+	// add the coinbase_bump column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='coinbase_bump'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN coinbase_bump BYTEA NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add coinbase_bump column to blocks table", err)
+			}
+		} else {
+			_ = db.Close()
+			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
 		}
 	}
 
@@ -554,6 +570,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,processed_at   TEXT NULL
 		,persisted_at   TEXT NULL
 		,median_time_past BIGINT NOT NULL DEFAULT 0
+		,coinbase_bump  BLOB NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -599,6 +616,21 @@ func createSqliteSchema(db *usql.DB) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for median_time_past column in blocks table", err)
+		}
+	}
+
+	// add the coinbase_bump column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT name FROM pragma_table_info('blocks') WHERE name='coinbase_bump'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN coinbase_bump BLOB NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add coinbase_bump column to blocks table", err)
+			}
+		} else {
+			_ = db.Close()
+			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
 		}
 	}
 

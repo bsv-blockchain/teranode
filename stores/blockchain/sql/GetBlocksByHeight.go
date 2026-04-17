@@ -115,6 +115,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 		,b.subtree_count
 		,b.subtrees
 		,b.height
+		,b.coinbase_bump
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id
 		WHERE cb.height >= $1 AND cb.height <= $2

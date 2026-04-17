@@ -89,6 +89,7 @@ type BlockExtended struct {
 //     "subtrees": ["<hash>", ...],
 //     "height": <uint32>,
 //     "id": <uint32>,
+//     "coinbase_bump": "<hex>",
 //     "nextblock": "<hash or null>"
 //     }
 //
@@ -102,6 +103,7 @@ type BlockExtended struct {
 //     - Subtree list
 //     - Coinbase transaction
 //     - Height (varint)
+//     - Coinbase BUMP length (varint) + Coinbase BUMP bytes
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK
@@ -239,6 +241,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //     "subtrees": ["<hash>", ...],
 //     "height": <uint32>,
 //     "id": <uint32>,
+//     "coinbase_bump": "<hex>",
 //     "nextblock": "<hash or null>"
 //     }
 //
@@ -252,6 +255,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //     - Subtree list
 //     - Coinbase transaction
 //     - Height (varint)
+//     - Coinbase BUMP length (varint) + Coinbase BUMP bytes
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK
