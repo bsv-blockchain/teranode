@@ -22,8 +22,8 @@ Commands:
                            e.g. generate 1,10 3,5
 
 Chaos:
-  chaos partition <node>   Disconnect a node from the network
-  chaos heal [node]        Reconnect a node (or all nodes if omitted)
+  chaos isolate <node>     Block peer traffic (RPC still works)
+  chaos heal [node]        Restore peer traffic (or all nodes if omitted)
   chaos kill <node>        Stop a node container
   chaos start <node>       Start a stopped node container
   chaos pause <node>       Freeze a node (simulates hang/GC pause)
@@ -34,7 +34,7 @@ Chaos:
 Examples:
   compose/multinode.sh up 5
   compose/multinode.sh generate 1,10 3,5
-  compose/multinode.sh chaos partition 3
+  compose/multinode.sh chaos isolate 3
   compose/multinode.sh chaos heal
   compose/multinode.sh chaos slow 2 500
   compose/multinode.sh logs 2
@@ -171,27 +171,13 @@ container_name() {
   echo "teranode${1}-multinode"
 }
 
-network_name() {
-  docker compose -f "$COMPOSE_FILE" ps --format json 2>/dev/null \
-    | head -1 \
-    | python3 -c "
-import sys, json
-d = json.loads(sys.stdin.read())
-for n in d.get('Networks', '').split(','):
-    n = n.strip()
-    if 'teranode-network' in n:
-        print(n)
-        break
-" 2>/dev/null
-}
-
 cmd_chaos() {
   require_stack
   local action="${1:-}"
   shift 2>/dev/null || true
 
   case "$action" in
-    partition) chaos_partition "$@" ;;
+    isolate)   chaos_isolate "$@" ;;
     heal)      chaos_heal "$@" ;;
     kill)      chaos_kill "$@" ;;
     start)     chaos_start "$@" ;;
@@ -201,43 +187,60 @@ cmd_chaos() {
     unslow)    chaos_unslow "$@" ;;
     *)
       echo "error: unknown chaos action '$action'" >&2
-      echo "actions: partition, heal, kill, start, pause, unpause, slow, unslow" >&2
+      echo "actions: isolate, heal, kill, start, pause, unpause, slow, unslow" >&2
       exit 2
       ;;
   esac
 }
 
-chaos_partition() {
-  local node="${1:?usage: chaos partition <node>}"
-  local net
-  net=$(network_name)
+nsenter_iptables() {
+  local ctr="$1"
+  shift
+  local pid
+  pid=$(docker inspect --format '{{.State.Pid}}' "$ctr")
+  sudo nsenter -t "$pid" -n iptables "$@"
+}
+
+chaos_isolate() {
+  local node="${1:?usage: chaos isolate <node>}"
   local ctr
   ctr=$(container_name "$node")
-  echo "disconnecting $ctr from $net..."
-  docker network disconnect "$net" "$ctr"
-  echo "teranode$node is now isolated from all peers"
+
+  local blocked=0
+  for other in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]' | grep -v "^${ctr}$"); do
+    local ip
+    ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$other" 2>/dev/null)
+    if [[ -n "$ip" ]]; then
+      nsenter_iptables "$ctr" -A INPUT -s "$ip" -j DROP
+      nsenter_iptables "$ctr" -A OUTPUT -d "$ip" -j DROP
+      blocked=$((blocked + 1))
+    fi
+  done
+  echo "teranode$node is isolated from $blocked peer(s) (RPC still accessible)"
 }
 
 chaos_heal() {
-  local net
-  net=$(network_name)
   if [[ -n "${1:-}" ]]; then
     local ctr
     ctr=$(container_name "$1")
-    echo "reconnecting $ctr to $net..."
-    docker network connect "$net" "$ctr" 2>/dev/null && echo "teranode$1 reconnected" || echo "teranode$1 was already connected"
+    echo "restoring teranode$1 peer traffic..."
+    nsenter_iptables "$ctr" -F 2>/dev/null || true
+    echo "teranode$1 healed"
     return
   fi
-  echo "reconnecting all nodes to $net..."
+  echo "restoring all nodes..."
   local healed=0
-  for ctr in $(docker ps -a --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]'); do
-    if docker network connect "$net" "$ctr" 2>/dev/null; then
-      echo "  reconnected $ctr"
+  for ctr in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]'); do
+    local count
+    count=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
+    if [[ "$count" -gt 0 ]]; then
+      nsenter_iptables "$ctr" -F
+      echo "  healed $ctr ($count rules cleared)"
       healed=$((healed + 1))
     fi
   done
   if [[ $healed -eq 0 ]]; then
-    echo "  all nodes already connected"
+    echo "  all nodes already healthy"
   fi
 }
 

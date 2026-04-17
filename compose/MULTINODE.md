@@ -44,8 +44,8 @@ compose/multinode.sh down
 
 | Command | Description |
 |---|---|
-| `chaos partition <node>` | Disconnect a node from the network |
-| `chaos heal [node]` | Reconnect a node, or all nodes if omitted |
+| `chaos isolate <node>` | Block peer traffic (RPC still works) |
+| `chaos heal [node]` | Restore peer traffic, or all nodes if omitted |
 | `chaos kill <node>` | Stop a node container |
 | `chaos start <node>` | Start a stopped node container |
 | `chaos pause <node>` | Freeze a node (simulates hang/GC pause) |
@@ -54,10 +54,10 @@ compose/multinode.sh down
 | `chaos unslow <node>` | Remove added latency from a node |
 
 ```bash
-# Isolate node 3 from all peers
-compose/multinode.sh chaos partition 3
+# Isolate node 3 from peers (RPC still works, can still generate blocks)
+compose/multinode.sh chaos isolate 3
 
-# Reconnect all partitioned nodes
+# Restore all isolated nodes
 compose/multinode.sh chaos heal
 
 # Simulate a 500ms network delay on node 1
@@ -71,7 +71,7 @@ compose/multinode.sh chaos kill 4
 compose/multinode.sh chaos start 4
 ```
 
-The `slow`/`unslow` commands use `tc` (traffic control) via `nsenter` into the container's network namespace, so they require `sudo` and `iproute2` on the host. The other chaos commands are pure Docker operations with no extra dependencies.
+The `isolate`/`heal` commands use `iptables` via `nsenter` to block traffic to other teranode containers while keeping RPC, dashboard, and shared infrastructure (Kafka, Postgres) accessible. The `slow`/`unslow` commands use `tc` (traffic control) via `nsenter`. Both require `sudo` and `iproute2` on the host. The `kill`/`start`/`pause`/`unpause` commands are pure Docker operations with no extra dependencies.
 
 ## Architecture
 
