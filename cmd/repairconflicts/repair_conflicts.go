@@ -76,12 +76,5 @@ func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *sett
 	fmt.Printf("  Case D (orphan conflicting) unmarked: %d\n", report.CaseDFixed)
 	fmt.Printf("  Case D (legit conflicting) cascaded:  %d\n", report.CaseDCascaded)
 
-	if len(report.Errors) > 0 {
-		fmt.Printf("  Non-fatal errors encountered: %d\n", len(report.Errors))
-		for _, e := range report.Errors {
-			fmt.Printf("    - %v\n", e)
-		}
-	}
-
 	return nil
 }

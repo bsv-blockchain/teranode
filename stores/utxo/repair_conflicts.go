@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
 
@@ -22,30 +23,39 @@ type BlockchainQuerier interface {
 
 // RepairReport contains the results of a conflict repair run.
 type RepairReport struct {
-	UnminedSinceFixed int     // Txs fixed in step 0 (had block_ids on main chain but unmined_since still set)
-	CaseAFixed        int     // Losers fixed (missing Conflicting=true mark, cascaded to subtree)
-	CaseCFixed        int     // Inverted winner/loser pairs fixed via ProcessConflicting
-	CaseDFixed        int     // Orphan-conflicting parents unmarked (Conflicting=true with non-conflicting recorded spender and no evidence of a real conflict)
-	CaseDCascaded     int     // Legit-conflicting parents whose non-conflicting children were cascaded via MarkConflictingRecursively
-	Errors            []error // Non-fatal errors encountered during repair
+	UnminedSinceFixed int // Txs fixed in step 0 (had block_ids on main chain but unmined_since still set)
+	CaseAFixed        int // Losers fixed (missing Conflicting=true mark, cascaded to subtree)
+	CaseCFixed        int // Inverted winner/loser pairs fixed via ProcessConflicting
+	CaseDFixed        int // Orphan-conflicting parents unmarked (Conflicting=true with non-conflicting recorded spender and no evidence of a real conflict)
+	CaseDCascaded     int // Legit-conflicting parents whose non-conflicting children were cascaded via MarkConflictingRecursively
 }
 
 // RepairProgressFunc is called by RepairConflictingChains to report progress.
 type RepairProgressFunc func(format string, args ...interface{})
 
+// cascadeMaxVisited bounds cascadeConflictingViaSpendingData so a corrupted or pathological
+// SpendingData graph cannot exhaust memory. Exceeding this cap aborts repair with an error;
+// a cascade this large indicates store corruption beyond what offline repair should resolve
+// silently.
+const cascadeMaxVisited = 100_000
+
 // RepairConflictingChains detects and fixes inconsistent conflicting transaction state in the UTXO store.
 // progressFn is optional — pass nil to suppress progress output.
-func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn ...RepairProgressFunc) (RepairReport, error) {
+//
+// Any DB error encountered during detection or repair aborts the run and returns that error.
+// The repair tool must not silently continue on a read or write failure — a partial repair
+// leaves the store dirty, which is the condition we are trying to eliminate.
+func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn RepairProgressFunc) (RepairReport, error) {
 	var report RepairReport
 
 	logProgress := func(format string, args ...interface{}) {
-		if len(progressFn) > 0 && progressFn[0] != nil {
-			progressFn[0](format, args...)
+		if progressFn != nil {
+			progressFn(format, args...)
 		}
 	}
 
 	// Step 0: fix unmined_since inconsistencies — prerequisite so mined txs don't appear in the iterator.
-	logProgress("[step 0/3] fixing unmined_since inconsistencies...")
+	logProgress("[step 0/4] fixing unmined_since inconsistencies...")
 	bestHeader, err := blockchainClient.GetBestBlockHeaderInfo(ctx)
 	if err != nil {
 		return report, err
@@ -83,7 +93,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 			scanned := scanIt.TotalScanned()
 			if scanned-lastReported >= 500_000 {
-				logProgress("[step 0/3] scanned %d records, fixed %d unmined_since inconsistencies so far", scanned, report.UnminedSinceFixed)
+				logProgress("[step 0/4] scanned %d records, fixed %d unmined_since inconsistencies so far", scanned, report.UnminedSinceFixed)
 				lastReported = scanned
 			}
 
@@ -109,10 +119,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				report.UnminedSinceFixed += len(toMark)
 			}
 		}
-		logProgress("[step 0/3] done — scanned %d total records, fixed %d unmined_since inconsistencies", scanIt.TotalScanned(), report.UnminedSinceFixed)
+		logProgress("[step 0/4] done — scanned %d total records, fixed %d unmined_since inconsistencies", scanIt.TotalScanned(), report.UnminedSinceFixed)
 	}
 
-	// Steps 1-3: conflict detection and repair.
+	// Steps 1-4: conflict detection and repair.
 	type caseCPair struct {
 		loser  chainhash.Hash
 		winner chainhash.Hash
@@ -121,9 +131,8 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	var caseALosers []chainhash.Hash
 	var caseCPairs []caseCPair
 	var caseDOrphans []chainhash.Hash
-	processedMap := map[chainhash.Hash]bool{}
 
-	logProgress("[step 1/3] scanning unmined transactions for conflicts...")
+	logProgress("[step 1/4] scanning unmined transactions for conflicts...")
 	unminedIt, err := s.GetUnminedTxIterator()
 	if err != nil {
 		return report, err
@@ -131,6 +140,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	defer unminedIt.Close()
 
 	unminedScanned := 0
+	lastLogScan := 0
 	for {
 		batch, bErr := unminedIt.Next(ctx)
 		if bErr != nil {
@@ -140,8 +150,9 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			break
 		}
 		unminedScanned += len(batch)
-		if unminedScanned%10000 == 0 {
+		if unminedScanned-lastLogScan >= 10000 {
 			logProgress("[step 1/4] scanned %d unmined txs, found %d Case A, %d Case C, %d Case D so far", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
+			lastLogScan = unminedScanned
 		}
 
 		for _, tx := range batch {
@@ -156,8 +167,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 			txMeta, gErr := s.Get(ctx, &txHash, fields.Conflicting, fields.Tx)
 			if gErr != nil {
-				report.Errors = append(report.Errors, gErr)
-				continue
+				if errors.Is(gErr, errors.ErrTxNotFound) {
+					continue
+				}
+				return report, gErr
 			}
 			if txMeta == nil || txMeta.Conflicting || txMeta.Tx == nil {
 				continue
@@ -175,18 +188,26 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// the recorded spender (txHash) is not — indicates an orphan conflicting mark.
 				parentMeta, pErr := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren, fields.Conflicting)
 				if pErr != nil {
+					// TX_NOT_FOUND is a legitimate response: the parent simply isn't in the store
+					// (e.g. an external reference pruned long ago, or a chain tip we never fetched).
+					// Real DB errors still abort — this branch only filters the benign case.
+					if errors.Is(pErr, errors.ErrTxNotFound) {
+						continue
+					}
 					logProgress("[step 1/4] child %s: Get(parent %s) error: %v", txHash.String(), parentHash.String(), pErr)
-					report.Errors = append(report.Errors, pErr)
-					continue
+					return report, pErr
 				}
 				if parentMeta == nil {
 					logProgress("[step 1/4] child %s: parent %s not found in store (nil meta)", txHash.String(), parentHash.String())
 					continue
 				}
 				if int(vout) >= len(parentMeta.SpendingDatas) {
+					// Corrupted store: child tx names parent[vout] but parent has fewer outputs
+					// than the requested vout. Abort — silently skipping this input would risk
+					// missing a real conflict and leave the store in an unclear state.
 					logProgress("[step 1/4] child %s: parent %s SpendingDatas len=%d, vout=%d out of range",
 						txHash.String(), parentHash.String(), len(parentMeta.SpendingDatas), vout)
-					continue
+					return report, errors.NewProcessingError("[repair] corrupt store: %s input vout %d exceeds parent %s SpendingDatas length %d", txHash.String(), vout, parentHash.String(), len(parentMeta.SpendingDatas))
 				}
 
 				spendingData := parentMeta.SpendingDatas[vout]
@@ -199,7 +220,11 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 					if parentMeta.Conflicting {
 						logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD=nil, ConflictingChildren=%v",
 							txHash.String(), vout, parentHash.String(), parentMeta.ConflictingChildren)
-						if !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress) {
+						active, hErr := hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress)
+						if hErr != nil {
+							return report, hErr
+						}
+						if !active {
 							logProgress("[step 1/4]   → adding %s to Case D orphans (nil SD branch)", parentHash.String())
 							caseDOrphans = append(caseDOrphans, *parentHash)
 						} else {
@@ -220,11 +245,12 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// GetCounterConflictingTxHashes is intentionally avoided here: it traverses
 				// txHash's own ConflictingChildren, missing siblings stored as (PARENT, sibling).
 				for _, sibling := range parentMeta.ConflictingChildren {
-					sibling := sibling
 					siblingMeta, sErr := s.Get(ctx, &sibling, fields.BlockIDs)
 					if sErr != nil {
-						report.Errors = append(report.Errors, sErr)
-						continue
+						if errors.Is(sErr, errors.ErrTxNotFound) {
+							continue
+						}
+						return report, sErr
 					}
 					if siblingMeta == nil {
 						continue
@@ -253,7 +279,11 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				if parentMeta.Conflicting {
 					logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD.TxID=%s, ConflictingChildren=%v",
 						txHash.String(), vout, parentHash.String(), spendingData.TxID.String(), parentMeta.ConflictingChildren)
-					if !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress) {
+					active, hErr := hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress)
+					if hErr != nil {
+						return report, hErr
+					}
+					if !active {
 						logProgress("[step 1/4]   → adding %s to Case D orphans (match SD branch)", parentHash.String())
 						caseDOrphans = append(caseDOrphans, *parentHash)
 					} else {
@@ -269,22 +299,27 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	logProgress("[step 1/4] done — scanned %d unmined txs, found %d Case A, %d Case C, %d Case D", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
 
 	// Fix Case C first so SpendingData is corrected before the Case A sweep.
-	// Dedup key is pair.loser (the fake winner tx being corrected): each unmined loser should be
-	// processed at most once even if multiple inputs point to the same real winner.
+	// Dedup by WINNER: the same real-winner may appear as the correction target for multiple
+	// losers, but ProcessConflicting needs to run on each distinct winner exactly once.
+	// Deduping by loser would silently drop subsequent distinct winners and leave their
+	// Conflicting=true flag set. ProcessConflicting's own dedup map only bypasses the
+	// "must be conflicting" reentry check during reorgs; it does not help here.
 	logProgress("[step 2/4] fixing %d Case C (inverted winner/loser) pairs...", len(caseCPairs))
 	currentBlockHeight := bestHeader.Height
+	seenCaseCWinners := map[chainhash.Hash]bool{}
 	for _, pair := range caseCPairs {
-		if processedMap[pair.loser] {
+		if seenCaseCWinners[pair.winner] {
 			continue
 		}
+		seenCaseCWinners[pair.winner] = true
 		if !dryRun {
-			if _, pErr := ProcessConflicting(ctx, s, currentBlockHeight, []chainhash.Hash{pair.winner}, processedMap); pErr != nil {
-				report.Errors = append(report.Errors, pErr)
-				continue
+			// processedConflictingHashesMap here is local to this single call — callers
+			// outside reorg flows pass a fresh empty map.
+			if _, pErr := ProcessConflicting(ctx, s, currentBlockHeight, []chainhash.Hash{pair.winner}, map[chainhash.Hash]bool{}); pErr != nil {
+				return report, pErr
 			}
 		}
 		report.CaseCFixed++
-		processedMap[pair.loser] = true
 	}
 
 	logProgress("[step 3/4] fixing %d Case A (unmarked losers)...", len(caseALosers))
@@ -292,16 +327,17 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	for _, loser := range caseALosers {
 		freshMeta, gErr := s.Get(ctx, &loser, fields.Conflicting)
 		if gErr != nil {
-			report.Errors = append(report.Errors, gErr)
-			continue
+			if errors.Is(gErr, errors.ErrTxNotFound) {
+				continue
+			}
+			return report, gErr
 		}
 		if freshMeta != nil && freshMeta.Conflicting {
 			continue
 		}
 		if !dryRun {
 			if _, mErr := MarkConflictingRecursively(ctx, s, []chainhash.Hash{loser}); mErr != nil {
-				report.Errors = append(report.Errors, mErr)
-				continue
+				return report, mErr
 			}
 		}
 		report.CaseAFixed++
@@ -323,7 +359,6 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	for len(worklist) > 0 {
 		var nextWave []chainhash.Hash
 		for _, parentHash := range worklist {
-			parentHash := parentHash
 			if seenCaseD[parentHash] {
 				continue
 			}
@@ -332,10 +367,19 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			// Re-fetch fresh. Previous steps may have cascaded conflict marks that change the picture.
 			freshParent, gErr := s.Get(ctx, &parentHash, fields.Conflicting, fields.ConflictingChildren, fields.Tx, fields.Utxos)
 			if gErr != nil {
-				report.Errors = append(report.Errors, gErr)
+				if errors.Is(gErr, errors.ErrTxNotFound) {
+					continue
+				}
+				return report, gErr
+			}
+			if freshParent == nil || !freshParent.Conflicting {
 				continue
 			}
-			if freshParent == nil || !freshParent.Conflicting || hasActiveConflictingChildren(ctx, s, freshParent.ConflictingChildren, nil) {
+			active, hErr := hasActiveConflictingChildren(ctx, s, freshParent.ConflictingChildren, nil)
+			if hErr != nil {
+				return report, hErr
+			}
+			if active {
 				continue
 			}
 			if freshParent.Tx == nil {
@@ -358,9 +402,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				gpVout := pin.PreviousTxOutIndex
 				gpMeta, gpErr := s.Get(ctx, gpHash, fields.Utxos)
 				if gpErr != nil {
-					// Cannot verify this input — be conservative and treat parent as legit.
-					legitConflict = true
-					break
+					if errors.Is(gpErr, errors.ErrTxNotFound) {
+						continue
+					}
+					return report, gpErr
 				}
 				if gpMeta == nil {
 					continue
@@ -388,8 +433,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// directly here to bypass that filter.
 				if !dryRun {
 					if cErr := cascadeConflictingViaSpendingData(ctx, s, parentHash); cErr != nil {
-						report.Errors = append(report.Errors, cErr)
-						continue
+						return report, cErr
 					}
 				}
 				report.CaseDCascaded++
@@ -398,8 +442,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 			if !dryRun {
 				if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{parentHash}, false); sErr != nil {
-					report.Errors = append(report.Errors, sErr)
-					continue
+					return report, sErr
 				}
 			}
 			report.CaseDFixed++
@@ -409,19 +452,24 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			// the relevant vout at all, and (c) has no *active* conflicting children is a
 			// candidate orphan one level up. Enqueue for re-evaluation.
 			for _, gpHash := range grandparentCandidates {
-				gpHash := gpHash
 				if seenCaseD[gpHash] {
 					continue
 				}
 				gpMeta, ggErr := s.Get(ctx, &gpHash, fields.Conflicting, fields.ConflictingChildren)
 				if ggErr != nil {
-					report.Errors = append(report.Errors, ggErr)
-					continue
+					if errors.Is(ggErr, errors.ErrTxNotFound) {
+						continue
+					}
+					return report, ggErr
 				}
 				if gpMeta == nil || !gpMeta.Conflicting {
 					continue
 				}
-				if hasActiveConflictingChildren(ctx, s, gpMeta.ConflictingChildren, nil) {
+				gpActive, gpHErr := hasActiveConflictingChildren(ctx, s, gpMeta.ConflictingChildren, nil)
+				if gpHErr != nil {
+					return report, gpHErr
+				}
+				if gpActive {
 					continue
 				}
 				nextWave = append(nextWave, gpHash)
@@ -438,29 +486,32 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 // Conflicting=true. Stale entries in ConflictingChildren (e.g. after Case D unmarks a
 // formerly-conflicting child) must not block orphan detection upstream.
 //
+// Any read error is propagated — callers must abort rather than guess at the state,
+// per the project rule that DB errors never get swallowed during repair.
+//
 // If logReason is non-nil, it is invoked with a human-readable explanation whenever the
 // function returns true — useful for step-1 debug diagnostics to see why a parent was
 // NOT classified as an orphan candidate.
-func hasActiveConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason func(string, ...interface{})) bool {
+func hasActiveConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason RepairProgressFunc) (bool, error) {
 	for i := range children {
 		h := children[i]
 		m, err := s.Get(ctx, &h, fields.Conflicting)
 		if err != nil {
-			// If we cannot verify, assume the child is still active (conservative — avoids
-			// accidentally unmarking a legitimately conflicting parent).
-			if logReason != nil {
-				logReason("  hasActiveConflictingChildren: Get(%s, Conflicting) failed: %v — treating as active (conservative)", h.String(), err)
+			if errors.Is(err, errors.ErrTxNotFound) {
+				// Child recorded in ConflictingChildren no longer exists in the store;
+				// treat as no longer active and keep scanning. A real DB error still propagates.
+				continue
 			}
-			return true
+			return false, err
 		}
 		if m != nil && m.Conflicting {
 			if logReason != nil {
 				logReason("  hasActiveConflictingChildren: child %s is still Conflicting=true", h.String())
 			}
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // cascadeConflictingViaSpendingData walks SpendingData descendants of rootHash and marks
@@ -468,16 +519,22 @@ func hasActiveConflictingChildren(ctx context.Context, s Store, children []chain
 // SpendingData directly from each tx's Utxos field, so it is not blocked by GetSpend
 // returning Status_CONFLICTING once a parent is flagged — which stops the standard
 // cascade the moment the root is already conflicting.
+//
+// The visited set is capped at cascadeMaxVisited: exceeding the cap aborts with an error
+// rather than growing unbounded on a pathological or corrupted SpendingData graph.
+// SetConflicting is issued per-level so a frontier of N children becomes one call, not N.
 func cascadeConflictingViaSpendingData(ctx context.Context, s Store, rootHash chainhash.Hash) error {
 	visited := map[chainhash.Hash]struct{}{rootHash: {}}
 	frontier := []chainhash.Hash{rootHash}
 
 	for len(frontier) > 0 {
-		var next []chainhash.Hash
+		var nextHashes []chainhash.Hash
 		for _, h := range frontier {
-			h := h
 			meta, err := s.Get(ctx, &h, fields.Utxos)
 			if err != nil {
+				if errors.Is(err, errors.ErrTxNotFound) {
+					continue
+				}
 				return err
 			}
 			if meta == nil {
@@ -491,15 +548,19 @@ func cascadeConflictingViaSpendingData(ctx context.Context, s Store, rootHash ch
 				if _, seen := visited[childHash]; seen {
 					continue
 				}
-				visited[childHash] = struct{}{}
-
-				if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{childHash}, true); sErr != nil {
-					return sErr
+				if len(visited) >= cascadeMaxVisited {
+					return errors.NewProcessingError("[repair] cascade exceeded %d descendants from %s — store corruption or runaway graph", cascadeMaxVisited, rootHash.String())
 				}
-				next = append(next, childHash)
+				visited[childHash] = struct{}{}
+				nextHashes = append(nextHashes, childHash)
 			}
 		}
-		frontier = next
+		if len(nextHashes) > 0 {
+			if _, _, sErr := s.SetConflicting(ctx, nextHashes, true); sErr != nil {
+				return sErr
+			}
+		}
+		frontier = nextHashes
 	}
 
 	return nil

@@ -89,12 +89,11 @@ func TestRepairConflictingChains_CleanState(t *testing.T) {
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.CaseAFixed)
 	require.Equal(t, 0, report.CaseCFixed)
 	require.Equal(t, 0, report.UnminedSinceFixed)
-	require.Empty(t, report.Errors)
 }
 
 // TestRepairConflictingChains_CaseA_SingleLoser sets up a double-spend scenario where
@@ -132,7 +131,7 @@ func TestRepairConflictingChains_CaseA_SingleLoser(t *testing.T) {
 	require.NoError(t, err)
 
 	querier := newQuerier()
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	// Non-fatal errors may occur when parentTx's input references an external tx not in the store.
 	// The repair should still detect and fix TX_B.
@@ -196,7 +195,7 @@ func TestRepairConflictingChains_CaseA_CascadeToChildren(t *testing.T) {
 	require.NoError(t, err)
 
 	querier := newQuerier()
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	// Non-fatal errors from external (unresolvable) parent inputs are expected; repair still runs.
 	require.Equal(t, 1, report.CaseAFixed, "only the root loser TX_B is the Case A entry")
@@ -240,7 +239,7 @@ func TestRepairConflictingChains_DryRun(t *testing.T) {
 	querier := newQuerier()
 
 	// Dry run — must report CaseA but not fix.
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseAFixed, "dry run must still report CaseAFixed")
 
@@ -281,11 +280,10 @@ func TestRepairConflictingChains_UnminedSinceFix(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	// SQL store returns nil from ScanInconsistentUnminedTxs — step 0 is skipped.
 	require.Equal(t, 0, report.UnminedSinceFixed)
-	require.Empty(t, report.Errors)
 }
 
 // TestRepairConflictingChains_CaseC_InvertedWinnerLoser verifies that Case C (inverted winner/loser)
@@ -361,9 +359,8 @@ func TestRepairConflictingChains_CaseC_InvertedWinnerLoser(t *testing.T) {
 		blockHeaderIDs:  []uint32{bestChainBlockID},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Empty(t, report.Errors, "no errors expected during repair")
 	require.Equal(t, 1, report.CaseCFixed, "Case C should be detected and fixed")
 	require.Equal(t, 0, report.CaseAFixed, "TX_A's loser state is handled by ProcessConflicting in Case C, not Case A")
 
@@ -418,7 +415,7 @@ func TestRepairConflictingChains_CaseC_DryRun(t *testing.T) {
 	}
 
 	// dry-run: report but don't write
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseCFixed, "Case C should be reported")
 
@@ -483,7 +480,7 @@ func TestRepairConflictingChains_CaseASkippedAfterCaseC(t *testing.T) {
 		blockHeaderIDs:  []uint32{bestChainBlockID},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseCFixed)
 	require.Equal(t, 0, report.CaseAFixed, "TX_A must not be double-counted: Case C ProcessConflicting already fixed it")
@@ -549,7 +546,7 @@ func TestRepairConflictingChains_CaseD_OrphanConflictingParent(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseDFixed, "parent orphan-conflicting must be detected and unmarked")
 	require.Equal(t, 0, report.CaseAFixed, "child is the recorded winner; no Case A")
@@ -605,7 +602,7 @@ func TestRepairConflictingChains_CaseD_DryRun(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseDFixed, "dryRun must still report Case D")
 
@@ -681,7 +678,7 @@ func TestRepairConflictingChains_CaseD_LegitConflictNotUnmarked(t *testing.T) {
 	require.Equal(t, *childOfLoser.TxIDChainHash(), *preCheck.SpendingDatas[0].TxID,
 		"precondition: parentLoser.SpendingDatas[0] must name childOfLoser")
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.CaseDFixed, "legit conflicting parent must NOT be unmarked by Case D")
 	require.Equal(t, 1, report.CaseDCascaded, "legit conflicting parent with non-conflicting child must cascade")
@@ -770,7 +767,7 @@ func TestRepairConflictingChains_CaseD_ChainedOrphans(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, report.CaseDFixed, "both parent and grandparent must be unmarked in one run")
 
@@ -836,7 +833,7 @@ func TestRepairConflictingChains_CaseD_CascadeDryRun(t *testing.T) {
 		blockHeaderIDs:  []uint32{1},
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, querier, true)
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.CaseDCascaded, "dryRun must still report cascade")
 
