@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,16 +27,15 @@ import (
 // when the process exits (via the testing cleanup mechanism).
 var sharedBenchEnv struct {
 	env  *kafkatest.Env
-	once atomic.Bool
+	once sync.Once
 }
 
 func getBenchEnv(b *testing.B) *kafkatest.Env {
-	if !sharedBenchEnv.once.Load() {
+	sharedBenchEnv.once.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		sharedBenchEnv.env = kafkatest.MustStartEnv(b, ctx)
-		sharedBenchEnv.once.Store(true)
-	}
+	})
 	return sharedBenchEnv.env
 }
 
