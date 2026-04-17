@@ -40,6 +40,39 @@ compose/multinode.sh down
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
 
+### Chaos commands
+
+| Command | Description |
+|---|---|
+| `chaos partition <node>` | Disconnect a node from the network |
+| `chaos heal [node]` | Reconnect a node, or all nodes if omitted |
+| `chaos kill <node>` | Stop a node container |
+| `chaos start <node>` | Start a stopped node container |
+| `chaos pause <node>` | Freeze a node (simulates hang/GC pause) |
+| `chaos unpause <node>` | Unfreeze a paused node |
+| `chaos slow <node> <ms>` | Add network latency to a node (requires sudo) |
+| `chaos unslow <node>` | Remove added latency from a node |
+
+```bash
+# Isolate node 3 from all peers
+compose/multinode.sh chaos partition 3
+
+# Reconnect all partitioned nodes
+compose/multinode.sh chaos heal
+
+# Simulate a 500ms network delay on node 1
+compose/multinode.sh chaos slow 1 500
+
+# Freeze node 2 (simulates a long GC pause or disk stall)
+compose/multinode.sh chaos pause 2
+
+# Kill and restart node 4
+compose/multinode.sh chaos kill 4
+compose/multinode.sh chaos start 4
+```
+
+The `slow`/`unslow` commands use `tc` (traffic control) via `nsenter` into the container's network namespace, so they require `sudo` and `iproute2` on the host. The other chaos commands are pure Docker operations with no extra dependencies.
+
 ## Architecture
 
 Each `up N` invocation generates a self-contained bundle under `compose/generated/`:

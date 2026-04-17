@@ -78,6 +78,8 @@ services:
   teranode{{ .Index }}:
     container_name: teranode{{ .Index }}-multinode
     image: teranode:latest
+    cap_add:
+      - NET_ADMIN
     networks:
       - teranode-network
     depends_on:
