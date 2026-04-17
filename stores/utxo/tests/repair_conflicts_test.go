@@ -787,6 +787,111 @@ func TestRepairConflictingChains_CaseD_ChainedOrphans(t *testing.T) {
 	require.False(t, childMeta.Conflicting)
 }
 
+// TestRepairConflictingChains_CaseD_OrphanBlocksParentDetection reproduces the mainnet
+// pathology where a parent's ConflictingChildren list references a child that is itself
+// orphan-conflicting (no credible reason to be Conflicting=true). The orphan child can
+// never be reached via the unmined iterator (conflicting filter hides it) and its mere
+// presence in the list blocks the parent from being classified as a Case D orphan. The
+// classifyConflictingChildren helper recurses one level to detect this and flags both
+// the parent and the orphan child for unmarking in the same repair pass.
+func TestRepairConflictingChains_CaseD_OrphanBlocksParentDetection(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	// parentX spends rootTx[0] and has (at least) two outputs: [0] will be spent by
+	// the blocker, [1] will be spent by goodChild.
+	parentX := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/2)
+	// Second output so we can spend a different vout with goodChild. PayToAddress adds
+	// another output — output[0] is the first PayToAddress, output[1] is the change.
+	err = parentX.PayToAddress("1BitcoinEaterAddressDontSendf59kuE", rootTx.Outputs[0].Satoshis/4)
+	require.NoError(t, err)
+	_, err = store.Create(ctx, parentX, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parentX, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// blocker spends parentX[0] — Create+Spend so parentX.SpendingDatas[0] = blocker.
+	blocker := makeTxSpendingOutput(t, parentX, 0, 5000)
+	_, err = store.Create(ctx, blocker, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, blocker, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// goodChild spends parentX[1] — Create+Spend so parentX.SpendingDatas[1] = goodChild.
+	goodChild := makeTxSpendingOutput(t, parentX, 1, 7000)
+	_, err = store.Create(ctx, goodChild, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, goodChild, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// Mark blocker conflicting — this adds blocker to parentX.ConflictingChildren.
+	// blocker has no legit reason to be conflicting: parentX.SpendingDatas[0] names
+	// blocker itself as the spender, so no sibling won the output.
+	blockerHash := blocker.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*blockerHash}, true)
+	require.NoError(t, err)
+
+	// Mark parentX conflicting too. parentX is also orphan: rootTx (grandparent) has
+	// SpendingDatas[0] = parentX, so no sibling won. But parent's ConflictingChildren
+	// now contains blocker which is still Conflicting=true — the old
+	// hasActiveConflictingChildren check would see blocker as "active" and refuse to
+	// enqueue parentX as a Case D candidate, leaving the pair stuck forever.
+	parentHash := parentX.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*parentHash}, true)
+	require.NoError(t, err)
+
+	// Sanity: parentX.ConflictingChildren includes blocker, blocker is still Conflicting=true.
+	pMeta, err := store.Get(ctx, parentHash, fields.Conflicting, fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.True(t, pMeta.Conflicting)
+	require.Contains(t, pMeta.ConflictingChildren, *blockerHash, "parentX.ConflictingChildren must include blocker")
+
+	bMeta, err := store.Get(ctx, blockerHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, bMeta.Conflicting, "blocker starts Conflicting=true")
+
+	gcMeta, err := store.Get(ctx, goodChild.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, gcMeta.Conflicting, "goodChild starts non-conflicting")
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, report.CaseDFixed, "both parentX and blocker must be unmarked in one run")
+
+	// parentX must be Conflicting=false.
+	pMeta, err = store.Get(ctx, parentHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, pMeta.Conflicting, "parentX must be unmarked")
+
+	// blocker must be Conflicting=false — discovered via classifyConflictingChildren.
+	bMeta, err = store.Get(ctx, blockerHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, bMeta.Conflicting, "orphan blocker must be unmarked")
+
+	// goodChild stays Conflicting=false.
+	gcMeta, err = store.Get(ctx, goodChild.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, gcMeta.Conflicting)
+}
+
 // TestRepairConflictingChains_CaseD_CascadeDryRun verifies that dryRun reports the
 // cascade case without writing anything.
 func TestRepairConflictingChains_CaseD_CascadeDryRun(t *testing.T) {
