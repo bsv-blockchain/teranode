@@ -560,6 +560,98 @@ func makeTxMap(t *testing.T, count int) *txmap.SyncedMap[chainhash.Hash, *TxMapW
 	return txMap
 }
 
+func TestWaitForPreviousBlockMined(t *testing.T) {
+	t.Run("returns immediately when parent is mined", func(t *testing.T) {
+		blockchainClient := &blockchain.Mock{}
+		prevHash := chainhash.HashH([]byte("prev-block"))
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(true, nil)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 3
+		tSettings.BlockValidation.IsParentMinedRetryBackoffMultiplier = 1
+		tSettings.BlockValidation.IsParentMinedRetryBackoffDuration = time.Millisecond
+
+		sm := &SyncManager{
+			settings:         tSettings,
+			logger:           ulogger.TestLogger{},
+			blockchainClient: blockchainClient,
+		}
+
+		err := sm.waitForPreviousBlockMined(context.Background(), &prevHash, 100)
+		require.NoError(t, err)
+		blockchainClient.AssertNumberOfCalls(t, "GetBlockIsMined", 1)
+	})
+
+	t.Run("retries when parent is not mined yet then succeeds", func(t *testing.T) {
+		blockchainClient := &blockchain.Mock{}
+		prevHash := chainhash.HashH([]byte("prev-block"))
+
+		// First two calls: not mined. Third call: mined.
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(false, nil).Times(2)
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(true, nil).Once()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 5
+		tSettings.BlockValidation.IsParentMinedRetryBackoffMultiplier = 1
+		tSettings.BlockValidation.IsParentMinedRetryBackoffDuration = time.Millisecond
+
+		sm := &SyncManager{
+			settings:         tSettings,
+			logger:           ulogger.TestLogger{},
+			blockchainClient: blockchainClient,
+		}
+
+		err := sm.waitForPreviousBlockMined(context.Background(), &prevHash, 100)
+		require.NoError(t, err)
+		blockchainClient.AssertNumberOfCalls(t, "GetBlockIsMined", 3)
+	})
+
+	t.Run("retries on ErrBlockNotFound then succeeds", func(t *testing.T) {
+		blockchainClient := &blockchain.Mock{}
+		prevHash := chainhash.HashH([]byte("prev-block"))
+
+		// First call: block not found. Second call: mined.
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(false, errors.ErrBlockNotFound).Once()
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(true, nil).Once()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 5
+		tSettings.BlockValidation.IsParentMinedRetryBackoffMultiplier = 1
+		tSettings.BlockValidation.IsParentMinedRetryBackoffDuration = time.Millisecond
+
+		sm := &SyncManager{
+			settings:         tSettings,
+			logger:           ulogger.TestLogger{},
+			blockchainClient: blockchainClient,
+		}
+
+		err := sm.waitForPreviousBlockMined(context.Background(), &prevHash, 100)
+		require.NoError(t, err)
+		blockchainClient.AssertNumberOfCalls(t, "GetBlockIsMined", 2)
+	})
+
+	t.Run("fails after max retries exhausted", func(t *testing.T) {
+		blockchainClient := &blockchain.Mock{}
+		prevHash := chainhash.HashH([]byte("prev-block"))
+		blockchainClient.On("GetBlockIsMined", mock.Anything, &prevHash).Return(false, nil)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 2
+		tSettings.BlockValidation.IsParentMinedRetryBackoffMultiplier = 1
+		tSettings.BlockValidation.IsParentMinedRetryBackoffDuration = time.Millisecond
+
+		sm := &SyncManager{
+			settings:         tSettings,
+			logger:           ulogger.TestLogger{},
+			blockchainClient: blockchainClient,
+		}
+
+		err := sm.waitForPreviousBlockMined(context.Background(), &prevHash, 100)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not mined yet")
+	})
+}
+
 func TestPreValidateTransactions_AllSucceed(t *testing.T) {
 	initPrometheusMetrics()
 

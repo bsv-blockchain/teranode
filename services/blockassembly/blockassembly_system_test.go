@@ -1003,8 +1003,18 @@ func TestHandleReorgWithInvalidBlock_Integration(t *testing.T) {
 	// Invalidate chain A block 2 (A2). This makes A2 and A3 invalid.
 	// Blockchain should reorg to A1 (the last valid block on chain A).
 	t.Log("Invalidating chain A block 2...")
-	_, err = ba.blockchainClient.InvalidateBlock(ctx, chainAHeaders[1].Hash())
+	invalidatedHashes, err := ba.blockchainClient.InvalidateBlock(ctx, chainAHeaders[1].Hash())
 	require.NoError(t, err, "failed to invalidate chain A block 2")
+
+	// Simulate BlockValidation's async reaction to InvalidateBlock: it would
+	// process the BlockMinedUnset notification and re-set mined_set=true after
+	// unsetting tx mined status. BlockValidation isn't running in this test,
+	// so call SetBlockMinedSet directly — otherwise BA's reset() blocks in
+	// waitForBlockMinedSet until its retry budget exhausts.
+	for i := range invalidatedHashes {
+		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i]),
+			"failed to re-set mined_set on invalidated block %s", invalidatedHashes[i].String())
+	}
 
 	// Build chain B: genesis → B1 → B2 → B3 (higher difficulty, from genesis)
 	chainBBits, err := model.NewNBitFromString("1d00ffff")
