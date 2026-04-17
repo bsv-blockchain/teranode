@@ -109,11 +109,11 @@ cmd_status() {
   local json
   json=$(compose ps --format json 2>/dev/null)
 
-  # Collect infra and node status from JSON lines
+  # Collect infra and node info from JSON lines
   local infra_lines=""
-  local node_lines=""
-  local node_count=0
-  local nodes_ok=0
+  local -a node_indices=()
+  local -A node_states=()
+  local -A node_statuses=()
 
   while IFS= read -r line; do
     local service state status
@@ -123,36 +123,10 @@ cmd_status() {
 
     case "$service" in
       teranode*)
-        node_count=$((node_count + 1))
         local idx="${service#teranode}"
-        local base=$((20000 + (idx - 1) * 2000))
-        local dashboard=$((base + 90))
-        local rpc=$((base + 1292))
-        local health=$((base))
-
-        local state_icon="x"
-        local chaos_tag=""
-        if [[ "$state" == "running" ]]; then
-          state_icon="+"
-          nodes_ok=$((nodes_ok + 1))
-          local ctr
-          ctr=$(container_name "$idx")
-          local drop_rules
-          drop_rules=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
-          local has_netem
-          has_netem=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -c netem || true)
-          if [[ "$drop_rules" -gt 0 ]]; then chaos_tag+=" ISOLATED"; fi
-          if [[ "$has_netem" -gt 0 ]]; then
-            local delay
-            delay=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -oP '\d+\.\d+ms|\d+ms' | head -1)
-            chaos_tag+=" SLOW(${delay})"
-          fi
-        elif [[ "$state" == "paused" ]]; then
-          chaos_tag=" PAUSED"
-        fi
-
-        node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s" \
-          "$state_icon" "$idx" "$status" "$dashboard" "$rpc" "$health" "$chaos_tag")
+        node_indices+=("$idx")
+        node_states[$idx]="$state"
+        node_statuses[$idx]="$status"
         ;;
       *)
         local state_icon="x"
@@ -164,6 +138,56 @@ cmd_status() {
 
   echo "Infrastructure:$infra_lines"
   echo ""
+
+  # Build node lines outside the herestring loop so curl/nsenter work
+  local node_lines=""
+  local node_count=${#node_indices[@]}
+  local nodes_ok=0
+
+  for idx in "${node_indices[@]}"; do
+    local state="${node_states[$idx]}"
+    local status="${node_statuses[$idx]}"
+    local base=$((20000 + (idx - 1) * 2000))
+    local dashboard=$((base + 90))
+    local rpc=$((base + 1292))
+    local health=$((base))
+    local state_icon="x"
+    local chaos_tag=""
+    local height_tag=""
+
+    if [[ "$state" == "running" ]]; then
+      state_icon="+"
+      nodes_ok=$((nodes_ok + 1))
+      local ctr
+      ctr=$(container_name "$idx")
+      local drop_rules
+      drop_rules=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
+      local has_netem
+      has_netem=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -c netem || true)
+      if [[ "$drop_rules" -gt 0 ]]; then chaos_tag+=" ISOLATED"; fi
+      if [[ "$has_netem" -gt 0 ]]; then
+        local delay
+        delay=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -oP '\d+\.\d+ms|\d+ms' | head -1)
+        chaos_tag+=" SLOW(${delay})"
+      fi
+      local height
+      height=$(docker exec "$ctr" wget -qO- --timeout=2 \
+        --user=bitcoin --password=bitcoin \
+        --header='Content-Type: application/json' \
+        --post-data='{"method":"getinfo","params":[]}' \
+        "http://localhost:9292" 2>/dev/null \
+        | grep -o '"blocks":[0-9]*' | cut -d: -f2 || true)
+      if [[ -n "$height" ]]; then
+        height_tag="  height=$height"
+      fi
+    elif [[ "$state" == "paused" ]]; then
+      chaos_tag=" PAUSED"
+    fi
+
+    node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s%s" \
+      "$state_icon" "$idx" "$status" "$dashboard" "$rpc" "$health" "$height_tag" "$chaos_tag")
+  done
+
   echo "Nodes ($nodes_ok/$node_count running):$node_lines"
 }
 
