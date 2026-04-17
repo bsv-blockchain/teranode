@@ -5,9 +5,9 @@
 #   ./generate-blocks.sh <node>,<count> [<node>,<count> ...]
 #
 # Examples:
-#   ./generate-blocks.sh 1,10          # 10 blocks on node 1
-#   ./generate-blocks.sh 1,5 3,5       # 5 blocks on node 1, then 5 on node 3
-#   ./generate-blocks.sh 1,1 2,1 3,1   # one block on each of nodes 1-3
+#   ./generate-blocks.sh 1,10              # 10 blocks on node 1
+#   ./generate-blocks.sh 1,5 3,5           # 5 on node 1, then 5 on node 3
+#   ./generate-blocks.sh 1,10,2,5,3,5      # same as: 1,10 2,5 3,5
 
 set -euo pipefail
 
@@ -46,15 +46,19 @@ generate() {
 
 if [[ $# -eq 0 ]]; then
   echo "usage: $0 <node>,<count> [<node>,<count> ...]"
-  echo "  e.g. $0 1,10 3,5"
+  echo "  e.g. $0 1,10 3,5   or   $0 1,10,3,5"
   exit 2
 fi
 
-for arg in "$@"; do
-  IFS=',' read -r node count <<< "$arg"
-  if [[ -z "$node" || -z "$count" ]]; then
-    echo "error: invalid argument '$arg', expected <node>,<count>" >&2
-    exit 2
-  fi
-  generate "$node" "$count"
+# Flatten all args into one comma-separated string, then split into pairs.
+flat=$(IFS=,; echo "$*")
+IFS=',' read -ra tokens <<< "$flat"
+
+if (( ${#tokens[@]} % 2 != 0 )); then
+  echo "error: odd number of values - expected <node>,<count> pairs" >&2
+  exit 2
+fi
+
+for (( i=0; i<${#tokens[@]}; i+=2 )); do
+  generate "${tokens[i]}" "${tokens[i+1]}"
 done
