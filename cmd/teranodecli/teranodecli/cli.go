@@ -403,9 +403,10 @@ func Start(args []string, version, commit string) {
 		}
 	case "repair-conflicts":
 		dryRun := cmd.FlagSet.Bool("dry-run", false, "Report issues without writing any changes")
+		skipUnminedSinceScan := cmd.FlagSet.Bool("skip-unmined-since-scan", false, "Skip step 0 (full-store consistency scan) — only use when it has completed cleanly since the last change")
 
 		cmd.Execute = func(args []string) error {
-			return repairconflicts.RepairConflicts(context.Background(), logger, tSettings, *dryRun)
+			return repairconflicts.RepairConflicts(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan)
 		}
 	case "fix-chainwork":
 		dbURL := cmd.FlagSet.String("db-url", "", "Database URL (postgres://... or sqlite://...)")

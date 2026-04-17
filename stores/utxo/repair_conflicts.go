@@ -40,13 +40,29 @@ type RepairProgressFunc func(format string, args ...interface{})
 // silently.
 const cascadeMaxVisited = 100_000
 
+// RepairOptions controls optional behavior of RepairConflictingChains. The zero value is
+// safe and enables every step.
+type RepairOptions struct {
+	// SkipUnminedSinceScan skips step 0 — the full-store consistency scan that finds mined
+	// transactions still carrying UnminedSince. That scan is the slowest part of repair on
+	// a large store (hundreds of millions of records) and rarely finds anything once fixed.
+	// Skipping it lets operators re-run steps 1-4 cheaply during iterative debugging. Only
+	// set this when you're certain step 0 has run cleanly at least once since the last
+	// change to the store.
+	SkipUnminedSinceScan bool
+}
+
 // RepairConflictingChains detects and fixes inconsistent conflicting transaction state in the UTXO store.
 // progressFn is optional — pass nil to suppress progress output.
 //
 // Any DB error encountered during detection or repair aborts the run and returns that error.
 // The repair tool must not silently continue on a read or write failure — a partial repair
 // leaves the store dirty, which is the condition we are trying to eliminate.
-func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn RepairProgressFunc) (RepairReport, error) {
+func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn RepairProgressFunc, opts ...RepairOptions) (RepairReport, error) {
+	var opt RepairOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	var report RepairReport
 
 	logProgress := func(format string, args ...interface{}) {
@@ -55,8 +71,8 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 	}
 
-	// Step 0: fix unmined_since inconsistencies — prerequisite so mined txs don't appear in the iterator.
-	logProgress("[step 0/4] fixing unmined_since inconsistencies...")
+	// Best-chain header data is needed by Case A / Case C regardless of whether we skip
+	// step 0, so fetch it unconditionally up front.
 	bestHeader, err := blockchainClient.GetBestBlockHeaderInfo(ctx)
 	if err != nil {
 		return report, err
@@ -74,53 +90,63 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		bestBlockIDsMap[id] = true
 	}
 
-	scanIt, err := s.ScanInconsistentUnminedTxs()
-	if err != nil {
-		return report, err
-	}
-
-	if scanIt != nil {
-		defer scanIt.Close()
-
-		lastReported := int64(0)
-		for {
-			batch, bErr := scanIt.Next(ctx)
-			if bErr != nil {
-				return report, bErr
-			}
-			if batch == nil {
-				break
-			}
-
-			scanned := scanIt.TotalScanned()
-			if scanned-lastReported >= 500_000 {
-				logProgress("[step 0/4] scanned %d records, fixed %d unmined_since inconsistencies so far", scanned, report.UnminedSinceFixed)
-				lastReported = scanned
-			}
-
-			var toMark []chainhash.Hash
-			for _, rec := range batch {
-				if rec.UnminedSince == 0 {
-					continue
-				}
-				for _, blockID := range rec.BlockIDs {
-					if bestBlockIDsMap[blockID] {
-						toMark = append(toMark, rec.Hash)
-						break
-					}
-				}
-			}
-
-			if len(toMark) > 0 {
-				if !dryRun {
-					if mErr := s.MarkTransactionsOnLongestChain(ctx, toMark, true); mErr != nil {
-						return report, mErr
-					}
-				}
-				report.UnminedSinceFixed += len(toMark)
-			}
+	// Step 0: fix unmined_since inconsistencies — prerequisite so mined txs don't appear in
+	// the iterator. This is the most expensive step (full-store scan, hundreds of millions
+	// of records on a large node) and almost always a no-op after the first run, so
+	// operators can opt out via RepairOptions.SkipUnminedSinceScan while iterating on
+	// steps 1-4.
+	if opt.SkipUnminedSinceScan {
+		logProgress("[step 0/4] skipped (SkipUnminedSinceScan enabled)")
+	} else {
+		logProgress("[step 0/4] fixing unmined_since inconsistencies...")
+		scanIt, sErr := s.ScanInconsistentUnminedTxs()
+		if sErr != nil {
+			return report, sErr
 		}
-		logProgress("[step 0/4] done — scanned %d total records, fixed %d unmined_since inconsistencies", scanIt.TotalScanned(), report.UnminedSinceFixed)
+
+		if scanIt != nil {
+			defer scanIt.Close()
+
+			lastReported := int64(0)
+			for {
+				batch, bErr := scanIt.Next(ctx)
+				if bErr != nil {
+					return report, bErr
+				}
+				if batch == nil {
+					break
+				}
+
+				scanned := scanIt.TotalScanned()
+				if scanned-lastReported >= 500_000 {
+					logProgress("[step 0/4] scanned %d records, fixed %d unmined_since inconsistencies so far", scanned, report.UnminedSinceFixed)
+					lastReported = scanned
+				}
+
+				var toMark []chainhash.Hash
+				for _, rec := range batch {
+					if rec.UnminedSince == 0 {
+						continue
+					}
+					for _, blockID := range rec.BlockIDs {
+						if bestBlockIDsMap[blockID] {
+							toMark = append(toMark, rec.Hash)
+							break
+						}
+					}
+				}
+
+				if len(toMark) > 0 {
+					if !dryRun {
+						if mErr := s.MarkTransactionsOnLongestChain(ctx, toMark, true); mErr != nil {
+							return report, mErr
+						}
+					}
+					report.UnminedSinceFixed += len(toMark)
+				}
+			}
+			logProgress("[step 0/4] done — scanned %d total records, fixed %d unmined_since inconsistencies", scanIt.TotalScanned(), report.UnminedSinceFixed)
+		}
 	}
 
 	// Steps 1-4: conflict detection and repair.

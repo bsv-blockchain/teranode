@@ -43,7 +43,9 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 // service to fetch header data, so stopping the node first will cause startup to fail with a
 // connection error. After the repair completes, restart the node to resume block assembly.
 // dryRun=true reports issues without writing any changes.
-func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun bool) error {
+// skipUnminedSinceScan=true skips step 0 (the expensive full-store consistency scan). Only
+// use it when step 0 has run cleanly at least once since the last change to the store.
+func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun, skipUnminedSinceScan bool) error {
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "RepairConflicts", false)
 	if err != nil {
 		return errors.NewConfigurationError("failed to create UTXO store", err)
@@ -60,7 +62,9 @@ func RepairConflicts(ctx context.Context, logger ulogger.Logger, tSettings *sett
 		fmt.Printf(format+"\n", args...)
 	}
 
-	report, err := utxo.RepairConflictingChains(ctx, store, adapter, dryRun, progress)
+	report, err := utxo.RepairConflictingChains(ctx, store, adapter, dryRun, progress, utxo.RepairOptions{
+		SkipUnminedSinceScan: skipUnminedSinceScan,
+	})
 	if err != nil {
 		return errors.NewProcessingError("repair failed", err)
 	}
