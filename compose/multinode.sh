@@ -76,7 +76,7 @@ cmd_up() {
 
 cmd_down() {
   require_stack
-  compose down -v
+  compose down -v --remove-orphans
 }
 
 cmd_restart() {
