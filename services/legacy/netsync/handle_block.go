@@ -175,7 +175,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.ProcessBlock(ctx, teranodeBlock, blockID)
+	err = sm.ProcessBlock(ctx, teranodeBlock)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 	return err
 }
 
-func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, blockID uint32) (err error) {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -240,7 +240,10 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", blockID); err != nil {
+	// teranodeBlock.ID was set by model.NewBlock from the pre-assigned ID returned by prepareSubtrees.
+	// Read it from the struct here — avoids duplicating it as a parameter. It still has to travel as
+	// a separate proto field in the gRPC request because block.Bytes() does not serialize ID.
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
