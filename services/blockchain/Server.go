@@ -2545,12 +2545,14 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 
 	priorState := b.finiteStateMachine.Current()
 
-	// Prevent manual transitions from CATCHINGBLOCKS state
-	// The state should only exit CATCHINGBLOCKS programmatically when catchup completes
+	// Restrict manual transitions from CATCHINGBLOCKS: the state should normally only exit
+	// programmatically when catchup completes (RUN), but STOP (→ IDLE) is also allowed so
+	// services detecting a data-integrity issue — e.g. BlockAssembler.validateParentChain —
+	// can halt the node for repair. Without this exit, a corrupted catchup would crash-loop
+	// the node on every restart (FSM persists CATCHINGBLOCKS across restarts).
 	if priorState == blockchain_api.FSMStateType_CATCHINGBLOCKS.String() {
-		// Only allow RUN event (catchup completion) to exit CATCHINGBLOCKS
-		if eventReq.Event != blockchain_api.FSMEventType_RUN {
-			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first"
+		if eventReq.Event != blockchain_api.FSMEventType_RUN && eventReq.Event != blockchain_api.FSMEventType_STOP {
+			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first (only RUN or STOP allowed)"
 			b.logger.Warnf("[Blockchain Server] %s (attempted event: %v)", errMsg, eventReq.Event)
 			return nil, errors.NewInvalidArgumentError(errMsg)
 		}

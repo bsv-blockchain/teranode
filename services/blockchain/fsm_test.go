@@ -39,7 +39,16 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS.String())
 		require.NoError(t, err)
 		require.Equal(t, "CATCHINGBLOCKS", fsm.Current())
-		require.False(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+		// STOP is allowed from CATCHINGBLOCKS so that data-integrity repair paths (e.g.
+		// BlockAssembler.validateParentChain) can drive the node to IDLE even while catchup
+		// is in progress.
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+	})
+
+	t.Run("Transition from Catch up Blocks to Idle via STOP", func(t *testing.T) {
+		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOP.String())
+		require.NoError(t, err)
+		require.Equal(t, "IDLE", fsm.Current())
 	})
 }
 

@@ -73,6 +73,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_IDLE.String(),
 			},
