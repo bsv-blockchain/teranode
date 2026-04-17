@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
 // BlockHeaderInfo holds the minimal block header data needed by RepairConflictingChains.
@@ -140,6 +141,55 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// properly populated.
 	caseDDirectChildren := map[chainhash.Hash][]chainhash.Hash{}
 
+	// classificationCache memoizes classifyConflictingChildren results by parent hash
+	// for the duration of step 1. The parent's ConflictingChildren list is stable during
+	// detection (no writes happen before step 2), and the same big parents appear many
+	// times — e.g. one mainnet parent had 341 entries in its list and was visited by
+	// ~14k non-conflicting unmined children, each of which would otherwise re-run
+	// ~341 Gets + grandparent lookups for every visit (5M+ Gets, many hitting external
+	// storage). Caching makes step 1 linear in the number of distinct conflicting parents
+	// rather than the number of scanned children times list size.
+	type classification struct {
+		orphans  []chainhash.Hash
+		hasLegit bool
+	}
+	classificationCache := map[chainhash.Hash]classification{}
+
+	classifyCached := func(parentHash chainhash.Hash, children []chainhash.Hash) ([]chainhash.Hash, bool, error) {
+		if c, ok := classificationCache[parentHash]; ok {
+			return c.orphans, c.hasLegit, nil
+		}
+		orphans, hasLegit, cErr := classifyConflictingChildren(ctx, s, children, logProgress)
+		if cErr != nil {
+			return nil, false, cErr
+		}
+		classificationCache[parentHash] = classification{orphans: orphans, hasLegit: hasLegit}
+		return orphans, hasLegit, nil
+	}
+
+	// parentMetaCache memoizes parent Get() results during step 1 for the same reason —
+	// a single big parent can be referenced by many children's inputs, and each Get on
+	// an external tx triggers file-store I/O.
+	parentMetaCache := map[chainhash.Hash]*meta.Data{}
+	parentMetaNotFound := map[chainhash.Hash]bool{}
+	fetchParent := func(parentHash *chainhash.Hash) (*meta.Data, error) {
+		if parentMetaNotFound[*parentHash] {
+			return nil, errors.ErrTxNotFound
+		}
+		if m, ok := parentMetaCache[*parentHash]; ok {
+			return m, nil
+		}
+		m, err := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren, fields.Conflicting)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) {
+				parentMetaNotFound[*parentHash] = true
+			}
+			return nil, err
+		}
+		parentMetaCache[*parentHash] = m
+		return m, nil
+	}
+
 	logProgress("[step 1/4] scanning unmined transactions for conflicts...")
 	unminedIt, err := s.GetUnminedTxIterator()
 	if err != nil {
@@ -189,12 +239,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				parentHash := input.PreviousTxIDChainHash()
 				vout := input.PreviousTxOutIndex
 
-				// Fetch parent SpendingDatas + ConflictingChildren + Conflicting in one call.
+				// Fetch parent SpendingDatas + ConflictingChildren + Conflicting in one call
+				// (memoized — the same big parent can be referenced by thousands of input
+				// walks, and each Get on an external tx hits the file store).
 				// ConflictingChildren is needed for Case C: siblings of txHash that are
 				// recorded as (PARENT, sibling) in conflicting_children — not (txHash, sibling).
 				// Conflicting is needed for Case D: parent is marked Conflicting=true but
 				// the recorded spender (txHash) is not — indicates an orphan conflicting mark.
-				parentMeta, pErr := s.Get(ctx, parentHash, fields.Utxos, fields.ConflictingChildren, fields.Conflicting)
+				parentMeta, pErr := fetchParent(parentHash)
 				if pErr != nil {
 					// TX_NOT_FOUND is a legitimate response: the parent simply isn't in the store
 					// (e.g. an external reference pruned long ago, or a chain tip we never fetched).
@@ -227,19 +279,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 					// any orphan conflicting children found (which themselves need unmarking
 					// so they stop blocking every parent that references them).
 					if parentMeta.Conflicting {
-						logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD=nil, ConflictingChildren=%v",
-							txHash.String(), vout, parentHash.String(), parentMeta.ConflictingChildren)
-						orphanChildren, hasLegit, cErr := classifyConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress)
+						orphanChildren, hasLegit, cErr := classifyCached(*parentHash, parentMeta.ConflictingChildren)
 						if cErr != nil {
 							return report, cErr
 						}
 						if !hasLegit {
-							logProgress("[step 1/4]   → adding %s to Case D orphans (nil SD branch, +%d orphan children)", parentHash.String(), len(orphanChildren))
 							caseDOrphans = append(caseDOrphans, *parentHash)
 							caseDOrphans = append(caseDOrphans, orphanChildren...)
 							caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
-						} else {
-							logProgress("[step 1/4]   → NOT adding %s (legit conflicting children found)", parentHash.String())
 						}
 					}
 					continue
@@ -296,19 +343,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// conflictingCs becomes a stale back-reference that must not block orphan
 				// detection one level up.
 				if parentMeta.Conflicting {
-					logProgress("[step 1/4] child %s input[vout=%d] → parent %s: Conflicting=true, SD.TxID=%s, ConflictingChildren=%v",
-						txHash.String(), vout, parentHash.String(), spendingData.TxID.String(), parentMeta.ConflictingChildren)
-					orphanChildren, hasLegit, cErr := classifyConflictingChildren(ctx, s, parentMeta.ConflictingChildren, logProgress)
+					orphanChildren, hasLegit, cErr := classifyCached(*parentHash, parentMeta.ConflictingChildren)
 					if cErr != nil {
 						return report, cErr
 					}
 					if !hasLegit {
-						logProgress("[step 1/4]   → adding %s to Case D orphans (match SD branch, +%d orphan children)", parentHash.String(), len(orphanChildren))
 						caseDOrphans = append(caseDOrphans, *parentHash)
 						caseDOrphans = append(caseDOrphans, orphanChildren...)
 						caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
-					} else {
-						logProgress("[step 1/4]   → NOT adding %s (legit conflicting children found)", parentHash.String())
 					}
 				}
 
