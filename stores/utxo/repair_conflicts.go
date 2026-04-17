@@ -187,6 +187,14 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 				spendingData := parentMeta.SpendingDatas[vout]
 				if spendingData == nil || spendingData.TxID == nil {
+					// SpendingData may be unpopulated if the parent was already conflicting
+					// when this child's Spend ran (some code paths skip the SD write).
+					// If the parent is flagged conflicting with no active conflicting children,
+					// that's still a Case D orphan candidate — enqueue it. We can't run Case A
+					// or Case C with no SpendingData, so fall through to the next input.
+					if parentMeta.Conflicting && !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren) {
+						caseDOrphans = append(caseDOrphans, *parentHash)
+					}
 					continue
 				}
 
@@ -222,10 +230,16 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 				// Case D: parent is marked Conflicting=true, but its own SpendingData records
 				// txHash (the non-conflicting unmined tx currently being scanned) as the spender
-				// of this output, and parent has no ConflictingChildren. The iterator would skip
-				// parent (conflicting filter), so validateParentChain later fails with "parent is
-				// unmined but not in processing list". Collect for step 4 validation + unmarking.
-				if parentMeta.Conflicting && len(parentMeta.ConflictingChildren) == 0 {
+				// of this output, and parent has no *active* ConflictingChildren. The iterator
+				// would skip parent (conflicting filter), so validateParentChain later fails with
+				// "parent is unmined but not in processing list". Collect for step 4 validation
+				// + unmarking.
+				//
+				// "Active" conflicting children means children that are themselves still
+				// conflicting=true — after Case D unmarks a parent, its entry in a grandparent's
+				// conflictingCs becomes a stale back-reference that must not block orphan
+				// detection one level up.
+				if parentMeta.Conflicting && !hasActiveConflictingChildren(ctx, s, parentMeta.ConflictingChildren) {
 					caseDOrphans = append(caseDOrphans, *parentHash)
 				}
 
@@ -287,82 +301,138 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// different tx, parent is a legit loser and we leave it alone.
 	logProgress("[step 4/4] fixing %d Case D (orphan conflicting parents)...", len(caseDOrphans))
 	seenCaseD := map[chainhash.Hash]bool{}
-	for _, parentHash := range caseDOrphans {
-		parentHash := parentHash
-		if seenCaseD[parentHash] {
-			continue
-		}
-		seenCaseD[parentHash] = true
-
-		// Re-fetch fresh. Previous steps may have cascaded conflict marks that change the picture.
-		freshParent, gErr := s.Get(ctx, &parentHash, fields.Conflicting, fields.ConflictingChildren, fields.Tx)
-		if gErr != nil {
-			report.Errors = append(report.Errors, gErr)
-			continue
-		}
-		if freshParent == nil || !freshParent.Conflicting || len(freshParent.ConflictingChildren) > 0 {
-			continue
-		}
-		if freshParent.Tx == nil {
-			// Cannot verify without inputs — skip for safety.
-			continue
-		}
-
-		legitConflict := false
-		for _, pin := range freshParent.Tx.Inputs {
-			gpHash := pin.PreviousTxIDChainHash()
-			gpVout := pin.PreviousTxOutIndex
-			gpMeta, gpErr := s.Get(ctx, gpHash, fields.Utxos)
-			if gpErr != nil {
-				// Cannot verify this input — be conservative and treat parent as legit.
-				legitConflict = true
-				break
-			}
-			if gpMeta == nil || int(gpVout) >= len(gpMeta.SpendingDatas) {
+	worklist := append([]chainhash.Hash(nil), caseDOrphans...)
+	for len(worklist) > 0 {
+		var nextWave []chainhash.Hash
+		for _, parentHash := range worklist {
+			parentHash := parentHash
+			if seenCaseD[parentHash] {
 				continue
 			}
-			gpSD := gpMeta.SpendingDatas[gpVout]
-			if gpSD == nil || gpSD.TxID == nil {
+			seenCaseD[parentHash] = true
+
+			// Re-fetch fresh. Previous steps may have cascaded conflict marks that change the picture.
+			freshParent, gErr := s.Get(ctx, &parentHash, fields.Conflicting, fields.ConflictingChildren, fields.Tx, fields.Utxos)
+			if gErr != nil {
+				report.Errors = append(report.Errors, gErr)
 				continue
 			}
-			if !gpSD.TxID.IsEqual(&parentHash) {
-				legitConflict = true
-				break
+			if freshParent == nil || !freshParent.Conflicting || hasActiveConflictingChildren(ctx, s, freshParent.ConflictingChildren) {
+				continue
 			}
-		}
+			if freshParent.Tx == nil {
+				// Cannot verify without inputs — skip for safety.
+				continue
+			}
 
-		if legitConflict {
-			// Parent is genuinely a loser (some grandparent's SpendingData names a different
-			// spender). Cascade the conflicting mark down via SpendingData so the non-conflicting
-			// child we scanned — and any descendants — also become conflicting. Without this the
-			// child stays visible to GetUnminedTxIterator and validateParentChain still trips.
-			//
-			// Why not MarkConflictingRecursively: its cascade relies on SetConflicting's return
-			// value, which is built from GetSpend. GetSpend reports Status=CONFLICTING on a
-			// parent's outputs once the parent is flagged, masking the real spender and returning
-			// an empty child list — so the recursion stops at the parent. We walk SpendingData
-			// directly here to bypass that filter.
+			legitConflict := false
+			// grandparentCandidates holds grandparents that might themselves be orphan-conflicting:
+			// they are ancestors that (per their own SpendingData) name `parentHash` as the spender
+			// OR have no SpendingData for the relevant output (typical when the grandparent was
+			// already conflicting when the child's Spend ran). We record them while walking
+			// parent's inputs so that after we unmark parent, we can extend the worklist upward —
+			// chains of orphan conflicting parents need iterative unmarking because Case D
+			// detection in step 1 only fires from a non-conflicting child, and grandparents are
+			// invisible until their direct child is unmarked.
+			var grandparentCandidates []chainhash.Hash
+			for _, pin := range freshParent.Tx.Inputs {
+				gpHash := pin.PreviousTxIDChainHash()
+				gpVout := pin.PreviousTxOutIndex
+				gpMeta, gpErr := s.Get(ctx, gpHash, fields.Utxos)
+				if gpErr != nil {
+					// Cannot verify this input — be conservative and treat parent as legit.
+					legitConflict = true
+					break
+				}
+				if gpMeta == nil {
+					continue
+				}
+				if int(gpVout) < len(gpMeta.SpendingDatas) {
+					gpSD := gpMeta.SpendingDatas[gpVout]
+					if gpSD != nil && gpSD.TxID != nil && !gpSD.TxID.IsEqual(&parentHash) {
+						legitConflict = true
+						break
+					}
+				}
+				grandparentCandidates = append(grandparentCandidates, *gpHash)
+			}
+
+			if legitConflict {
+				// Parent is genuinely a loser (some grandparent's SpendingData names a different
+				// spender). Cascade the conflicting mark down via SpendingData so the non-conflicting
+				// child we scanned — and any descendants — also become conflicting. Without this the
+				// child stays visible to GetUnminedTxIterator and validateParentChain still trips.
+				//
+				// Why not MarkConflictingRecursively: its cascade relies on SetConflicting's return
+				// value, which is built from GetSpend. GetSpend reports Status=CONFLICTING on a
+				// parent's outputs once the parent is flagged, masking the real spender and returning
+				// an empty child list — so the recursion stops at the parent. We walk SpendingData
+				// directly here to bypass that filter.
+				if !dryRun {
+					if cErr := cascadeConflictingViaSpendingData(ctx, s, parentHash); cErr != nil {
+						report.Errors = append(report.Errors, cErr)
+						continue
+					}
+				}
+				report.CaseDCascaded++
+				continue
+			}
+
 			if !dryRun {
-				if cErr := cascadeConflictingViaSpendingData(ctx, s, parentHash); cErr != nil {
-					report.Errors = append(report.Errors, cErr)
+				if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{parentHash}, false); sErr != nil {
+					report.Errors = append(report.Errors, sErr)
 					continue
 				}
 			}
-			report.CaseDCascaded++
-			continue
-		}
+			report.CaseDFixed++
 
-		if !dryRun {
-			if _, _, sErr := s.SetConflicting(ctx, []chainhash.Hash{parentHash}, false); sErr != nil {
-				report.Errors = append(report.Errors, sErr)
-				continue
+			// Parent was unmarked. Any grandparent that (a) is Conflicting=true, (b) has
+			// SpendingData naming this parent as the recorded spender OR no SpendingData for
+			// the relevant vout at all, and (c) has no *active* conflicting children is a
+			// candidate orphan one level up. Enqueue for re-evaluation.
+			for _, gpHash := range grandparentCandidates {
+				gpHash := gpHash
+				if seenCaseD[gpHash] {
+					continue
+				}
+				gpMeta, ggErr := s.Get(ctx, &gpHash, fields.Conflicting, fields.ConflictingChildren)
+				if ggErr != nil {
+					report.Errors = append(report.Errors, ggErr)
+					continue
+				}
+				if gpMeta == nil || !gpMeta.Conflicting {
+					continue
+				}
+				if hasActiveConflictingChildren(ctx, s, gpMeta.ConflictingChildren) {
+					continue
+				}
+				nextWave = append(nextWave, gpHash)
 			}
 		}
-		report.CaseDFixed++
+		worklist = nextWave
 	}
 
 	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d Case D (unmark), %d Case D (cascade)", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDFixed, report.CaseDCascaded)
 	return report, nil
+}
+
+// hasActiveConflictingChildren returns true if any hash in children still has
+// Conflicting=true. Stale entries in ConflictingChildren (e.g. after Case D unmarks a
+// formerly-conflicting child) must not block orphan detection upstream.
+func hasActiveConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash) bool {
+	for i := range children {
+		h := children[i]
+		m, err := s.Get(ctx, &h, fields.Conflicting)
+		if err != nil {
+			// If we cannot verify, assume the child is still active (conservative — avoids
+			// accidentally unmarking a legitimately conflicting parent).
+			return true
+		}
+		if m != nil && m.Conflicting {
+			return true
+		}
+	}
+	return false
 }
 
 // cascadeConflictingViaSpendingData walks SpendingData descendants of rootHash and marks

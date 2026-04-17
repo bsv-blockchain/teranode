@@ -697,6 +697,99 @@ func TestRepairConflictingChains_CaseD_LegitConflictNotUnmarked(t *testing.T) {
 	require.True(t, childMeta.Conflicting, "child of legit conflicting parent must be cascaded to Conflicting=true")
 }
 
+// TestRepairConflictingChains_CaseD_ChainedOrphans verifies the iterative worklist:
+// two orphan-conflicting ancestors stacked — grandparent is ALSO orphan-conflicting,
+// with grandparent.ConflictingChildren still listing parent (stale back-reference from
+// an earlier SetConflicting cascade). After parent is unmarked, grandparent must also
+// be detected and unmarked in the same repair run.
+func TestRepairConflictingChains_CaseD_ChainedOrphans(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	rootTx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+	_, err = store.Create(ctx, rootTx, 0,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 0}),
+	)
+	require.NoError(t, err)
+
+	// Chain: grandparent → parent → child. Only child is non-conflicting.
+	grandparent := makeTxSpendingOutput(t, rootTx, 0, rootTx.Outputs[0].Satoshis/2)
+	_, err = store.Create(ctx, grandparent, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, grandparent, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	parent := makeTxSpendingOutput(t, grandparent, 0, grandparent.Outputs[0].Satoshis/2)
+	_, err = store.Create(ctx, parent, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, parent, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	child := makeTxSpendingOutput(t, parent, 0, 5000)
+	_, err = store.Create(ctx, child, 100)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, child, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	// Mark grandparent conflicting FIRST — this adds grandparent to rootTx.ConflictingChildren
+	// but leaves parent/child untouched.
+	gpHash := grandparent.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*gpHash}, true)
+	require.NoError(t, err)
+
+	// Then mark parent conflicting separately — this adds parent to grandparent.ConflictingChildren.
+	// Grandparent is now orphan-conflicting with a stale entry pointing at parent (once parent
+	// is itself unmarked, grandparent's conflictingCs will reference a non-conflicting tx).
+	pHash := parent.TxIDChainHash()
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*pHash}, true)
+	require.NoError(t, err)
+
+	// Sanity: both ancestors conflicting, child is not.
+	pMeta, err := store.Get(ctx, pHash, fields.Conflicting, fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.True(t, pMeta.Conflicting)
+
+	gpMeta, err := store.Get(ctx, gpHash, fields.Conflicting, fields.ConflictingChildren)
+	require.NoError(t, err)
+	require.True(t, gpMeta.Conflicting)
+	require.Contains(t, gpMeta.ConflictingChildren, *pHash, "grandparent must list parent in its ConflictingChildren")
+
+	childMeta, err := store.Get(ctx, child.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, childMeta.Conflicting)
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 1,
+		blockHeaderIDs:  []uint32{1},
+	}
+
+	report, err := utxo.RepairConflictingChains(ctx, store, querier, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, report.CaseDFixed, "both parent and grandparent must be unmarked in one run")
+
+	// Parent must be Conflicting=false.
+	pMeta, err = store.Get(ctx, pHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, pMeta.Conflicting, "parent must be unmarked after Case D")
+
+	// Grandparent must also be Conflicting=false — discovered via chase-up.
+	gpMeta, err = store.Get(ctx, gpHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, gpMeta.Conflicting, "grandparent must be unmarked after chained Case D")
+
+	// Child remains non-conflicting.
+	childMeta, err = store.Get(ctx, child.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.False(t, childMeta.Conflicting)
+}
+
 // TestRepairConflictingChains_CaseD_CascadeDryRun verifies that dryRun reports the
 // cascade case without writing anything.
 func TestRepairConflictingChains_CaseD_CascadeDryRun(t *testing.T) {
