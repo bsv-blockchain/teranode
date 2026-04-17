@@ -158,6 +158,18 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	var caseALosers []chainhash.Hash
 	var caseCPairs []caseCPair
 	var caseDOrphans []chainhash.Hash
+	// caseDOrphansSeen dedups caseDOrphans at append time. The same parent can be reached
+	// via thousands of non-conflicting children, and orphan blocker children are shared
+	// across hundreds of parents — without this the raw slice length grows to ~40k on
+	// mainnet while the unique count is a few hundred.
+	caseDOrphansSeen := map[chainhash.Hash]bool{}
+	appendCaseDOrphan := func(h chainhash.Hash) {
+		if caseDOrphansSeen[h] {
+			return
+		}
+		caseDOrphansSeen[h] = true
+		caseDOrphans = append(caseDOrphans, h)
+	}
 	// caseDDirectChildren records, for each orphan parent candidate, the non-conflicting
 	// unmined children we saw spend it during step 1. These are needed if the parent turns
 	// out to be a legit loser in step 4: cascadeConflictingViaSpendingData walks parent.SD,
@@ -181,11 +193,17 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	}
 	classificationCache := map[chainhash.Hash]classification{}
 
+	// childClassCache is shared by step 1 and step 4 — same "blocker" children (e.g. the
+	// 2 mainnet txs referenced by ~2700 parents) appear in many parents' lists. Without
+	// memoization classifyChild runs an external Get plus N grandparent Gets every time
+	// it's seen. With it, each distinct child is resolved once per repair run.
+	childClassCache := map[chainhash.Hash]conflictingChildClass{}
+
 	classifyCached := func(parentHash chainhash.Hash, children []chainhash.Hash) ([]chainhash.Hash, bool, error) {
 		if c, ok := classificationCache[parentHash]; ok {
 			return c.orphans, c.hasLegit, nil
 		}
-		orphans, hasLegit, cErr := classifyConflictingChildren(ctx, s, children, logProgress)
+		orphans, hasLegit, cErr := classifyConflictingChildren(ctx, s, children, logProgress, childClassCache)
 		if cErr != nil {
 			return nil, false, cErr
 		}
@@ -310,8 +328,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 							return report, cErr
 						}
 						if !hasLegit {
-							caseDOrphans = append(caseDOrphans, *parentHash)
-							caseDOrphans = append(caseDOrphans, orphanChildren...)
+							appendCaseDOrphan(*parentHash)
+							for _, oc := range orphanChildren {
+								appendCaseDOrphan(oc)
+							}
 							caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
 						}
 					}
@@ -374,8 +394,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 						return report, cErr
 					}
 					if !hasLegit {
-						caseDOrphans = append(caseDOrphans, *parentHash)
-						caseDOrphans = append(caseDOrphans, orphanChildren...)
+						appendCaseDOrphan(*parentHash)
+						for _, oc := range orphanChildren {
+							appendCaseDOrphan(oc)
+						}
 						caseDDirectChildren[*parentHash] = append(caseDDirectChildren[*parentHash], txHash)
 					}
 				}
@@ -464,7 +486,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			if freshParent == nil || !freshParent.Conflicting {
 				continue
 			}
-			_, hasLegit, cErr := classifyConflictingChildren(ctx, s, freshParent.ConflictingChildren, nil)
+			_, hasLegit, cErr := classifyConflictingChildren(ctx, s, freshParent.ConflictingChildren, nil, childClassCache)
 			if cErr != nil {
 				return report, cErr
 			}
@@ -570,7 +592,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				if gpMeta == nil || !gpMeta.Conflicting {
 					continue
 				}
-				gpOrphans, gpHasLegit, gpCErr := classifyConflictingChildren(ctx, s, gpMeta.ConflictingChildren, nil)
+				gpOrphans, gpHasLegit, gpCErr := classifyConflictingChildren(ctx, s, gpMeta.ConflictingChildren, nil, childClassCache)
 				if gpCErr != nil {
 					return report, gpCErr
 				}
@@ -587,6 +609,60 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 	logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d Case D (unmark), %d Case D (cascade)", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDFixed, report.CaseDCascaded)
 	return report, nil
+}
+
+// conflictingChildClass is the per-child result of classifyConflictingChildren, exposed
+// so callers can share a cache across many parents. Populated by classifyChild.
+type conflictingChildClass struct {
+	exists      bool // record present in the store
+	conflicting bool // currently Conflicting=true (must be checked before legit/orphan)
+	legit       bool // legit loser (grandparent.SD names a different spender)
+}
+
+// classifyChild returns the classification of a single ConflictingChildren entry.
+// The result is stable across a single repair run so long as no SetConflicting(h, false)
+// happens to h itself — in which case the cached result overestimates "still conflicting"
+// but the Case D decisions it feeds remain correct (an already-unmarked entry listed in
+// another parent's list is an acceptable stale-back-reference, not a legit loser).
+func classifyChild(ctx context.Context, s Store, h chainhash.Hash) (conflictingChildClass, error) {
+	m, gErr := s.Get(ctx, &h, fields.Conflicting, fields.Tx)
+	if gErr != nil {
+		if errors.Is(gErr, errors.ErrTxNotFound) {
+			return conflictingChildClass{}, nil
+		}
+		return conflictingChildClass{}, gErr
+	}
+	if m == nil {
+		return conflictingChildClass{}, nil
+	}
+	if !m.Conflicting {
+		return conflictingChildClass{exists: true}, nil
+	}
+	if m.Tx == nil {
+		// Can't verify without inputs — treat conservatively as legit so we don't
+		// accidentally unmark a parent on incomplete information.
+		return conflictingChildClass{exists: true, conflicting: true, legit: true}, nil
+	}
+	for _, in := range m.Tx.Inputs {
+		gp, gpErr := s.Get(ctx, in.PreviousTxIDChainHash(), fields.Utxos)
+		if gpErr != nil {
+			if errors.Is(gpErr, errors.ErrTxNotFound) {
+				continue
+			}
+			return conflictingChildClass{}, gpErr
+		}
+		if gp == nil {
+			continue
+		}
+		if int(in.PreviousTxOutIndex) >= len(gp.SpendingDatas) {
+			continue
+		}
+		sd := gp.SpendingDatas[in.PreviousTxOutIndex]
+		if sd != nil && sd.TxID != nil && !sd.TxID.IsEqual(&h) {
+			return conflictingChildClass{exists: true, conflicting: true, legit: true}, nil
+		}
+	}
+	return conflictingChildClass{exists: true, conflicting: true, legit: false}, nil
 }
 
 // classifyConflictingChildren walks a parent's ConflictingChildren list and splits the
@@ -608,55 +684,34 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 // Any read error is propagated — callers must abort rather than guess at the state,
 // per the project rule that DB errors never get swallowed during repair.
 //
+// childCache, if non-nil, memoizes per-child classifications across calls — the same
+// few "blocker" children typically appear in many parents' lists (e.g. 2 blocker txs
+// were referenced by ~2700 parents on mainnet), and without this cache classifyChild
+// runs an external Get plus per-input grandparent Gets for every occurrence.
+//
 // If logReason is non-nil, it is invoked with a human-readable explanation whenever an
 // entry is classified as legit — useful for step-1 debug diagnostics.
-func classifyConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason RepairProgressFunc) (orphans []chainhash.Hash, hasLegit bool, err error) {
+func classifyConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason RepairProgressFunc, childCache map[chainhash.Hash]conflictingChildClass) (orphans []chainhash.Hash, hasLegit bool, err error) {
 	for i := range children {
 		h := children[i]
-		m, gErr := s.Get(ctx, &h, fields.Conflicting, fields.Tx)
-		if gErr != nil {
-			if errors.Is(gErr, errors.ErrTxNotFound) {
-				// Stale back-reference — child no longer exists.
-				continue
-			}
-			return nil, false, gErr
+		c, cached := childCache[h], false
+		if childCache != nil {
+			_, cached = childCache[h]
 		}
-		if m == nil || !m.Conflicting {
-			// Stale back-reference or already-unmarked child — ignore.
+		if !cached {
+			var cErr error
+			c, cErr = classifyChild(ctx, s, h)
+			if cErr != nil {
+				return nil, false, cErr
+			}
+			if childCache != nil {
+				childCache[h] = c
+			}
+		}
+		if !c.exists || !c.conflicting {
 			continue
 		}
-		if m.Tx == nil {
-			// Can't verify without inputs — treat conservatively as legit.
-			hasLegit = true
-			if logReason != nil {
-				logReason("  classifyConflictingChildren: child %s has Conflicting=true, cannot verify (no Tx) — treating as legit", h.String())
-			}
-			continue
-		}
-
-		legitLoser := false
-		for _, in := range m.Tx.Inputs {
-			gp, gpErr := s.Get(ctx, in.PreviousTxIDChainHash(), fields.Utxos)
-			if gpErr != nil {
-				if errors.Is(gpErr, errors.ErrTxNotFound) {
-					continue
-				}
-				return nil, false, gpErr
-			}
-			if gp == nil {
-				continue
-			}
-			if int(in.PreviousTxOutIndex) >= len(gp.SpendingDatas) {
-				continue
-			}
-			sd := gp.SpendingDatas[in.PreviousTxOutIndex]
-			if sd != nil && sd.TxID != nil && !sd.TxID.IsEqual(&h) {
-				legitLoser = true
-				break
-			}
-		}
-
-		if legitLoser {
+		if c.legit {
 			hasLegit = true
 			if logReason != nil {
 				logReason("  classifyConflictingChildren: child %s is legit loser (grandparent SpendingData names a different spender)", h.String())
