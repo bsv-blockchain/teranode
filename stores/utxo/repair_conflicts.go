@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -243,6 +244,18 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 
 	unminedScanned := 0
 	lastLogScan := 0
+	// Time-based progress so a single batch with expensive inner work (first encounter of
+	// a big conflicting parent can stall on hundreds of external Gets while populating
+	// caches) still produces output instead of going silent for minutes.
+	lastLogTime := time.Now()
+	const progressInterval = 30 * time.Second
+	maybeLogProgress := func() {
+		if unminedScanned-lastLogScan >= 10000 || time.Since(lastLogTime) >= progressInterval {
+			logProgress("[step 1/4] scanned %d unmined txs, found %d Case A, %d Case C, %d Case D so far", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
+			lastLogScan = unminedScanned
+			lastLogTime = time.Now()
+		}
+	}
 	for {
 		batch, bErr := unminedIt.Next(ctx)
 		if bErr != nil {
@@ -252,12 +265,9 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			break
 		}
 		unminedScanned += len(batch)
-		if unminedScanned-lastLogScan >= 10000 {
-			logProgress("[step 1/4] scanned %d unmined txs, found %d Case A, %d Case C, %d Case D so far", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
-			lastLogScan = unminedScanned
-		}
+		maybeLogProgress()
 
-		for _, tx := range batch {
+		for i, tx := range batch {
 			if tx.Node == nil {
 				continue
 			}
@@ -265,6 +275,13 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			txHash := tx.Node.Hash
 			if tx.Skip {
 				continue
+			}
+
+			// Log periodically inside a large batch too — expensive first-time classifies
+			// against a big ConflictingChildren list can stall a single iteration long
+			// enough to hit the time-based gate without ever crossing the count threshold.
+			if i > 0 && (i%500 == 0) {
+				maybeLogProgress()
 			}
 
 			txMeta, gErr := s.Get(ctx, &txHash, fields.Conflicting, fields.Tx)
