@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -51,6 +52,19 @@ type RepairOptions struct {
 	// set this when you're certain step 0 has run cleanly at least once since the last
 	// change to the store.
 	SkipUnminedSinceScan bool
+
+	// AggressiveCascade replaces the full Case D classification with a coarse "any
+	// non-conflicting unmined child that references a Conflicting=true+UnminedSince>0
+	// parent becomes Conflicting=true" sweep. Rationale: the unmined set is ephemeral by
+	// design — valid txs will re-arrive via propagation or be pulled in by the next
+	// block, so we don't have to preserve their state across a repair. The careful
+	// classification runs dozens of Gets per child to distinguish orphan vs legit losers
+	// and in practice has taken hours on mainnet with huge parents; this mode takes one
+	// write per match. The trade-off is that some unmined txs referencing a parent that
+	// was itself wrongly flagged will be marked conflicting too — they get pruned by
+	// delete_at_height and re-enter the mempool normally. Case A and Case C detection
+	// are unchanged.
+	AggressiveCascade bool
 }
 
 // RepairConflictingChains detects and fixes inconsistent conflicting transaction state in the UTXO store.
@@ -71,6 +85,33 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 			progressFn(format, args...)
 		}
 	}
+
+	// Heartbeat ticker — prints "still working: <phase>" every 15s regardless of what
+	// the main goroutine is doing. The repair can stall inside a single deeply-nested
+	// classifyChild call (hundreds of sequential external-tx Gets to populate the
+	// per-child cache on first contact with a big conflicting parent) and the per-tx
+	// progress log would sit silent for tens of minutes without this.
+	var currentPhase atomic.Pointer[string]
+	setPhase := func(s string) {
+		currentPhase.Store(&s)
+	}
+	setPhase("initializing")
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	defer stopHeartbeat()
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-t.C:
+				if p := currentPhase.Load(); p != nil {
+					logProgress("[heartbeat] still working: %s", *p)
+				}
+			}
+		}
+	}()
 
 	// Best-chain header data is needed by Case A / Case C regardless of whether we skip
 	// step 0, so fetch it unconditionally up front.
@@ -97,8 +138,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// operators can opt out via RepairOptions.SkipUnminedSinceScan while iterating on
 	// steps 1-4.
 	if opt.SkipUnminedSinceScan {
+		setPhase("step 0 skipped")
 		logProgress("[step 0/4] skipped (SkipUnminedSinceScan enabled)")
 	} else {
+		setPhase("step 0 fixing unmined_since inconsistencies")
 		logProgress("[step 0/4] fixing unmined_since inconsistencies...")
 		scanIt, sErr := s.ScanInconsistentUnminedTxs()
 		if sErr != nil {
@@ -180,6 +223,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// properly populated.
 	caseDDirectChildren := map[chainhash.Hash][]chainhash.Hash{}
 
+	// aggressiveCascadeChildren accumulates txHashes that should be SetConflicting(true)
+	// in a single batch after the step 1 scan when opt.AggressiveCascade is set.
+	aggressiveCascadeChildren := map[chainhash.Hash]bool{}
+
 	// classificationCache memoizes classifyConflictingChildren results by parent hash
 	// for the duration of step 1. The parent's ConflictingChildren list is stable during
 	// detection (no writes happen before step 2), and the same big parents appear many
@@ -235,6 +282,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		return m, nil
 	}
 
+	setPhase("step 1 scanning unmined for conflicts")
 	logProgress("[step 1/4] scanning unmined transactions for conflicts...")
 	unminedIt, err := s.GetUnminedTxIterator()
 	if err != nil {
@@ -277,12 +325,12 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				continue
 			}
 
-			// Log periodically inside a large batch too — expensive first-time classifies
-			// against a big ConflictingChildren list can stall a single iteration long
-			// enough to hit the time-based gate without ever crossing the count threshold.
-			if i > 0 && (i%500 == 0) {
-				maybeLogProgress()
-			}
+			_ = i
+			// Check progress on every tx — time.Since is cheap and a single tx can stall
+			// for tens of minutes on the first encounter with a big conflicting parent
+			// whose ConflictingChildren list contains large external txs. Gating by count
+			// (every N iterations) would suppress the time-based log for the entire stall.
+			maybeLogProgress()
 
 			txMeta, gErr := s.Get(ctx, &txHash, fields.Conflicting, fields.Tx)
 			if gErr != nil {
@@ -340,6 +388,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 					// any orphan conflicting children found (which themselves need unmarking
 					// so they stop blocking every parent that references them).
 					if parentMeta.Conflicting {
+						if opt.AggressiveCascade {
+							aggressiveCascadeChildren[txHash] = true
+							continue
+						}
 						orphanChildren, hasLegit, cErr := classifyCached(*parentHash, parentMeta.ConflictingChildren)
 						if cErr != nil {
 							return report, cErr
@@ -406,6 +458,10 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 				// conflictingCs becomes a stale back-reference that must not block orphan
 				// detection one level up.
 				if parentMeta.Conflicting {
+					if opt.AggressiveCascade {
+						aggressiveCascadeChildren[txHash] = true
+						break inputLoop
+					}
 					orphanChildren, hasLegit, cErr := classifyCached(*parentHash, parentMeta.ConflictingChildren)
 					if cErr != nil {
 						return report, cErr
@@ -424,7 +480,29 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		}
 	}
 
-	logProgress("[step 1/4] done — scanned %d unmined txs, found %d Case A, %d Case C, %d Case D", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
+	if opt.AggressiveCascade {
+		logProgress("[step 1/4] done — scanned %d unmined txs, %d Case A, %d Case C, %d to aggressive-cascade", unminedScanned, len(caseALosers), len(caseCPairs), len(aggressiveCascadeChildren))
+	} else {
+		logProgress("[step 1/4] done — scanned %d unmined txs, found %d Case A, %d Case C, %d Case D", unminedScanned, len(caseALosers), len(caseCPairs), len(caseDOrphans))
+	}
+
+	// AggressiveCascade: skip all the classification and just mark every discovered child
+	// Conflicting=true in a single batch. Case D detection is replaced by this coarser
+	// action. Case A / Case C are still applied below as usual.
+	if opt.AggressiveCascade && len(aggressiveCascadeChildren) > 0 {
+		setPhase("aggressive cascade")
+		logProgress("[aggressive] marking %d unmined children Conflicting=true", len(aggressiveCascadeChildren))
+		if !dryRun {
+			hashes := make([]chainhash.Hash, 0, len(aggressiveCascadeChildren))
+			for h := range aggressiveCascadeChildren {
+				hashes = append(hashes, h)
+			}
+			if _, _, sErr := s.SetConflicting(ctx, hashes, true); sErr != nil {
+				return report, sErr
+			}
+		}
+		report.CaseDCascaded += len(aggressiveCascadeChildren)
+	}
 
 	// Fix Case C first so SpendingData is corrected before the Case A sweep.
 	// Dedup by WINNER: the same real-winner may appear as the correction target for multiple
@@ -432,6 +510,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// Deduping by loser would silently drop subsequent distinct winners and leave their
 	// Conflicting=true flag set. ProcessConflicting's own dedup map only bypasses the
 	// "must be conflicting" reentry check during reorgs; it does not help here.
+	setPhase("step 2 fixing Case C pairs")
 	logProgress("[step 2/4] fixing %d Case C (inverted winner/loser) pairs...", len(caseCPairs))
 	currentBlockHeight := bestHeader.Height
 	seenCaseCWinners := map[chainhash.Hash]bool{}
@@ -450,6 +529,7 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 		report.CaseCFixed++
 	}
 
+	setPhase("step 3 fixing Case A losers")
 	logProgress("[step 3/4] fixing %d Case A (unmarked losers)...", len(caseALosers))
 	// Fix Case A, skipping any already resolved by Case C.
 	for _, loser := range caseALosers {
@@ -481,6 +561,15 @@ func RepairConflictingChains(ctx context.Context, s Store, blockchainClient Bloc
 	// Before unmarking, we verify there is no legitimate reason for parent to be conflicting
 	// by checking each of parent's inputs: if any grandparent's SpendingData[vout] names a
 	// different tx, parent is a legit loser and we leave it alone.
+	// AggressiveCascade replaces step 4's classification-driven handling — the aggressive
+	// batch ran above right after step 1, no orphan detection.
+	if opt.AggressiveCascade {
+		setPhase("done")
+		logProgress("[done] repair complete — fixed %d unmined_since, %d Case A, %d Case C, %d aggressive cascade", report.UnminedSinceFixed, report.CaseAFixed, report.CaseCFixed, report.CaseDCascaded)
+		return report, nil
+	}
+
+	setPhase("step 4 fixing Case D orphans")
 	logProgress("[step 4/4] fixing %d Case D (orphan conflicting parents)...", len(caseDOrphans))
 	seenCaseD := map[chainhash.Hash]bool{}
 	worklist := append([]chainhash.Hash(nil), caseDOrphans...)
