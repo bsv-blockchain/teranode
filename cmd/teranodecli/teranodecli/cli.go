@@ -18,8 +18,8 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
 	"github.com/bsv-blockchain/teranode/cmd/logs"
 	"github.com/bsv-blockchain/teranode/cmd/monitor"
+	"github.com/bsv-blockchain/teranode/cmd/purgeconflictingunmined"
 	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
-	"github.com/bsv-blockchain/teranode/cmd/repairconflicts"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
 	"github.com/bsv-blockchain/teranode/cmd/setfsmstate"
@@ -407,7 +407,7 @@ func Start(args []string, version, commit string) {
 		aggressiveCascade := cmd.FlagSet.Bool("aggressive-cascade", false, "Replace Case D classification with a coarse cascade — any non-conflicting unmined child of a Conflicting=true+UnminedSince>0 parent is marked Conflicting=true without per-ancestor verification. Much faster; may mark some valid unmined txs conflicting (they'll get pruned and re-arrive via propagation).")
 
 		cmd.Execute = func(args []string) error {
-			return repairconflicts.RepairConflicts(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan, *aggressiveCascade)
+			return purgeconflictingunmined.PurgeConflictingUnmined(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan, *aggressiveCascade)
 		}
 	case "fix-chainwork":
 		dbURL := cmd.FlagSet.String("db-url", "", "Database URL (postgres://... or sqlite://...)")

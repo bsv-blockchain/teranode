@@ -11,21 +11,21 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
-// BlockHeaderInfo holds the minimal block header data needed by RepairConflictingChains.
+// BlockHeaderInfo holds the minimal block header data needed by PurgeConflictingUnmined.
 type BlockHeaderInfo struct {
 	Hash   *chainhash.Hash
 	Height uint32
 }
 
-// BlockchainQuerier is the subset of blockchain.ClientI needed by RepairConflictingChains.
+// BlockchainQuerier is the subset of blockchain.ClientI needed by PurgeConflictingUnmined.
 // Using a local interface with primitive types avoids an import cycle between stores/utxo and services/blockchain.
 type BlockchainQuerier interface {
 	GetBestBlockHeaderInfo(ctx context.Context) (BlockHeaderInfo, error)
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 }
 
-// RepairReport contains the results of a conflict repair run.
-type RepairReport struct {
+// PurgeReport contains the results of a conflict repair run.
+type PurgeReport struct {
 	UnminedSinceFixed int // Txs fixed in step 0 (had block_ids on main chain but unmined_since still set)
 	CaseAFixed        int // Losers fixed (missing Conflicting=true mark, cascaded to subtree)
 	CaseCFixed        int // Inverted winner/loser pairs fixed via ProcessConflicting
@@ -33,8 +33,8 @@ type RepairReport struct {
 	CaseDCascaded     int // Legit-conflicting parents whose non-conflicting children were cascaded via MarkConflictingRecursively
 }
 
-// RepairProgressFunc is called by RepairConflictingChains to report progress.
-type RepairProgressFunc func(format string, args ...interface{})
+// PurgeProgressFunc is called by PurgeConflictingUnmined to report progress.
+type PurgeProgressFunc func(format string, args ...interface{})
 
 // cascadeMaxVisited bounds cascadeConflictingViaSpendingData so a corrupted or pathological
 // SpendingData graph cannot exhaust memory. Exceeding this cap aborts repair with an error;
@@ -42,9 +42,9 @@ type RepairProgressFunc func(format string, args ...interface{})
 // silently.
 const cascadeMaxVisited = 100_000
 
-// RepairOptions controls optional behavior of RepairConflictingChains. The zero value is
+// PurgeOptions controls optional behavior of PurgeConflictingUnmined. The zero value is
 // safe and enables every step.
-type RepairOptions struct {
+type PurgeOptions struct {
 	// SkipUnminedSinceScan skips step 0 — the full-store consistency scan that finds mined
 	// transactions still carrying UnminedSince. That scan is the slowest part of repair on
 	// a large store (hundreds of millions of records) and rarely finds anything once fixed.
@@ -67,18 +67,18 @@ type RepairOptions struct {
 	AggressiveCascade bool
 }
 
-// RepairConflictingChains detects and fixes inconsistent conflicting transaction state in the UTXO store.
+// PurgeConflictingUnmined detects and fixes inconsistent conflicting transaction state in the UTXO store.
 // progressFn is optional — pass nil to suppress progress output.
 //
 // Any DB error encountered during detection or repair aborts the run and returns that error.
 // The repair tool must not silently continue on a read or write failure — a partial repair
 // leaves the store dirty, which is the condition we are trying to eliminate.
-func RepairConflictingChains(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn RepairProgressFunc, opts ...RepairOptions) (RepairReport, error) {
-	var opt RepairOptions
+func PurgeConflictingUnmined(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn PurgeProgressFunc, opts ...PurgeOptions) (PurgeReport, error) {
+	var opt PurgeOptions
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
-	var report RepairReport
+	var report PurgeReport
 
 	logProgress := func(format string, args ...interface{}) {
 		if progressFn != nil {
@@ -797,7 +797,7 @@ func classifyChild(ctx context.Context, s Store, h chainhash.Hash) (conflictingC
 //
 // If logReason is non-nil, it is invoked with a human-readable explanation whenever an
 // entry is classified as legit — useful for step-1 debug diagnostics.
-func classifyConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason RepairProgressFunc, childCache map[chainhash.Hash]conflictingChildClass) (orphans []chainhash.Hash, hasLegit bool, err error) {
+func classifyConflictingChildren(ctx context.Context, s Store, children []chainhash.Hash, logReason PurgeProgressFunc, childCache map[chainhash.Hash]conflictingChildClass) (orphans []chainhash.Hash, hasLegit bool, err error) {
 	for i := range children {
 		h := children[i]
 		c, cached := childCache[h], false
