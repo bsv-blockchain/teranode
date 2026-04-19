@@ -14,6 +14,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -21,20 +22,37 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
-// blockchainAdapter wraps blockchain.ClientI to implement utxo.BlockchainQuerier.
+// blockchainAdapter implements utxo.BlockchainQuerier. GetBestBlockHeaderInfo
+// uses Block Assembly's persisted CurrentBlock — not the blockchain service's
+// best — because BA is the validateParentChain consumer and cleanup must
+// classify parents against the exact chain BA will evaluate on its next
+// loadUnminedTransactions pass. The two views can drift after a reorg: BA
+// persists its tip in the blockchain DB state table and resumes from there
+// on startup, while the blockchain service may have advanced or retreated.
+// BA's gRPC stays reachable while the FSM is in IDLE (only write entry
+// points are gated by frozenForRepair); if we cannot read BA's state, we
+// fail rather than silently operate on a mismatched chain view.
 type blockchainAdapter struct {
-	client blockchain.ClientI
+	client   blockchain.ClientI
+	baClient blockassembly.ClientI
+	logger   ulogger.Logger
 }
 
 func (a *blockchainAdapter) GetBestBlockHeaderInfo(ctx context.Context) (utxo.BlockHeaderInfo, error) {
-	header, meta, err := a.client.GetBestBlockHeader(ctx)
+	state, err := a.baClient.GetBlockAssemblyState(ctx)
 	if err != nil {
-		return utxo.BlockHeaderInfo{}, err
+		return utxo.BlockHeaderInfo{}, errors.NewProcessingError("failed to query block assembly state", err)
 	}
-	if header == nil || meta == nil {
-		return utxo.BlockHeaderInfo{}, errors.NewProcessingError("GetBestBlockHeader returned nil header or meta")
+	if state == nil || state.CurrentHash == "" {
+		return utxo.BlockHeaderInfo{}, errors.NewProcessingError("block assembly state missing CurrentHash")
 	}
-	return utxo.BlockHeaderInfo{Hash: header.Hash(), Height: meta.Height}, nil
+	hash, hashErr := chainhash.NewHashFromStr(state.CurrentHash)
+	if hashErr != nil {
+		return utxo.BlockHeaderInfo{}, errors.NewProcessingError("block assembly CurrentHash is not a valid hash: %s", state.CurrentHash, hashErr)
+	}
+	a.logger.Infof("[blockchainAdapter] using Block Assembly's CurrentBlock as best-chain anchor: %s @ height %d",
+		state.CurrentHash, state.CurrentHeight)
+	return utxo.BlockHeaderInfo{Hash: hash, Height: state.CurrentHeight}, nil
 }
 
 func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
@@ -66,7 +84,21 @@ func CleanupUnmined(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		return errors.NewConfigurationError("failed to create blockchain client", err)
 	}
 
-	adapter := &blockchainAdapter{client: blockchainClient}
+	// Block Assembly client is required — cleanup classifies orphan-parent
+	// children against BA's current chain view, so drift between BA and the
+	// blockchain service after a reorg does not cause us to miss or
+	// mis-delete records. BA's gRPC stays reachable in IDLE; if we can't
+	// dial it, fail loudly.
+	baClient, err := blockassembly.NewClient(ctx, logger, tSettings)
+	if err != nil {
+		return errors.NewConfigurationError("failed to create block assembly client (required for best-chain alignment)", err)
+	}
+
+	adapter := &blockchainAdapter{
+		client:   blockchainClient,
+		baClient: baClient,
+		logger:   logger,
+	}
 
 	progress := func(format string, args ...interface{}) {
 		fmt.Printf(format+"\n", args...)
