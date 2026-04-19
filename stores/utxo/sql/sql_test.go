@@ -398,6 +398,111 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.False(t, txMeta.Locked)
 		assert.Zero(t, txMeta.UnminedSince)
 	})
+
+	t.Run("unset last block_id sets unmined_since to current block height", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		utxoStore, tx := setup(ctx, t)
+
+		// Set the store's current block height to 500
+		err := utxoStore.SetBlockHeight(500)
+		require.NoError(t, err)
+
+		// Create tx as unmined at height 100
+		_, err = utxoStore.Create(ctx, tx, 100)
+		require.NoError(t, err)
+
+		// Mine the tx into block at height 200 (not on longest chain)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		// Verify tx has block_id 10
+		txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		require.Len(t, txMeta.BlockIDs, 1)
+		require.Equal(t, uint32(10), txMeta.BlockIDs[0])
+
+		// Now unset mined (block invalidation) -- this removes the only block_id
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+			UnsetMined:     true,
+		})
+		require.NoError(t, err)
+
+		// Verify: tx should have zero block_ids and unmined_since set to current block height (501 = 500+1)
+		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		assert.Len(t, txMeta.BlockIDs, 0, "tx should have no block_ids after unsetting the only one")
+		assert.Equal(t, uint32(501), txMeta.UnminedSince,
+			"unmined_since should be set to current block height (store height + 1), not the invalidated block's height")
+		assert.False(t, txMeta.Locked, "tx should be unlocked after unset mined")
+	})
+
+	t.Run("unset one of two block_ids does not set unmined_since", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		utxoStore, tx := setup(ctx, t)
+
+		// Set the store's current block height to 500
+		err := utxoStore.SetBlockHeight(500)
+		require.NoError(t, err)
+
+		// Create tx as unmined at height 100
+		_, err = utxoStore.Create(ctx, tx, 100)
+		require.NoError(t, err)
+
+		// Mine the tx into two blocks (not on longest chain)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        20,
+			BlockHeight:    201,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		// Verify tx has both block_ids and capture unmined_since before the unset
+		txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		require.Len(t, txMeta.BlockIDs, 2)
+		unminedSinceBefore := txMeta.UnminedSince
+
+		// Unset one block_id (invalidate block 10)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+			UnsetMined:     true,
+		})
+		require.NoError(t, err)
+
+		// Verify: tx still has one block_id and unmined_since is unchanged
+		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		assert.Len(t, txMeta.BlockIDs, 1, "tx should have one block_id remaining")
+		assert.Equal(t, uint32(20), txMeta.BlockIDs[0], "remaining block_id should be 20")
+		// unmined_since should be unchanged because the tx still has a remaining block_id
+		assert.Equal(t, unminedSinceBefore, txMeta.UnminedSince,
+			"unmined_since should be unchanged when tx still has block_ids")
+	})
 }
 
 func TestBatchDecorate(t *testing.T) {

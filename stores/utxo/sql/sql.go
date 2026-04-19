@@ -2722,15 +2722,58 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 	} else {
 		// Not on longest chain: clear delete_at_height, set locked = false
-		// Do NOT set unmined_since here — that's MarkTransactionsOnLongestChain's job
-		inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
-		qUpdate := fmt.Sprintf(`
-			UPDATE transactions
-			SET locked = false, delete_at_height = NULL
-			WHERE hash IN %s
-		`, inClause3)
-		if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
-			return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+		if minedBlockInfo.UnsetMined {
+			// UnsetMined path (block invalidation): unlock and clear delete_at_height
+			// for all affected transactions, then set unmined_since only for those
+			// with zero remaining block_ids.
+			// This mirrors the aerospike Lua which sets unmined_since = currentBlockHeight
+			// when #blocks == 0 after removing the block_id.
+			// Use the store's current block height (not the invalidated block's height)
+			// to match Aerospike's setMined UDF behavior.
+			currentBlockHeight := s.blockHeight.Load() + 1
+
+			// Step 1: Unlock and clear delete_at_height for all affected transactions
+			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
+			qUpdate := fmt.Sprintf(`
+				UPDATE transactions
+				SET locked = false
+				   ,delete_at_height = NULL
+				WHERE hash IN %s
+			`, inClause3)
+			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+			}
+
+			// Step 2: Set unmined_since only for transactions with no remaining block_ids
+			inClause3b, inArgs3b := buildINClause(existingHashBytes, 2)
+			qUpdateUnmined := fmt.Sprintf(`
+				WITH txs_without_blocks AS (
+					SELECT t.id
+					FROM transactions t
+					LEFT JOIN block_ids bi ON bi.transaction_id = t.id
+					WHERE t.hash IN %s
+					GROUP BY t.id
+					HAVING COUNT(bi.transaction_id) = 0
+				)
+				UPDATE transactions
+				SET unmined_since = $1
+				WHERE id IN (SELECT id FROM txs_without_blocks)
+			`, inClause3b)
+			args := append([]interface{}{currentBlockHeight}, inArgs3b...)
+			if _, err = txn.ExecContext(ctx, qUpdateUnmined, args...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating unmined_since: %v", err)
+			}
+		} else {
+			// Normal not-on-longest-chain path: MarkTransactionsOnLongestChain handles unmined_since
+			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
+			qUpdate := fmt.Sprintf(`
+				UPDATE transactions
+				SET locked = false, delete_at_height = NULL
+				WHERE hash IN %s
+			`, inClause3)
+			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+			}
 		}
 	}
 
