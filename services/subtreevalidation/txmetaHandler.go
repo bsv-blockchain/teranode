@@ -58,7 +58,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			// Only the first IDLE-observed call pauses and spawns the resume watcher; concurrent
 			// handler invocations short-circuit via the atomic guard.
 			if u.idleConsumerPaused.CompareAndSwap(false, true) {
-				u.logger.Warnf("[txmetaHandler] node is in IDLE state — pausing Kafka consumers until FSM leaves IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix.")
+				u.logger.Warnf("[txmetaHandler] node is in IDLE state — pausing Kafka consumers until FSM leaves IDLE. Run 'teranode-cli cleanup-unmined' to fix.")
 				if u.subtreeConsumerClient != nil {
 					u.subtreeConsumerClient.PauseAll()
 				}

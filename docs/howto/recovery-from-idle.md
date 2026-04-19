@@ -5,7 +5,7 @@ example an unmined transaction whose parent is flagged `Conflicting=true` with
 `UnminedSince>0` — it parks the blockchain FSM in `IDLE` and prints:
 
 ```text
-block assembly paused in IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix;
+block assembly paused in IDLE. Run 'teranode-cli cleanup-unmined' to fix;
 block assembly will resume automatically once the FSM leaves IDLE.
 ```
 
@@ -15,7 +15,7 @@ Propagation, Legacy netsync) stop processing until the FSM leaves IDLE.
 ## Fix
 
 ```bash
-teranode-cli purge-conflicting-unmined [--skip-unmined-since-scan] [--dry-run]
+teranode-cli cleanup-unmined [--skip-unmined-since-scan] [--dry-run]
 ```
 
 The command connects to the live node's blockchain gRPC, so leave the node

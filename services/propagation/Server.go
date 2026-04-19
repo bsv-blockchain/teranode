@@ -1034,7 +1034,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			return errors.NewProcessingError("[processTransaction] failed to check FSM state: %v", fsmErr)
 		}
 		if isIdle {
-			ps.logger.Warnf("[processTransaction] node is in IDLE state — rejecting transaction. Run 'teranode-cli purge-conflicting-unmined' to fix.")
+			ps.logger.Warnf("[processTransaction] node is in IDLE state — rejecting transaction. Run 'teranode-cli cleanup-unmined' to fix.")
 			return errors.NewProcessingError("node is in IDLE state")
 		}
 	}

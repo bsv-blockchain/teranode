@@ -261,7 +261,7 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 }
 
 // ScanInconsistentUnminedTxs returns a lightweight iterator over every record
-// with unmined_since set. It is used by purge-conflicting-unmined for both the
+// with unmined_since set. It is used by cleanup-unmined for both the
 // step 0 consistency fixup (mined tx still carrying unmined_since) and the
 // step 1 conflicting-unmined purge collection.
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {

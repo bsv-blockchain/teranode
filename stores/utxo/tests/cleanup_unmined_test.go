@@ -1,4 +1,4 @@
-// Package tests provides tests for the PurgeConflictingUnmined function.
+// Package tests provides tests for the CleanupUnmined function.
 package tests
 
 import (
@@ -115,29 +115,29 @@ func createMinedConflicting(t *testing.T, ctx context.Context, store utxo.Store,
 	return hash
 }
 
-// TestPurgeConflictingUnmined_CleanState verifies that running the purge on an
+// TestCleanupUnmined_CleanState verifies that running the purge on an
 // empty store produces a zeroed report.
-func TestPurgeConflictingUnmined_CleanState(t *testing.T) {
+func TestCleanupUnmined_CleanState(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.UnminedSinceFixed)
 	require.Equal(t, 0, report.ConflictingUnminedPurged)
 }
 
-// TestPurgeConflictingUnmined_DeletesConflictingUnmined verifies that a record
+// TestCleanupUnmined_DeletesConflictingUnmined verifies that a record
 // with Conflicting=true and UnminedSince>0 is removed from the store.
-func TestPurgeConflictingUnmined_DeletesConflictingUnmined(t *testing.T) {
+func TestCleanupUnmined_DeletesConflictingUnmined(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
 	hash := createConflictingUnmined(t, ctx, store, 100_000, 100)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.ConflictingUnminedPurged)
 
@@ -146,10 +146,10 @@ func TestPurgeConflictingUnmined_DeletesConflictingUnmined(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrTxNotFound), "purged record must not be found; got %v", err)
 }
 
-// TestPurgeConflictingUnmined_LeavesNonConflictingUnminedAlone verifies that a
+// TestCleanupUnmined_LeavesNonConflictingUnminedAlone verifies that a
 // non-conflicting unmined tx — even one whose parent we just purged — remains
 // in the store. BA's validateParentChain tolerates the dangling parent ref.
-func TestPurgeConflictingUnmined_LeavesNonConflictingUnminedAlone(t *testing.T) {
+func TestCleanupUnmined_LeavesNonConflictingUnminedAlone(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
@@ -157,7 +157,7 @@ func TestPurgeConflictingUnmined_LeavesNonConflictingUnminedAlone(t *testing.T) 
 	conflictingHash := createConflictingUnmined(t, ctx, store, 200_000, 100)
 	nonConflictingHash := createNonConflictingUnmined(t, ctx, store, 300_000, 100)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.ConflictingUnminedPurged)
 
@@ -172,17 +172,17 @@ func TestPurgeConflictingUnmined_LeavesNonConflictingUnminedAlone(t *testing.T) 
 	require.False(t, meta.Conflicting)
 }
 
-// TestPurgeConflictingUnmined_LeavesMinedTxAlone verifies that a mined record
+// TestCleanupUnmined_LeavesMinedTxAlone verifies that a mined record
 // carrying Conflicting=true but with UnminedSince=0 is NOT deleted (the
 // UnminedSince>0 filter guards us from removing historical conflict records).
-func TestPurgeConflictingUnmined_LeavesMinedTxAlone(t *testing.T) {
+func TestCleanupUnmined_LeavesMinedTxAlone(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
 	minedHash := createMinedConflicting(t, ctx, store, 400_000, 100, 7)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.ConflictingUnminedPurged)
 
@@ -192,16 +192,16 @@ func TestPurgeConflictingUnmined_LeavesMinedTxAlone(t *testing.T) {
 	require.True(t, meta.Conflicting)
 }
 
-// TestPurgeConflictingUnmined_DryRun verifies that dryRun=true counts purge
+// TestCleanupUnmined_DryRun verifies that dryRun=true counts purge
 // candidates without actually deleting them.
-func TestPurgeConflictingUnmined_DryRun(t *testing.T) {
+func TestCleanupUnmined_DryRun(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
 	hash := createConflictingUnmined(t, ctx, store, 500_000, 100)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, true, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.ConflictingUnminedPurged, "dry run still counts candidates")
 
@@ -212,16 +212,16 @@ func TestPurgeConflictingUnmined_DryRun(t *testing.T) {
 	require.True(t, meta.Conflicting)
 }
 
-// TestPurgeConflictingUnmined_SkipUnminedSinceScan verifies that step 0 is
+// TestCleanupUnmined_SkipUnminedSinceScan verifies that step 0 is
 // skipped when the option is set but step 1 (the purge) still runs.
-func TestPurgeConflictingUnmined_SkipUnminedSinceScan(t *testing.T) {
+func TestCleanupUnmined_SkipUnminedSinceScan(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
 	hash := createConflictingUnmined(t, ctx, store, 600_000, 100)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil, utxo.PurgeOptions{SkipUnminedSinceScan: true})
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil, utxo.CleanupOptions{SkipUnminedSinceScan: true})
 	require.NoError(t, err)
 	require.Equal(t, 0, report.UnminedSinceFixed)
 	require.Equal(t, 1, report.ConflictingUnminedPurged)
@@ -231,12 +231,12 @@ func TestPurgeConflictingUnmined_SkipUnminedSinceScan(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
 
-// TestPurgeConflictingUnmined_UnminedSinceFix verifies step 0 clears the
+// TestCleanupUnmined_UnminedSinceFix verifies step 0 clears the
 // stray-UnminedSince-on-mined-tx case. The tx is marked unmined, then stored
 // as mined on the best chain without clearing UnminedSince (simulated by
 // MarkTransactionsOnLongestChain(false) after SetMinedMulti). The purge's
 // step 0 should re-mark it as on the longest chain.
-func TestPurgeConflictingUnmined_UnminedSinceFix(t *testing.T) {
+func TestCleanupUnmined_UnminedSinceFix(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 
@@ -263,11 +263,11 @@ func TestPurgeConflictingUnmined_UnminedSinceFix(t *testing.T) {
 	require.NoError(t, err)
 
 	// Force the inconsistent state: the tx is mined on the best chain yet still
-	// carries UnminedSince (the bug purge-conflicting-unmined step 0 repairs).
+	// carries UnminedSince (the bug cleanup-unmined step 0 repairs).
 	err = store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{hash}, false)
 	require.NoError(t, err)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.UnminedSinceFixed)
 
@@ -276,21 +276,21 @@ func TestPurgeConflictingUnmined_UnminedSinceFix(t *testing.T) {
 	require.Zero(t, meta.UnminedSince, "step 0 should have cleared UnminedSince on the mined tx")
 }
 
-// TestPurgeConflictingUnmined_Idempotent verifies that running the purge a
+// TestCleanupUnmined_Idempotent verifies that running the purge a
 // second time on the same store is a no-op — all candidates were already
 // deleted by the first pass.
-func TestPurgeConflictingUnmined_Idempotent(t *testing.T) {
+func TestCleanupUnmined_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	store := setupSQLiteFileStore(ctx, t)
 	querier := newQuerier()
 
 	_ = createConflictingUnmined(t, ctx, store, 800_000, 100)
 
-	firstReport, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	firstReport, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, firstReport.ConflictingUnminedPurged)
 
-	secondReport, err := utxo.PurgeConflictingUnmined(ctx, store, querier, false, nil)
+	secondReport, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, secondReport.ConflictingUnminedPurged)
 }
@@ -310,10 +310,10 @@ func (d *deleteTrackingStore) Delete(ctx context.Context, hash *chainhash.Hash) 
 	return d.Store.Delete(ctx, hash)
 }
 
-// TestPurgeConflictingUnmined_DeleteForwardsThroughStore verifies the purge
+// TestCleanupUnmined_DeleteForwardsThroughStore verifies the purge
 // calls Store.Delete for every purged hash. In a node with a TxMetaCache layer
 // wrapping the UTXO store, this is also the hook that evicts the cached entry.
-func TestPurgeConflictingUnmined_DeleteForwardsThroughStore(t *testing.T) {
+func TestCleanupUnmined_DeleteForwardsThroughStore(t *testing.T) {
 	ctx := context.Background()
 	inner := setupSQLiteFileStore(ctx, t)
 	tracker := &deleteTrackingStore{Store: inner}
@@ -321,7 +321,7 @@ func TestPurgeConflictingUnmined_DeleteForwardsThroughStore(t *testing.T) {
 
 	hash := createConflictingUnmined(t, ctx, tracker, 900_000, 100)
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, tracker, querier, false, nil)
+	report, err := utxo.CleanupUnmined(ctx, tracker, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.ConflictingUnminedPurged)
 	require.Equal(t, int64(1), tracker.deleted.Load(), "purge must call Store.Delete for the purged hash")

@@ -8,21 +8,21 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
-// BlockHeaderInfo holds the minimal block header data needed by PurgeConflictingUnmined.
+// BlockHeaderInfo holds the minimal block header data needed by CleanupUnmined.
 type BlockHeaderInfo struct {
 	Hash   *chainhash.Hash
 	Height uint32
 }
 
-// BlockchainQuerier is the subset of blockchain.ClientI needed by PurgeConflictingUnmined.
+// BlockchainQuerier is the subset of blockchain.ClientI needed by CleanupUnmined.
 // Using a local interface with primitive types avoids an import cycle between stores/utxo and services/blockchain.
 type BlockchainQuerier interface {
 	GetBestBlockHeaderInfo(ctx context.Context) (BlockHeaderInfo, error)
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 }
 
-// PurgeReport contains the results of a purge run.
-type PurgeReport struct {
+// CleanupReport contains the results of a purge run.
+type CleanupReport struct {
 	// UnminedSinceFixed is the number of records whose unmined_since marker was
 	// cleared in step 0 because the record is now confirmed on the best chain.
 	UnminedSinceFixed int
@@ -31,12 +31,12 @@ type PurgeReport struct {
 	ConflictingUnminedPurged int
 }
 
-// PurgeProgressFunc is called by PurgeConflictingUnmined to report progress.
-type PurgeProgressFunc func(format string, args ...interface{})
+// CleanupProgressFunc is called by CleanupUnmined to report progress.
+type CleanupProgressFunc func(format string, args ...interface{})
 
-// PurgeOptions controls optional behavior of PurgeConflictingUnmined. The zero
+// CleanupOptions controls optional behavior of CleanupUnmined. The zero
 // value is safe and runs every step.
-type PurgeOptions struct {
+type CleanupOptions struct {
 	// SkipUnminedSinceScan skips step 0 — the fixup pass that clears
 	// unmined_since on records already confirmed on the best chain. Step 0 is
 	// the slowest part of a purge on a large store (hundreds of millions of
@@ -47,7 +47,7 @@ type PurgeOptions struct {
 	SkipUnminedSinceScan bool
 }
 
-// PurgeConflictingUnmined performs a surgical purge of every record in the UTXO
+// CleanupUnmined performs a surgical purge of every record in the UTXO
 // store whose Conflicting=true flag and UnminedSince>0 marker are both set.
 //
 // The unmined set is ephemeral by design — BSV propagation re-arrives valid txs
@@ -69,13 +69,13 @@ type PurgeOptions struct {
 //
 // Any DB error aborts the run — a partial purge leaves the store dirty, which
 // is the condition we are trying to eliminate.
-func PurgeConflictingUnmined(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn PurgeProgressFunc, opts ...PurgeOptions) (PurgeReport, error) {
-	var opt PurgeOptions
+func CleanupUnmined(ctx context.Context, s Store, blockchainClient BlockchainQuerier, dryRun bool, progressFn CleanupProgressFunc, opts ...CleanupOptions) (CleanupReport, error) {
+	var opt CleanupOptions
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
 
-	var report PurgeReport
+	var report CleanupReport
 
 	logProgress := func(format string, args ...interface{}) {
 		if progressFn != nil {

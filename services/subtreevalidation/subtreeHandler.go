@@ -72,7 +72,7 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 			// handler invocations short-circuit via the atomic guard, so we neither spawn one
 			// goroutine per message nor issue thousands of redundant PauseAll calls.
 			if u.idleConsumerPaused.CompareAndSwap(false, true) {
-				u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers until FSM leaves IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix.")
+				u.logger.Warnf("[subtreeMessageHandler] node is in IDLE state — pausing Kafka consumers until FSM leaves IDLE. Run 'teranode-cli cleanup-unmined' to fix.")
 				if u.subtreeConsumerClient != nil {
 					u.subtreeConsumerClient.PauseAll()
 				}

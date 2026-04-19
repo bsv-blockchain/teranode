@@ -144,7 +144,7 @@ type BlockAssembler struct {
 	unminedTransactionsLoading atomic.Bool
 
 	// frozenForRepair is set when Start aborts due to ErrRepairNeeded: the FSM is moved to IDLE,
-	// Start returns nil to keep the process alive so the operator can run teranode-cli purge-conflicting-unmined,
+	// Start returns nil to keep the process alive so the operator can run teranode-cli cleanup-unmined,
 	// but subtreeProcessor and channel listeners are never started. Externally reachable gRPC
 	// methods must check this flag and reject so no call ends up interacting with a half-initialised
 	// assembler — defence-in-depth alongside the FSM IDLE guards in upstream services.
@@ -820,7 +820,7 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
 	if err = b.loadUnminedTransactions(ctx); err != nil {
 		if errors.Is(err, errors.ErrRepairNeeded) {
-			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix; block assembly will resume automatically once the FSM leaves IDLE.")
+			b.logger.Errorf("[BlockAssembler] UTXO store needs repair — block assembly paused in IDLE. Run 'teranode-cli cleanup-unmined' to fix; block assembly will resume automatically once the FSM leaves IDLE.")
 			b.frozenForRepair.Store(true)
 			b.wg.Add(1)
 			go b.watchForRepairCompletion(ctx)
@@ -1679,7 +1679,7 @@ func (b *BlockAssembler) validateParentChain(
 			for _, parentTxID := range tx.TxInpoints.GetParentTxHashes() {
 				parentMeta, exists := parentMetadata[parentTxID]
 				if !exists {
-					// Parent not in UTXO store. Happens after purge-conflicting-unmined
+					// Parent not in UTXO store. Happens after cleanup-unmined
 					// removes conflicting parents whose non-conflicting children still
 					// reference them. The dangling child is harmless — it will be mined
 					// in the next block or pruned. Skip the check for this parent.
@@ -1729,12 +1729,12 @@ func (b *BlockAssembler) validateParentChain(
 // IDLE-coordination scheme other services rely on.
 func (b *BlockAssembler) idleAndError(ctx context.Context, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
-	b.logger.Errorf("%s — setting FSM to IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix.", msg)
+	b.logger.Errorf("%s — setting FSM to IDLE. Run 'teranode-cli cleanup-unmined' to fix.", msg)
 	if fsmErr := b.blockchainClient.Idle(ctx); fsmErr != nil {
 		b.logger.Errorf("[validateParentChain] failed to set FSM to IDLE: %v", fsmErr)
-		return errors.NewStorageError("%s — ALSO failed to set FSM to IDLE: %v — run 'teranode-cli purge-conflicting-unmined' to fix UTXO store state", msg, fsmErr)
+		return errors.NewStorageError("%s — ALSO failed to set FSM to IDLE: %v — run 'teranode-cli cleanup-unmined' to fix UTXO store state", msg, fsmErr)
 	}
-	return errors.NewRepairNeededError("%s — run 'teranode-cli purge-conflicting-unmined' to fix UTXO store state", msg)
+	return errors.NewRepairNeededError("%s — run 'teranode-cli cleanup-unmined' to fix UTXO store state", msg)
 }
 
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store

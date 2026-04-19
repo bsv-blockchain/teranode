@@ -1,9 +1,9 @@
-// Package purgeconflictingunmined repairs inconsistent conflicting transaction state in the UTXO store.
+// Package cleanupunmined repairs inconsistent conflicting transaction state in the UTXO store.
 // Run this while the node is running with the FSM in IDLE (e.g. after BlockAssembler
 // transitions to IDLE due to a parent-chain repair request). The command connects to the
 // live blockchain gRPC service, so the node process must be up; after the repair completes,
 // restart the node (or transition the FSM back out of IDLE) to resume block assembly.
-package purgeconflictingunmined
+package cleanupunmined
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 	return a.client.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }
 
-// PurgeConflictingUnmined deletes every (Conflicting=true, UnminedSince>0)
+// CleanupUnmined deletes every (Conflicting=true, UnminedSince>0)
 // record from the UTXO store. Run this while the node is up and the FSM is in
 // IDLE — the command dials the blockchain gRPC service to fetch header data,
 // so stopping the node first will cause startup to fail with a connection
@@ -47,13 +47,13 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 // skipUnminedSinceScan=true skips step 0 (the unmined_since fixup pass). Only
 // use it when step 0 has run cleanly at least once since the last change to
 // the store.
-func PurgeConflictingUnmined(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun, skipUnminedSinceScan bool) error {
-	store, err := utxofactory.NewStore(ctx, logger, tSettings, "PurgeConflictingUnmined", false)
+func CleanupUnmined(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun, skipUnminedSinceScan bool) error {
+	store, err := utxofactory.NewStore(ctx, logger, tSettings, "CleanupUnmined", false)
 	if err != nil {
 		return errors.NewConfigurationError("failed to create UTXO store", err)
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "PurgeConflictingUnmined")
+	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "CleanupUnmined")
 	if err != nil {
 		return errors.NewConfigurationError("failed to create blockchain client", err)
 	}
@@ -64,7 +64,7 @@ func PurgeConflictingUnmined(ctx context.Context, logger ulogger.Logger, tSettin
 		fmt.Printf(format+"\n", args...)
 	}
 
-	report, err := utxo.PurgeConflictingUnmined(ctx, store, adapter, dryRun, progress, utxo.PurgeOptions{
+	report, err := utxo.CleanupUnmined(ctx, store, adapter, dryRun, progress, utxo.CleanupOptions{
 		SkipUnminedSinceScan: skipUnminedSinceScan,
 	})
 	if err != nil {

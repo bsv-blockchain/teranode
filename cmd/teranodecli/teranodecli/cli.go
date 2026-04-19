@@ -13,12 +13,12 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
 	"github.com/bsv-blockchain/teranode/cmd/checkblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
+	"github.com/bsv-blockchain/teranode/cmd/cleanupunmined"
 	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
 	"github.com/bsv-blockchain/teranode/cmd/logs"
 	"github.com/bsv-blockchain/teranode/cmd/monitor"
-	"github.com/bsv-blockchain/teranode/cmd/purgeconflictingunmined"
 	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
@@ -35,32 +35,32 @@ import (
 
 // commandHelp stores the command descriptions
 var commandHelp = map[string]string{
-	"filereader":                "File Reader",
-	"aerospikereader":           "Aerospike Reader",
-	"aerospikekafkaconnector":   "Read Aerospike CDC from Kafka and filter by txID bin",
-	"bitcointoutxoset":          "Bitcoin to Utxoset",
-	"seeder":                    "Seeder",
-	"utxopersister":             "Utxo Persister",
-	"getfsmstate":               "Get the current FSM State",
-	"setfsmstate":               "Set the FSM State",
-	"settings":                  "Settings",
-	"export-blocks":             "Export blockchain to CSV",
-	"import-blocks":             "Import blockchain from CSV",
-	"checkblocktemplate":        "Check block template",
-	"checkblock":                "Check block - fetches a block and validates it using the block validation service",
-	"reconsiderblock":           "Reconsider a block that was previously marked as invalid",
-	"resetblockassembly":        "Reset block assembly state",
-	"checkblockassembly":        "Check block assembly state by validating unmined transaction inputs (read-only)",
-	"fix-chainwork":             "Fix incorrect chainwork values in blockchain database",
-	"validate-utxo-set":         "Validate UTXO set file",
-	"subtreebench":              "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
-	"loadunminedbench":          "Benchmark loadUnminedTransactions with CPU and memory profiling",
-	"txmapbench":                "Benchmark CreateTransactionMap with CPU and memory profiling",
-	"remainderbench":            "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
-	"monitor":                   "Live TUI dashboard for monitoring node status",
-	"logs":                      "Interactive log viewer with filtering and search",
-	"diagnose":                  "Diagnose node health and validate configuration",
-	"purge-conflicting-unmined": "Purge unmined transactions marked Conflicting=true from the UTXO store (run with node up, FSM in IDLE)",
+	"filereader":              "File Reader",
+	"aerospikereader":         "Aerospike Reader",
+	"aerospikekafkaconnector": "Read Aerospike CDC from Kafka and filter by txID bin",
+	"bitcointoutxoset":        "Bitcoin to Utxoset",
+	"seeder":                  "Seeder",
+	"utxopersister":           "Utxo Persister",
+	"getfsmstate":             "Get the current FSM State",
+	"setfsmstate":             "Set the FSM State",
+	"settings":                "Settings",
+	"export-blocks":           "Export blockchain to CSV",
+	"import-blocks":           "Import blockchain from CSV",
+	"checkblocktemplate":      "Check block template",
+	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
+	"reconsiderblock":         "Reconsider a block that was previously marked as invalid",
+	"resetblockassembly":      "Reset block assembly state",
+	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
+	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
+	"validate-utxo-set":       "Validate UTXO set file",
+	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
+	"loadunminedbench":        "Benchmark loadUnminedTransactions with CPU and memory profiling",
+	"txmapbench":              "Benchmark CreateTransactionMap with CPU and memory profiling",
+	"remainderbench":          "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
+	"monitor":                 "Live TUI dashboard for monitoring node status",
+	"logs":                    "Interactive log viewer with filtering and search",
+	"diagnose":                "Diagnose node health and validate configuration",
+	"cleanup-unmined":         "Purge unmined transactions marked Conflicting=true from the UTXO store (run with node up, FSM in IDLE)",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -401,12 +401,12 @@ func Start(args []string, version, commit string) {
 			fmt.Println("Block assembly validation passed: all unmined transactions have valid inputs")
 			return nil
 		}
-	case "purge-conflicting-unmined":
+	case "cleanup-unmined":
 		dryRun := cmd.FlagSet.Bool("dry-run", false, "Report what would be deleted without writing any changes")
 		skipUnminedSinceScan := cmd.FlagSet.Bool("skip-unmined-since-scan", false, "Skip step 0 (unmined_since fixup pass) — only use when it has completed cleanly since the last change")
 
 		cmd.Execute = func(args []string) error {
-			return purgeconflictingunmined.PurgeConflictingUnmined(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan)
+			return cleanupunmined.CleanupUnmined(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan)
 		}
 	case "fix-chainwork":
 		dbURL := cmd.FlagSet.String("db-url", "", "Database URL (postgres://... or sqlite://...)")
