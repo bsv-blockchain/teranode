@@ -1,8 +1,10 @@
 # Recovering from FSM IDLE (Block Assembly frozen)
 
-When the Block Assembler detects inconsistent UTXO-store state on startup — for
-example an unmined transaction whose parent is flagged `Conflicting=true` with
-`UnminedSince>0` — it parks the blockchain FSM in `IDLE` and prints:
+When the Block Assembler detects inconsistent UTXO-store state on startup —
+for example an unmined transaction whose parent is flagged `Conflicting=true`
+with `UnminedSince>0`, or an unmined transaction whose parent is mined on a
+block that is not on the best chain (orphan fork) — it parks the blockchain
+FSM in `IDLE` and prints:
 
 ```text
 block assembly paused in IDLE. Run 'teranode-cli cleanup-unmined' to fix;
@@ -19,14 +21,16 @@ teranode-cli cleanup-unmined [--skip-unmined-since-scan] [--dry-run]
 ```
 
 The command connects to the live node's blockchain gRPC, so leave the node
-running. It performs a single pass that:
+running. It performs the following passes:
 
 1. (optional, `--skip-unmined-since-scan` to skip) Clears stray `UnminedSince`
    markers on transactions already mined on the best chain.
-2. Collects every record with `Conflicting=true` and `UnminedSince>0`.
-3. Deletes the collected records.
+2. Deletes every record with `Conflicting=true` and `UnminedSince>0`.
+3. Iterates non-conflicting unmined transactions and deletes any whose parent
+   is mined on a block that is not on the best chain (orphan fork) or whose
+   parent is a mined record with no block_ids at all.
 
-`--dry-run` reports the set that would be deleted without writing anything.
+`--dry-run` reports the records that would be deleted without writing anything.
 
 ## Resume
 
@@ -39,10 +43,13 @@ Block Assembly's FSM watcher detects the transition out of IDLE, retries
 
 ## Notes
 
-- Non-conflicting children of a purged parent are left in place. Block Assembly's
-  `validateParentChain` tolerates the dangling reference — those children will
-  be mined in the next block or swept by the pruner.
+- Missing parents (e.g. parents deleted by step 2) are tolerated by Block
+  Assembly's `validateParentChain`; cleanup-unmined does not cascade deletes
+  to their non-conflicting children.
 - Running the command a second time is a no-op; it only finds records that
-  still match the purge filter.
+  still match the deletion filters.
+- Unmined subtree blobs are left to the pruner / TTL — they are content-
+  addressed, unique by hash, and a stale blob costs only disk.
 - `errors.ErrRepairNeeded` / `NewRepairNeededError` keep their names — the
-  operator intervention semantic is unchanged, only the fix command is renamed.
+  operator-intervention semantic is unchanged, only the fix command name
+  changed.

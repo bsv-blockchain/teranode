@@ -38,7 +38,7 @@ func setupSQLiteFileStore(ctx context.Context, t *testing.T) utxo.Store {
 	require.NoError(t, err)
 
 	_, err = store.Create(ctx, Tx, 100, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
+		BlockID:        setupParentBlockID,
 		BlockHeight:    99,
 		OnLongestChain: true,
 	}))
@@ -62,13 +62,21 @@ func (tbq *testBlockchainQuerier) GetBlockHeaderIDs(ctx context.Context, blockHa
 	return tbq.blockHeaderIDs, nil
 }
 
-// newQuerier creates a simple querier with no blocks on the best chain.
+// setupParentBlockID is the block id setupSQLiteFileStore pins the shared
+// parent Tx onto; newQuerier publishes it as on the best chain so the orphan-
+// parent detection in step 3 does not flag newTestTx-derived children.
+const setupParentBlockID uint32 = 1
+
+// newQuerier creates a querier whose best chain contains only
+// setupParentBlockID — the mined block id used by setupSQLiteFileStore for
+// the shared parent Tx. Tests that want the parent to look orphan-mined (so
+// step 3 deletes its children) override blockHeaderIDs with a disjoint set.
 func newQuerier() *testBlockchainQuerier {
 	h := &chainhash.Hash{}
 	return &testBlockchainQuerier{
 		bestBlockHash:   h,
-		bestBlockHeight: 0,
-		blockHeaderIDs:  []uint32{},
+		bestBlockHeight: 100,
+		blockHeaderIDs:  []uint32{setupParentBlockID},
 	}
 }
 
@@ -125,7 +133,7 @@ func TestCleanupUnmined_CleanState(t *testing.T) {
 	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, report.UnminedSinceFixed)
-	require.Equal(t, 0, report.ConflictingUnminedPurged)
+	require.Equal(t, 0, report.ConflictingUnminedDeleted)
 }
 
 // TestCleanupUnmined_DeletesConflictingUnmined verifies that a record
@@ -139,7 +147,7 @@ func TestCleanupUnmined_DeletesConflictingUnmined(t *testing.T) {
 
 	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, report.ConflictingUnminedPurged)
+	require.Equal(t, 1, report.ConflictingUnminedDeleted)
 
 	_, err = store.Get(ctx, &hash, fields.Conflicting)
 	require.Error(t, err)
@@ -159,7 +167,7 @@ func TestCleanupUnmined_LeavesNonConflictingUnminedAlone(t *testing.T) {
 
 	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, report.ConflictingUnminedPurged)
+	require.Equal(t, 1, report.ConflictingUnminedDeleted)
 
 	_, err = store.Get(ctx, &conflictingHash, fields.Conflicting)
 	require.Error(t, err)
@@ -184,7 +192,7 @@ func TestCleanupUnmined_LeavesMinedTxAlone(t *testing.T) {
 
 	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 0, report.ConflictingUnminedPurged)
+	require.Equal(t, 0, report.ConflictingUnminedDeleted)
 
 	meta, err := store.Get(ctx, &minedHash, fields.Conflicting)
 	require.NoError(t, err)
@@ -203,7 +211,7 @@ func TestCleanupUnmined_DryRun(t *testing.T) {
 
 	report, err := utxo.CleanupUnmined(ctx, store, querier, true, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, report.ConflictingUnminedPurged, "dry run still counts candidates")
+	require.Equal(t, 1, report.ConflictingUnminedDeleted, "dry run still counts candidates")
 
 	// Record must still exist.
 	meta, err := store.Get(ctx, &hash, fields.Conflicting)
@@ -224,7 +232,7 @@ func TestCleanupUnmined_SkipUnminedSinceScan(t *testing.T) {
 	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil, utxo.CleanupOptions{SkipUnminedSinceScan: true})
 	require.NoError(t, err)
 	require.Equal(t, 0, report.UnminedSinceFixed)
-	require.Equal(t, 1, report.ConflictingUnminedPurged)
+	require.Equal(t, 1, report.ConflictingUnminedDeleted)
 
 	_, err = store.Get(ctx, &hash, fields.Conflicting)
 	require.Error(t, err)
@@ -288,11 +296,11 @@ func TestCleanupUnmined_Idempotent(t *testing.T) {
 
 	firstReport, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, firstReport.ConflictingUnminedPurged)
+	require.Equal(t, 1, firstReport.ConflictingUnminedDeleted)
 
 	secondReport, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 0, secondReport.ConflictingUnminedPurged)
+	require.Equal(t, 0, secondReport.ConflictingUnminedDeleted)
 }
 
 // deleteTrackingStore wraps a utxo.Store and counts Delete calls so tests can
@@ -323,7 +331,78 @@ func TestCleanupUnmined_DeleteForwardsThroughStore(t *testing.T) {
 
 	report, err := utxo.CleanupUnmined(ctx, tracker, querier, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, report.ConflictingUnminedPurged)
+	require.Equal(t, 1, report.ConflictingUnminedDeleted)
 	require.Equal(t, int64(1), tracker.deleted.Load(), "purge must call Store.Delete for the purged hash")
 	require.Equal(t, []chainhash.Hash{hash}, tracker.hashes)
+}
+
+// TestCleanupUnmined_DeletesOrphanParentChildren reproduces the mainnet
+// scenario that motivated the cleanup-unmined rename: the shared parent Tx is
+// mined (UnminedSince=0, BlockIDs=[setupParentBlockID]), but the caller's
+// best-chain view does not contain that block id. Step 3 must delete every
+// non-conflicting unmined child referencing that now-orphan-mined parent.
+func TestCleanupUnmined_DeletesOrphanParentChildren(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	// Publish an unrelated block id as the best chain — Tx's block id is not
+	// in the set, so Tx looks orphan-mined to cleanup.
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 100,
+		blockHeaderIDs:  []uint32{9999},
+	}
+
+	childHash := createNonConflictingUnmined(t, ctx, store, 1_000_000, 100)
+
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.OrphanParentUnminedDeleted)
+	require.Equal(t, 0, report.ConflictingUnminedDeleted)
+
+	_, err = store.Get(ctx, &childHash, fields.Conflicting)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxNotFound), "orphan-parent child must be deleted; got %v", err)
+}
+
+// TestCleanupUnmined_LeavesMainChainParentChildrenAlone verifies the inverse:
+// when the parent is mined on the best chain, non-conflicting unmined children
+// are untouched by step 3.
+func TestCleanupUnmined_LeavesMainChainParentChildrenAlone(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+	querier := newQuerier() // includes setupParentBlockID in best chain
+
+	childHash := createNonConflictingUnmined(t, ctx, store, 1_100_000, 100)
+
+	report, err := utxo.CleanupUnmined(ctx, store, querier, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, report.OrphanParentUnminedDeleted)
+
+	meta, err := store.Get(ctx, &childHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+}
+
+// TestCleanupUnmined_OrphanParentDryRun verifies dryRun=true counts orphan-
+// parent children without actually deleting them.
+func TestCleanupUnmined_OrphanParentDryRun(t *testing.T) {
+	ctx := context.Background()
+	store := setupSQLiteFileStore(ctx, t)
+
+	querier := &testBlockchainQuerier{
+		bestBlockHash:   &chainhash.Hash{},
+		bestBlockHeight: 100,
+		blockHeaderIDs:  []uint32{9999},
+	}
+
+	childHash := createNonConflictingUnmined(t, ctx, store, 1_200_000, 100)
+
+	report, err := utxo.CleanupUnmined(ctx, store, querier, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.OrphanParentUnminedDeleted, "dry run still counts orphan-parent candidates")
+
+	meta, err := store.Get(ctx, &childHash, fields.Conflicting)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
 }

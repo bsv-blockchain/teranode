@@ -1,8 +1,11 @@
-// Package cleanupunmined repairs inconsistent conflicting transaction state in the UTXO store.
-// Run this while the node is running with the FSM in IDLE (e.g. after BlockAssembler
-// transitions to IDLE due to a parent-chain repair request). The command connects to the
-// live blockchain gRPC service, so the node process must be up; after the repair completes,
-// restart the node (or transition the FSM back out of IDLE) to resume block assembly.
+// Package cleanupunmined removes inconsistent unmined transaction state from
+// the UTXO store: conflicting-unmined records and non-conflicting unmined
+// records whose parents are mined on an orphaned fork. Run this while the node
+// is running with the FSM in IDLE (BlockAssembler parks itself in IDLE when it
+// detects such inconsistencies). The command connects to the live blockchain
+// gRPC service, so the node process must be up; after the cleanup completes,
+// transition the FSM back out of IDLE (e.g. teranode-cli setfsmstate
+// --fsmstate RUNNING) to resume block assembly. No node restart is required.
 package cleanupunmined
 
 import (
@@ -38,11 +41,16 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 	return a.client.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }
 
-// CleanupUnmined deletes every (Conflicting=true, UnminedSince>0)
-// record from the UTXO store. Run this while the node is up and the FSM is in
-// IDLE — the command dials the blockchain gRPC service to fetch header data,
-// so stopping the node first will cause startup to fail with a connection
-// error. Block assembly resumes automatically once the FSM leaves IDLE.
+// CleanupUnmined removes inconsistent unmined state from the UTXO store:
+//   - records with Conflicting=true AND UnminedSince>0
+//   - non-conflicting unmined records whose parents are mined on a block that
+//     is not on the best chain (orphaned fork)
+//
+// Run this while the node is up and the FSM is in IDLE — the command dials
+// the blockchain gRPC service to fetch header data, so stopping the node first
+// will cause startup to fail with a connection error. Block assembly resumes
+// automatically once the FSM leaves IDLE.
+//
 // dryRun=true reports what would be deleted without writing any changes.
 // skipUnminedSinceScan=true skips step 0 (the unmined_since fixup pass). Only
 // use it when step 0 has run cleanly at least once since the last change to
@@ -68,16 +76,17 @@ func CleanupUnmined(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		SkipUnminedSinceScan: skipUnminedSinceScan,
 	})
 	if err != nil {
-		return errors.NewProcessingError("purge failed", err)
+		return errors.NewProcessingError("cleanup failed", err)
 	}
 
 	if dryRun {
 		fmt.Println("Dry run — no changes written.")
 	}
 
-	fmt.Printf("Purge report:\n")
-	fmt.Printf("  UnminedSince inconsistencies fixed: %d\n", report.UnminedSinceFixed)
-	fmt.Printf("  Conflicting-unmined records purged: %d\n", report.ConflictingUnminedPurged)
+	fmt.Printf("Cleanup report:\n")
+	fmt.Printf("  UnminedSince inconsistencies fixed:       %d\n", report.UnminedSinceFixed)
+	fmt.Printf("  Conflicting-unmined records deleted:      %d\n", report.ConflictingUnminedDeleted)
+	fmt.Printf("  Orphan-parent unmined children deleted:   %d\n", report.OrphanParentUnminedDeleted)
 
 	return nil
 }
