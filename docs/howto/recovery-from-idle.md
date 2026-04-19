@@ -50,6 +50,14 @@ Block Assembly's FSM watcher detects the transition out of IDLE, retries
   still match the deletion filters.
 - Unmined subtree blobs are left to the pruner / TTL — they are content-
   addressed, unique by hash, and a stale blob costs only disk.
+- **Deleted tx in a peer's blessed subtree is safe.** If a later block
+  arrives referencing a subtree that contains a tx we deleted, block
+  validation does not hard-fail. `SubtreeValidation.processMissingTransactions`
+  (services/subtreevalidation/SubtreeValidation.go:1001) refetches the tx
+  bytes from the peer via `getSubtreeMissingTxs` and reconstructs the UTXO
+  metadata as part of normal validation. `BatchDecorate` TX_NOT_FOUND is
+  treated as a miss counter, not a fatal error
+  (services/subtreevalidation/processTxMetaUsingStore.go:140-148).
 - `errors.ErrRepairNeeded` / `NewRepairNeededError` keep their names — the
   operator-intervention semantic is unchanged, only the fix command name
   changed.
