@@ -24,12 +24,14 @@ type UnminedTransaction struct {
 }
 
 // InconsistentTxRecord is a lightweight record used by the consistency scan.
-// It contains only the fields needed to detect unmined_since inconsistencies:
-// transactions that have block_ids on the main chain but unmined_since still set.
+// It contains the fields needed to detect both unmined_since inconsistencies
+// (mined txs with unmined_since still set) and conflicting-unmined records
+// that the purge tool deletes.
 type InconsistentTxRecord struct {
 	Hash         chainhash.Hash
 	BlockIDs     []uint32
 	UnminedSince int
+	Conflicting  bool
 }
 
 // UnminedTxIterator provides an interface to iterate over unmined transactions efficiently.

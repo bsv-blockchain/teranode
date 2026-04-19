@@ -260,10 +260,137 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return newUnminedTxIterator(s)
 }
 
-// ScanInconsistentUnminedTxs is a no-op for SQL — the SQL store always uses
-// index-based queries, so there's no fullScan inconsistency to fix.
+// ScanInconsistentUnminedTxs returns a lightweight iterator over every record
+// with unmined_since set. It is used by purge-conflicting-unmined for both the
+// step 0 consistency fixup (mined tx still carrying unmined_since) and the
+// step 1 conflicting-unmined purge collection.
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
-	return nil, nil
+	q := `
+		SELECT t.hash, t.unmined_since, t.conflicting
+		FROM transactions t
+		WHERE t.unmined_since IS NOT NULL
+		ORDER BY t.id ASC
+	`
+
+	rows, err := s.db.Query(q)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sqlConsistencyScanIterator{store: s, rows: rows}, nil
+}
+
+type sqlConsistencyScanIterator struct {
+	store        *Store
+	rows         *sql.Rows
+	err          error
+	done         bool
+	totalScanned int64
+}
+
+func (it *sqlConsistencyScanIterator) Next(ctx context.Context) ([]*utxo.InconsistentTxRecord, error) {
+	if it.done || it.err != nil || it.rows == nil {
+		return nil, it.err
+	}
+
+	const batchSize = 1024
+	batch := make([]*utxo.InconsistentTxRecord, 0, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		if !it.rows.Next() {
+			if err := it.rows.Err(); err != nil {
+				it.err = err
+				return nil, it.err
+			}
+			it.done = true
+			break
+		}
+
+		var (
+			txID         *chainhash.Hash
+			unminedSince sql.NullInt64
+			conflicting  bool
+		)
+
+		if err := it.rows.Scan(&txID, &unminedSince, &conflicting); err != nil {
+			it.err = err
+			return nil, it.err
+		}
+
+		blockIDs, err := it.fetchBlockIDs(ctx, *txID)
+		if err != nil {
+			it.err = err
+			return nil, it.err
+		}
+
+		us := 0
+		if unminedSince.Valid {
+			us = int(unminedSince.Int64)
+		}
+
+		batch = append(batch, &utxo.InconsistentTxRecord{
+			Hash:         *txID,
+			BlockIDs:     blockIDs,
+			UnminedSince: us,
+			Conflicting:  conflicting,
+		})
+		it.totalScanned++
+	}
+
+	if len(batch) == 0 {
+		return nil, nil
+	}
+
+	return batch, nil
+}
+
+func (it *sqlConsistencyScanIterator) fetchBlockIDs(ctx context.Context, txHash chainhash.Hash) ([]uint32, error) {
+	q := `
+		SELECT bi.block_id
+		FROM block_ids bi
+		JOIN transactions t ON t.id = bi.transaction_id
+		WHERE t.hash = $1
+		ORDER BY bi.block_id
+	`
+
+	rows, err := it.store.db.QueryContext(ctx, q, txHash[:])
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var blockIDs []uint32
+	for rows.Next() {
+		var id uint32
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		blockIDs = append(blockIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return blockIDs, nil
+}
+
+func (it *sqlConsistencyScanIterator) TotalScanned() int64 {
+	return it.totalScanned
+}
+
+func (it *sqlConsistencyScanIterator) Err() error {
+	return it.err
+}
+
+func (it *sqlConsistencyScanIterator) Close() error {
+	if it.done {
+		return nil
+	}
+	it.done = true
+	if it.rows != nil {
+		return it.rows.Close()
+	}
+	return nil
 }
 
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {

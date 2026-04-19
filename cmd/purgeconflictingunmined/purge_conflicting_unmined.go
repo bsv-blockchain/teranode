@@ -38,14 +38,16 @@ func (a *blockchainAdapter) GetBlockHeaderIDs(ctx context.Context, blockHash *ch
 	return a.client.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }
 
-// PurgeConflictingUnmined detects and fixes inconsistent conflicting transaction state in the UTXO store.
-// Run this while the node is up and the FSM is in IDLE — the command dials the blockchain gRPC
-// service to fetch header data, so stopping the node first will cause startup to fail with a
-// connection error. After the repair completes, restart the node to resume block assembly.
-// dryRun=true reports issues without writing any changes.
-// skipUnminedSinceScan=true skips step 0 (the expensive full-store consistency scan). Only
-// use it when step 0 has run cleanly at least once since the last change to the store.
-func PurgeConflictingUnmined(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun, skipUnminedSinceScan, aggressiveCascade bool) error {
+// PurgeConflictingUnmined deletes every (Conflicting=true, UnminedSince>0)
+// record from the UTXO store. Run this while the node is up and the FSM is in
+// IDLE — the command dials the blockchain gRPC service to fetch header data,
+// so stopping the node first will cause startup to fail with a connection
+// error. Block assembly resumes automatically once the FSM leaves IDLE.
+// dryRun=true reports what would be deleted without writing any changes.
+// skipUnminedSinceScan=true skips step 0 (the unmined_since fixup pass). Only
+// use it when step 0 has run cleanly at least once since the last change to
+// the store.
+func PurgeConflictingUnmined(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, dryRun, skipUnminedSinceScan bool) error {
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "PurgeConflictingUnmined", false)
 	if err != nil {
 		return errors.NewConfigurationError("failed to create UTXO store", err)
@@ -64,22 +66,18 @@ func PurgeConflictingUnmined(ctx context.Context, logger ulogger.Logger, tSettin
 
 	report, err := utxo.PurgeConflictingUnmined(ctx, store, adapter, dryRun, progress, utxo.PurgeOptions{
 		SkipUnminedSinceScan: skipUnminedSinceScan,
-		AggressiveCascade:    aggressiveCascade,
 	})
 	if err != nil {
-		return errors.NewProcessingError("repair failed", err)
+		return errors.NewProcessingError("purge failed", err)
 	}
 
 	if dryRun {
 		fmt.Println("Dry run — no changes written.")
 	}
 
-	fmt.Printf("Repair report:\n")
-	fmt.Printf("  UnminedSince inconsistencies fixed:   %d\n", report.UnminedSinceFixed)
-	fmt.Printf("  Case A (loser not marked) fixed:      %d\n", report.CaseAFixed)
-	fmt.Printf("  Case C (inverted winner/loser) fixed: %d\n", report.CaseCFixed)
-	fmt.Printf("  Case D (orphan conflicting) unmarked: %d\n", report.CaseDFixed)
-	fmt.Printf("  Case D (legit conflicting) cascaded:  %d\n", report.CaseDCascaded)
+	fmt.Printf("Purge report:\n")
+	fmt.Printf("  UnminedSince inconsistencies fixed: %d\n", report.UnminedSinceFixed)
+	fmt.Printf("  Conflicting-unmined records purged: %d\n", report.ConflictingUnminedPurged)
 
 	return nil
 }

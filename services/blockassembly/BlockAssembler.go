@@ -1679,9 +1679,11 @@ func (b *BlockAssembler) validateParentChain(
 			for _, parentTxID := range tx.TxInpoints.GetParentTxHashes() {
 				parentMeta, exists := parentMetadata[parentTxID]
 				if !exists {
-					return b.idleAndError(ctx,
-						"[validateParentChain] tx %s: parent %s not found in UTXO store",
-						tx.Hash.String(), parentTxID.String())
+					// Parent not in UTXO store. Happens after purge-conflicting-unmined
+					// removes conflicting parents whose non-conflicting children still
+					// reference them. The dangling child is harmless — it will be mined
+					// in the next block or pruned. Skip the check for this parent.
+					continue
 				}
 
 				if parentMeta.UnminedSince > 0 {

@@ -110,11 +110,12 @@ func launchConsistencyScan(store *Store, numPartitionQueries int, workerFunc fun
 func (it *consistencyScanIterator) partitionWorker(ctx context.Context, policy *as.QueryPolicy, partitionStart, partitionCount int) {
 	stmt := as.NewStatement(it.store.namespace, it.store.setName)
 
-	// No filter — scan all records. Only fetch 3 lightweight bins.
+	// No filter — scan all records. Only fetch the lightweight bins we need.
 	stmt.BinNames = []string{
 		fields.TxID.String(),
 		fields.BlockIDs.String(),
 		fields.UnminedSince.String(),
+		fields.Conflicting.String(),
 	}
 
 	partitionFilter := as.NewPartitionFilterByRange(partitionStart, partitionCount)
@@ -216,10 +217,13 @@ func parseConsistencyRecord(bins map[string]interface{}) (*utxo.InconsistentTxRe
 		return nil, false
 	}
 
+	conflicting, _ := bins[fields.Conflicting.String()].(bool)
+
 	return &utxo.InconsistentTxRecord{
 		Hash:         *hash,
 		BlockIDs:     blockIDs,
 		UnminedSince: unminedSince,
+		Conflicting:  conflicting,
 	}, true
 }
 

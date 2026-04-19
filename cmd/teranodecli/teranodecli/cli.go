@@ -402,12 +402,11 @@ func Start(args []string, version, commit string) {
 			return nil
 		}
 	case "repair-conflicts":
-		dryRun := cmd.FlagSet.Bool("dry-run", false, "Report issues without writing any changes")
-		skipUnminedSinceScan := cmd.FlagSet.Bool("skip-unmined-since-scan", false, "Skip step 0 (full-store consistency scan) — only use when it has completed cleanly since the last change")
-		aggressiveCascade := cmd.FlagSet.Bool("aggressive-cascade", false, "Replace Case D classification with a coarse cascade — any non-conflicting unmined child of a Conflicting=true+UnminedSince>0 parent is marked Conflicting=true without per-ancestor verification. Much faster; may mark some valid unmined txs conflicting (they'll get pruned and re-arrive via propagation).")
+		dryRun := cmd.FlagSet.Bool("dry-run", false, "Report what would be deleted without writing any changes")
+		skipUnminedSinceScan := cmd.FlagSet.Bool("skip-unmined-since-scan", false, "Skip step 0 (unmined_since fixup pass) — only use when it has completed cleanly since the last change")
 
 		cmd.Execute = func(args []string) error {
-			return purgeconflictingunmined.PurgeConflictingUnmined(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan, *aggressiveCascade)
+			return purgeconflictingunmined.PurgeConflictingUnmined(context.Background(), logger, tSettings, *dryRun, *skipUnminedSinceScan)
 		}
 	case "fix-chainwork":
 		dbURL := cmd.FlagSet.String("db-url", "", "Database URL (postgres://... or sqlite://...)")
