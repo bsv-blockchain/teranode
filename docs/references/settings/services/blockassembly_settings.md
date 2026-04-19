@@ -88,7 +88,7 @@
 
 - `OnRestartValidateParentChain = true`: Validates transaction parent chains after service restart
 - `ParentValidationBatchSize`: Controls batch processing size (default: 1000)
-- Invalid parent chains now trigger FSM IDLE — use `teranodecli repair-conflicts` to fix
+- Invalid parent chains now trigger FSM IDLE — use `teranodecli purge-conflicting-unmined` to fix
 
 ## Service Dependencies
 

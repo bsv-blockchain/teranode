@@ -812,7 +812,7 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 			// Only the first IDLE-observed call actually pauses and spawns the resume watcher;
 			// concurrent handler invocations short-circuit via the atomic guard.
 			if u.idleConsumerPaused.CompareAndSwap(false, true) {
-				u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer; this message will be retried after FSM leaves IDLE. Run 'teranode-cli repair-conflicts' to fix.")
+				u.logger.Warnf("[blockHandler] node is in IDLE state — pausing Kafka consumer; this message will be retried after FSM leaves IDLE. Run 'teranode-cli purge-conflicting-unmined' to fix.")
 				if u.kafkaConsumerClient != nil {
 					u.kafkaConsumerClient.PauseAll()
 					go func() {

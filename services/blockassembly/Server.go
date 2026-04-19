@@ -472,7 +472,7 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 // startChannelListeners — those were never initialised in the frozen path.
 func (ba *BlockAssembly) assertNotFrozenForRepair() error {
 	if ba.blockAssembler != nil && ba.blockAssembler.FrozenForRepair() {
-		return errors.WrapGRPC(errors.NewRepairNeededError("block assembly frozen — run 'teranode-cli repair-conflicts' and restart"))
+		return errors.WrapGRPC(errors.NewRepairNeededError("block assembly frozen — run 'teranode-cli purge-conflicting-unmined' and restart"))
 	}
 	return nil
 }

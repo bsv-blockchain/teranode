@@ -60,7 +60,7 @@ var commandHelp = map[string]string{
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
-	"repair-conflicts":        "Repair conflicting transaction chains in the UTXO store (run with node up, FSM in IDLE)",
+	"purge-conflicting-unmined": "Purge unmined transactions marked Conflicting=true from the UTXO store (run with node up, FSM in IDLE)",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -401,7 +401,7 @@ func Start(args []string, version, commit string) {
 			fmt.Println("Block assembly validation passed: all unmined transactions have valid inputs")
 			return nil
 		}
-	case "repair-conflicts":
+	case "purge-conflicting-unmined":
 		dryRun := cmd.FlagSet.Bool("dry-run", false, "Report what would be deleted without writing any changes")
 		skipUnminedSinceScan := cmd.FlagSet.Bool("skip-unmined-since-scan", false, "Skip step 0 (unmined_since fixup pass) — only use when it has completed cleanly since the last change")
 

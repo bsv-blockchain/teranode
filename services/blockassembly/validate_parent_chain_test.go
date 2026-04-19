@@ -113,7 +113,7 @@ func makeUnminedTx(t *testing.T, tx *bt.Tx, createdAt int) *utxoStore.UnminedTra
 
 // TestValidateParentChain_HardFailsWithFSMIdle_UnminedParentNotInList tests that
 // when a TX_CHILD has an unmined parent TX_PARENT that is NOT in the processing list,
-// validateParentChain returns an error containing "repair-conflicts" and calls
+// validateParentChain returns an error containing "purge-conflicting-unmined" and calls
 // Idle to transition FSM.
 func TestValidateParentChain_HardFailsWithFSMIdle_UnminedParentNotInList(t *testing.T) {
 	ctx := context.Background()

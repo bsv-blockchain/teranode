@@ -46,7 +46,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("[HandleBlockDirect] failed to check FSM state: %v", err)
 	}
 	if isIdle {
-		sm.logger.Warnf("[HandleBlockDirect] node is in IDLE state — skipping block. Run 'teranode-cli repair-conflicts' to fix.")
+		sm.logger.Warnf("[HandleBlockDirect] node is in IDLE state — skipping block. Run 'teranode-cli purge-conflicting-unmined' to fix.")
 		return errors.ErrRepairNeeded
 	}
 
