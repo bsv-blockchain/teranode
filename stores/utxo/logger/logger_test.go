@@ -113,6 +113,24 @@ func (m *MockStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+func (m *MockStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
 func (m *MockStore) GetSpend(ctx context.Context, spendArg *utxo.Spend) (*utxo.SpendResponse, error) {
 	args := m.Called(ctx, spendArg)
 	return args.Get(0).(*utxo.SpendResponse), args.Error(1)

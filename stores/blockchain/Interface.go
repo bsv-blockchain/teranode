@@ -270,6 +270,45 @@ type Store interface {
 	// Returns: Any error encountered
 	RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// DeleteBlock physically removes a single block row from the store.
+	// The caller is responsible for ordering deletes so that no surviving row's
+	// parent_id references a deleted block (i.e. delete children before parents,
+	// typically by iterating in descending height order). This method does NOT
+	// cascade to descendants and does NOT reset on_main_chain or rebuild caches;
+	// callers performing a rewind must handle cache invalidation and flag rebuild
+	// after all deletions are complete.
+	//
+	// Returns no error if the block does not exist (idempotent).
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to delete
+	// Returns: Any error encountered
+	DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// HasBlockBelowHeightContainingSubtree returns true if any block with height
+	// less than or equal to maxHeight references the given subtree hash, regardless
+	// of whether that block is valid or on the main chain. Used by rewind tooling
+	// to decide whether a subtree blob is still referenced by a surviving block
+	// before deleting it.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - subtreeHash: Hash of the subtree to look for
+	//   - maxHeight: Only consider blocks with height <= maxHeight
+	// Returns: true if at least one matching block exists, and any error encountered
+	HasBlockBelowHeightContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxHeight uint32) (bool, error)
+
+	// ListBlockRefsAboveHeight enumerates every block row with height > minHeight,
+	// across all branches (main chain and any losing forks), ordered by
+	// (height DESC, id DESC). Used by rewind tooling to safely delete blocks
+	// in an order that satisfies the self-referencing parent_id FK.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - minHeight: Only consider blocks with height > minHeight
+	// Returns: slice of model.BlockRef sorted by (height DESC, id DESC), and any error
+	ListBlockRefsAboveHeight(ctx context.Context, minHeight uint32) ([]model.BlockRef, error)
+
 	// GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
 	// Parameters:
 	//   - ctx: Context for the operation

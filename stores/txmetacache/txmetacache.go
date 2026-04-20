@@ -636,6 +636,18 @@ func (t *TxMetaCache) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (ut
 	return t.utxoStore.GetPrunableUnminedTxIterator(cutoffBlockHeight)
 }
 
+func (t *TxMetaCache) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return t.utxoStore.GetConflictingTxIterator()
+}
+
+func (t *TxMetaCache) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return t.utxoStore.RemoveFromConflictingChildren(ctx, removals)
+}
+
+func (t *TxMetaCache) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return t.utxoStore.RemoveBlockIDs(ctx, removals)
+}
+
 // setMinedInCacheParallel is an internal helper method that updates the mined status
 // of multiple transactions in parallel, using goroutines to improve performance.
 //
