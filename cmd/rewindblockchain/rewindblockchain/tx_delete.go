@@ -11,6 +11,13 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
+// isNotFound returns true if err is a NotFound-family error that repair
+// tooling should silently tolerate. SQL raises ErrNotFound for missing
+// output rows; Aerospike raises ErrTxNotFound for missing records.
+func isNotFound(err error) bool {
+	return errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)
+}
+
 // removalCollector accumulates cross-record cleanup work so we can flush via
 // Aerospike batch APIs. Callers add (parent, child) tuples and (tx, blockIDs)
 // trims across many txs in a phase, then invoke flushCollector once per batch.
@@ -64,7 +71,7 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 		fields.Conflicting,
 	)
 	if err != nil {
-		if errors.Is(err, errors.ErrTxNotFound) {
+		if isNotFound(err) {
 			// Already gone — idempotent.
 			return false, nil
 		}
@@ -121,15 +128,17 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 
 	if len(spends) > 0 {
 		if err = e.utxoStore.Unspend(ctx, spends); err != nil {
-			// Tolerate NotFound: parent may have been DAH-reaped or already deleted.
-			if !errors.Is(err, errors.ErrTxNotFound) {
+			// Tolerate NotFound: parent tx may have been DAH-reaped, already
+			// deleted, or have had its outputs removed. SQL raises ErrNotFound
+			// ("output X:Y not found") while Aerospike raises ErrTxNotFound.
+			if !isNotFound(err) {
 				return false, errors.NewStorageError("Unspend tx %s: %w", txHash.String(), err)
 			}
 		}
 	}
 
 	if err = e.utxoStore.Delete(ctx, txHash); err != nil {
-		if !errors.Is(err, errors.ErrTxNotFound) {
+		if !isNotFound(err) {
 			return false, errors.NewStorageError("Delete tx %s: %w", txHash.String(), err)
 		}
 	}

@@ -75,7 +75,7 @@ func main() {
 		Stdout:       os.Stdout,
 	}
 
-	if err := rewindblockchain.Rewind(ctx, logger, s, opts); err != nil {
+	if _, err := rewindblockchain.Rewind(ctx, logger, s, opts); err != nil {
 		logger.Errorf("rewind failed: %v", err)
 		os.Exit(1)
 	}

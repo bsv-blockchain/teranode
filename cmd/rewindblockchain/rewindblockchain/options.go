@@ -44,6 +44,11 @@ type Options struct {
 	// callers can supply buffers; defaults come from main.go.
 	Stdin  io.Reader
 	Stdout io.Writer
+
+	// Stores, when non-nil, bypasses Rewind's own store construction and
+	// uses the supplied stores directly. Used by integration tests so the
+	// test fixture and the rewind pass share the same in-memory backends.
+	Stores *Stores
 }
 
 // coinbaseMaturity is the number of blocks after which a coinbase output

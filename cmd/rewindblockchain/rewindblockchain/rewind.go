@@ -2,7 +2,6 @@ package rewindblockchain
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -27,26 +26,25 @@ type Stats struct {
 	Duration               time.Duration
 }
 
+// Stores bundles the three backend stores used by Rewind. Tests can pass
+// pre-constructed stores via Options.Stores; production callers leave it nil
+// and Rewind opens stores from settings.
+type Stores struct {
+	Blockchain blockchain.Store
+	UTXO       utxo.Store
+	Subtree    blob.Store
+}
+
 // Rewind executes all four phases.
-func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, opts Options) error {
+func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, opts Options) (*Stats, error) {
 	start := time.Now()
 	stats := &Stats{}
 
-	// Open the stores directly (no server startup).
-	blockchainStore, err := blockchain.NewStore(logger, s.BlockChain.StoreURL, s)
+	stores, ownedByUs, err := resolveStores(ctx, logger, s, opts)
 	if err != nil {
-		return errors.NewConfigurationError("failed to open blockchain store: %w", err)
+		return stats, err
 	}
-
-	utxoStore, err := utxofactory.NewStore(ctx, logger, s, "rewindblockchain", false)
-	if err != nil {
-		return errors.NewConfigurationError("failed to open utxo store: %w", err)
-	}
-
-	subtreeStore, err := blob.NewStore(logger, s.SubtreeValidation.SubtreeStore)
-	if err != nil {
-		return errors.NewConfigurationError("failed to open subtree blob store: %w", err)
-	}
+	_ = ownedByUs // currently unused; would drive Close() calls once the store interfaces expose them.
 
 	concurrency := opts.Concurrency
 	if concurrency <= 0 {
@@ -59,9 +57,9 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 	env := &env{
 		logger:          logger,
 		settings:        s,
-		blockchainStore: blockchainStore,
-		utxoStore:       utxoStore,
-		subtreeStore:    subtreeStore,
+		blockchainStore: stores.Blockchain,
+		utxoStore:       stores.UTXO,
+		subtreeStore:    stores.Subtree,
 		opts:            opts,
 		stats:           stats,
 		concurrency:     concurrency,
@@ -70,26 +68,26 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 	// Preflight: gates, target resolution, enumeration.
 	preflightResult, err := env.preflight(ctx)
 	if err != nil {
-		return err
+		return stats, err
 	}
 
 	if opts.DryRun {
 		logger.Infof("--dry-run: would delete %d blocks above target height %d; stopping before mutation",
 			len(preflightResult.deleteList), preflightResult.target)
 		env.logStats(time.Since(start))
-		return nil
+		return stats, nil
 	}
 
 	// Phase 0 — UTXO store internal height reset.
-	if err = utxoStore.SetBlockHeight(preflightResult.target); err != nil {
-		return errors.NewStorageError("failed to reset UTXO store blockHeight: %w", err)
+	if err = stores.UTXO.SetBlockHeight(preflightResult.target); err != nil {
+		return stats, errors.NewStorageError("failed to reset UTXO store blockHeight: %w", err)
 	}
 
 	logger.Infof("Phase 0 complete: UTXO store blockHeight set to %d", preflightResult.target)
 
 	// Phase 1 — unmined + conflicting cleanup.
 	if err = env.phase1Unmined(ctx, preflightResult); err != nil {
-		return errors.NewProcessingError("Phase 1 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 1 failed: %w", err)
 	}
 
 	logger.Infof("Phase 1 complete: unmined_purged=%d conflicting_purged=%d",
@@ -97,7 +95,7 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 
 	// Phase 2 — block rewind.
 	if err = env.phase2Blocks(ctx, preflightResult); err != nil {
-		return errors.NewProcessingError("Phase 2 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 2 failed: %w", err)
 	}
 
 	logger.Infof("Phase 2 complete: blocks_deleted=%d txs_deleted=%d blockids_trimmed=%d subtrees_deleted=%d subtrees_skipped_shared=%d",
@@ -106,18 +104,51 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 
 	// Phase 3 — finalize.
 	if err = env.phase3Finalize(ctx, preflightResult); err != nil {
-		return errors.NewProcessingError("Phase 3 failed: %w", err)
+		return stats, errors.NewProcessingError("Phase 3 failed: %w", err)
 	}
 
 	if opts.Verify {
 		if err = env.phase4Verify(ctx, preflightResult); err != nil {
-			return errors.NewProcessingError("Phase 4 verify failed: %w", err)
+			return stats, errors.NewProcessingError("Phase 4 verify failed: %w", err)
 		}
 		logger.Infof("Phase 4 verify complete")
 	}
 
 	env.logStats(time.Since(start))
-	return nil
+	return stats, nil
+}
+
+// resolveStores returns either the caller-supplied stores or freshly opened
+// ones. When it opens stores, ownedByUs is true so callers know to close them
+// (kept as a hint for future use).
+func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Settings, opts Options) (*Stores, bool, error) {
+	if opts.Stores != nil {
+		if opts.Stores.Blockchain == nil || opts.Stores.UTXO == nil || opts.Stores.Subtree == nil {
+			return nil, false, errors.NewConfigurationError("Options.Stores must have all three stores set when supplied")
+		}
+		return opts.Stores, false, nil
+	}
+
+	blockchainStore, err := blockchain.NewStore(logger, s.BlockChain.StoreURL, s)
+	if err != nil {
+		return nil, false, errors.NewConfigurationError("failed to open blockchain store: %w", err)
+	}
+
+	utxoStore, err := utxofactory.NewStore(ctx, logger, s, "rewindblockchain", false)
+	if err != nil {
+		return nil, false, errors.NewConfigurationError("failed to open utxo store: %w", err)
+	}
+
+	subtreeStore, err := blob.NewStore(logger, s.SubtreeValidation.SubtreeStore)
+	if err != nil {
+		return nil, false, errors.NewConfigurationError("failed to open subtree blob store: %w", err)
+	}
+
+	return &Stores{
+		Blockchain: blockchainStore,
+		UTXO:       utxoStore,
+		Subtree:    subtreeStore,
+	}, true, nil
 }
 
 // env bundles the resolved stores and counters shared across phases.
@@ -147,7 +178,3 @@ func (e *env) logStats(d time.Duration) {
 		d,
 	)
 }
-
-// fmt is pulled in only so gofmt keeps the import group above tidy when
-// we later add more imports. Safe to remove when unneeded.
-var _ = fmt.Sprintf
