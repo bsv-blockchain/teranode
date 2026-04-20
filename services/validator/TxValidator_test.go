@@ -407,13 +407,28 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	testTx, errTx := bt.NewTxFromString(testTxHex)
 	assert.NoError(t, errTx)
 
-	testBlockHeight := uint32(820540)
-	testUtxoHeights := []uint32{820539}
+	// The transaction above is a real mainnet transaction but its UTXO locking script is
+	// non-standard: it appends two 6-byte number pushes and OP_NUMEQUALVERIFY after a
+	// standard P2PKH, specifically to exercise the MaxScriptNumLength policy limit.
+	//
+	// BDK v1.2.2 added a standardness check inside VerifyScript for policy mode
+	// (consensus=false). On mainnet, chainParams.RequireStandard()=true, so BDK runs
+	// IsStandardTx/IsInputStandard before executing the script. The non-standard UTXO
+	// script causes that check to fail with SCRIPT_ERR_UNKNOWN_ERROR, masking the
+	// MaxScriptNumLength policy violation we want to test.
+	//
+	// On testnet, chainParams.RequireStandard()=false, so the standardness check is
+	// skipped entirely and BDK proceeds directly to script execution where the policy
+	// limit is enforced. Heights 1400000/1399999 place the transaction in testnet's
+	// Post-Genesis era (genesis=1344302, chronicle=1713168), matching the same protocol
+	// era that the original mainnet heights (820540/820539) represented.
+	testBlockHeight := uint32(1400000)
+	testUtxoHeights := []uint32{1399999}
 
 	t.Run("low MaxScriptNumLengthPolicy must fail", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 5
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
@@ -424,7 +439,7 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	t.Run("high MaxScriptNumLengthPolicy must pass", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 6
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
