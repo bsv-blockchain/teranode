@@ -8,10 +8,10 @@ import (
 )
 
 // phase1Unmined sweeps the UTXO store in two passes:
-//   1. Iterate non-conflicting unmined transactions and purge each via
-//      deleteTxWithParents.
-//   2. Iterate conflicting transactions (GetConflictingTxIterator) and do
-//      the same.
+//  1. Iterate non-conflicting unmined transactions and purge each via
+//     deleteTxWithParents.
+//  2. Iterate conflicting transactions (GetConflictingTxIterator) and do
+//     the same.
 //
 // Both iterators are Aerospike-partition-parallel. Accumulated batch
 // operations (RemoveFromConflictingChildren, RemoveBlockIDs) are flushed

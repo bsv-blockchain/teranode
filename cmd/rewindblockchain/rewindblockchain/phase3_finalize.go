@@ -41,8 +41,9 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 // so BA bootstraps from the correct post-rewind tip.
 //
 // Format matches services/blockassembly/BlockAssembler.go:904-918:
-//    [0:4]   LE uint32 height
-//    [4:]    block header bytes
+//
+//	[0:4]   LE uint32 height
+//	[4:]    block header bytes
 func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult) error {
 	header, _, err := e.blockchainStore.GetBlockHeader(ctx, pf.targetHash)
 	if err != nil {

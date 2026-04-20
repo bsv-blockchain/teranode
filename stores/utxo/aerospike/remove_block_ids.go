@@ -15,7 +15,7 @@ import (
 // RemoveBlockIDs strips each removal's block IDs from the transaction's
 // blockIDs list via BatchOperate. Idempotent.
 func (s *Store) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
-	ctx, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "RemoveBlockIDs")
+	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "RemoveBlockIDs")
 	defer deferFn()
 
 	if len(removals) == 0 {

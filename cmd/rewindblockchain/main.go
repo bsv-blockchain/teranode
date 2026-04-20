@@ -21,15 +21,15 @@ import (
 
 func main() {
 	var (
-		targetHeight  int64
-		dryRun        bool
-		batchSize     int
-		assumeYes     bool
-		forceNotIdle  bool
-		forceDeep     bool
-		verify        bool
-		concurrency   int
-		showVersion   bool
+		targetHeight int64
+		dryRun       bool
+		batchSize    int
+		assumeYes    bool
+		forceNotIdle bool
+		forceDeep    bool
+		verify       bool
+		concurrency  int
+		showVersion  bool
 	)
 
 	flag.Int64Var(&targetHeight, "target-height", -1, "Target height to rewind to (default: read state[\"BlockAssembler\"])")

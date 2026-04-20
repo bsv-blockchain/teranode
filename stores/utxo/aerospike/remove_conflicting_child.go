@@ -23,7 +23,7 @@ import (
 // Multiple removals targeting the same parent are packed into a single
 // BatchWrite (ListRemoveByValueList) for efficiency.
 func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
-	ctx, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "RemoveFromConflictingChildren")
+	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "RemoveFromConflictingChildren")
 	defer deferFn()
 
 	if len(removals) == 0 {
