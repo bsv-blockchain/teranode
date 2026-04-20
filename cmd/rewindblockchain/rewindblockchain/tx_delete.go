@@ -7,8 +7,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/util"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // isNotFound returns true if err is a NotFound-family error that repair
@@ -56,11 +56,11 @@ func (e *env) flushCollector(ctx context.Context, c *removalCollector) error {
 }
 
 // deleteTxWithParents implements the full helper described in the plan:
-//  - Fetches tx + metadata.
-//  - If the tx is still referenced by a surviving block, trims only the
-//    deleted block IDs (queued onto the collector).
-//  - Otherwise: builds Spend structs from inputs, Unspends, Deletes, and
-//    queues parent conflictingChildren cleanups for the collector.
+//   - Fetches tx + metadata.
+//   - If the tx is still referenced by a surviving block, trims only the
+//     deleted block IDs (queued onto the collector).
+//   - Otherwise: builds Spend structs from inputs, Unspends, Deletes, and
+//     queues parent conflictingChildren cleanups for the collector.
 //
 // Returns (acted, err) where `acted` is true iff the tx was deleted or
 // trimmed.
