@@ -91,7 +91,37 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	var q string
 	var args []interface{}
 
-	if s.mainChainRebuilding.Load() > 0 {
+	// The fast path filters blocks by on_main_chain = true and height <=
+	// bestBlockHash's height. That matches the CTE's walk-from-bestBlockHash
+	// semantics only when bestBlockHash is itself on the main chain. When it is
+	// a fork tip (a known hash with on_main_chain = false), the two paths
+	// disagree — the CTE follows the fork's ancestors, the fast path would
+	// substitute whichever main-chain block sits at the same heights. Fall
+	// back to the CTE in that case. Treat DB errors or unknown hashes as
+	// "not on main chain" so the CTE (which also surfaces that error) stays
+	// authoritative.
+	//
+	// TOCTOU: the guard check and bestOnMain preflight are non-atomic with the
+	// main query that follows. A concurrent writer can bump the guard after
+	// this check but before the main query runs. In the worst case the caller
+	// sees one call's worth of slightly-stale data; on the next call the
+	// guard is observed > 0 and the CTE path is taken. Acceptable under the
+	// store's single-writer model, where these transient inconsistencies are
+	// bounded and self-healing.
+	rebuilding := s.mainChainRebuilding.Load() > 0
+	bestOnMain := false
+	if !rebuilding {
+		if scanErr := s.db.QueryRowContext(ctx,
+			`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+			bestBlockHash[:],
+		).Scan(&bestOnMain); scanErr != nil {
+			// Error falls through to the CTE path, which will re-run the same
+			// kind of DB access and surface the error to the caller.
+			bestOnMain = false
+		}
+	}
+
+	if rebuilding || !bestOnMain {
 		baseQuery := `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height

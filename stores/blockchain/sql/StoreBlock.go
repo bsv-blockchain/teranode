@@ -106,6 +106,16 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
+	// Hold the rebuild guard for the full StoreBlock window. Between the INSERT
+	// commit and the post-insert rebuild (reorg case), readers that take the
+	// fast path would otherwise see a newly-inserted best block with
+	// on_main_chain=false while the old tip still has on_main_chain=true.
+	// Holding the guard forces those readers onto the CTE fallback, which
+	// walks from the authoritative best block and is consistent immediately
+	// after the INSERT commits. Mirrors InvalidateBlock's pattern.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
 	// Capture the best block hash before insert. Used both for:
 	//   1. Reorg detection after insert (existing logic, gated on useInMemoryChainCheck)
 	//   2. Determining whether to set on_main_chain = true directly in the INSERT

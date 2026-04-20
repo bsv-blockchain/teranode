@@ -200,6 +200,17 @@ func newStoreWithInMemoryChainCheck(t *testing.T) *SQL {
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
+	waitForStartupRebuild(t, s)
+	return s
+}
+
+// waitForStartupRebuild blocks until the startup rebuild goroutine has released
+// its guard, or fails the test after 5 seconds. Use this in tests that need
+// deterministic behaviour from the fast-path (guard == 0) or that call Close()
+// and want to avoid noisy "database is closed" logs from the still-running
+// startup goroutine.
+func waitForStartupRebuild(t *testing.T, s *SQL) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for s.mainChainRebuilding.Load() > 0 {
 		if time.Now().After(deadline) {
@@ -207,7 +218,6 @@ func newStoreWithInMemoryChainCheck(t *testing.T) *SQL {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	return s
 }
 
 func TestCheckBlockIsInCurrentChain_InMemory_SingleBlockInChain(t *testing.T) {

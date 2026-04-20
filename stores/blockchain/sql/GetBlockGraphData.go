@@ -85,12 +85,17 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 		WHERE block_time >= $1
 	`
 	} else {
-		// id > 0 excludes genesis (id=0), matching the original CTE behaviour.
+		// Mirror the original CTE exactly. The CTE's anchor is `id IN (0, best)`
+		// so genesis is explicitly included; the recursive step has
+		// `WHERE b.parent_id != 0` (needed because genesis's parent_id
+		// self-references to 0) which inadvertently drops the height-1 block
+		// (whose parent_id equals genesis's id, 0). So: keep genesis, keep
+		// anything with parent_id != 0, drop the height-1 block.
 		q = `
 		SELECT block_time, tx_count
 		FROM blocks
 		WHERE on_main_chain = true
-		  AND id > 0
+		  AND (id = 0 OR parent_id != 0)
 		  AND block_time >= $1
 	`
 	}

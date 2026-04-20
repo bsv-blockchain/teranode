@@ -20,6 +20,12 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
+	// Hold the rebuild guard from the UPDATE through the rebuild so concurrent
+	// readers fall back to the authoritative CTE path during the inconsistent
+	// window. Mirrors InvalidateBlock's pattern.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
 	// Update the block to valid (not invalid) and clear the mined_set flag.
 	q := `
 		UPDATE blocks

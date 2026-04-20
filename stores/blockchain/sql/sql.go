@@ -239,8 +239,14 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 
 		full, err := s.needsFullOnMainChainRebuild(ctx)
 		if err != nil {
-			s.logger.Errorf("startup: needsFullOnMainChainRebuild: %v", err)
-			// Fall through with full=false; bounded rebuild still covers recent blocks.
+			// On error we cannot determine whether this is a fresh migration or
+			// a consistent DB. A bounded rebuild would silently leave deep
+			// blocks with on_main_chain=false and fast-path reads for those
+			// blocks would return no rows. Err on the side of a full rebuild —
+			// it is a one-time cost at startup, bounded rebuilds take over on
+			// subsequent startups once flags are consistent.
+			s.logger.Errorf("startup: needsFullOnMainChainRebuild: %v — assuming full rebuild needed", err)
+			full = true
 		}
 		if full {
 			s.logger.Infof("startup: on_main_chain appears unpopulated — running full-chain rebuild (migration)")
@@ -951,6 +957,12 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 // shutdownAwareContext returns a context that is cancelled either when the timeout
 // expires or when Close() is called (s.backgroundDone is closed). Callers must call
 // the returned cancel function to release resources.
+//
+// One goroutine is spawned per call. This is intentionally unbounded because
+// shutdownAwareContext is only called from startup and Close paths — total
+// lifetime calls are O(1) per store. The spawned goroutine is always bounded
+// by ctx.Done (via timeout or caller cancel) or backgroundDone close, so it
+// cannot leak past Close().
 func (s *SQL) shutdownAwareContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	go func() {
@@ -968,6 +980,13 @@ func (s *SQL) shutdownAwareContext(timeout time.Duration) (context.Context, cont
 // bestHeight+1 blocks (genesis through tip), so count(on_main_chain=true) must
 // equal that. Any other value indicates either a fresh migration (count << expected)
 // or a corrupt state — both require a full-chain rebuild.
+//
+// The two SELECTs run outside a transaction. This is safe because the function
+// is only invoked from the startup goroutine (see New), before blockchain
+// services come up and begin calling StoreBlock / InvalidateBlock. Under the
+// single-writer model assumed by the store, no concurrent mutations can race
+// the two reads. A false-positive "needs rebuild" from an interleaved write
+// would only cost an extra full rebuild, not corrupt state.
 func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	var bestHeight int64
 	err := s.db.QueryRowContext(ctx,
@@ -1009,11 +1028,12 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // mainChainRebuilding is incremented for the duration of the call so concurrent
 // queries fall back to the authoritative CTE rather than reading partially-updated
 // flags. The counter-based guard is safe under reentrant/overlapping callers.
-func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) error {
+func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error) {
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	var tx *sql.Tx
+	tx, err = s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to begin transaction", err)
 	}
