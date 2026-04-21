@@ -234,11 +234,10 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return errors.NewTxInvalidError("transaction has no inputs or outputs")
 	}
 
-	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkTxSize(txSize); err != nil {
-			return err
-		}
+	// 2) Check transaction size against both consensus and policy limits
+	// Consensus limits are ALWAYS checked, policy limits only for mempool transactions
+	if err := tv.checkTxSize(txSize, blockHeight, validationOptions.SkipPolicyChecks); err != nil {
+		return err
 	}
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
@@ -545,16 +544,44 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 	return nil
 }
 
-// checkTxSize validates that the transaction size complies with policy limits.
-func (tv *TxValidator) checkTxSize(txSize int) error {
-	maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
-	if maxTxSizePolicy == 0 {
-		// no policy found for tx size, use max block size
-		maxTxSizePolicy = MaxBlockSize
+// checkTxSize validates that the transaction size complies with consensus and policy limits.
+// This method enforces two types of checks:
+// 1. Consensus check (ALWAYS enforced): Ensures transaction doesn't exceed consensus size limit
+//   - Before Genesis: 1 MB (MaxTxSizeConsensusBeforeGenesis)
+//   - After Genesis: 1 GB (MaxTxSizeConsensusAfterGenesis)
+//   - Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:536
+//
+// 2. Policy check (only when skipPolicy=false): Ensures transaction doesn't exceed policy size limit
+//
+// Parameters:
+//   - txSize: The transaction size in bytes
+//   - blockHeight: Current block height to determine if Genesis is active
+//   - skipPolicy: If true, skip policy checks (used for block validation)
+func (tv *TxValidator) checkTxSize(txSize int, blockHeight uint32, skipPolicy bool) error {
+	// Consensus check: ALWAYS enforced regardless of skipPolicy
+	// Matches C++ bitcoin-sv implementation: CheckTransactionCommon in validation.cpp:536
+	// where it checks: if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION) > maxTxSizeConsensus)
+	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	isPostGenesis := blockHeight >= genesisActivationHeight
+	maxTxSizeConsensus := MaxTxSizeConsensusBeforeGenesis
+	if isPostGenesis {
+		maxTxSizeConsensus = MaxTxSizeConsensusAfterGenesis
+	}
+	if txSize > maxTxSizeConsensus {
+		return errors.NewTxInvalidError("bad-txns-oversize")
 	}
 
-	if txSize > maxTxSizePolicy {
-		return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
+	// Policy check: Only enforced for mempool transactions (when skipPolicy=false)
+	if !skipPolicy {
+		maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
+		if maxTxSizePolicy == 0 {
+			// no policy found for tx size, use max block size
+			maxTxSizePolicy = MaxBlockSize
+		}
+
+		if txSize > maxTxSizePolicy {
+			return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
+		}
 	}
 
 	return nil

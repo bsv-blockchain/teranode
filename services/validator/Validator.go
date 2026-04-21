@@ -48,7 +48,17 @@ const (
 	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
 	MaxBlockSize = 4 * 1024 * 1024 * 1024
 
-	// MaxSatoshis defines the maximum number of satoshis that can exist in the BSV Blockchain ecosystem (21M BSV).
+	// MaxTxSizeConsensusBeforeGenesis defines the consensus limit for transaction size before Genesis (1 MB).
+	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS in consensus/consensus.h
+	// Transactions exceeding this size are invalid by consensus rules pre-Genesis.
+	MaxTxSizeConsensusBeforeGenesis = 1_000_000 // 1 MB
+
+	// MaxTxSizeConsensusAfterGenesis defines the consensus limit for transaction size after Genesis (1 GB).
+	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS in consensus/consensus.h
+	// Transactions exceeding this size are invalid by consensus rules post-Genesis.
+	MaxTxSizeConsensusAfterGenesis = 1_000_000_000 // 1 GB
+
+	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
 	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
