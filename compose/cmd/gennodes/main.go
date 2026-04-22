@@ -41,6 +41,7 @@ var hostExposedContainerPorts = []int{
 	8000, // health
 	8081, // validator grpc
 	8083, // block persister http
+	8084, // propagation grpc
 	8085, // block assembly grpc
 	8087, // blockchain grpc
 	8090, // asset http
