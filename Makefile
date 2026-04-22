@@ -157,6 +157,26 @@ build-blockchainstatus:
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
+# Generate a docker-compose stack for a multinode teranode network (3 <= N <= 10).
+# Output is written to compose/generated/. Bring it up with:
+#   docker compose -f compose/generated/docker-compose-multinode.yml up -d
+# Example: make gen-multinode N=5
+.PHONY: gen-multinode
+gen-multinode:
+	@test -n "$(N)" || { echo "usage: make gen-multinode N=<3..10>"; exit 2; }
+	go run ./compose/cmd/gennodes -n $(N) -o compose/generated
+
+.PHONY: open-dashboards
+open-dashboards:
+	@test -f compose/generated/open-dashboards.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/open-dashboards.sh
+
+# Generate blocks on specific nodes. Usage: make generate-blocks ARGS="1,10 3,5"
+.PHONY: generate-blocks
+generate-blocks:
+	@test -f compose/generated/generate-blocks.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/generate-blocks.sh $(ARGS)
+
 .PHONY: install-tools
 install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest

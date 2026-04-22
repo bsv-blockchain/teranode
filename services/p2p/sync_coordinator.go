@@ -86,6 +86,25 @@ const (
 	slowMonitorInterval = 15 * time.Second // When caught up
 )
 
+// isViableSyncCandidate returns true if a peer passes the unconditional
+// viability filters used by the coordinator when deciding whether we're
+// caught up and when determining whether all eligible peers have been
+// attempted. Keeping this in one place ensures both call sites stay in sync.
+//
+// These filters — not banned, has a DataHub URL, non-zero advertised height,
+// and sufficient reputation — exclude obviously unsuitable peers. They do
+// not validate whether a peer's advertised height is truthful: a peer can
+// still claim an inflated height while passing them. The HTTP health check
+// applied during peer selection (when `settings.P2P.HealthCheckEnabled` is
+// true) only confirms that the peer's DataHub endpoint is reachable; it
+// does not check the advertised height either. Validation of advertised
+// height is handled elsewhere, via catchup validation, reputation
+// downgrades after failed catchup, and banning — not by a height-delta
+// tolerance here.
+func isViableSyncCandidate(p *PeerInfo) bool {
+	return !p.IsBanned && p.DataHubURL != "" && p.Height != 0 && p.ReputationScore >= 20
+}
+
 // isCaughtUp determines if we're caught up with the network
 func (sc *SyncCoordinator) isCaughtUp() bool {
 	localHeight := sc.getLocalHeightSafe()
@@ -93,20 +112,26 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	// Get all peers
 	peers := sc.registry.GetAll()
 
-	// Check if any eligible peer is significantly ahead of us.
+	// Check if any eligible peer is ahead of us.
 	// This must align with sync peer selection criteria; otherwise, a low-quality
 	// peer we would never select could cause us to think we're perpetually behind.
 	for _, p := range peers {
-		// Only consider peers that are viable sync candidates
-		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+		// Only consider peers that pass the unconditional viability filters
+		// (see isViableSyncCandidate). The HTTP health check, when enabled,
+		// only confirms that the peer's DataHub endpoint is reachable.
+		// Validation of whether an advertised height is truthful is handled
+		// elsewhere via catchup validation, reputation downgrades after
+		// failed catchup, and banning, so no extra height-delta tolerance is
+		// needed here.
+		if !isViableSyncCandidate(p) {
 			continue
 		}
-		if p.Height > localHeight+10 { // Allow some tolerance
-			return false // At least one peer is significantly ahead
+		if p.Height > localHeight {
+			return false // At least one viable peer is ahead
 		}
 	}
 
-	return true // We're at the same height or ahead of all peers
+	return true // We're at the same height or ahead of every eligible peer
 }
 
 // Start begins the coordinator
@@ -699,10 +724,10 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 
 	for _, p := range peers {
 		// Count peers that are viable sync candidates (must match isCaughtUp criteria)
-		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+		if !isViableSyncCandidate(p) {
 			continue
 		}
-		if p.Height > localHeight+10 { // Same tolerance as isCaughtUp
+		if p.Height > localHeight { // Same comparison as isCaughtUp
 			eligibleCount++
 
 			// Check if attempted recently

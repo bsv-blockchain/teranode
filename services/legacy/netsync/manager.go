@@ -24,12 +24,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	teranodeblockchain "github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -2408,55 +2406,9 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "txmeta.legacy"+"."+sm.settings.ClientName, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
-	// Listen to blockchain notifications for subtree announcements
-	go func() {
-		// will never return an error
-		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, teranodeblockchain.SubscriberLegacy)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-blockchainSubscription:
-				if notification == nil {
-					continue
-				}
-
-				// check if the notification is a new subtree
-				if notification.Type == model.NotificationType_Subtree {
-					// we just got notified of a new subtree internally, announce all the transactions to our peers
-					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
-
-					subtreeReader, err := sm.subtreeStore.GetIoReader(ctx, notification.Hash, fileformat.FileTypeSubtree)
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
-						continue
-					}
-
-					subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
-					_ = subtreeReader.Close()
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
-						continue
-					}
-
-					// announce all the transactions in the subtree
-					// the batcher should de-duplicate the transactions that have already been sent in the last minute
-					for _, subtreeNode := range subtree.Nodes {
-						if subtreeNode.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-							continue
-						}
-
-						sm.txAnnounceBatcher.Put(&TxHashAndFee{
-							TxHash: subtreeNode.Hash,
-							Fee:    subtreeNode.Fee,
-							Size:   subtreeNode.SizeInBytes,
-						})
-					}
-				}
-			}
-		}
-	}()
+	// Tx announcements to legacy peers are handled entirely by the txmeta Kafka path.
+	// Subtree notifications are NOT used for tx announcements — they caused all txs in
+	// reorganized subtrees to be re-announced to peers after every new block.
 
 	// Control block listeners based on blockControlChan
 	go func() {
@@ -2561,73 +2513,84 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	const (
-		txmetaActionADD    = byte(0)
-		txmetaActionDELETE = byte(1)
-	)
-
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		data := msg.Value
-		if len(data) < 4 {
+		return sm.processTXmetaBatchMessage(msg.Value)
+	}, &sm.settings.Kafka)
+}
+
+const (
+	txmetaActionADD    = byte(0)
+	txmetaActionDELETE = byte(1)
+)
+
+// processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
+// It parses the batch format, deserializes metadata for ADD entries, and announces
+// non-coinbase transactions to peers via the txAnnounceBatcher.
+// Coinbase transactions are intentionally skipped to avoid peer bans.
+func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
+	if len(data) < 4 {
+		return nil
+	}
+
+	offset := 0
+
+	// Read entry count
+	entryCount := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+
+	// Process each entry
+	for i := uint32(0); i < entryCount; i++ {
+		// Check minimum bytes for hash + action + length
+		if offset+32+1+4 > len(data) {
+			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
 			return nil
 		}
 
-		offset := 0
+		// Read hash (32 bytes)
+		var hash chainhash.Hash
+		copy(hash[:], data[offset:offset+32])
+		offset += 32
 
-		// Read entry count
-		entryCount := binary.LittleEndian.Uint32(data[offset:])
+		// Read action (1 byte)
+		action := data[offset]
+		offset++
+
+		// Read content length (4 bytes)
+		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		// Process each entry
-		for i := uint32(0); i < entryCount; i++ {
-			// Check minimum bytes for hash + action + length
-			if offset+32+1+4 > len(data) {
-				sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
+		if action == txmetaActionADD {
+			// Handle ADD
+			if offset+int(contentLen) > len(data) {
+				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
 			}
 
-			// Read hash (32 bytes)
-			var hash chainhash.Hash
-			copy(hash[:], data[offset:offset+32])
-			offset += 32
+			content := data[offset : offset+int(contentLen)]
+			offset += int(contentLen)
 
-			// Read action (1 byte)
-			action := data[offset]
-			offset++
+			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 
-			// Read content length (4 bytes)
-			contentLen := binary.LittleEndian.Uint32(data[offset:])
-			offset += 4
-
-			if action == txmetaActionADD {
-				// Handle ADD
-				if offset+int(contentLen) > len(data) {
-					sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
-					return nil
-				}
-
-				content := data[offset : offset+int(contentLen)]
-				offset += int(contentLen)
-
-				sm.logger.Debugf("Received tx message from Kafka: %v", hash)
-
-				var txMeta meta.Data
-				if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
-					sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
-					continue
-				}
-
-				sm.txAnnounceBatcher.Put(&TxHashAndFee{
-					TxHash: hash,
-					Fee:    txMeta.Fee,
-					Size:   txMeta.SizeInBytes,
-				})
-			} else {
-				// Skip DELETE entries (no action needed for peer announcements)
+			var txMeta meta.Data
+			if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
+				sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
 				continue
 			}
-		}
 
-		return nil
-	}, &sm.settings.Kafka)
+			if txMeta.IsCoinbase {
+				continue
+			}
+
+			sm.txAnnounceBatcher.Put(&TxHashAndFee{
+				TxHash: hash,
+				Fee:    txMeta.Fee,
+				Size:   txMeta.SizeInBytes,
+			})
+		} else {
+			offset += int(contentLen)
+			continue
+		}
+	}
+
+	return nil
 }

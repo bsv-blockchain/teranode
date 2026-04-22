@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1922,6 +1923,20 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		spendingData  []byte
 	}
 	var toUpdate []updateItem
+	// Parent tx IDs from idempotent re-spends (output already carries matching
+	// spending_data). The CTE-based DAH recompute below only covers parents
+	// touched by the bulk UPDATE, so it would miss these. Recording them here
+	// lets us run a post-UPDATE DAH recompute so parents whose DAH was left
+	// NULL by a pre-fix spend still get healed — matching the per-row path.
+	idempotentParentIDs := make(map[int]struct{})
+	// Note: we intentionally do NOT track conflicting parents as a separate
+	// set. The post-UPDATE setDAH loop below already runs for every parent
+	// that successfully had an output spent (via dedupedUpdate+updatedSet) or
+	// idempotent-matched (via idempotentParentIDs), and setDAH internally
+	// handles conflicting-vs-non-conflicting DAH semantics. Because we added
+	// "AND NOT t.conflicting" to the CTE's dah_upd clause, conflicting parents
+	// are exclusively routed through setDAH — no duplication, no risk of
+	// calling setDAH for a parent whose items all ended up in validationErrors.
 
 	for i, item := range batch {
 		spend := item.spend
@@ -1959,7 +1974,10 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
 				continue
 			}
-			// Idempotent re-spend: same spending data — treat as success without UPDATE
+			// Idempotent re-spend: same spending data — treat as success without UPDATE.
+			// Record the parent so DAH can still be (re)evaluated and heal NULL DAHs
+			// left by spends that happened before the DAH-on-spend fix landed.
+			idempotentParentIDs[r.transactionID] = struct{}{}
 			continue
 		}
 
@@ -2002,15 +2020,26 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 	}
 
-	// Bulk UPDATE with optimistic locking
+	// Bulk UPDATE with optimistic locking.
+	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH
+	// recompute on any parent tx whose last unspent output was just drained.
+	// Mirrors aerospike's inline setDeleteAtHeight Lua call; without this, mined
+	// txs spent gradually over time never get a DAH and disk usage grows unbounded.
 	updatedSet := make(map[int]bool) // batchIdx -> updated
 	if len(dedupedUpdate) > 0 {
+		retention := s.settings.GetUtxoStoreBlockHeightRetention()
+		wrapDAH := retention > 0
+
 		var ub strings.Builder
-		ub.WriteString(`
+		if wrapDAH {
+			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx) AS (VALUES `)
+		} else {
+			ub.WriteString(`
 			UPDATE outputs o
 			SET spending_data = v.spending_data
 			FROM (VALUES `)
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4)
+		}
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
@@ -2020,10 +2049,80 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx)
 			pidx += 4
 		}
-		ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+		if wrapDAH {
+			newDAH := int64(s.blockHeight.Load() + 1 + retention)
+			dahIdx := pidx
+			updateArgs = append(updateArgs, newDAH)
+			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
+			// dah_upd sees the PRE-update state. "unspent-before == spent_in_batch"
+			// ⇔ this batch just drained the tx's last unspent output.
+			//
+			// We split the UPDATE into two sibling CTEs:
+			//   * upd_spent — only rows that were genuinely NULL before this UPDATE,
+			//     i.e. truly spent by this batch. These feed the drain check.
+			//   * upd_idem  — rows that were already spent with matching spending_data
+			//     at statement-snapshot time (idempotent re-spend). Reported as
+			//     "updated" so the caller sees success, but NOT counted in
+			//     spent_in_batch — otherwise the count would exceed the real
+			//     pre-state unspent count and the drain check would falsely miss.
+			//
+			// Edge case: if a concurrent transaction commits matching
+			// spending_data AFTER our statement snapshot is taken, neither CTE
+			// catches it (upd_spent's EPQ recheck sees non-NULL, upd_idem's
+			// snapshot predicate sees NULL). That race is caught by a second
+			// fresh-snapshot re-check after the statement — see the
+			// concurrent-idempotent re-check below.
+			ub.WriteString(fmt.Sprintf(`),
+			upd_spent AS (
+				UPDATE outputs o SET spending_data = v.spending_data FROM v
+				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
+				  AND o.spending_data IS NULL
+				RETURNING v.batch_idx, o.transaction_id
+			),
+			upd_idem AS (
+				SELECT v.batch_idx
+				FROM v
+				JOIN outputs o
+				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
+				WHERE o.spending_data = v.spending_data
+			),
+			parents AS (
+				SELECT transaction_id, count(*) AS spent_in_batch FROM upd_spent GROUP BY transaction_id
+			),
+			-- Aggregate the pre-update unspent count for every touched parent in
+			-- one scan over outputs (driven by the parents set). Avoids the
+			-- correlated subquery-per-parent pattern the drain check used to
+			-- issue, which scaled with #parents × index lookup rather than
+			-- #touched-outputs.
+			unspent_before AS (
+				SELECT o.transaction_id, count(*) AS n_unspent
+				FROM outputs o
+				JOIN parents p ON p.transaction_id = o.transaction_id
+				WHERE o.spending_data IS NULL
+				GROUP BY o.transaction_id
+			),
+			dah_upd AS (
+				UPDATE transactions t SET delete_at_height = $%d
+				FROM parents p
+				LEFT JOIN unspent_before u ON u.transaction_id = p.transaction_id
+				WHERE t.id = p.transaction_id
+				  AND t.preserve_until IS NULL
+				  AND t.unmined_since IS NULL
+				  AND NOT t.conflicting
+				  AND EXISTS (SELECT 1 FROM block_ids bi WHERE bi.transaction_id = t.id)
+				  AND COALESCE(u.n_unspent, 0) = p.spent_in_batch
+				  AND (t.delete_at_height IS NULL OR t.delete_at_height < $%d)
+				RETURNING 1
+			)
+			SELECT batch_idx FROM upd_spent
+			UNION ALL
+			SELECT batch_idx FROM upd_idem`, dahIdx, dahIdx))
+		} else {
+			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)
 			RETURNING v.batch_idx`)
+		}
 
 		uRows, err := txn.QueryContext(s.ctx, ub.String(), updateArgs...)
 		if err != nil {
@@ -2065,6 +2164,87 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 
 		// Check for items that were not updated (concurrent spend between SELECT and UPDATE)
+		// First pass: items absent from upd_spent AND upd_idem are candidates
+		// for UtxoSpentError. Gather them for a concurrent-idempotent re-check
+		// against a fresh snapshot before we finalise the error.
+		var missedIdxs []int
+		for _, u := range dedupedUpdate {
+			if !updatedSet[u.batchIdx] {
+				missedIdxs = append(missedIdxs, u.batchIdx)
+			}
+		}
+
+		// The bulk UPDATE and the sibling upd_idem CTE share one statement
+		// snapshot. If a concurrent transaction commits the SAME spending_data
+		// on one of our target rows after our snapshot is taken, upd_spent's
+		// EPQ recheck will reject the row (spending_data no longer NULL) and
+		// upd_idem's snapshot-level predicate won't match it (NULL at snapshot,
+		// filter is `= v.spending_data`). The row ends up in neither RETURNING
+		// set and would be wrongly marked as UtxoSpentError.
+		//
+		// Run a second, fresh-snapshot SELECT over the missed rows to catch
+		// those concurrent idempotent commits. Anything whose current
+		// spending_data matches ours is a successful idempotent spend.
+		if len(missedIdxs) > 0 {
+			var sb strings.Builder
+			sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
+			args := make([]interface{}, 0, len(missedIdxs)*4)
+			pidx := 1
+			for i, bIdx := range missedIdxs {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
+				spend := batch[bIdx].spend
+				r := resultMap[bIdx]
+				args = append(args, r.transactionID, spend.Vout, spend.SpendingData.Bytes(), bIdx)
+				pidx += 4
+			}
+			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
+			WHERE o.spending_data = v.spending_data`)
+
+			iRows, err := txn.QueryContext(s.ctx, sb.String(), args...)
+			if err != nil {
+				if isDeadlock(err) {
+					return true
+				}
+				for _, item := range batch {
+					item.errCh <- errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err)
+				}
+				return false
+			}
+			for iRows.Next() {
+				var bIdx int
+				if err := iRows.Scan(&bIdx); err != nil {
+					iRows.Close()
+					if isDeadlock(err) {
+						return true
+					}
+					for _, item := range batch {
+						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
+					}
+					return false
+				}
+				updatedSet[bIdx] = true
+				// Parent has just had its output confirmed-spent by someone
+				// else with our exact spending_data. Treat it as an idempotent
+				// match for DAH-healing purposes, same as the in-statement path.
+				idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+			}
+			if err := iRows.Close(); err != nil {
+				if isDeadlock(err) {
+					return true
+				}
+				for _, item := range batch {
+					item.errCh <- errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err)
+				}
+				return false
+			}
+		}
+
+		// Anything still not in updatedSet after the re-check is a genuine
+		// UtxoSpentError (row was concurrently spent by a DIFFERENT spender).
 		for _, u := range dedupedUpdate {
 			if !updatedSet[u.batchIdx] {
 				spend := batch[u.batchIdx].spend
@@ -2078,6 +2258,65 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				if updatedSet[firstIdx] {
 					updatedSet[u.batchIdx] = true
 				}
+			}
+		}
+	}
+
+	// Post-UPDATE DAH recompute via setDAH for every parent touched by this
+	// bulk batch. The CTE's dah_upd clause is an in-statement fast path that
+	// succeeds in the single-writer case, but it can miss DAH under concurrent
+	// spends of different outputs of the same parent: each statement only sees
+	// its own snapshot, so both observe unspent_before > spent_in_batch, skip
+	// dah_upd, and leave DAH NULL even though the parent is fully drained
+	// after both commits. Calling setDAH afterwards runs a fresh statement
+	// under READ COMMITTED that sees (a) the latest committed writes of any
+	// concurrent spend plus (b) this transaction's own pending writes — so
+	// whoever commits last correctly deterministically sets DAH.
+	//
+	// setDAH is idempotent w.r.t. the CTE: if the CTE already set DAH to
+	// newDAH, setDAH sees conditions met + existingDAH == newDAH and writes
+	// the same value (no-op). Extra round-trip cost is O(distinct parents),
+	// bounded by batch size.
+	//
+	// The set also includes idempotent parents (Phase 1 SELECT already showed
+	// the output spent with matching spending_data — the CTE skips them).
+	// Conflicting parents are NOT tracked separately: they arrive via the
+	// same dedupedUpdate / idempotent paths whenever a spend actually targets
+	// them, and setDAH internally picks the conflicting-DAH semantics.
+	touchedParents := make(map[int]struct{}, len(dedupedUpdate)+len(idempotentParentIDs))
+	for _, u := range dedupedUpdate {
+		// Only count parents whose UPDATE actually landed — avoids issuing
+		// setDAH for rows lost to a concurrent spender (UtxoSpentError path).
+		if updatedSet[u.batchIdx] {
+			touchedParents[u.transactionID] = struct{}{}
+		}
+	}
+	for p := range idempotentParentIDs {
+		touchedParents[p] = struct{}{}
+	}
+	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 && len(touchedParents) > 0 {
+		// Sort parent IDs before calling setDAH so concurrent bulk batches
+		// acquire row locks on `transactions` in a deterministic order. Map
+		// iteration is randomised per-run, which under contention would
+		// otherwise inflate deadlock rates.
+		sortedParents := make([]int, 0, len(touchedParents))
+		for parentID := range touchedParents {
+			sortedParents = append(sortedParents, parentID)
+		}
+		sort.Ints(sortedParents)
+		for _, parentID := range sortedParents {
+			if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+				if isDeadlock(err) {
+					return true
+				}
+				for i, item := range batch {
+					if valErr, ok := validationErrors[i]; ok {
+						item.errCh <- valErr
+					} else {
+						item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH for bulk spend fallback", err)
+					}
+				}
+				return false
 			}
 		}
 	}
@@ -2148,7 +2387,8 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 	`
 
 	successItems := make([]*batchSpend, 0, len(batch))
-	validationErrors := make(map[int]error) // index -> validation error (non-retryable)
+	spentParentIDs := make(map[int]struct{}, len(batch)) // distinct parent tx ids whose outputs were just spent
+	validationErrors := make(map[int]error)              // index -> validation error (non-retryable)
 	aborted := false
 
 	// Phase 1: SELECT + validate + UPDATE outputs
@@ -2253,9 +2493,12 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		if affected == 0 {
-			// Idempotent re-spend: same tx spending the same output again
+			// Idempotent re-spend: same tx spending the same output again.
+			// Still record the parent so DAH can be (re)evaluated — this heals DAHs
+			// that an earlier spend (before the DAH-on-spend fix) failed to set.
 			if len(spendingDataBytes) > 0 && spend.SpendingData != nil && bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
 				successItems = append(successItems, item)
+				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
 			// Concurrently spent by a different tx between SELECT and UPDATE.
@@ -2266,6 +2509,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		successItems = append(successItems, item)
+		spentParentIDs[transactionID] = struct{}{}
 	}
 
 	// If aborted, roll back — send errors for items not yet notified
@@ -2281,6 +2525,36 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			item.errCh <- errors.NewStorageError("[Spend] batch rolled back due to DB error")
 		}
 		return false
+	}
+
+	// Recompute DAH for every parent tx whose outputs were just spent. Mirrors
+	// aerospike's inline setDeleteAtHeight Lua call — if this batch drained the
+	// last unspent output of a mined, on-longest-chain tx, setDAH sets DAH so
+	// the pruner can later reclaim it. Without this, mined txs spent gradually
+	// over time never become prunable and disk usage grows unbounded.
+	//
+	// Sort parent IDs so concurrent per-row batches acquire row locks in a
+	// deterministic order and don't deadlock on cross-batch lock orderings.
+	sortedSpentParents := make([]int, 0, len(spentParentIDs))
+	for parentID := range spentParentIDs {
+		sortedSpentParents = append(sortedSpentParents, parentID)
+	}
+	sort.Ints(sortedSpentParents)
+	for _, parentID := range sortedSpentParents {
+		if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+			if isDeadlock(err) {
+				return true
+			}
+			for i, item := range batch {
+				if valErr, ok := validationErrors[i]; ok {
+					item.errCh <- valErr
+				}
+			}
+			for _, item := range successItems {
+				item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH", err)
+			}
+			return false
+		}
 	}
 
 	// Commit
@@ -2379,6 +2653,14 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	}
 	// else: conditions not met and no existing DAH, leave as NULL
 
+	// Short-circuit: if the computed DAH equals what's already stored (including
+	// NULL→NULL), skip the UPDATE entirely. Avoids taking a row lock, writing a
+	// new row version and generating WAL for a no-op — matters on the spend hot
+	// path where setDAH is called for every touched parent per batch.
+	if dahUnchanged(existingDAH, deleteAtHeightOrNull) {
+		return nil
+	}
+
 	// Update delete_at_height
 	qUpdate := `
 		UPDATE transactions
@@ -2391,6 +2673,19 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	}
 
 	return nil
+}
+
+// dahUnchanged reports whether two sql.NullInt64 DAH values are equivalent.
+// NULL==NULL is true; NULL vs valid and valid vs valid with different values
+// are false; valid vs valid with same value is true.
+func dahUnchanged(a, b sql.NullInt64) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	if !a.Valid {
+		return true
+	}
+	return a.Int64 == b.Int64
 }
 
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
@@ -2722,15 +3017,58 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 	} else {
 		// Not on longest chain: clear delete_at_height, set locked = false
-		// Do NOT set unmined_since here — that's MarkTransactionsOnLongestChain's job
-		inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
-		qUpdate := fmt.Sprintf(`
-			UPDATE transactions
-			SET locked = false, delete_at_height = NULL
-			WHERE hash IN %s
-		`, inClause3)
-		if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
-			return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+		if minedBlockInfo.UnsetMined {
+			// UnsetMined path (block invalidation): unlock and clear delete_at_height
+			// for all affected transactions, then set unmined_since only for those
+			// with zero remaining block_ids.
+			// This mirrors the aerospike Lua which sets unmined_since = currentBlockHeight
+			// when #blocks == 0 after removing the block_id.
+			// Use the store's current block height (not the invalidated block's height)
+			// to match Aerospike's setMined UDF behavior.
+			currentBlockHeight := s.blockHeight.Load() + 1
+
+			// Step 1: Unlock and clear delete_at_height for all affected transactions
+			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
+			qUpdate := fmt.Sprintf(`
+				UPDATE transactions
+				SET locked = false
+				   ,delete_at_height = NULL
+				WHERE hash IN %s
+			`, inClause3)
+			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+			}
+
+			// Step 2: Set unmined_since only for transactions with no remaining block_ids
+			inClause3b, inArgs3b := buildINClause(existingHashBytes, 2)
+			qUpdateUnmined := fmt.Sprintf(`
+				WITH txs_without_blocks AS (
+					SELECT t.id
+					FROM transactions t
+					LEFT JOIN block_ids bi ON bi.transaction_id = t.id
+					WHERE t.hash IN %s
+					GROUP BY t.id
+					HAVING COUNT(bi.transaction_id) = 0
+				)
+				UPDATE transactions
+				SET unmined_since = $1
+				WHERE id IN (SELECT id FROM txs_without_blocks)
+			`, inClause3b)
+			args := append([]interface{}{currentBlockHeight}, inArgs3b...)
+			if _, err = txn.ExecContext(ctx, qUpdateUnmined, args...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating unmined_since: %v", err)
+			}
+		} else {
+			// Normal not-on-longest-chain path: MarkTransactionsOnLongestChain handles unmined_since
+			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
+			qUpdate := fmt.Sprintf(`
+				UPDATE transactions
+				SET locked = false, delete_at_height = NULL
+				WHERE hash IN %s
+			`, inClause3)
+			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
+				return nil, errors.NewStorageError("SQL error updating transactions: %v", err)
+			}
 		}
 	}
 

@@ -16,6 +16,16 @@ var (
 	prunerServiceMutex    sync.Mutex
 )
 
+// ResetPrunerServiceForTests resets the pruner service singleton. Only for
+// tests — the singleton captures a Store reference, so tests that teardown
+// their Store (or that exercise multiple backends in one run) must reset
+// between tests or subsequent tests see stale state.
+func ResetPrunerServiceForTests() {
+	prunerServiceMutex.Lock()
+	defer prunerServiceMutex.Unlock()
+	prunerServiceInstance = nil
+}
+
 // GetPrunerService returns a pruner service for the SQL store.
 // This implements the pruner.PrunerProvider interface.
 func (s *Store) GetPrunerService() (pruner.Service, error) {

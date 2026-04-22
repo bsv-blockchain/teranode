@@ -924,17 +924,16 @@ func (t *TxMetaCache) GetConflictingChildren(ctx context.Context, txHash chainha
 // - Array of transaction hashes that were successfully marked
 // - Error if the operation fails
 func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	_, _, err := t.utxoStore.SetConflicting(ctx, txHashes, setValue)
+	affectedSpends, spendingChildren, err := t.utxoStore.SetConflicting(ctx, txHashes, setValue)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// remove from cache to ensure consistency, as conflicting transactions are not cached
 	for _, txHash := range txHashes {
 		_ = t.Delete(ctx, &txHash)
 	}
 
-	return nil, txHashes, nil
+	return affectedSpends, spendingChildren, nil
 }
 
 // SetLocked marks transactions as locked and not spendable.

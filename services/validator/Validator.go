@@ -614,9 +614,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 							return nil, err
 						}
 
-						// Tx already exists — ensure it's marked as conflicting in the store
+						// Tx already exists — ensure it and all its spending descendants are marked conflicting.
+						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
+						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
 						if !txMetaData.Conflicting {
-							if _, _, setErr := v.utxoStore.SetConflicting(decoupledCtx, []chainhash.Hash{*tx.TxIDChainHash()}, true); setErr != nil {
+							if _, _, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()}); setErr != nil {
 								err = errors.NewProcessingError("[Validate][%s] failed to mark existing tx as conflicting", txID, setErr)
 								span.RecordError(err)
 
