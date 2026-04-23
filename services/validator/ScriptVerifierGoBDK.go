@@ -8,7 +8,6 @@ This verifier is only built when the 'bdk' build tag is specified.
 package validator
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -182,9 +181,8 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		}
 
 		utxoInfoStr := strings.Join(utxoHeighstStr, "|")
-		errorLogMsg := fmt.Sprintf("%v \n\n TxID : %v\n\nBlock Height : %v\n\nUTXO Heights : %v\n\nerror:\n%v\n\n", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
-		v.logger.Warnf("%s", errorLogMsg)
+		v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
 		errCode := errVerify.Code()
 		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
