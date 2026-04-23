@@ -39,7 +39,7 @@ compose/multinode.sh down
 | `logs [node]` | Tail logs for all nodes or a specific node number |
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
-| `blast [nodes] [-- args]` | Run the coinbase blaster against the stack |
+| `blast [nodes] [--build] [--auto-mine[=N]] [-- args]` | Run the coinbase blaster against the stack |
 
 ### Blaster
 
@@ -62,6 +62,8 @@ BLAST_AUTO_MINE_INTERVAL=2 compose/multinode.sh blast --auto-mine
 `--auto-mine[=N]` spawns a background loop that generates one block on node N (default: first target) every 5 seconds, overridable via `BLAST_AUTO_MINE_INTERVAL`. The loop is killed automatically when the blaster exits. If you name a different node than the first target the script warns, because split txs then have to propagate across the mesh before the funding RPC sees them.
 
 `--build` rebuilds the blaster via `make build-blaster` before launching (ignored if `BLASTER_BIN` is set).
+
+Before launching, `blast` polls each target node's RPC (`getinfo`) until it answers, with a 60s default timeout overridable via `BLAST_READY_TIMEOUT=<seconds>`. This avoids a race where gRPC dials to propagation land during container startup and end up in a stuck state; without it you'd see empty mined blocks and have to restart the blaster.
 
 The blaster binary is located via `$BLASTER_BIN` (if set), otherwise `../teranode-coinbase/blaster` or `../teranode-coinbase/blaster-tui.run` (whichever is newest). The script does a pre-flight check that the binary supports the required CLI flags; if it's stale you'll get a clear error instead of a cryptic `flag provided but not defined`.
 
