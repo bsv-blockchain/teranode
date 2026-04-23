@@ -223,7 +223,10 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		// Use a non-existent hash as best block
+		// Use a non-existent hash as best block. The height constraint
+		// (b.height <= SELECT height FROM blocks WHERE hash = $random) evaluates to
+		// b.height <= NULL, which matches no rows — identical to the CTE path walking
+		// from a non-existent hash.
 		randomHash, err := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 		require.NoError(t, err)
 

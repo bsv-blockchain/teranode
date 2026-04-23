@@ -53,7 +53,7 @@ func testDeepChainConflictResolution(t *testing.T, utxoStore string) {
 
 	// Mine txA0 in block 103a
 	_, block103a := td.CreateTestBlock(t, block102a, 50301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, blockWait, true)
 
 	// Build a 10-level deep chain from txA0. Each tx spends outputs 0,1 from its parent
@@ -89,12 +89,12 @@ func testDeepChainConflictResolution(t *testing.T, utxoStore string) {
 	// Mine chain A across two blocks
 	// Block 104a: txA1..txA4
 	subtree104a, block104a := td.CreateTestBlock(t, block103a, 50401, chainA[1], chainA[2], chainA[3], chainA[4])
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104a, blockWait, true)
 
 	// Block 105a: txA5..txA9
 	subtree105a, block105a := td.CreateTestBlock(t, block104a, 50501, chainA[5], chainA[6], chainA[7], chainA[8], chainA[9])
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block105a, blockWait, true)
 
 	// Verify chain A txs are not conflicting
@@ -116,17 +116,17 @@ func testDeepChainConflictResolution(t *testing.T, utxoStore string) {
 
 	// Mine empty blocks on chain B to overtake chain A
 	_, block104b := td.CreateTestBlock(t, block103b, 50402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 
 	_, block105b := td.CreateTestBlock(t, block104b, 50502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0))
 
 	// Block 106b makes chain B longer — triggers reorg and conflict resolution
 	// This is the critical section: the old recursive code would hang here
 	reorgStart := time.Now()
 
 	_, block106b := td.CreateTestBlock(t, block105b, 50602)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block106b, block106b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block106b, block106b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block106b, 30*time.Second, true)
 
 	reorgDuration := time.Since(reorgStart)
@@ -199,7 +199,7 @@ func testWideTreeConflictResolution(t *testing.T, utxoStore string) {
 
 	// Mine txA_root in block 103a
 	_, block103a := td.CreateTestBlock(t, block102a, 51301, txARoot)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, blockWait, true)
 
 	// Build wide tree: 4 children from txA_root, each spending a different output
@@ -263,7 +263,7 @@ func testWideTreeConflictResolution(t *testing.T, utxoStore string) {
 	// Mine all tree txs in block 104a (children first, then grandchildren — dependency order)
 	allTreeTxs := []*bt.Tx{child0, child1, child2, child3, gc0, gc1, gc2, gc3, gc4, gc5, gc6}
 	subtree104a, block104a := td.CreateTestBlock(t, block103a, 51401, allTreeTxs...)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104a, blockWait, true)
 
 	// Verify tree txs are not conflicting
@@ -283,13 +283,13 @@ func testWideTreeConflictResolution(t *testing.T, utxoStore string) {
 
 	// Mine empty blocks on chain B to overtake
 	_, block104b := td.CreateTestBlock(t, block103b, 51402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 
 	// Block 105b makes chain B longer — triggers reorg
 	reorgStart := time.Now()
 
 	_, block105b := td.CreateTestBlock(t, block104b, 51502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block105b, 30*time.Second, true)
 
 	reorgDuration := time.Since(reorgStart)

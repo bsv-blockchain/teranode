@@ -430,7 +430,7 @@ func TestOrphanTxWithSingleNode(t *testing.T) {
 
 	_, block3 := node1.CreateTestBlock(t, block2, 3, childTx)
 
-	require.Error(t, node1.BlockValidationClient.ProcessBlock(node1.Ctx, block3, block3.Height, "", "legacy"))
+	require.Error(t, node1.BlockValidationClient.ProcessBlock(node1.Ctx, block3, block3.Height, "", "legacy", 0))
 
 	bestHeight, _, err := node1.BlockchainClient.GetBestHeightAndTime(node1.Ctx)
 	require.NoError(t, err)

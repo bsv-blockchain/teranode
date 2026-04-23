@@ -53,7 +53,7 @@ func testMarkAsConflictingChainsExternalTx(t *testing.T, utxoStore string) {
 
 	// Create block 103a with txA0
 	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	td.WaitForBlockHeight(t, block103a, blockWait, true)
@@ -92,7 +92,7 @@ func testMarkAsConflictingChainsExternalTx(t *testing.T, utxoStore string) {
 	// Create block 104a with chain A transactions
 	subtree104a, block104a := td.CreateTestBlock(t, block103a, 10401, txA1, txA2, txA3, txA4)
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	// 0 -> 1 ... 101 -> 102a -> 103a [txA0] -> 104a [txA1, txA2, txA3, txA4]
@@ -151,7 +151,7 @@ func testMarkAsConflictingChainsExternalTx(t *testing.T, utxoStore string) {
 	// Switch forks by mining 105b
 	_, block105b := td.CreateTestBlock(t, block104b, 10502) // Empty block
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	// Wait for block assembly to reach height 105

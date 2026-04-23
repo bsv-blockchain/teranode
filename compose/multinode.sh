@@ -20,6 +20,14 @@ Commands:
   dashboards               Open all dashboards in the browser
   generate <n,count> ...   Generate blocks on specific nodes
                            e.g. generate 1,10 3,5
+  blast [nodes] [--build] [--auto-mine[=N]] [-- args]
+                           Run the coinbase blaster against the stack.
+                           'nodes' is a comma/space-separated list (default: all
+                           running). --build rebuilds the blaster first.
+                           --auto-mine spawns a background miner on node N
+                           (default: first target) every 5s; override with
+                           BLAST_AUTO_MINE_INTERVAL=<seconds>. Flags after '--'
+                           are passed to blaster.
 
 Chaos:
   chaos isolate <node>     Block peer traffic (RPC still works)
@@ -34,6 +42,9 @@ Chaos:
 Examples:
   compose/multinode.sh up 5
   compose/multinode.sh generate 1,10 3,5
+  compose/multinode.sh blast              # blast all running nodes (TUI)
+  compose/multinode.sh blast --build --auto-mine  # rebuild, mine on node 1
+  compose/multinode.sh blast 1,3 -- --headless --max-tps 50
   compose/multinode.sh chaos isolate 3
   compose/multinode.sh chaos heal
   compose/multinode.sh chaos slow 2 500
@@ -95,6 +106,13 @@ cmd_up() {
 cmd_down() {
   require_stack
   compose down -v --remove-orphans
+  # Wipe blaster local state so a subsequent 'blast' against a fresh chain
+  # doesn't try to spend UTXOs that no longer exist.
+  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  if [[ -d "$blaster_data_dir" ]]; then
+    rm -rf "$blaster_data_dir"
+    echo "cleaned blaster state: $blaster_data_dir"
+  fi
 }
 
 cmd_restart() {
@@ -356,6 +374,220 @@ cmd_generate() {
   "$GEN_DIR/generate-blocks.sh" "$@"
 }
 
+cmd_blast() {
+  require_stack
+
+  local -a nodes=()
+  local -a passthrough=()
+  local sawDashDash=false
+  local auto_mine_enabled=false
+  local auto_mine_node=""
+  local auto_mine_interval="${BLAST_AUTO_MINE_INTERVAL:-5}"
+  local do_build=false
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+      sawDashDash=true
+      shift
+      continue
+    fi
+    if $sawDashDash; then
+      passthrough+=("$1")
+      shift
+      continue
+    fi
+    case "$1" in
+      --build)
+        do_build=true
+        shift
+        ;;
+      --auto-mine)
+        auto_mine_enabled=true
+        shift
+        ;;
+      --auto-mine=*)
+        auto_mine_enabled=true
+        auto_mine_node="${1#--auto-mine=}"
+        shift
+        ;;
+      *)
+        IFS=', ' read -ra items <<< "$1"
+        for item in "${items[@]}"; do
+          [[ -n "$item" ]] && nodes+=("$item")
+        done
+        shift
+        ;;
+    esac
+  done
+
+  if $do_build; then
+    if [[ -n "${BLASTER_BIN:-}" ]]; then
+      echo "warning: --build ignored because BLASTER_BIN is set" >&2
+    else
+      echo "building blaster..."
+      (cd "$REPO_ROOT/../teranode-coinbase" && make build-blaster) || {
+        echo "error: blaster build failed" >&2
+        exit 1
+      }
+    fi
+  fi
+
+  local blaster_bin=""
+  if [[ -n "${BLASTER_BIN:-}" ]]; then
+    blaster_bin="$BLASTER_BIN"
+  else
+    # The Makefile builds './blaster-tui.run', but users often `go build -o blaster`
+    # manually. Pick whichever exists and is newest so a fresh rebuild wins.
+    local candidates=(
+      "$REPO_ROOT/../teranode-coinbase/blaster"
+      "$REPO_ROOT/../teranode-coinbase/blaster-tui.run"
+    )
+    for c in "${candidates[@]}"; do
+      if [[ -x "$c" ]] && { [[ -z "$blaster_bin" ]] || [[ "$c" -nt "$blaster_bin" ]]; }; then
+        blaster_bin="$c"
+      fi
+    done
+  fi
+  if [[ -z "$blaster_bin" || ! -x "$blaster_bin" ]]; then
+    echo "error: blaster binary not found" >&2
+    echo "build it: '$0 blast --build' or (cd $REPO_ROOT/../teranode-coinbase && make build-blaster)" >&2
+    echo "or set BLASTER_BIN to the binary path" >&2
+    exit 1
+  fi
+
+  # Pre-flight: make sure the binary isn't a stale build that predates the
+  # multinode-compatible CLI flags.
+  if ! "$blaster_bin" -h 2>&1 | grep -q -- '-propagation-addr'; then
+    echo "error: $blaster_bin looks stale (no -propagation-addr flag)." >&2
+    echo "rebuild it: '$0 blast --build'" >&2
+    exit 1
+  fi
+
+  if [[ ${#nodes[@]} -eq 0 ]]; then
+    while read -r name; do
+      local idx="${name#teranode}"
+      idx="${idx%-multinode}"
+      nodes+=("$idx")
+    done < <(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]' | sort -V)
+  fi
+
+  if [[ ${#nodes[@]} -eq 0 ]]; then
+    echo "error: no running teranode containers. Start the stack with '$0 up <N>' first." >&2
+    exit 1
+  fi
+
+  # Verify propagation port is exposed (older stacks generated before 8084 was added won't have it).
+  local first="${nodes[0]}"
+  local first_prop=$((20000 + (first - 1) * 2000 + 84))
+  if ! docker ps --filter "name=teranode${first}-multinode" --format '{{.Ports}}' | grep -q ":${first_prop}->8084"; then
+    echo "error: propagation port not exposed on teranode${first} (expected host port ${first_prop})." >&2
+    echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
+    exit 1
+  fi
+
+  local prop_addrs=""
+  for n in "${nodes[@]}"; do
+    local base=$((20000 + (n - 1) * 2000))
+    local prop=$((base + 84))
+    [[ -n "$prop_addrs" ]] && prop_addrs+=","
+    prop_addrs+="localhost:${prop}"
+  done
+  local rpc_port=$((20000 + (first - 1) * 2000 + 1292))
+  local rpc_url="http://localhost:${rpc_port}"
+
+  # Wait for each target node's RPC to answer before launching the blaster.
+  # Without this, gRPC dials to propagation can race container startup and
+  # end up in a stuck state where the blaster thinks it's connected but
+  # broadcasts silently fail. 'up -d' only waits for containers to start,
+  # not for teranode services inside them to be ready.
+  local ready_timeout="${BLAST_READY_TIMEOUT:-60}"
+  for n in "${nodes[@]}"; do
+    local node_rpc=$((20000 + (n - 1) * 2000 + 1292))
+    local waited=0
+    printf "waiting for teranode%s RPC (localhost:%d)..." "$n" "$node_rpc"
+    until curl -sf --max-time 2 -u bitcoin:bitcoin \
+          -H 'Content-Type: application/json' \
+          -d '{"method":"getinfo","params":[]}' \
+          "http://localhost:${node_rpc}" >/dev/null 2>&1; do
+      if [[ "$waited" -ge "$ready_timeout" ]]; then
+        printf " TIMEOUT\n"
+        echo "error: teranode${n} RPC did not become ready within ${ready_timeout}s" >&2
+        echo "       check 'docker compose logs teranode${n}' or raise BLAST_READY_TIMEOUT" >&2
+        exit 1
+      fi
+      sleep 2
+      waited=$((waited + 2))
+    done
+    printf " ok\n"
+  done
+
+  if $auto_mine_enabled && [[ -z "$auto_mine_node" ]]; then
+    auto_mine_node="$first"
+  fi
+
+  if $auto_mine_enabled; then
+    # Ensure the target is actually running (otherwise the background loop
+    # silently does nothing and the user is left wondering why funding stalls).
+    if ! docker ps --filter "name=teranode${auto_mine_node}-multinode" --filter "status=running" --format '{{.Names}}' | grep -q '.'; then
+      echo "error: auto-mine target teranode${auto_mine_node} is not running" >&2
+      exit 1
+    fi
+    if [[ "$auto_mine_node" != "$first" ]]; then
+      echo "warning: auto-mine is on teranode${auto_mine_node} but funding RPC is on teranode${first}."
+      echo "         Split txs must propagate ${auto_mine_node}->${first} before funding flows."
+      echo "         Prefer matching them (e.g. omit --auto-mine=N to default to the first target)."
+    fi
+  fi
+
+  # Control where the blaster writes snapshot + embedded coinbase DB so that
+  # 'multinode.sh down' can clean it up alongside the chain state. Only inject
+  # our path if the user didn't pass one via '--'.
+  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  local user_snapshot=false
+  for arg in ${passthrough[@]+"${passthrough[@]}"}; do
+    case "$arg" in
+      --snapshot-path|--snapshot-path=*|-snapshot-path|-snapshot-path=*)
+        user_snapshot=true
+        break
+        ;;
+    esac
+  done
+  local snapshot_path="$blaster_data_dir/utxos.json"
+  if ! $user_snapshot; then
+    mkdir -p "$blaster_data_dir"
+    passthrough=(--snapshot-path "$snapshot_path" ${passthrough[@]+"${passthrough[@]}"})
+  fi
+
+  echo "blaster:     $blaster_bin"
+  echo "nodes:       ${nodes[*]}"
+  echo "propagation: $prop_addrs"
+  echo "rpc:         $rpc_url  (funding source for embedded coinbase)"
+  if ! $user_snapshot; then
+    echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
+  fi
+  if $auto_mine_enabled; then
+    echo "auto-mine:   node $auto_mine_node, every ${auto_mine_interval}s"
+  fi
+  echo ""
+
+  local miner_pid=""
+  if $auto_mine_enabled; then
+    (
+      while true; do
+        "$GEN_DIR/generate-blocks.sh" "${auto_mine_node},1" >/dev/null 2>&1 || true
+        sleep "$auto_mine_interval"
+      done
+    ) &
+    miner_pid=$!
+    trap 'if [[ -n "'"$miner_pid"'" ]]; then kill '"$miner_pid"' 2>/dev/null || true; wait '"$miner_pid"' 2>/dev/null || true; fi' EXIT INT TERM
+  fi
+
+  "$blaster_bin" \
+    --propagation-addr "$prop_addrs" \
+    --rpc-url "$rpc_url" \
+    ${passthrough[@]+"${passthrough[@]}"}
+}
+
 [[ $# -eq 0 ]] && usage
 
 command="$1"
@@ -370,6 +602,7 @@ case "$command" in
   logs)       cmd_logs "$@" ;;
   dashboards) cmd_dashboards ;;
   generate)   cmd_generate "$@" ;;
+  blast)      cmd_blast "$@" ;;
   chaos)      cmd_chaos "$@" ;;
   help|-h)    usage ;;
   *)          echo "error: unknown command '$command'" >&2; usage ;;

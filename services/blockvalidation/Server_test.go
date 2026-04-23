@@ -72,8 +72,8 @@ func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash
 	return args.Error(0)
 }
 
-func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
-	args := m.Called(ctx, block, blockHeight, peerID, baseURL)
+func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+	args := m.Called(ctx, block, blockHeight, peerID, baseURL, blockID)
 	return args.Error(0)
 }
 

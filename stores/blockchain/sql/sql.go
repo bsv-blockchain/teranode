@@ -105,6 +105,14 @@ type SQL struct {
 	// in-memory off-chain set (true) or the original SQL recursive CTE (false).
 	// Read once at construction from settings; not changed at runtime.
 	useInMemoryChainCheck bool
+	// mainChainRebuilding is a reference counter: each caller that is about to (or
+	// currently is) mutating the on_main_chain column Adds 1 on entry and Adds -1 on
+	// exit. While the counter is > 0, all queries that use on_main_chain fall back to
+	// the authoritative CTE so they never read a partially-updated flag. A counter
+	// rather than a bool is required because multiple callers (reorg + invalidation,
+	// startup + concurrent RPC) may overlap: a bool would be cleared by the first to
+	// finish, exposing readers while later callers are still mid-update.
+	mainChainRebuilding atomic.Int32
 	// blockTimestampCache is a sliding-window cache of recent block timestamps,
 	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
 	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
@@ -202,10 +210,10 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		blockTimestampCache:   newBlockTimestampCache(),
 	}
 
+	s.backgroundDone = make(chan struct{})
 	if useInMemory {
 		s.chainWalkCache = NewGenerationalCache()
 		s.offChainBlockIDs = make(map[uint32]struct{})
-		s.backgroundDone = make(chan struct{})
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -213,19 +221,52 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
-	if useInMemory {
-		// Rebuild the off-chain set using a CTE walk of the main chain so that
-		// CheckBlockIsInCurrentChain works correctly after a process restart.
-		// This is fatal because the in-memory lookup has no DB fallback — if the
-		// off-chain set is empty, fork/orphan blocks would incorrectly return true.
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-		defer rebuildCancel()
-		if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
-			s.Close()
-			return nil, errors.NewStorageError("failed to seed off-chain set during startup", rebuildErr)
-		}
-		s.lastSuccessfulRebuild.Store(time.Now().Unix())
+	// Hold the rebuild guard synchronously until the background goroutine has started
+	// and incremented it itself. This ensures concurrent queries fall back to the CTE
+	// from the moment New() returns, even before the goroutine is scheduled — without
+	// this, there is a narrow window where maps/flags are unpopulated but the guard is 0.
+	s.mainChainRebuilding.Add(1)
 
+	// Rebuild the on_main_chain column and (if applicable) the in-memory off-chain set
+	// asynchronously so startup is not blocked. The first rebuild after the column is
+	// added (migration) walks the whole chain; subsequent starts walk only the last
+	// 10×CoinbaseMaturity blocks.
+	go func() {
+		defer s.mainChainRebuilding.Add(-1) // release the guard held by New()
+
+		ctx, cancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
+		defer cancel()
+
+		full, err := s.needsFullOnMainChainRebuild(ctx)
+		if err != nil {
+			// On error we cannot determine whether this is a fresh migration or
+			// a consistent DB. A bounded rebuild would silently leave deep
+			// blocks with on_main_chain=false and fast-path reads for those
+			// blocks would return no rows. Err on the side of a full rebuild —
+			// it is a one-time cost at startup, bounded rebuilds take over on
+			// subsequent startups once flags are consistent.
+			s.logger.Errorf("startup: needsFullOnMainChainRebuild: %v — assuming full rebuild needed", err)
+			full = true
+		}
+		if full {
+			s.logger.Infof("startup: on_main_chain appears unpopulated — running full-chain rebuild (migration)")
+		}
+		if rebuildErr := s.rebuildOnMainChainFlag(ctx, full); rebuildErr != nil {
+			s.logger.Errorf("startup: rebuildOnMainChainFlag: %v", rebuildErr)
+		}
+
+		if useInMemory {
+			rebuildCtx, rebuildCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("startup: rebuildOffChainSet: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	}()
+
+	if useInMemory {
 		// Start periodic background refresh of the off-chain set as a safety net.
 		// This catches any missed rebuilds (e.g. due to transient DB errors during
 		// event-driven rebuilds) without requiring a process restart.
@@ -310,6 +351,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 		,persisted_at   TIMESTAMPTZ NULL
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BYTEA NULL
+		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -373,6 +415,21 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 		} else {
 			_ = db.Close()
 			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
+		}
+	}
+
+	// add the on_main_chain column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='on_main_chain'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN on_main_chain BOOLEAN NOT NULL DEFAULT FALSE;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add on_main_chain column to blocks table", err)
+			}
+		} else {
+			_ = db.Close()
+			return errors.NewStorageError("could not check for on_main_chain column in blocks table", err)
 		}
 	}
 
@@ -473,6 +530,16 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_invalid_height index", err)
 		}
+
+		// === MAIN CHAIN INDEX ===
+		// Partial index for fast main-chain height lookups (replaces recursive CTEs).
+		// Scoped to on_main_chain = true blocks; on mainnet where forks are rare this
+		// covers nearly all blocks, but still provides fast B-tree height lookups
+		// without including fork/orphan blocks.
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_on_main_chain_height ON blocks (height ASC) WHERE on_main_chain = true;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
+		}
 	}
 
 	if _, err := db.Exec(`
@@ -571,6 +638,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,persisted_at   TEXT NULL
 		,median_time_past BIGINT NOT NULL DEFAULT 0
 		,coinbase_bump  BLOB NULL
+		,on_main_chain  BOOLEAN NOT NULL DEFAULT FALSE
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -631,6 +699,21 @@ func createSqliteSchema(db *usql.DB) error {
 		} else {
 			_ = db.Close()
 			return errors.NewStorageError("could not check for coinbase_bump column in blocks table", err)
+		}
+	}
+
+	// add the on_main_chain column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT name FROM pragma_table_info('blocks') WHERE name='on_main_chain'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN on_main_chain BOOLEAN NOT NULL DEFAULT FALSE;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add on_main_chain column to blocks table", err)
+			}
+		} else {
+			_ = db.Close()
+			return errors.NewStorageError("could not check for on_main_chain column in blocks table", err)
 		}
 	}
 
@@ -729,6 +812,16 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invalid_height ON blocks (height DESC) WHERE invalid = true;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_invalid_height index", err)
+	}
+
+	// === MAIN CHAIN INDEX ===
+	// Partial index for fast main-chain height lookups (replaces recursive CTEs).
+	// Scoped to on_main_chain = true blocks; on mainnet where forks are rare this
+	// covers nearly all blocks, but still provides fast B-tree height lookups
+	// without including fork/orphan blocks.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_on_main_chain_height ON blocks (height ASC) WHERE on_main_chain = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
 	}
 
 	if _, err := db.Exec(`
@@ -861,6 +954,160 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 	return err
 }
 
+// shutdownAwareContext returns a context that is cancelled either when the timeout
+// expires or when Close() is called (s.backgroundDone is closed). Callers must call
+// the returned cancel function to release resources.
+//
+// One goroutine is spawned per call. This is intentionally unbounded because
+// shutdownAwareContext is only called from startup and Close paths — total
+// lifetime calls are O(1) per store. The spawned goroutine is always bounded
+// by ctx.Done (via timeout or caller cancel) or backgroundDone close, so it
+// cannot leak past Close().
+func (s *SQL) shutdownAwareContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		select {
+		case <-s.backgroundDone:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+// needsFullOnMainChainRebuild returns true when the on_main_chain column looks
+// unpopulated relative to the canonical chain. The canonical chain has exactly
+// bestHeight+1 blocks (genesis through tip), so count(on_main_chain=true) must
+// equal that. Any other value indicates either a fresh migration (count << expected)
+// or a corrupt state — both require a full-chain rebuild.
+//
+// The two SELECTs run outside a transaction. This is safe because the function
+// is only invoked from the startup goroutine (see New), before blockchain
+// services come up and begin calling StoreBlock / InvalidateBlock. Under the
+// single-writer model assumed by the store, no concurrent mutations can race
+// the two reads. A false-positive "needs rebuild" from an interleaved write
+// would only cost an extra full rebuild, not corrupt state.
+func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
+	var bestHeight int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(height), -1) FROM blocks WHERE invalid = false`,
+	).Scan(&bestHeight)
+	if err != nil {
+		return false, errors.NewStorageError("needsFullOnMainChainRebuild: failed to get best height", err)
+	}
+	if bestHeight < 0 {
+		return false, nil // empty DB
+	}
+
+	var onMainChainCount int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM blocks WHERE on_main_chain = true`,
+	).Scan(&onMainChainCount)
+	if err != nil {
+		return false, errors.NewStorageError("needsFullOnMainChainRebuild: failed to count on_main_chain", err)
+	}
+
+	return onMainChainCount != bestHeight+1, nil
+}
+
+// rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
+// current canonical chain. It walks the main chain backward from the best block via
+// parent_id.
+//
+// When full is false, the walk is bounded to the last 10×CoinbaseMaturity blocks above
+// the tip. The bound is safe because a reorg deeper than CoinbaseMaturity is
+// consensus-invalid — blocks beyond that depth have immutable on_main_chain status.
+// When full is true, the walk covers the entire chain back to genesis. Full rebuild
+// is required once after the on_main_chain column is first added to an existing DB
+// (migration), since default values need to be corrected chain-wide.
+//
+// Two UPDATEs run inside a single transaction so readers never see a partial state:
+//   - Step 1: clear on_main_chain for blocks in the window no longer on the chain
+//   - Step 2: set on_main_chain for blocks in the window not yet marked
+//
+// mainChainRebuilding is incremented for the duration of the call so concurrent
+// queries fall back to the authoritative CTE rather than reading partially-updated
+// flags. The counter-based guard is safe under reentrant/overlapping callers.
+func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error) {
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
+	var tx *sql.Tx
+	tx, err = s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to begin transaction", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Fetch best block ID and height inside the transaction for a consistent snapshot.
+	var bestBlockID uint32
+	var bestHeight int64
+	bestQ := `SELECT id, height FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
+	if err = tx.QueryRowContext(ctx, bestQ).Scan(&bestBlockID, &bestHeight); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // empty DB — nothing to rebuild
+		}
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to get best block", err)
+	}
+
+	// Compute the walk bound. full=true walks to genesis (windowBottom=0); otherwise
+	// limit to 10×CoinbaseMaturity blocks above the tip.
+	var windowBottom int64
+	if !full {
+		windowSize := int64(10) * int64(s.chainParams.CoinbaseMaturity)
+		windowBottom = bestHeight - windowSize
+		if windowBottom < 0 {
+			windowBottom = 0
+		}
+	}
+
+	// Step 1: clear on_main_chain for blocks in the window no longer on the main chain.
+	// These are blocks that were previously on_main_chain = true but whose path from
+	// the best block does not reach them anymore (e.g. after a reorg).
+	q1 := `
+		WITH RECURSIVE main_chain AS (
+			SELECT id, parent_id, height FROM blocks WHERE id = $1
+			UNION ALL
+			SELECT b.id, b.parent_id, b.height FROM blocks b
+			INNER JOIN main_chain m ON b.id = m.parent_id
+			WHERE b.id != m.id AND b.height >= $2
+		)
+		UPDATE blocks SET on_main_chain = false
+		WHERE on_main_chain = true AND height >= $2 AND id NOT IN (SELECT id FROM main_chain)
+	`
+	if _, err = tx.ExecContext(ctx, q1, bestBlockID, windowBottom); err != nil {
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to clear stale on_main_chain flags", err)
+	}
+
+	// Step 2: set on_main_chain for blocks in the window now on the main chain.
+	// In the normal extend case this updates the newly inserted block (1 row).
+	// In the reorg case this updates the blocks on the new winning branch.
+	q2 := `
+		WITH RECURSIVE main_chain AS (
+			SELECT id, parent_id, height FROM blocks WHERE id = $1
+			UNION ALL
+			SELECT b.id, b.parent_id, b.height FROM blocks b
+			INNER JOIN main_chain m ON b.id = m.parent_id
+			WHERE b.id != m.id AND b.height >= $2
+		)
+		UPDATE blocks SET on_main_chain = true
+		WHERE on_main_chain = false AND height >= $2 AND id IN (SELECT id FROM main_chain)
+	`
+	if _, err = tx.ExecContext(ctx, q2, bestBlockID, windowBottom); err != nil {
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return errors.NewStorageError("rebuildOnMainChainFlag: failed to commit transaction", err)
+	}
+
+	return nil
+}
+
 // rebuildOffChainSet rebuilds the set of block IDs that are NOT on the main chain.
 // It uses a recursive CTE to walk the main chain from the best block backward via
 // parent_id, then finds all block IDs NOT on that path. This correctly handles all
@@ -877,26 +1124,36 @@ func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
 // so this operation is fast even when it runs. The CTE walks the full main chain once
 // (O(chain_depth)), which is acceptable since rebuilds are infrequent.
 func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
-	bestBlockID, _, bestErr := s.getBestBlockID(ctx)
-	if bestErr != nil {
-		return errors.NewStorageError("rebuildOffChainSet: failed to get best block ID", bestErr)
-	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
 
-	// Walk the main chain from bestBlockID backward to genesis via parent_id,
-	// then find all block IDs NOT on that path. This is provably correct for all
-	// chain topologies (including nested forks) because any block not reachable
-	// from the best block via parent_id links is by definition off-chain.
-	// The "b.id != m.id" condition prevents infinite recursion at the genesis
-	// block which has parent_id = id (self-referencing).
-	q := `
-		WITH RECURSIVE main_chain AS (
-			SELECT id, parent_id FROM blocks WHERE id = $1
-			UNION ALL
-			SELECT b.id, b.parent_id FROM blocks b INNER JOIN main_chain m ON b.id = m.parent_id WHERE b.id != m.id
-		)
-		SELECT b.id FROM blocks b LEFT JOIN main_chain m ON b.id = m.id WHERE m.id IS NULL
-	`
-	rows, err := s.db.QueryContext(ctx, q, bestBlockID)
+	if s.mainChainRebuilding.Load() > 0 {
+		// on_main_chain flags may be mid-update — fall back to the authoritative CTE walk.
+		// Walk the main chain from bestBlockID backward to genesis via parent_id,
+		// then find all block IDs NOT on that path. This is provably correct for all
+		// chain topologies (including nested forks) because any block not reachable
+		// from the best block via parent_id links is by definition off-chain.
+		// The "b.id != m.id" condition prevents infinite recursion at the genesis
+		// block which has parent_id = id (self-referencing).
+		bestBlockID, _, bestErr := s.getBestBlockID(ctx)
+		if bestErr != nil {
+			return errors.NewStorageError("rebuildOffChainSet: failed to get best block ID", bestErr)
+		}
+		q := `
+			WITH RECURSIVE main_chain AS (
+				SELECT id, parent_id FROM blocks WHERE id = $1
+				UNION ALL
+				SELECT b.id, b.parent_id FROM blocks b INNER JOIN main_chain m ON b.id = m.parent_id WHERE b.id != m.id
+			)
+			SELECT b.id FROM blocks b LEFT JOIN main_chain m ON b.id = m.id WHERE m.id IS NULL
+		`
+		rows, err = s.db.QueryContext(ctx, q, bestBlockID)
+	} else {
+		// on_main_chain flags are up-to-date — use the fast flat scan instead of the CTE.
+		rows, err = s.db.QueryContext(ctx, `SELECT id FROM blocks WHERE on_main_chain = false`)
+	}
 	if err != nil {
 		return errors.NewStorageError("rebuildOffChainSet: failed to query off-chain blocks", err)
 	}
