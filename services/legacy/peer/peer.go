@@ -2388,26 +2388,23 @@ func (p *Peer) handleVersionMsg(msg *wire.MsgVersion) error {
 	return nil
 }
 
-// negotiateOutboundProtocol sends our version message then waits to receive a
-// version message from the peer.  If the events do not occur in that order then
-// it returns an error.
+// negotiateOutboundProtocol performs the outbound side of the Bitcoin version
+// handshake: send VERSION, wait for the remote VERSION, then send VERACK.
+//
+// The order matters. Per the Bitcoin wire protocol, VERACK is a reply to a
+// received VERSION. Sending VERACK before the remote VERSION arrives is a
+// protocol violation that standard BSV nodes (and bitcoind) reject by closing
+// the connection, which surfaces as a "broken pipe" write error on our side.
 func (p *Peer) negotiateOutboundProtocol() error {
 	if err := p.writeLocalVersionMsg(); err != nil {
 		return err
 	}
 
-	errCh := make(chan error, 1)
-
-	go func() {
-		errCh <- p.readRemoteVersionMsg()
-	}()
-
-	if err := p.sendVerack(); err != nil {
+	if err := p.readRemoteVersionMsg(); err != nil {
 		return err
 	}
 
-	// Wait for VERACK from the remote peer
-	return <-errCh
+	return p.sendVerack()
 }
 
 // start begins processing input and output messages.
