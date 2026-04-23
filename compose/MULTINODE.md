@@ -65,7 +65,7 @@ BLAST_AUTO_MINE_INTERVAL=2 compose/multinode.sh blast --auto-mine
 
 The blaster binary is located via `$BLASTER_BIN` (if set), otherwise `../teranode-coinbase/blaster` or `../teranode-coinbase/blaster-tui.run` (whichever is newest). The script does a pre-flight check that the binary supports the required CLI flags; if it's stale you'll get a clear error instead of a cryptic `flag provided but not defined`.
 
-Blaster snapshot + embedded coinbase state goes to `data/multinode/blaster/`. `multinode.sh down` wipes this alongside the chain state so a fresh stack doesn't inherit stale UTXOs.
+Blaster snapshot + embedded coinbase state goes to `data/multinode-blaster/` (outside the docker-managed `data/multinode/` tree so it stays user-owned). `multinode.sh down` wipes this alongside the chain state so a fresh stack doesn't inherit stale UTXOs.
 
 ### Chaos commands
 

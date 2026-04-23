@@ -108,7 +108,7 @@ cmd_down() {
   compose down -v --remove-orphans
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
-  local blaster_data_dir="$REPO_ROOT/data/multinode/blaster"
+  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
   if [[ -d "$blaster_data_dir" ]]; then
     rm -rf "$blaster_data_dir"
     echo "cleaned blaster state: $blaster_data_dir"
@@ -494,6 +494,32 @@ cmd_blast() {
   local rpc_port=$((20000 + (first - 1) * 2000 + 1292))
   local rpc_url="http://localhost:${rpc_port}"
 
+  # Wait for each target node's RPC to answer before launching the blaster.
+  # Without this, gRPC dials to propagation can race container startup and
+  # end up in a stuck state where the blaster thinks it's connected but
+  # broadcasts silently fail. 'up -d' only waits for containers to start,
+  # not for teranode services inside them to be ready.
+  local ready_timeout="${BLAST_READY_TIMEOUT:-60}"
+  for n in "${nodes[@]}"; do
+    local node_rpc=$((20000 + (n - 1) * 2000 + 1292))
+    local waited=0
+    printf "waiting for teranode%s RPC (localhost:%d)..." "$n" "$node_rpc"
+    until curl -sf --max-time 2 -u bitcoin:bitcoin \
+          -H 'Content-Type: application/json' \
+          -d '{"method":"getinfo","params":[]}' \
+          "http://localhost:${node_rpc}" >/dev/null 2>&1; do
+      if [[ "$waited" -ge "$ready_timeout" ]]; then
+        printf " TIMEOUT\n"
+        echo "error: teranode${n} RPC did not become ready within ${ready_timeout}s" >&2
+        echo "       check 'docker compose logs teranode${n}' or raise BLAST_READY_TIMEOUT" >&2
+        exit 1
+      fi
+      sleep 2
+      waited=$((waited + 2))
+    done
+    printf " ok\n"
+  done
+
   if $auto_mine_enabled && [[ -z "$auto_mine_node" ]]; then
     auto_mine_node="$first"
   fi
@@ -515,7 +541,7 @@ cmd_blast() {
   # Control where the blaster writes snapshot + embedded coinbase DB so that
   # 'multinode.sh down' can clean it up alongside the chain state. Only inject
   # our path if the user didn't pass one via '--'.
-  local blaster_data_dir="$REPO_ROOT/data/multinode/blaster"
+  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
   local user_snapshot=false
   for arg in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$arg" in
@@ -537,6 +563,7 @@ cmd_blast() {
   echo "rpc:         $rpc_url  (funding source for embedded coinbase)"
   if ! $user_snapshot; then
     echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
   fi
   if $auto_mine_enabled; then
     echo "auto-mine:   node $auto_mine_node, every ${auto_mine_interval}s"
