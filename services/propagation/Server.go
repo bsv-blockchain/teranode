@@ -607,7 +607,7 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+errors.UserMessage(err))
+			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -667,7 +667,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 		go func() {
 			for err := range processErrors {
-				errMsgs = append(errMsgs, errors.UserMessage(err))
+				errMsgs = append(errMsgs, err.Error())
 				processingErrorWg.Done()
 			}
 		}()
