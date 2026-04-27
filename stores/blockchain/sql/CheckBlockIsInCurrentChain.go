@@ -10,6 +10,12 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
+// maxIDsPerCheckBatch caps the number of placeholders per IN() query in the
+// on_main_chain fast path. Postgres has a 32767 bind-parameter limit; 1000 is
+// far below that and keeps plan-cache pressure low while still amortising
+// round-trip cost across many IDs.
+const maxIDsPerCheckBatch = 1000
+
 // CheckBlockIsInCurrentChain determines if any of the specified blocks are on the current
 // main chain. When useInMemoryChainCheck is true, uses a pure in-memory O(1) lookup via
 // the off-chain set. When false, falls back to the original SQL recursive CTE.
@@ -25,7 +31,11 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 		return false, nil
 	}
 
-	if !s.useInMemoryChainCheck {
+	// Fall back to SQL when:
+	//   - in-memory mode is disabled, OR
+	//   - a rebuild is in progress: offChainBlockIDs may be empty (startup) or stale
+	//     (ongoing reorg/invalidation) and the SQL path has its own CTE fallback.
+	if !s.useInMemoryChainCheck || s.mainChainRebuilding.Load() > 0 {
 		return s.checkBlockIsInCurrentChainSQL(ctx, blockIDs)
 	}
 
@@ -52,9 +62,50 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 	return false, nil
 }
 
-// checkBlockIsInCurrentChainSQL is the original SQL recursive CTE implementation.
-// Used when useInMemoryChainCheck is false.
+// checkBlockIsInCurrentChainSQL is the SQL fallback implementation used when
+// useInMemoryChainCheck is false. Uses the on_main_chain column when flags are
+// consistent; falls back to the recursive CTE when a rebuild is in progress.
 func (s *SQL) checkBlockIsInCurrentChainSQL(ctx context.Context, blockIDs []uint32) (bool, error) {
+	// Defense in depth: the public wrapper already rejects empty input, but
+	// direct callers (tests, benchmarks) may bypass that. The CTE fallback
+	// below indexes blockIDs[0], so an empty slice must not reach it.
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	if s.mainChainRebuilding.Load() == 0 {
+		// Fast path: on_main_chain flags are reliable. Resolve ANY-of semantics
+		// in a single round-trip per batch, rather than one query per ID. Cap
+		// each batch at maxIDsPerCheckBatch so we never approach Postgres's
+		// parameter limit (32767) even if a future caller passes a huge slice.
+		for start := 0; start < len(blockIDs); start += maxIDsPerCheckBatch {
+			end := start + maxIDsPerCheckBatch
+			if end > len(blockIDs) {
+				end = len(blockIDs)
+			}
+			batch := blockIDs[start:end]
+
+			placeholders := make([]string, len(batch))
+			args := make([]interface{}, len(batch))
+			for i, id := range batch {
+				placeholders[i] = fmt.Sprintf("$%d", i+1)
+				args[i] = id
+			}
+			q := fmt.Sprintf(`SELECT 1 FROM blocks WHERE id IN (%s) AND on_main_chain = true LIMIT 1`, strings.Join(placeholders, ","))
+			var found int // sentinel — we only care whether a row is returned
+			err := s.db.QueryRowContext(ctx, q, args...).Scan(&found)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue // this batch had no match; try the next
+				}
+				return false, errors.NewStorageError("failed to check on_main_chain for blocks", err)
+			}
+			return true, nil // ANY-of short-circuit
+		}
+		return false, nil
+	}
+
+	// CTE fallback when on_main_chain is being rebuilt.
 	_, bestBlockMeta, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return false, errors.NewStorageError("failed to get best block header", err)

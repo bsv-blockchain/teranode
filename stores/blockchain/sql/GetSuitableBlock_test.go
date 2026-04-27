@@ -13,7 +13,7 @@ import (
 )
 
 func Test_getMedianBlock(t *testing.T) {
-	var blocks []*model.SuitableBlock
+	blocks := make([]*model.SuitableBlock, 0, 3)
 
 	blocks = append(blocks, &model.SuitableBlock{
 		Time: 1,

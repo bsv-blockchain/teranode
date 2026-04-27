@@ -1606,7 +1606,7 @@ func (b *BlockAssembler) validateParentChain(
 			// Batch fetch all parent metadata at once
 			// Request only the fields we need for validation
 			err := b.utxoStore.BatchDecorate(ctx, unresolvedParents,
-				fields.BlockIDs, fields.UnminedSince, fields.Locked)
+				fields.BlockIDs, fields.UnminedSince, fields.Locked, fields.Conflicting)
 			if err != nil {
 				// Log the batch error but continue - individual errors are in UnresolvedMetaData
 				b.logger.Warnf("[BlockAssembler][validateParentChain] BatchDecorate error (will check individual results): %v", err)
@@ -1669,6 +1669,13 @@ func (b *BlockAssembler) validateParentChain(
 					// This means BatchDecorate couldn't find it - it doesn't exist
 					allParentsValid = false
 					invalidReason = fmt.Sprintf("parent tx %s not found in UTXO store", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					break
+				}
+
+				if parentMeta.Conflicting {
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s is conflicting", parentTxID.String())
 					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 					break
 				}
@@ -2407,8 +2414,16 @@ func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash cha
 }
 
 func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash.Hash) {
-	if _, _, err := b.utxoStore.SetConflicting(ctx, []chainhash.Hash{txHash}, true); err != nil {
+	_, cascadedHashes, err := utxo.MarkConflictingRecursively(ctx, b.utxoStore, []chainhash.Hash{txHash})
+	if err != nil {
 		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
+		return
+	}
+
+	for _, h := range cascadedHashes {
+		if removeErr := b.subtreeProcessor.Remove(ctx, h); removeErr != nil {
+			b.logger.Warnf("[validateUnminedTxInputs][%s] failed to evict cascaded tx from subtree processor: %v", h.String(), removeErr)
+		}
 	}
 }
 

@@ -62,7 +62,7 @@ func testTripleForkedChainExternalTx(t *testing.T, utxoStore string) {
 	// First, mine txA0 so its outputs can be spent
 	// 0 -> 1 ... 101 -> 102a [parentTx] -> 103a [txA0]
 	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0),
 		"Failed to process block103a")
 
 	td.WaitForBlockHeight(t, block103a, blockWait, true)
@@ -91,7 +91,7 @@ func testTripleForkedChainExternalTx(t *testing.T, utxoStore string) {
 	// Create block 104a with chain A external transactions
 	subtree104a, block104a := td.CreateTestBlock(t, block103a, 10401, txA1, txA2, txA3)
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0),
 		"Failed to process block104a")
 
 	td.WaitForBlockHeight(t, block104a, blockWait, true)
@@ -142,12 +142,12 @@ func testTripleForkedChainExternalTx(t *testing.T, utxoStore string) {
 
 	// Create block103b with chain B external transactions (forks from 102a)
 	subtree103b, block103b := td.CreateTestBlock(t, block102aRefetch, 10302, txB0, txB1, txB2)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0),
 		"Failed to process block103b")
 
 	// Create block103c with chain C external transactions (forks from 102a)
 	_, block103c := td.CreateTestBlock(t, block102aRefetch, 10303, txC0, txC1, txC2)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103c, block103c.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103c, block103c.Height, "", "legacy", 0),
 		"Failed to process block103c")
 
 	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA3] (*)
@@ -159,11 +159,11 @@ func testTripleForkedChainExternalTx(t *testing.T, utxoStore string) {
 
 	// Make chain B win temporarily by mining 104b and 105b
 	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0),
 		"Failed to process block104b")
 
 	_, block105b := td.CreateTestBlock(t, block104b, 10502) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0),
 		"Failed to process block105b")
 
 	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA3]
@@ -175,15 +175,15 @@ func testTripleForkedChainExternalTx(t *testing.T, utxoStore string) {
 
 	// Make chain C the ultimate winner by mining 104c, 105c, and 106c
 	_, block104c := td.CreateTestBlock(t, block103c, 10403) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104c, block104c.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104c, block104c.Height, "", "legacy", 0),
 		"Failed to process block104c")
 
 	_, block105c := td.CreateTestBlock(t, block104c, 10503) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105c, block105c.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105c, block105c.Height, "", "legacy", 0),
 		"Failed to process block105c")
 
 	_, block106c := td.CreateTestBlock(t, block105c, 10603) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block106c, block106c.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block106c, block106c.Height, "", "legacy", 0),
 		"Failed to process block106c")
 
 	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA3]

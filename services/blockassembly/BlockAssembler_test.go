@@ -1387,24 +1387,18 @@ func TestBlockAssembler_GetMiningCandidate_PrecomputedData(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
 		ba := testItems.blockAssembler
 		_, _, _ = setupBlockchainClient(t, testItems)
 
 		currentHeader, _ := ba.CurrentBlock()
 		ba.setBestBlockHeader(currentHeader, 1)
 
-		go func() {
-			_ = ba.startChannelListeners(ctx)
-		}()
-
-		// With no transactions added, precomputed data may be nil or empty
-		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		// Do not start channel listeners: the subscription goroutine races with
+		// this test by overwriting bestBlock via processNewBlockAnnouncement.
+		// GetMiningCandidate works directly against the values we set above.
+		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
-		// Should return a valid candidate (empty block template)
 		assert.Equal(t, uint32(2), candidate.Height)
 		assert.Empty(t, subtrees)
 	})

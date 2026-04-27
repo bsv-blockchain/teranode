@@ -142,7 +142,7 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 
 	// The block validation should fail because it contains a transaction
 	// that attempts to spend an already-spent UTXO
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block5Invalid, block5Invalid.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block5Invalid, block5Invalid.Height, "", "legacy", 0)
 	require.Error(t, err, "Expected block with invalidChild to be rejected - contains double spend")
 	t.Logf("Block validation correctly rejected block with invalidChild: %v", err)
 

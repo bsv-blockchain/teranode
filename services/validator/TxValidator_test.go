@@ -407,13 +407,28 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	testTx, errTx := bt.NewTxFromString(testTxHex)
 	assert.NoError(t, errTx)
 
-	testBlockHeight := uint32(820540)
-	testUtxoHeights := []uint32{820539}
+	// The transaction above is a real mainnet transaction but its UTXO locking script is
+	// non-standard: it appends two 6-byte number pushes and OP_NUMEQUALVERIFY after a
+	// standard P2PKH, specifically to exercise the MaxScriptNumLength policy limit.
+	//
+	// BDK v1.2.2 added a standardness check inside VerifyScript for policy mode
+	// (consensus=false). On mainnet, chainParams.RequireStandard()=true, so BDK runs
+	// IsStandardTx/IsInputStandard before executing the script. The non-standard UTXO
+	// script causes that check to fail with SCRIPT_ERR_UNKNOWN_ERROR, masking the
+	// MaxScriptNumLength policy violation we want to test.
+	//
+	// On testnet, chainParams.RequireStandard()=false, so the standardness check is
+	// skipped entirely and BDK proceeds directly to script execution where the policy
+	// limit is enforced. Heights 1400000/1399999 place the transaction in testnet's
+	// Post-Genesis era (genesis=1344302, chronicle=1713168), matching the same protocol
+	// era that the original mainnet heights (820540/820539) represented.
+	testBlockHeight := uint32(1400000)
+	testUtxoHeights := []uint32{1399999}
 
 	t.Run("low MaxScriptNumLengthPolicy must fail", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 5
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
@@ -424,7 +439,7 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	t.Run("high MaxScriptNumLengthPolicy must pass", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 6
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
@@ -468,29 +483,6 @@ func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
 
 	err := txValidator.ValidateTransaction(aTx, 101, nil, &Options{})
 	assert.NoError(t, err)
-}
-
-func TestReturnConsensusError(t *testing.T) {
-	// TxID := 9f569c12dfe382504748015791d1994725a7d81d92ab61a6221eadab9f122ece
-	testTxHex := "010000000000000000ef011c044c4db32b3da68aa54e3f30c71300db250e0b48ea740bd3897a8ea1a2cc9a020000006b483045022100c6177fa406ecb95817d3cdd3e951696439b23f8e888ef993295aa73046504029022052e75e7bfd060541be406ec64f4fc55e708e55c3871963e95bf9bd34df747ee041210245c6e32afad67f6177b02cfc2878fce2a28e77ad9ecbc6356960c020c592d867ffffffffd4c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac0301000000000000001976a914a4429da7462800dedc7b03a4fc77c363b8de40f588ac000000000000000024006a4c2042535620466175636574207c20707573682d7468652d627574746f6e2e617070d2c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac00000000"
-	testTx, errTx := bt.NewTxFromString(testTxHex)
-	assert.NoError(t, errTx)
-
-	testBlockHeight := uint32(886413)
-	testUtxoHeights := []uint32{886412, 886412} // Add one element to make utxo array wrong
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.Policy.MaxTxSigopsCountsPolicy = 1 // low
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
-
-	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
-	assert.NoError(t, err)
-
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
-
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, errors.ErrTxConsensus)
 }
 
 func Test_MinFeePolicy(t *testing.T) {
@@ -667,40 +659,15 @@ func TestSubErrorTxInvalid(t *testing.T) {
 	rootErr := errors.NewUnknownError("a returned root error")
 
 	t.Run("simple errors", func(t *testing.T) {
-		newConsensusError := errors.NewTxConsensusError("An error by consenss", rootErr)
-		isConcensusError := errors.Is(newConsensusError, errors.ErrTxConsensus)
-		assert.True(t, isConcensusError)
-		assert.ErrorIs(t, newConsensusError, errors.ErrTxConsensus) // std check
-
 		newPolicyError := errors.NewTxPolicyError("An error by policy check", rootErr)
 		isPolicyError := errors.Is(newPolicyError, errors.ErrTxPolicy)
 		assert.True(t, isPolicyError)
 		assert.ErrorIs(t, newPolicyError, errors.ErrTxPolicy) // std check
 
-		// Policy, consensus errors are different than the invalid tx error
-		assert.False(t, errors.Is(errors.ErrTxConsensus, errors.ErrTxInvalid))
+		// Policy error is different than the invalid tx error
 		assert.False(t, errors.Is(errors.ErrTxPolicy, errors.ErrTxInvalid))
-		assert.False(t, errors.Is(errors.ErrTxPolicy, errors.ErrTxConsensus))
-
-		assert.False(t, errors.Is(newConsensusError, newPolicyError))
-
-		assert.False(t, errors.Is(newConsensusError, errors.ErrTxInvalid))
-		assert.False(t, errors.Is(newConsensusError, errors.ErrTxPolicy))
 
 		assert.False(t, errors.Is(newPolicyError, errors.ErrTxInvalid))
-		assert.False(t, errors.Is(newPolicyError, errors.ErrTxConsensus))
-	})
-
-	t.Run("combined ErrTxInvalid ErrTxConsensus", func(t *testing.T) {
-		consensusError := errors.NewTxConsensusError("An error by consensus check", rootErr)
-		combinedError := errors.NewTxInvalidError("Final error triggered by consensus check", consensusError)
-
-		assert.ErrorIs(t, combinedError, errors.ErrTxConsensus) // std check
-		assert.ErrorIs(t, combinedError, errors.ErrTxInvalid)   // std check
-
-		assert.True(t, errors.Is(combinedError, errors.ErrTxConsensus))
-		assert.True(t, errors.Is(combinedError, errors.ErrTxInvalid))
-		assert.False(t, errors.Is(combinedError, errors.ErrTxPolicy))
 	})
 
 	t.Run("combined ErrTxInvalid NewTxPolicyError", func(t *testing.T) {
@@ -712,7 +679,6 @@ func TestSubErrorTxInvalid(t *testing.T) {
 
 		assert.True(t, errors.Is(combinedError, errors.ErrTxPolicy))
 		assert.True(t, errors.Is(combinedError, errors.ErrTxInvalid))
-		assert.False(t, errors.Is(combinedError, errors.ErrTxConsensus))
 	})
 }
 

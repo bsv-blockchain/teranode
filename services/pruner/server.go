@@ -136,10 +136,10 @@ func (s *Server) Init(ctx context.Context) error {
 
 	// Blob deletion is now managed by blockchain service - no local DB needed
 
-	// Subscribe to blockchain notifications for event-driven pruning:
-	// - BlockPersisted: Triggers pruning when block persister completes (primary)
-	// - Block: Waits for mined_set=true and triggers if persister not running (fallback)
-	// Also tracks persisted height for coordination with store-level pruner safety checks
+	// Subscribe to blockchain notifications for event-driven pruning.
+	// The pruner_block_trigger setting controls which notification type is used:
+	// - OnBlockPersisted mode: uses BlockPersisted notifications (block persister is running)
+	// - OnBlockMined mode: uses Block notifications and waits for mined_set=true (no persister)
 	subscriptionCh, err := s.blockchainClient.Subscribe(ctx, blockchain.SubscriberPruner)
 	if err != nil {
 		return errors.NewServiceError("failed to subscribe to blockchain notifications", err)

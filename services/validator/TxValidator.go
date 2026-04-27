@@ -344,6 +344,27 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 		return nil
 	}
 
+	// BSV Genesis restored the original Bitcoin semantics for nSequence: it is
+	// used for RBF signalling only, not for relative lock-time enforcement. The
+	// reference implementation drops LOCKTIME_VERIFY_SEQUENCE post-Genesis (see
+	// src/policy/policy.h::StandardNonFinalVerifyFlags and
+	// src/validation.cpp::CheckSequenceLocks), which makes CalculateSequenceLocks
+	// a no-op. Mirror that here so blocks containing non-zero-sequence inputs are
+	// accepted post-Genesis.
+	//
+	// Note on >= vs >: This check uses >= to match BSV's IsGenesisEnabled()
+	// semantics (the activation block itself is considered post-Genesis). That
+	// differs from checkOutputs() below, which uses > because mainnet block
+	// 620538's outputs were created before Genesis rules existed and must not be
+	// retroactively rejected. The two predicates are intentionally different:
+	// checkOutputs gates a backward-incompatible output-shape rule (P2SH/dust)
+	// and exempts the activation block for continuity, whereas sequenceLocks
+	// disables a now-obsolete consensus rule and must match the reference
+	// implementation's boundary exactly.
+	if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
+		return nil
+	}
+
 	// Version 2 transactions are required for BIP68
 	// Transactions with version < 2 bypass relative lock-time enforcement
 	if tx.Version < 2 {

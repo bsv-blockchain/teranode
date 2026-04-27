@@ -100,6 +100,12 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		hash      *chainhash.Hash
 	)
 
+	// Guard the entire window: from when invalid flags change until on_main_chain
+	// is corrected by rebuildOnMainChainFlag. Balanced by the defer so all exit
+	// paths (including the early error below) decrement.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
 	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
 		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
 	}
@@ -107,13 +113,22 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
-		// Invalidate caches to ensure cached blocks reflect updated invalid field
+		// Invalidate caches FIRST so that rebuildOnMainChainFlag does not return a
+		// stale best block that included the now-invalid block.
 		s.blockTimestampCache.Clear()
 		s.ResetResponseCache()
 		if s.useInMemoryChainCheck {
 			s.resetChainWalkCache()
-			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
-			defer rebuildCancel()
+		}
+
+		// Rebuild on_main_chain flags to reflect the new canonical chain after invalidation.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer rebuildCancel()
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		}
+
+		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("InvalidateBlock: %v", rebuildErr)
 			} else {
