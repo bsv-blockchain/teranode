@@ -104,7 +104,7 @@ func testBlockRejectedForDuplicateTxidAcrossSubtrees(t *testing.T, utxoStoreType
 	// checkCounterConflictingOnCurrentChain detects this → block REJECTED.
 	_, block103withTxB := td.CreateTestBlock(t, block102a, 51300, txB)
 
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block103withTxB, block103withTxB.Height, "", "legacy")
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block103withTxB, block103withTxB.Height, "", "legacy", 0)
 	require.Error(t, err,
 		"block with txB (double-spend of mined txA) must be rejected — "+
 			"checkCounterConflictingOnCurrentChain detects txA is on current chain")
@@ -134,7 +134,7 @@ func testBlockRejectedWhenParentTxIsOnOrphanedBranch(t *testing.T, utxoStoreType
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 52300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// Chain B is now the longest: block102b → block103b
@@ -148,7 +148,7 @@ func testBlockRejectedWhenParentTxIsOnOrphanedBranch(t *testing.T, utxoStoreType
 	txChild := td.CreateTransaction(t, txParentOrphaned, 0) // spends txParentOrphaned:0
 
 	_, block104child := td.CreateTestBlock(t, block103b, 52400, txChild)
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104child, block104child.Height, "", "legacy")
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104child, block104child.Height, "", "legacy", 0)
 	require.Error(t, err,
 		"block with txChild (whose parent txParent is on an orphaned branch) must be rejected by checkOldBlockIDs")
 }
@@ -177,7 +177,7 @@ func testBlockAcceptedWhenParentOnDeepMainChain(t *testing.T, utxoStoreType stri
 
 	// Mine txDeepParent
 	_, blockWithDeepParent := td.CreateTestBlock(t, bestBlock, 53100, txDeepParent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithDeepParent, blockWithDeepParent.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithDeepParent, blockWithDeepParent.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, blockWithDeepParent, helperBlockWait, true)
 
 	// Create txDeepChild spending txDeepParent:0
@@ -192,7 +192,7 @@ func testBlockAcceptedWhenParentOnDeepMainChain(t *testing.T, utxoStoreType stri
 	require.NoError(t, err)
 
 	_, blockWithDeepChild := td.CreateTestBlock(t, bestBlock2, 53200, txDeepChild)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithDeepChild, blockWithDeepChild.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithDeepChild, blockWithDeepChild.Height, "", "legacy", 0)
 
 	// Block must be ACCEPTED: txDeepParent is on the current chain
 	require.NoError(t, err,
@@ -238,16 +238,16 @@ func testBlockRejectedWhenParentHasBothCurrentAndOrphanedBlockIDs(t *testing.T, 
 	// Chain A: block102a is already the current chain (from setupDoubleSpendTest)
 	// Build block102c (competing, same parent) containing txShared
 	_, block102c := td.CreateTestBlock(t, block101, 54300, txShared)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102c, block102c.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102c, block102c.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block102a, helperBlockWait, true) // chain A still wins
 
 	// Chain B: also build block102b with txShared (SAME txid as in block102c)
 	_, block102b := td.CreateTestBlock(t, block101, 54200, txShared)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy", 0))
 
 	// Extend chain B to make it win (height 103b)
 	_, block103b := td.CreateTestBlock(t, block102b, 54301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// txShared is now mined on chain B (blockID from block102b)
@@ -258,7 +258,7 @@ func testBlockRejectedWhenParentHasBothCurrentAndOrphanedBlockIDs(t *testing.T, 
 	txChild := td.CreateTransaction(t, txShared, 0)
 
 	_, block104b := td.CreateTestBlock(t, block103b, 54400, txChild)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0)
 
 	// Block must be ACCEPTED: txShared is on the current chain (chain B via block102b)
 	// Even if txShared has additional orphaned block IDs, checkOldBlockIDs must find
@@ -298,7 +298,7 @@ func testBlockRejectedForDuplicateTxidWithConflictingCopy(t *testing.T, utxoStor
 	// CreateTestBlock appends all txs to the same subtree; the duplicate txFresh will
 	// appear twice by position, triggering checkDuplicateTransactions.
 	_, block103 := td.CreateTestBlock(t, block102a, 56300, txFresh, txFresh, txFreshB)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block103, block103.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block103, block103.Height, "", "legacy", 0)
 
 	// Block MUST be rejected — checkDuplicateTransactions fires for the duplicate txFresh
 	require.Error(t, err,

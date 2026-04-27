@@ -169,7 +169,7 @@ func testMultiInputTxPartialSpendRollback(t *testing.T, utxoStoreType string) {
 	require.NoError(t, err)
 
 	_, blockWithTxOther := td.CreateTestBlock(t, bestBlock, 31100, txOther)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithTxOther, blockWithTxOther.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithTxOther, blockWithTxOther.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, blockWithTxOther, helperBlockWait, true)
 
 	// Confirm UTXO2 is now spent (txOther mined)
@@ -236,7 +236,7 @@ func testIntraBlockDoubleSpendAcrossSubtrees(t *testing.T, utxoStoreType string)
 	// txA is first in the slice → wins the UTXO P spend
 	// txB is second → ErrSpent → stored as conflicting in ConflictingNodes
 	_, block103 := td.CreateTestBlock(t, block102a, 80300, txA, txB)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block103, block103.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block103, block103.Height, "", "legacy", 0)
 
 	// Block is REJECTED — intra-block double spend is detected before conflict handling.
 	// The system detects "transaction has duplicate inputs" (same UTXO spent twice in the block)
@@ -299,7 +299,7 @@ func testHundredLevelDeepChainConflict(t *testing.T, utxoStoreType string) {
 		batch := chain[batchStart:batchEnd]
 		nonce := uint32(35300 + batchStart)
 		_, blk := td.CreateTestBlock(t, prevBlock, nonce, batch...)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blk, blk.Height, "", "legacy"),
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blk, blk.Height, "", "legacy", 0),
 			"batch block %d-%d must be accepted", batchStart, batchEnd)
 		td.WaitForBlockHeight(t, blk, 30*helperBlockWait, true)
 		prevBlock = blk
@@ -317,7 +317,7 @@ func testHundredLevelDeepChainConflict(t *testing.T, utxoStoreType string) {
 	for i := 1; i <= 3; i++ { // 3 empty blocks brings chain B to height 105
 		nonce := uint32(35300 + i*100)
 		_, blkB := td.CreateTestBlock(t, chainBPrev, nonce)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blkB, blkB.Height, "", "legacy"))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blkB, blkB.Height, "", "legacy", 0))
 		chainBPrev = blkB
 	}
 	td.WaitForBlockHeight(t, chainBPrev, 30*helperBlockWait, true) // extra timeout for deep chain BFS
@@ -366,7 +366,7 @@ func testDiamondConflictGraph(t *testing.T, utxoStoreType string) {
 
 	// Mine txA and txC in block103a
 	_, block103a := td.CreateTestBlock(t, block102a, 37300, txA, txC)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, helperBlockWait, true)
 
 	// Verify txA and txC are mined and valid
@@ -439,7 +439,7 @@ func testSpendingFromConflictingParentInBlock(t *testing.T, utxoStoreType string
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 82300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	td.VerifyConflictingInUtxoStore(t, true, txA)
@@ -453,7 +453,7 @@ func testSpendingFromConflictingParentInBlock(t *testing.T, utxoStoreType string
 	// Submit block on chain B containing txC
 	// SubtreeValidation with CreateConflicting=true processes txC with conflicting parent
 	_, block104b := td.CreateTestBlock(t, block103b, 82400, txC)
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy")
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0)
 
 	// Block is REJECTED — txC's parent (txA) was mined in block102a which is now an orphaned block.
 	// checkOldBlockIDs detects that txA's block ID is not on the current chain (chain B)

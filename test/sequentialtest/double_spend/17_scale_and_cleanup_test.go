@@ -131,7 +131,7 @@ func testConflictingChildrenListWith50Entries(t *testing.T, utxoStoreType string
 
 	// Extend the chain; verify conflict state remains stable
 	_, block103a := td.CreateTestBlock(t, block102a, 44300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, helperBlockWait, true)
 
 	// txWinner still non-conflicting after chain extension
@@ -164,7 +164,7 @@ func testStaleConflictingChildrenAfterMultipleReorgs(t *testing.T, utxoStoreType
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 40300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	td.VerifyConflictingInUtxoStore(t, true, txA)
@@ -172,10 +172,10 @@ func testStaleConflictingChildrenAfterMultipleReorgs(t *testing.T, utxoStoreType
 
 	// ── Reorg 3: txA wins, txB loses ──────────────────────────────────────────
 	_, block103a := td.CreateTestBlock(t, block102a, 40301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 
 	_, block104a := td.CreateTestBlock(t, block103a, 40401)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104a, helperBlockWait)
 
 	td.VerifyConflictingInUtxoStore(t, false, txA)
@@ -301,7 +301,7 @@ func testZeroOutputTransactionConflict(t *testing.T, utxoStoreType string) {
 	require.NotNil(t, block102bBurn)
 
 	_, block103Winner := td.CreateTestBlock(t, block102bBurn, 45300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103Winner, block103Winner.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103Winner, block103Winner.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103Winner, helperBlockWait, true)
 
 	// ProcessConflicting runs: marks txBurn as conflicting.

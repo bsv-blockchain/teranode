@@ -168,7 +168,7 @@ func testFlipFlopReorg(t *testing.T, utxoStoreType string) {
 
 	// Extend chain B to height 103 to make it the longest chain
 	_, block103b := td.CreateTestBlock(t, block102b, 20300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// After round 2: txB wins, txA loses
@@ -179,10 +179,10 @@ func testFlipFlopReorg(t *testing.T, utxoStoreType string) {
 
 	// ── Round 3: Make chain A win again ───────────────────────────────────────
 	_, block103a := td.CreateTestBlock(t, block102a, 20301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 
 	_, block104a := td.CreateTestBlock(t, block103a, 20401)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104a, helperBlockWait)
 
 	// After round 3: txA wins, txB loses
@@ -193,10 +193,10 @@ func testFlipFlopReorg(t *testing.T, utxoStoreType string) {
 
 	// ── Round 4: Make chain B win again ──────────────────────────────────────
 	_, block104b := td.CreateTestBlock(t, block103b, 20400)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 
 	_, block105b := td.CreateTestBlock(t, block104b, 20500)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block105b, helperBlockWait, true)
 
 	// After round 4: txB wins again, txA loses
@@ -246,7 +246,7 @@ func testResubmitOrphanedConfirmedTxToMempool(t *testing.T, utxoStoreType string
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 21300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// After reorg: txA is conflicting, txConflict is the winner
@@ -287,7 +287,7 @@ func testOrphanedTxReturnsToMempoolNotConflicting(t *testing.T, utxoStoreType st
 
 	// Mine txB in block103a — chain A: 102a[txA] → 103a[txB]
 	_, block103a := td.CreateTestBlock(t, block102a, 22301, txB)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, helperBlockWait, true)
 
 	td.VerifyConflictingInUtxoStore(t, false, txB)
@@ -301,14 +301,14 @@ func testOrphanedTxReturnsToMempoolNotConflicting(t *testing.T, utxoStoreType st
 	require.NoError(t, err)
 
 	_, block102b := td.CreateTestBlock(t, block102aParent, 22200, txC)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy", 0))
 
 	// Extend chain B to height 104 to make it the longest
 	_, block103b := td.CreateTestBlock(t, block102b, 22300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 
 	_, block104b := td.CreateTestBlock(t, block103b, 22400)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104b, helperBlockWait, true)
 
 	// After chain B wins (which doesn't touch UTXO_P or txA:0):
@@ -403,7 +403,7 @@ func testProcessConflictingDoesNotMarkValidChildrenAsConflicting(t *testing.T, u
 
 	// Mine txParent into a block
 	_, blockWithParent := td.CreateTestBlock(t, bestBlock, 30100, txParent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithParent, blockWithParent.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithParent, blockWithParent.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, blockWithParent, externalBlockWait, true)
 	_ = bestHeight // used for context only
 
@@ -428,16 +428,16 @@ func testProcessConflictingDoesNotMarkValidChildrenAsConflicting(t *testing.T, u
 
 	// Mine txValidChild and txGoodChild in chain A block (blockWithParent + 1)
 	_, block103a := td.CreateTestBlock(t, blockWithParent, 30200, txValidChild, txGoodChild)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, externalBlockWait, true)
 
 	// Create competing chain B block at same height, containing txConflictChild (not txValidChild)
 	_, block103b := td.CreateTestBlock(t, blockWithParent, 30201, txConflictChild)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 
 	// Extend chain B to make it the winner
 	_, block104b := td.CreateTestBlock(t, block103b, 30300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104b, externalBlockWait, true)
 
 	// After chain B wins:
@@ -486,7 +486,7 @@ func testMultipleSequentialConflictsOnSameUTXO(t *testing.T, utxoStoreType strin
 	require.NotNil(t, block102c)
 
 	_, block103c := td.CreateTestBlock(t, block102c, 25300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103c, block103c.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103c, block103c.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103c, helperBlockWait, true)
 
 	// txC wins, txA loses (txB was rejected by propagation — not in UTXO store, skip check)
@@ -500,13 +500,13 @@ func testMultipleSequentialConflictsOnSameUTXO(t *testing.T, utxoStoreType strin
 	require.NoError(t, err)
 
 	_, block102d := td.CreateTestBlock(t, block101For3, 25201, txD)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102d, block102d.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102d, block102d.Height, "", "legacy", 0))
 
 	_, block103d := td.CreateTestBlock(t, block102d, 25301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103d, block103d.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103d, block103d.Height, "", "legacy", 0))
 
 	_, block104d := td.CreateTestBlock(t, block103d, 25401)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104d, block104d.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104d, block104d.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104d, helperBlockWait, true)
 
 	// Final state: txD wins; txA and txC lose (txB was rejected by propagation — not in UTXO store)
@@ -561,7 +561,7 @@ func testDeepReorgMixedTxFates(t *testing.T, utxoStoreType string) {
 
 	// Extend chain A: block103a contains txReMined and txOrphan
 	_, block103a := td.CreateTestBlock(t, block102a, 70300, txReMined, txOrphan)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block103a, helperBlockWait, true)
 
 	// All chain A txs are valid at this point
@@ -576,14 +576,14 @@ func testDeepReorgMixedTxFates(t *testing.T, utxoStoreType string) {
 	require.NoError(t, err2)
 
 	_, block102b := td.CreateTestBlock(t, block101, 70200, txConflictB, txReMined)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy", 0))
 
 	// Extend chain B to height 104 to beat chain A at height 103
 	_, block103b := td.CreateTestBlock(t, block102b, 70301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
 
 	_, block104b := td.CreateTestBlock(t, block103b, 70400)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0))
 	td.WaitForBlockHeight(t, block104b, helperBlockWait, true)
 
 	// ── Assert all 3 categories ──────────────────────────────────────────────
