@@ -106,6 +106,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// LimitAncestorCount:              getInt("limitancestorcount", 1000000, alternativeContext...),
 			// LimitCPFPGroupMembersCount:      getInt("limitcpfpgroupmemberscount", 1000000, alternativeContext...),
 			AcceptNonStdOutputs: getBool("acceptnonstdoutputs", true, alternativeContext...),
+			RequireStandard:     getBool("requirestandard", false, alternativeContext...),
 			// DataCarrier:                     getBool("datacarrier", false, alternativeContext...),
 			// MaxStdTxValidationDuration:    getInt("maxstdtxvalidationduration", 3, alternativeContext...),       // 3ms
 			// MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000, alternativeContext...), // 1000ms

@@ -160,8 +160,8 @@ github.com/beorn7/perks v1.0.0/go.mod h1:KWe93zE9D1o94FZ5RNwFwVgaQK1VOXiVxmqh+Ce
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bgentry/speakeasy v0.1.0/go.mod h1:+zsyZBPWlz7T6j88CTgSN5bM796AkVf0kBD4zp0CCIs=
-github.com/bitcoin-sv/bdk/module/gobdk v1.2.2 h1:fsOR00yXLYq600O6HeuQ3iajidDYt4wS7c5EUXwVWaE=
-github.com/bitcoin-sv/bdk/module/gobdk v1.2.2/go.mod h1:6maRlx9FmnAD5vxzSrjOQRyZUV39nbVr/4Tx7hlPlAU=
+github.com/bitcoin-sv/bdk/module/gobdk v1.2.3 h1:Zg+2Y08G+EXwk2Eu5mH4+PNWrcwm0CGa8X3TpiTMJWY=
+github.com/bitcoin-sv/bdk/module/gobdk v1.2.3/go.mod h1:6maRlx9FmnAD5vxzSrjOQRyZUV39nbVr/4Tx7hlPlAU=
 github.com/bitcoinschema/go-bitcoin v0.3.20 h1:jWKT7ePYm4dPaIR2aIAVL8BwdsYtuG/4B87l1+KZyWs=
 github.com/bitcoinschema/go-bitcoin v0.3.20/go.mod h1:HyyMGUTtGE1qOgFJzCmvgsf3y55IfxJ+qLbwRm4Ski4=
 github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 h1:2yTIV9u7H0BhRDGXH5xrAwAz7XibWJtX2dNezMeNsUo=

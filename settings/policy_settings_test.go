@@ -29,6 +29,7 @@ func TestNewPolicySettings(t *testing.T) {
 		assert.Equal(t, 0, ps.LimitAncestorCount)
 		assert.Equal(t, 0, ps.LimitCPFPGroupMembersCount)
 		assert.Equal(t, false, ps.AcceptNonStdOutputs)
+		assert.Equal(t, false, ps.RequireStandard)
 		assert.Equal(t, false, ps.DataCarrier)
 		assert.Equal(t, 0.0, ps.MinMiningTxFee)
 		assert.Equal(t, 0, ps.MaxStdTxValidationDuration)
@@ -225,6 +226,14 @@ func TestPolicySettings_AcceptanceSettings(t *testing.T) {
 
 		ps.SetAcceptNonStdOutputs(false)
 		assert.Equal(t, false, ps.GetAcceptNonStdOutputs())
+	})
+
+	t.Run("SetAndGetRequireStandard", func(t *testing.T) {
+		ps.SetRequireStandard(true)
+		assert.Equal(t, true, ps.GetRequireStandard())
+
+		ps.SetRequireStandard(false)
+		assert.Equal(t, false, ps.GetRequireStandard())
 	})
 
 	t.Run("SetAndGetAcceptNonStdConsolidationInput", func(t *testing.T) {
@@ -507,6 +516,7 @@ func TestPolicySettings_DataTypes(t *testing.T) {
 			getter func() bool
 		}{
 			{"AcceptNonStdOutputs", ps.SetAcceptNonStdOutputs, ps.GetAcceptNonStdOutputs},
+			{"RequireStandard", ps.SetRequireStandard, ps.GetRequireStandard},
 			{"DataCarrier", ps.SetDataCarrier, ps.GetDataCarrier},
 			{"ValidationClockCPU", ps.SetValidationClockCPU, ps.GetValidationClockCPU},
 			{"AcceptNonStdConsolidationInput", ps.SetAcceptNonStdConsolidationInput, ps.GetAcceptNonStdConsolidationInput},
