@@ -18,7 +18,11 @@ utxostore.docker.teranode{{ .Index }}.test                     = aerospike://aer
 p2p_peer_id.docker.teranode{{ .Index }}                        = {{ .PeerID }}
 p2p_private_key.docker.teranode{{ .Index }}                    = {{ .PrivateKey }}
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers }}
-p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
+# StaticPeers is defined in settings but not consumed by services/p2p today; we
+# also populate bootstrap_peers so the mesh actually connects at startup
+# instead of relying on public libp2p relays.
+p2p_bootstrap_peers.docker.teranode{{ .Index }}                = {{ .StaticPeers }}
+p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           = {{ .StaticPeers }}
 {{- end }}
 
 # Shared: disable DHT bootstrap chatter for the local mesh; static peers are enough.
