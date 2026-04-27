@@ -45,6 +45,8 @@ func (s *SQL) getBestBlockID(ctx context.Context) (uint32, *chainhash.Hash, erro
 		hashBytes []byte
 	)
 
+	s.bestBlockIDQueries.Add(1)
+
 	if err := s.db.QueryRowContext(ctx, q).Scan(&id, &hashBytes); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, nil, errors.NewBlockNotFoundError("no valid blocks found", err)

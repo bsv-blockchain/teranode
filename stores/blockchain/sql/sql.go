@@ -54,6 +54,19 @@ const chainWalkCacheTTL = 10 * time.Minute
 // context cancellation.
 const rebuildOffChainSetTimeout = 30 * time.Second
 
+// migrationFullRebuildTimeout bounds the one-shot full-chain rebuildOnMainChainFlag
+// that runs at startup the first time the on_main_chain column is populated.
+// Unlike the bounded-window rebuilds (which touch at most 10×CoinbaseMaturity
+// blocks and always fit in rebuildOffChainSetTimeout), the migration walks the
+// full chain via a recursive CTE and its runtime scales with chain length. On a
+// multi-million-block chain on an undersized VM this can take several minutes,
+// so the 30 s window used elsewhere is too short: if the migration times out,
+// the column is left unpopulated and CheckBlockIsInCurrentChain's fast path
+// returns no rows, silently breaking validation for any block below the
+// windowed-rebuild floor. 30 minutes is generous enough for any realistic
+// chain while still providing a safety net against a truly stuck query.
+const migrationFullRebuildTimeout = 30 * time.Minute
+
 // SQL implements the blockchain.Store interface using SQL database backends.
 // It provides a complete implementation of blockchain data storage and retrieval
 // operations with support for different SQL engines, caching mechanisms, and
@@ -117,6 +130,10 @@ type SQL struct {
 	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
 	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
 	blockTimestampCache *blockTimestampCache
+	// bestBlockIDQueries counts how many times getBestBlockID has hit the database
+	// (cache misses only). Exposed for tests to catch regressions that reintroduce
+	// unnecessary per-block Postgres round-trips in the StoreBlock hot path.
+	bestBlockIDQueries atomic.Uint64
 }
 
 // New creates and initializes a new SQL blockchain store instance.
@@ -234,10 +251,11 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	go func() {
 		defer s.mainChainRebuilding.Add(-1) // release the guard held by New()
 
-		ctx, cancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
-		defer cancel()
-
-		full, err := s.needsFullOnMainChainRebuild(ctx)
+		// Detection is a COUNT comparison — always fast, so the standard bounded
+		// timeout is appropriate.
+		detectCtx, detectCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
+		full, err := s.needsFullOnMainChainRebuild(detectCtx)
+		detectCancel()
 		if err != nil {
 			// On error we cannot determine whether this is a fresh migration or
 			// a consistent DB. A bounded rebuild would silently leave deep
@@ -251,14 +269,30 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		if full {
 			s.logger.Infof("startup: on_main_chain appears unpopulated — running full-chain rebuild (migration)")
 		}
-		if rebuildErr := s.rebuildOnMainChainFlag(ctx, full); rebuildErr != nil {
+
+		// The rebuild itself has two very different runtime profiles:
+		//   - full=true: one-shot recursive CTE over the entire chain; can take
+		//     minutes on multi-million-block chains, especially on undersized
+		//     VMs. Needs migrationFullRebuildTimeout so the migration can
+		//     actually complete — timing out here leaves on_main_chain
+		//     unpopulated and silently breaks validation for deep blocks.
+		//   - full=false: bounded to a 10×CoinbaseMaturity window above the
+		//     tip; always short, so rebuildOffChainSetTimeout is sufficient
+		//     and protects against runaway queries.
+		rebuildTimeout := rebuildOffChainSetTimeout
+		if full {
+			rebuildTimeout = migrationFullRebuildTimeout
+		}
+		rebuildCtx, rebuildCancel := s.shutdownAwareContext(rebuildTimeout)
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, full); rebuildErr != nil {
 			s.logger.Errorf("startup: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
+		rebuildCancel()
 
 		if useInMemory {
-			rebuildCtx, rebuildCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
-			defer rebuildCancel()
-			if rebuildErr := s.rebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			offChainCtx, offChainCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
+			defer offChainCancel()
+			if rebuildErr := s.rebuildOffChainSet(offChainCtx); rebuildErr != nil {
 				s.logger.Errorf("startup: rebuildOffChainSet: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())

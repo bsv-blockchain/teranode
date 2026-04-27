@@ -124,6 +124,9 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		panic(err)
 	}
 
+	se.SetAcceptNonStandardOutput(po.AcceptNonStdOutputs)
+	se.SetRequireStandard(po.RequireStandard)
+
 	return &scriptVerifierGoBDK{
 		logger: l,
 		policy: po,

@@ -1021,7 +1021,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", p.isCoinbase),
+					Err: errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v)", p.isCoinbase),
 				}})
 			} else {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{Data: p.txMeta}})
