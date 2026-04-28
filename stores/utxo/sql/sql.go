@@ -4372,8 +4372,13 @@ type DBExecutor interface {
 	Close() error
 }
 
+// Advisory lock ID for UTXO schema creation serialization across pods.
+const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
+
 func createPostgresSchema(db *usql.DB) error {
-	return createPostgresSchemaImpl(db)
+	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
+		return createPostgresSchemaImpl(db)
+	})
 }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
