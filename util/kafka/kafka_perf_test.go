@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -234,7 +235,10 @@ func TestPerfConsumerThroughput(t *testing.T) {
 	}
 
 	logger := ulogger.TestLogger{}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// This test pre-populates topics with 10k sync sends per size, which can take
+	// several minutes under -race in CI. Keep the parent context comfortably larger
+	// than total test runtime so consumer loops do not inherit an already-expired ctx.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	env := kafkatest.MustStartEnv(t, ctx)
@@ -392,7 +396,7 @@ func TestPerfVaryingFlushSettings(t *testing.T) {
 	var results []kafkatest.Result
 
 	for _, cfg := range configs {
-		topic := fmt.Sprintf("perf-flush-%s-%d", cfg.label, time.Now().UnixNano()%10000)
+		topic := fmt.Sprintf("perf-flush-%s-%d", sanitizeTopicComponent(cfg.label), time.Now().UnixNano()%10000)
 		query := fmt.Sprintf("partitions=1&replication=1&retention=60000&flush_frequency=%s&flush_bytes=%s",
 			cfg.flushFrequency, cfg.flushBytes)
 		kafkaURL, err := url.Parse(env.TopicURL(topic, query))
@@ -430,4 +434,14 @@ func TestPerfVaryingFlushSettings(t *testing.T) {
 	}
 
 	t.Log(kafkatest.FormatResults(results))
+}
+
+var invalidKafkaTopicChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func sanitizeTopicComponent(raw string) string {
+	sanitized := invalidKafkaTopicChars.ReplaceAllString(raw, "-")
+	if sanitized == "" {
+		return "perf"
+	}
+	return sanitized
 }
