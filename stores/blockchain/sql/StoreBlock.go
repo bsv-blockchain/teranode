@@ -147,9 +147,39 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// Reset response cache to invalidate cached best block ID and headers
 	s.ResetResponseCache()
 
-	// Detect forks and reorgs by comparing the newly inserted block against
-	// the post-insert best block. This drives both on_main_chain flag maintenance
-	// and the in-memory off-chain set (when useInMemoryChainCheck is enabled).
+	// Fast path: the block was inserted with onMainChain=true (its parent is the
+	// pre-insert best block) AND we won the race for the highest ID. In this
+	// case we can skip the post-insert getBestBlockID query entirely — the new
+	// block is necessarily the new best (its chain_work is strictly greater
+	// than its parent, which was the previous best). This halves the Postgres
+	// round-trips per StoreBlock call during sequential seeding / catch-up.
+	//
+	// The maxBlockID.CompareAndSwap guards against a concurrent writer: if we
+	// are not the highest ID, another StoreBlock inserted while we were mid-op
+	// and we must fall through to the slow path for authoritative classification.
+	//
+	// We prime the getBestBlockID cache with our identity so the next caller's
+	// pre-insert lookup is a cache hit (no DB round-trip). Begin() is called
+	// after ResetResponseCache() so the captured generation matches current; a
+	// concurrent invalidation between Begin and Set is still safe (the Set is a
+	// no-op under generational tracking).
+	if onMainChain && s.maxBlockID.CompareAndSwap(newBlockID-1, newBlockID) {
+		// Defensive symmetry with slow-path Case 3 at line 218: the CAS above
+		// already advanced maxBlockID from newBlockID-1 to newBlockID, so this
+		// call is a no-op under the max-CAS loop in updateMaxBlockID. Kept
+		// explicit so the intent ("the new tip is maxBlockID") is identical to
+		// the slow path and survives future refactors of the race-detection gate.
+		s.updateMaxBlockID(newBlockID)
+
+		cacheID := chainhash.HashH([]byte("getBestBlockID"))
+		cacheOp := s.responseCache.Begin(cacheID)
+		cacheOp.Set(bestBlockIDResult{id: uint32(newBlockID), hash: block.Hash()}, s.cacheTTL)
+
+		return newBlockID, height, nil
+	}
+
+	// Slow path — classifier for fork/reorg/orphan insertions, or concurrent-
+	// writer races where onMainChain was true but we lost the maxBlockID race.
 	postBestCtx, postBestCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 	defer postBestCancel()
 	postBestID, _, bestErr := s.getBestBlockID(postBestCtx)

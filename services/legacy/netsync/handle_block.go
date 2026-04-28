@@ -894,8 +894,22 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 
 	outpointBatcherSize := sm.settings.Legacy.OutpointBatcherSize
 
-	g, gCtx := errgroup.WithContext(ctx)      // we don't want the tracing to be linked to these calls
-	util.SafeSetLimit(g, outpointBatcherSize) // we limit the number of concurrent requests, to not overload Aerospike
+	// Phase 1: populate inputs whose parents are same-block transactions. These are
+	// served directly from the in-memory txMap, so no DB work is needed here. We run
+	// per-tx goroutines (bounded by OutpointBatcherSize) because each tx's own inputs
+	// are populated independently; this phase reads same-block parent outputs
+	// immediately and does not wait for the parent transaction to be extended first.
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, outpointBatcherSize)
+
+	// Blocks always include a coinbase, but guard against 0-tx edge cases
+	// (malformed/test blocks) where len-1 would produce a negative capacity.
+	txCount := len(block.Transactions())
+	txCapacity := 0
+	if txCount > 0 {
+		txCapacity = txCount - 1
+	}
+	txs := make([]*bt.Tx, 0, txCapacity)
 
 	for idx, wireTx := range block.Transactions() {
 		if idx == 0 {
@@ -906,27 +920,137 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 		txHash := *wireTx.Hash()
 
 		// the coinbase transaction is not part of the txMap
-		if txWrapper, found := txMap.Get(txHash); found {
-			tx := txWrapper.Tx
-
-			g.Go(func() error {
-				if err := sm.ExtendTransaction(gCtx, tx, txMap); err != nil {
-					return errors.NewTxError("failed to extend transaction", err)
-				}
-
-				return nil
-			})
-		} else {
-			// we don't have the transaction in the txMap, so we cannot extend it
+		txWrapper, found := txMap.Get(txHash)
+		if !found {
 			return errors.NewTxError("transaction %s not found in txMap", txHash.String())
 		}
+
+		tx := txWrapper.Tx
+		txs = append(txs, tx)
+
+		g.Go(func() error {
+			if err := sm.extendFromTxMap(gCtx, tx, txMap); err != nil {
+				return errors.NewTxError("failed to extend transaction from txMap", err)
+			}
+			return nil
+		})
 	}
 
-	// wait for all tx to be processed - we don't need to process errors here
 	if err = g.Wait(); err != nil {
-		return errors.NewProcessingError("failed to process transactions", err)
+		return errors.NewProcessingError("failed to extend transactions from txMap", err)
 	}
 
+	// Phase 2: for inputs whose parents are NOT same-block, batch the decoration
+	// using the store's internal chunking instead of issuing one DB lookup per tx.
+	// For a 20k-tx block this collapses ~20k round-trips into roughly O(N / chunkSize).
+	//
+	// BatchPreviousOutputsDecorate skips inputs that already have PreviousTxScript set,
+	// so Phase 1's work is preserved. If it returns a processing/not-found error the
+	// most likely cause is a parent that's been pruned (DAH'd) because the child
+	// already had a prior processing pass. Fall back to per-tx decoration so the
+	// existing recovery path (utxoStore.Get on the child itself) can still kick in.
+	if batchErr := sm.utxoStore.BatchPreviousOutputsDecorate(ctx, txs); batchErr != nil {
+		if errors.Is(batchErr, errors.ErrProcessing) || errors.Is(batchErr, errors.ErrTxNotFound) {
+			return sm.extendPerTxFallback(ctx, txs)
+		}
+		return errors.NewProcessingError("failed to batch-decorate previous outputs", batchErr)
+	}
+
+	return nil
+}
+
+// extendFromTxMap populates a transaction's inputs whose parents are in the same
+// block (available via txMap). Parent Outputs are populated at wire-parse time
+// and never mutated afterwards, so they can be read immediately without waiting
+// for the parent's own inputs to be extended.
+//
+// Inputs whose parents are not in txMap are left for a later bulk DB lookup (see
+// extendTransactions phase 2).
+func (sm *SyncManager) extendFromTxMap(ctx context.Context, tx *bt.Tx, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) error {
+	defer func() {
+		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
+		prometheusLegacyNetsyncBlockTxNrInputs.Observe(float64(len(tx.Inputs)))
+		prometheusLegacyNetsyncBlockTxNrOutputs.Observe(float64(len(tx.Outputs)))
+		// NOTE: prometheusLegacyNetsyncBlockTxExtend is intentionally NOT observed here.
+		// This function is phase 1 only (same-block parents from txMap); phase 2 (bulk
+		// DB decoration via BatchPreviousOutputsDecorate) runs block-wide in
+		// extendTransactions. Observing a tx-level duration here would under-report
+		// end-to-end extend cost versus the old per-tx DB path. We could revisit by
+		// adding a block-level phase-2 histogram if dashboards need it.
+	}()
+
+	txWrapper, found := txMap.Get(*tx.TxIDChainHash())
+	if !found {
+		return errors.NewProcessingError("tx %s not found in txMap", tx.TxIDChainHash())
+	}
+
+	// The per-input work here is trivial (bounds check + two field assignments),
+	// and extendTransactions already parallelises across transactions up to
+	// Legacy.OutpointBatcherSize (default 1024). Spawning another goroutine per
+	// input would multiply concurrency into the tens of thousands for large
+	// blocks with negligible wall-clock benefit. Process inputs synchronously.
+	for i, input := range tx.Inputs {
+		// Honour caller-initiated cancellation between inputs.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		prevTxHash := *input.PreviousTxIDChainHash()
+
+		prevTxWrapper, found := txMap.Get(prevTxHash)
+		if !found {
+			// Parent lives outside this block — phase 2 will decorate it via the batch DB call.
+			continue
+		}
+
+		// Flag the child tx as having at least one in-block parent (used by
+		// downstream bookkeeping). Safe to set repeatedly from this single
+		// goroutine.
+		txWrapper.SomeParentsInBlock = true
+
+		if input.PreviousTxOutIndex >= uint32(len(prevTxWrapper.Tx.Outputs)) {
+			return errors.NewProcessingError("tx %s input %d references invalid output index %d (parent %s has %d outputs)",
+				tx.TxIDChainHash(), i, input.PreviousTxOutIndex, prevTxHash, len(prevTxWrapper.Tx.Outputs))
+		}
+
+		// Parent's Outputs are populated at wire-parse time and never mutated
+		// afterwards, so we can read them immediately without waiting for the
+		// parent tx itself to finish being extended. The old implementation
+		// polled on prevTxWrapper.Tx.IsExtended(); that was unnecessary
+		// (IsExtended checks the parent's *inputs*, not its outputs) and caused
+		// a deadlock under the two-phase flow in extendTransactions, where a
+		// pure-non-local-parent tx only becomes "extended" after phase 2 runs.
+		tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].Satoshis
+		tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].LockingScript)
+	}
+
+	return nil
+}
+
+// extendPerTxFallback runs the original per-tx decoration path. It is invoked only
+// when BatchPreviousOutputsDecorate fails with a missing-parent / processing error;
+// the per-tx path additionally tries `utxoStore.Get(txHash, fields.Tx)` to recover
+// from DAH'd parents that the child itself has already been processed with.
+func (sm *SyncManager) extendPerTxFallback(ctx context.Context, txs []*bt.Tx) error {
+	for _, tx := range txs {
+		if err := sm.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+			if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrTxNotFound) {
+				txMeta, metaErr := sm.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
+				if metaErr == nil && txMeta != nil && txMeta.Tx != nil {
+					if len(txMeta.Tx.Inputs) != len(tx.Inputs) {
+						return errors.NewProcessingError("recovered tx %s has %d inputs but expected %d",
+							tx.TxIDChainHash(), len(txMeta.Tx.Inputs), len(tx.Inputs))
+					}
+					for i, input := range txMeta.Tx.Inputs {
+						tx.Inputs[i].PreviousTxSatoshis = input.PreviousTxSatoshis
+						tx.Inputs[i].PreviousTxScript = input.PreviousTxScript
+					}
+					continue
+				}
+			}
+			return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash(), err)
+		}
+	}
 	return nil
 }
 

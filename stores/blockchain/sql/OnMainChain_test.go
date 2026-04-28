@@ -930,3 +930,18 @@ func TestOnMainChain_ConsistentWithFindBlocksContainingSubtree(t *testing.T) {
 		}
 	}
 }
+
+// TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout guards the invariant
+// that the startup full-migration rebuild gets a more generous deadline than
+// bounded-window rebuilds. The migration walks the entire chain via a recursive
+// CTE and can take minutes on multi-million-block chains (especially on
+// undersized VMs); reducing its timeout to match the windowed one silently
+// leaves on_main_chain unpopulated after startup and breaks
+// CheckBlockIsInCurrentChain's fast path for any block below the windowed
+// rebuild floor.
+func TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout(t *testing.T) {
+	require.Greater(t, migrationFullRebuildTimeout, rebuildOffChainSetTimeout,
+		"full-migration rebuild must have a more generous timeout than windowed rebuilds")
+	require.GreaterOrEqual(t, migrationFullRebuildTimeout, time.Minute,
+		"migration timeout should be minutes-scale to accommodate multi-million-block chains")
+}
