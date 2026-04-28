@@ -2,7 +2,7 @@
 
 ## Summary
 
-Adds go-swagger annotations to the Asset service HTTP handlers and generates a Swagger 2.0 specification covering all 71 REST API operations. This replaces the manually maintained `ui/dashboard/docs/api/openapi.yaml` (which only covered ~15 endpoints and had drifted from the actual code) with an auto-generated spec derived directly from the source.
+Adds go-swagger annotations to the Asset service HTTP handlers and generates a Swagger 2.0 specification covering all 71 REST API operations. This adds a new auto-generated spec derived directly from the source in `services/asset/httpimpl/swagger.json`, while `ui/dashboard/docs/api/openapi.yaml` remains in the repository.
 
 ## What changed
 

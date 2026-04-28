@@ -5,7 +5,6 @@
 // binary response formats.
 //
 //	Schemes: http, https
-//	Host: localhost:8080
 //	BasePath: /api/v1
 //	Version: 1.0.0
 //	License: Open BSV License https://github.com/bsv-blockchain/teranode/blob/master/LICENSE
