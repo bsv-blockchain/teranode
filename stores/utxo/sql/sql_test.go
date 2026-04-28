@@ -1770,6 +1770,185 @@ func TestBatchPreviousOutputsDecorate(t *testing.T) {
 	})
 }
 
+// TestBatchPreviousOutputsDecorate_MultiChunkParallel forces a small chunk size
+// so a modest fixture covers many chunks, then runs the decorate with
+// concurrency > 1 to exercise the parallel path. Every child must end up fully
+// decorated; no slot may be written twice. We verify both pre-conditions.
+func TestBatchPreviousOutputsDecorate_MultiChunkParallel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Shrink the chunk size so 15 unique parents = 5 chunks, which requires
+	// parallel dispatch to actually cover anything interesting.
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 3
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+
+	// Push the store into the parallel path. Value of 1 would be serial.
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 4
+
+	// Build 15 distinct parent txs by cloning the template and varying Version.
+	// Each parent has one output (the template has one spendable output at idx 0
+	// — the second output on the template tx is empty/script-only, we only need
+	// one locking script per parent for this test).
+	parents := make([]*bt.Tx, 15)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(1_000_000 + i) // guarantee unique hash
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err, "create parent %d", i)
+		parents[i] = p
+	}
+
+	// One child per parent, each referencing output index 0 of its parent.
+	// Keeping the child graph simple means every chunk covers one parent only,
+	// which is the worst case for the chunk-to-input dispatch: a bug in the
+	// per-chunk refs slicing would produce wrong scripts or missing inputs.
+	children := make([]*bt.Tx, len(parents))
+	for i, parent := range parents {
+		child := bt.NewTx()
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     0xffffffff,
+		}
+		parentHash := parent.TxIDChainHash()
+		require.NoError(t, input.PreviousTxIDAdd(parentHash))
+		child.Inputs = append(child.Inputs, input)
+		children[i] = child
+	}
+
+	err := store.BatchPreviousOutputsDecorate(ctx, children)
+	require.NoError(t, err, "multi-chunk parallel decorate must succeed")
+
+	// Each child's sole input must now have both PreviousTxScript and
+	// PreviousTxSatoshis populated from its corresponding parent's output 0.
+	for i, child := range children {
+		require.NotNil(t, child.Inputs[0].PreviousTxScript, "child %d missing script", i)
+		expectedScript := parents[i].Outputs[0].LockingScript
+		require.Equal(t, expectedScript.String(), child.Inputs[0].PreviousTxScript.String(),
+			"child %d got wrong script (suggests per-chunk refs dispatch bug)", i)
+		require.Equal(t, parents[i].Outputs[0].Satoshis, child.Inputs[0].PreviousTxSatoshis,
+			"child %d got wrong satoshis", i)
+	}
+}
+
+// TestBatchPreviousOutputsDecorate_MultipleInputsSharingParent checks the case
+// where several inputs across different txs all reference the same (parent,
+// outIdx) — exactly one DB row must fan out to every slot, and chunking must
+// not drop any slot. Bug surface: a per-chunk dispatch that loses the "one row
+// -> N input refs" mapping would leave some slots undecorated.
+func TestBatchPreviousOutputsDecorate_MultipleInputsSharingParent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Force 1-pair chunks so each shared-parent group crosses a chunk boundary
+	// and the parallel dispatch must still fan-out correctly.
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 1
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 2
+
+	// Two parents, each referenced by three child inputs.
+	parents := make([]*bt.Tx, 2)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(2_000_000 + i)
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err)
+		parents[i] = p
+	}
+
+	// 6 children total: 3 per parent.
+	children := make([]*bt.Tx, 0, 6)
+	for _, parent := range parents {
+		for r := 0; r < 3; r++ {
+			child := bt.NewTx()
+			input := &bt.Input{
+				PreviousTxOutIndex: 0,
+				SequenceNumber:     0xffffffff,
+			}
+			parentHash := parent.TxIDChainHash()
+			require.NoError(t, input.PreviousTxIDAdd(parentHash))
+			child.Inputs = append(child.Inputs, input)
+			children = append(children, child)
+		}
+	}
+
+	err := store.BatchPreviousOutputsDecorate(ctx, children)
+	require.NoError(t, err)
+
+	// Every child must be decorated with its parent's output 0.
+	for i, child := range children {
+		parent := parents[i/3]
+		require.NotNil(t, child.Inputs[0].PreviousTxScript, "child %d missing script", i)
+		require.Equal(t, parent.Outputs[0].LockingScript.String(),
+			child.Inputs[0].PreviousTxScript.String(), "child %d wrong script", i)
+		require.Equal(t, parent.Outputs[0].Satoshis,
+			child.Inputs[0].PreviousTxSatoshis, "child %d wrong satoshis", i)
+	}
+}
+
+// TestBatchPreviousOutputsDecorate_SerialEquivalence asserts that concurrency=1
+// still works (kill-switch path) and produces identical output to concurrency>1.
+// This pins the invariant that the parallel path is a pure perf optimisation,
+// not a behaviour change.
+func TestBatchPreviousOutputsDecorate_SerialEquivalence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 2
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+
+	// Seed 7 parents (ensuring at least 4 chunks at chunk size 2).
+	parents := make([]*bt.Tx, 7)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(3_000_000 + i)
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err)
+		parents[i] = p
+	}
+
+	makeChildren := func() []*bt.Tx {
+		out := make([]*bt.Tx, len(parents))
+		for i, parent := range parents {
+			child := bt.NewTx()
+			input := &bt.Input{PreviousTxOutIndex: 0, SequenceNumber: 0xffffffff}
+			require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+			child.Inputs = append(child.Inputs, input)
+			out[i] = child
+		}
+		return out
+	}
+
+	// Run serial
+	serial := makeChildren()
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 1
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, serial))
+
+	// Run parallel
+	parallel := makeChildren()
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 4
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, parallel))
+
+	// Both runs must produce identical decoration for every input.
+	for i := range parents {
+		require.Equal(t, serial[i].Inputs[0].PreviousTxScript.String(),
+			parallel[i].Inputs[0].PreviousTxScript.String(),
+			"serial vs parallel disagreed on script at child %d", i)
+		require.Equal(t, serial[i].Inputs[0].PreviousTxSatoshis,
+			parallel[i].Inputs[0].PreviousTxSatoshis,
+			"serial vs parallel disagreed on satoshis at child %d", i)
+	}
+}
+
 func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2220,4 +2399,56 @@ func TestUnspendSimple(t *testing.T) {
 
 	err = store.Unspend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
+}
+
+func TestBuildCompositeValuesPairs(t *testing.T) {
+	t.Run("single pair sqlite (no casts)", func(t *testing.T) {
+		pairs := []outpointPair{{hash: []byte{0x01, 0x02}, idx: 7}}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "sqlite")
+		require.Equal(t, "VALUES ($1,$2)", clause)
+		require.Equal(t, []interface{}{[]byte{0x01, 0x02}, uint32(7)}, args)
+	})
+
+	t.Run("single pair postgres (first row cast)", func(t *testing.T) {
+		pairs := []outpointPair{{hash: []byte{0x01, 0x02}, idx: 7}}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "postgres")
+		require.Equal(t, "VALUES ($1::bytea,$2::bigint)", clause)
+		require.Equal(t, []interface{}{[]byte{0x01, 0x02}, uint32(7)}, args)
+	})
+
+	t.Run("multiple pairs postgres — only first row cast", func(t *testing.T) {
+		pairs := []outpointPair{
+			{hash: []byte{0xaa}, idx: 0},
+			{hash: []byte{0xbb}, idx: 5},
+			{hash: []byte{0xcc}, idx: 9},
+		}
+		clause, args := buildCompositeValuesPairs(pairs, 3, "postgres")
+		// First row carries the casts to anchor column types; subsequent rows
+		// inherit. Repeating the casts would work but wastes bytes.
+		require.Equal(t, "VALUES ($3::bytea,$4::bigint),($5,$6),($7,$8)", clause)
+		require.Equal(t, []interface{}{
+			[]byte{0xaa}, uint32(0),
+			[]byte{0xbb}, uint32(5),
+			[]byte{0xcc}, uint32(9),
+		}, args)
+	})
+
+	t.Run("multiple pairs sqlite", func(t *testing.T) {
+		pairs := []outpointPair{
+			{hash: []byte{0xaa}, idx: 0},
+			{hash: []byte{0xbb}, idx: 5},
+		}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "sqlite")
+		require.Equal(t, "VALUES ($1,$2),($3,$4)", clause)
+		require.Equal(t, []interface{}{
+			[]byte{0xaa}, uint32(0),
+			[]byte{0xbb}, uint32(5),
+		}, args)
+	})
+
+	t.Run("empty pairs returns empty clause", func(t *testing.T) {
+		clause, args := buildCompositeValuesPairs(nil, 1, "postgres")
+		require.Equal(t, "", clause)
+		require.Nil(t, args)
+	})
 }

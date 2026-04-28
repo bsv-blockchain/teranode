@@ -169,7 +169,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		// The 'seeder' query parameter is used to optimize bulk imports by bypassing index creation.
 		// Creating indexes during data insertion can significantly slow down the process, so we skip
 		// index creation when 'seeder=true' is specified in the query parameters.
-		if err = createPostgresSchema(db, storeURL.Query().Get("seeder") != trueStr); err != nil {
+		if err = createPostgresSchema(logger, db, storeURL.Query().Get("seeder") != trueStr); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -345,7 +345,149 @@ func (s *SQL) Close() error {
 	return s.db.Close()
 }
 
-func createPostgresSchema(db *usql.DB, withIndexes bool) error {
+// Advisory lock IDs for schema creation serialization across pods.
+// These must be unique per schema-creation context and stable across releases.
+const blockchainSchemaLockID int64 = 7_265_726_101 // "tera" + "bc" in ASCII-ish
+
+func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) error {
+	logger.Infof("[blockchain schema] acquiring advisory lock (id=%d) and checking schema", blockchainSchemaLockID)
+	return usql.WithAdvisoryLock(context.Background(), db, blockchainSchemaLockID, func() error {
+		// Fast path: if the schema is already current, skip the DDL sequence
+		// entirely. All DDL statements below ultimately take at least a SHARE
+		// lock on blocks (CREATE INDEX IF NOT EXISTS still does so briefly on
+		// some postgres versions, and CREATE TABLE IF NOT EXISTS touches the
+		// type catalog). When a concurrent pod has spawned its async
+		// on_main_chain rebuild — which holds ROW EXCLUSIVE on blocks for the
+		// duration of the walk — any SHARE request queues, and postgres fair
+		// queueing then parks subsequent AccessShare (SELECT) callers behind
+		// it. That cascade is what blocks readers during otherwise idle
+		// startup.
+		//
+		// Probing the schema via system catalogs (information_schema and
+		// pg_class) only takes AccessShare on catalog tables, never on
+		// blocks, so it cannot be blocked by the rebuild UPDATE. If
+		// everything we expect is already in place we return early and no
+		// blocks-table lock is ever requested.
+		current, err := isBlockchainSchemaCurrent(db, withIndexes)
+		if err != nil {
+			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
+		} else if current {
+			logger.Infof("[blockchain schema] current (withIndexes=%v), skipping DDL", withIndexes)
+			return nil
+		} else {
+			logger.Infof("[blockchain schema] not current (withIndexes=%v), running DDL sequence", withIndexes)
+		}
+		if err := createPostgresSchemaUnlocked(db, withIndexes); err != nil {
+			return err
+		}
+		logger.Infof("[blockchain schema] DDL sequence complete")
+		return nil
+	})
+}
+
+// blockchainSchemaExpectedColumns is the list of columns createPostgresSchemaUnlocked
+// guarantees exist on the blocks table after a successful run. Kept in sync with
+// the CREATE TABLE / ADD COLUMN statements below.
+var blockchainSchemaExpectedColumns = []string{
+	"processed_at",
+	"persisted_at",
+	"median_time_past",
+	"coinbase_bump",
+	"on_main_chain",
+}
+
+// blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
+// withIndexes branch guarantees. Kept in sync with the CREATE INDEX statements
+// below. ux_blocks_hash is always created, so it lives in the base set.
+var (
+	blockchainSchemaExpectedBaseIndexes = []string{
+		"ux_blocks_hash",
+	}
+	blockchainSchemaExpectedFullIndexes = []string{
+		"idx_chain_work_peer_id",
+		"idx_chain_work_valid",
+		"idx_subtrees_mined_height",
+		"idx_subtrees_set_height",
+		"idx_not_persisted_height",
+		"idx_height",
+		"idx_parent_id",
+		"idx_inserted_at",
+		"idx_invalid_height",
+		"idx_on_main_chain_height",
+	}
+)
+
+// isBlockchainSchemaCurrent returns true when the blocks table exists with all
+// expected columns and indexes in place. Uses only system-catalog reads
+// (AccessShare on pg_class / information_schema) so it never contends with
+// writes on blocks. Callers that see true can skip the DDL sequence.
+//
+// Returns (false, nil) if anything is missing. Returns (false, err) only for
+// transport errors — a missing column / table / index is not an error.
+func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
+	// blocks table present?
+	var hasBlocks bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'blocks')`,
+	).Scan(&hasBlocks); err != nil {
+		return false, err
+	}
+	if !hasBlocks {
+		return false, nil
+	}
+
+	// peer_id must exist and already be TEXT — otherwise we still need the
+	// ALTER COLUMN. Use EXISTS so a missing column returns (false, nil)
+	// rather than sql.ErrNoRows from QueryRow.Scan.
+	var peerIDIsText bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'blocks' AND column_name = 'peer_id' AND data_type = 'text'
+		)`,
+	).Scan(&peerIDIsText); err != nil {
+		return false, err
+	}
+	if !peerIDIsText {
+		return false, nil
+	}
+
+	// All expected columns present?
+	for _, col := range blockchainSchemaExpectedColumns {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'blocks' AND column_name = $1)`,
+			col,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	// All expected indexes present?
+	expected := blockchainSchemaExpectedBaseIndexes
+	if withIndexes {
+		expected = append(expected, blockchainSchemaExpectedFullIndexes...)
+	}
+	for _, idx := range expected {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`,
+			idx,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
