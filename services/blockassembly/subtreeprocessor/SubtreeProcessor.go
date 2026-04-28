@@ -1242,6 +1242,12 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 				}
 
+				// Record each winner as processed so subsequent blocks referencing the same
+				// winner don't fail with "tx is not conflicting" (W.conflicting was cleared above).
+				for _, h := range conflictingNodes {
+					processedConflictingHashesMap[h] = true
+				}
+
 				if losingTxHashesMap.Length() > 0 {
 					// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 					if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
