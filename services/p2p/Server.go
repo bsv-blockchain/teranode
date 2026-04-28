@@ -330,6 +330,7 @@ func NewServer(
 		Logger:             logger,
 		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
 		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
+		StaticPeers:        tSettings.P2P.StaticPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
 		DHTMode:            dhtMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
