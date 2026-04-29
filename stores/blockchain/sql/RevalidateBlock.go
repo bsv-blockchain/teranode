@@ -20,7 +20,15 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
-	// Hold the rebuild guard from the UPDATE through the rebuild so concurrent
+	// Capture the pre-revalidation best block ID. If revalidation makes this
+	// block (or one of its now-valid descendants) the new best, we apply a
+	// diff via applyOnMainChainSwitch instead of a wide-window rebuild.
+	preBestID, _, preBestErr := s.getBestBlockID(ctx)
+	if preBestErr != nil {
+		s.logger.Warnf("RevalidateBlock: failed to get pre-revalidation best block: %v", preBestErr)
+	}
+
+	// Hold the rebuild guard from the UPDATE through the diff so concurrent
 	// readers fall back to the authoritative CTE path during the inconsistent
 	// window. Mirrors InvalidateBlock's pattern.
 	s.mainChainRebuilding.Add(1)
@@ -39,17 +47,26 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 	defer rebuildCancel()
 
-	// Invalidate caches FIRST so that rebuildOnMainChainFlag's getBestBlockID call
-	// sees the freshly revalidated state rather than the pre-revalidation cached value.
+	// Invalidate caches FIRST so that getBestBlockID sees the freshly
+	// revalidated state rather than the pre-revalidation cached value.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()
 	}
 
-	// Rebuild on_main_chain flags to reflect the potentially new canonical chain.
-	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+	if preBestErr != nil {
+		// Couldn't capture the old tip; fall back to the bounded full rebuild.
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+			s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		}
+	} else if newBestID, _, newBestErr := s.getBestBlockID(rebuildCtx); newBestErr != nil {
+		s.logger.Errorf("RevalidateBlock: post-revalidation getBestBlockID: %v", newBestErr)
+	} else if newBestID != preBestID {
+		// Revalidation moved the tip — flip the divergent suffixes.
+		if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, newBestID); switchErr != nil {
+			s.logger.Errorf("RevalidateBlock: applyOnMainChainSwitch: %v", switchErr)
+		}
 	}
 
 	if s.useInMemoryChainCheck {

@@ -1186,16 +1186,114 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	return onMainChainCount != bestHeight+1, nil
 }
 
-// rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
-// current canonical chain. It walks the main chain backward from the best block via
-// parent_id.
+// applyOnMainChainSwitch flips on_main_chain along the divergent suffixes between
+// the old chain tip and the new chain tip. It is the hot-path replacement for
+// rebuildOnMainChainFlag's window scan: the walks stop at the lowest common
+// ancestor (LCA), so each visits only reorg-depth-many rows — typically 1-6 in
+// practice and bounded by CoinbaseMaturity by consensus.
 //
-// When full is false, the walk is bounded to the last 10×CoinbaseMaturity blocks above
-// the tip. The bound is safe because a reorg deeper than CoinbaseMaturity is
-// consensus-invalid — blocks beyond that depth have immutable on_main_chain status.
-// When full is true, the walk covers the entire chain back to genesis. Full rebuild
-// is required once after the on_main_chain column is first added to an existing DB
-// (migration), since default values need to be corrected chain-wide.
+// Algorithm (single transaction, single statement):
+//  1. Walk from newTipID backward along parent_id, collecting blocks while
+//     on_main_chain = false. The walk terminates at the first ancestor with
+//     on_main_chain = true — the LCA. That LCA's height is captured.
+//  2. Walk from oldTipID backward along parent_id, collecting blocks with
+//     on_main_chain = true and height strictly greater than the LCA height.
+//     This visits only the divergent old-suffix and stops at LCA.
+//  3. UPDATE the union: set on_main_chain = true for the new-walk rows,
+//     on_main_chain = false for the old-walk rows. The two sets are disjoint
+//     by construction.
+//
+// The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so that any
+// concurrent reader takes the CTE fallback during the brief commit window.
+//
+// Idempotent and safe under repeated calls: a no-op when oldTipID == newTipID,
+// and when newTipID is already on_main_chain = true the new-walk produces an
+// empty set (so does the old-walk).
+func (s *SQL) applyOnMainChainSwitch(ctx context.Context, oldTipID, newTipID uint32) (err error) {
+	if oldTipID == newTipID {
+		return nil
+	}
+
+	var tx *sql.Tx
+	tx, err = s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.NewStorageError("applyOnMainChainSwitch: failed to begin transaction", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// new_walk: ancestors of newTipID while on_main_chain = false. Stops at LCA.
+	// lca: the height of the LCA (single row). NULL/empty if newTipID is itself
+	//      already on_main_chain = true (no-op flip-on case) or if the walk
+	//      reaches genesis without finding an on-chain ancestor (only possible
+	//      if genesis itself is on_main_chain = false, which the startup
+	//      migration prevents).
+	// old_walk: ancestors of oldTipID currently on_main_chain = true above the
+	//      LCA height. The COALESCE on missing LCA falls back to -1, which
+	//      below any real height; combined with on_main_chain = true on every
+	//      step, the walk still terminates at genesis (parent_id = 0 → no row).
+	q := `
+		WITH RECURSIVE
+		new_walk(id, parent_id, height, on_chain) AS (
+			SELECT id, parent_id, height, on_main_chain
+			FROM blocks
+			WHERE id = $1
+			UNION ALL
+			SELECT b.id, b.parent_id, b.height, b.on_main_chain
+			FROM blocks b
+			INNER JOIN new_walk n ON b.id = n.parent_id
+			WHERE b.id != n.id AND NOT n.on_chain
+		),
+		lca(height) AS (
+			SELECT height FROM new_walk WHERE on_chain LIMIT 1
+		),
+		old_walk(id, parent_id) AS (
+			SELECT id, parent_id FROM blocks
+			WHERE id = $2
+			  AND on_main_chain = true
+			  AND height > COALESCE((SELECT height FROM lca), -1)
+			UNION ALL
+			SELECT b.id, b.parent_id
+			FROM blocks b
+			INNER JOIN old_walk o ON b.id = o.parent_id
+			WHERE b.id != o.id
+			  AND b.on_main_chain = true
+			  AND b.height > COALESCE((SELECT height FROM lca), -1)
+		)
+		UPDATE blocks
+		SET on_main_chain = CASE
+			WHEN id IN (SELECT id FROM new_walk WHERE NOT on_chain) THEN true
+			ELSE false
+		END
+		WHERE id IN (SELECT id FROM new_walk WHERE NOT on_chain)
+		   OR id IN (SELECT id FROM old_walk)
+	`
+	if _, err = tx.ExecContext(ctx, q, newTipID, oldTipID); err != nil {
+		return errors.NewStorageError("applyOnMainChainSwitch: failed to apply diff", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return errors.NewStorageError("applyOnMainChainSwitch: failed to commit", err)
+	}
+	return nil
+}
+
+// rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
+// current canonical chain by scanning a height window. It walks the main chain
+// backward from the best block via parent_id.
+//
+// As of the diff-update refactor this is no longer called from any hot path —
+// StoreBlock (reorg case), InvalidateBlock and RevalidateBlock all use
+// applyOnMainChainSwitch instead, which touches only the divergent suffix and
+// avoids the wide UPDATE that previously held the blocks-table write lock.
+// rebuildOnMainChainFlag remains in place for the startup migration only:
+//   - full=true: one-shot, runs once after the on_main_chain column is first
+//     added (column-add migration). Walks to genesis.
+//   - full=false: bounded recovery rebuild on subsequent boots, walks the last
+//     10×CoinbaseMaturity blocks. Used as a startup safety net.
 //
 // Two UPDATEs run inside a single transaction so readers never see a partial state:
 //   - Step 1: clear on_main_chain for blocks in the window no longer on the chain

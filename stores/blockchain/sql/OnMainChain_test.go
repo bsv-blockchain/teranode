@@ -931,6 +931,74 @@ func TestOnMainChain_ConsistentWithFindBlocksContainingSubtree(t *testing.T) {
 	}
 }
 
+// TestApplyOnMainChainSwitch_ReorgDiff verifies the helper flips only the
+// divergent suffixes between two tips, leaving common ancestors untouched.
+func TestApplyOnMainChainSwitch_ReorgDiff(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build main chain genesis → block1 → block2 → block3 (all on_main_chain).
+	storeBlocks(t, s, block1, block2, block3)
+	mainTipID := getBlockID(t, s, block3.Hash().CloneBytes())
+
+	// Build a longer fork off block1: block1 → altBlock2 → forkB3 → forkB4.
+	// Storing the fork blocks one by one will trigger the StoreBlock reorg
+	// path itself (which uses applyOnMainChainSwitch internally). To exercise
+	// the helper directly on a stable state we insert the fork via a different
+	// route: store the fork blocks (which causes a reorg via StoreBlock), then
+	// reset the flags manually and call the helper to re-apply.
+	forkB3 := createBlock3OnFork(blockAlternative2)
+	forkB4 := createBlock3OnFork(forkB3)
+	storeBlocks(t, s, blockAlternative2, forkB3, forkB4)
+	forkTipID := getBlockID(t, s, forkB4.Hash().CloneBytes())
+
+	// At this point a reorg has already happened via StoreBlock. Reset to the
+	// pre-reorg flag state so the helper has actual work to do.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1 OR hash = $2 OR hash = $3`,
+		blockAlternative2.Hash().CloneBytes(), forkB3.Hash().CloneBytes(), forkB4.Hash().CloneBytes())
+	require.NoError(t, err)
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = true WHERE hash = $1 OR hash = $2 OR hash = $3`,
+		block1.Hash().CloneBytes(), block2.Hash().CloneBytes(), block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	// Sanity: pre-state matches the pre-reorg world.
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, forkB3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
+
+	// Apply the diff: switch from main tip (block3) to fork tip (forkB4).
+	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, forkTipID))
+
+	// Post-state: block1 (LCA) untouched, block2/block3 off-chain, fork chain on-chain.
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "LCA stays on main chain")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "old branch flipped off")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "old branch flipped off")
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "new branch flipped on")
+	require.True(t, getOnMainChain(t, s, forkB3.Hash().CloneBytes()), "new branch flipped on")
+	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()), "new branch flipped on (tip)")
+
+	// Idempotency: a second call against the now-correct state must be a no-op.
+	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, forkTipID))
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
+}
+
+// TestApplyOnMainChainSwitch_EqualTipNoOp verifies the helper short-circuits
+// cleanly when oldTipID == newTipID.
+func TestApplyOnMainChainSwitch_EqualTipNoOp(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+	tipID := getBlockID(t, s, block2.Hash().CloneBytes())
+
+	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), tipID, tipID))
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
+}
+
 // TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout guards the invariant
 // that the startup full-migration rebuild gets a more generous deadline than
 // bounded-window rebuilds. The migration walks the entire chain via a recursive

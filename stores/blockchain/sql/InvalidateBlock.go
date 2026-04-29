@@ -75,9 +75,21 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		return []chainhash.Hash{}, nil
 	}
 
-	// recursively update all children blocks to invalid in 1 query
-	// we also set mined_set to false as an invalid block cannot be mined, this will trigger
-	// the mined go routing in block validation to reset any mining state for this block
+	// Capture the pre-invalidation best block ID. Used after the UPDATE to
+	// detect whether invalidation changed the chain tip; if so we flip the new
+	// winning branch's on_main_chain on via applyOnMainChainSwitch. The old
+	// branch is flipped off in the UPDATE below (on_main_chain = false in the
+	// SET clause), so applyOnMainChainSwitch only needs to handle the new side.
+	preBestID, _, preBestErr := s.getBestBlockID(ctx)
+	if preBestErr != nil {
+		s.logger.Warnf("InvalidateBlock: failed to get pre-invalidation best block: %v", preBestErr)
+	}
+
+	// recursively update all children blocks to invalid in 1 query.
+	// Also set mined_set = false (invalid blocks cannot be mined; this triggers
+	// block-validation to reset mining state) and on_main_chain = false so the
+	// invalidated subtree is removed from the canonical chain in the same
+	// transaction — no follow-up wide-window UPDATE needed.
 	q := `
 		WITH RECURSIVE children AS (
 			SELECT id, hash, previous_hash
@@ -89,7 +101,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			INNER JOIN children c ON c.hash = b.previous_hash
 		)
 		UPDATE blocks
-		SET invalid = true, mined_set = false
+		SET invalid = true, mined_set = false, on_main_chain = false
 		WHERE id IN (SELECT id FROM children)
 		RETURNING hash
 	`
@@ -100,9 +112,9 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		hash      *chainhash.Hash
 	)
 
-	// Guard the entire window: from when invalid flags change until on_main_chain
-	// is corrected by rebuildOnMainChainFlag. Balanced by the defer so all exit
-	// paths (including the early error below) decrement.
+	// Guard the entire window: from when invalid/on_main_chain flags change
+	// until applyOnMainChainSwitch corrects the new winning branch. Balanced
+	// by the defer so all exit paths (including the early error below) decrement.
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
@@ -113,7 +125,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
-		// Invalidate caches FIRST so that rebuildOnMainChainFlag does not return a
+		// Invalidate caches FIRST so that getBestBlockID does not return a
 		// stale best block that included the now-invalid block.
 		s.blockTimestampCache.Clear()
 		s.ResetResponseCache()
@@ -121,11 +133,24 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			s.resetChainWalkCache()
 		}
 
-		// Rebuild on_main_chain flags to reflect the new canonical chain after invalidation.
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+
+		if preBestErr != nil {
+			// Couldn't capture the old tip before invalidation; fall back to
+			// the bounded full rebuild for safety.
+			if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+				s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+			}
+		} else if newBestID, _, newBestErr := s.getBestBlockID(rebuildCtx); newBestErr != nil {
+			s.logger.Errorf("InvalidateBlock: post-invalidation getBestBlockID: %v", newBestErr)
+		} else if newBestID != preBestID {
+			// The invalidated subtree contained the old tip; flip the new
+			// winning branch's on_main_chain on. The old branch already had
+			// on_main_chain cleared by the UPDATE above.
+			if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, newBestID); switchErr != nil {
+				s.logger.Errorf("InvalidateBlock: applyOnMainChainSwitch: %v", switchErr)
+			}
 		}
 
 		if s.useInMemoryChainCheck {

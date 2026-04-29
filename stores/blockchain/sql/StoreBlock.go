@@ -106,25 +106,23 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
-	// Hold the rebuild guard for the full StoreBlock window. Between the INSERT
-	// commit and the post-insert rebuild (reorg case), readers that take the
-	// fast path would otherwise see a newly-inserted best block with
-	// on_main_chain=false while the old tip still has on_main_chain=true.
-	// Holding the guard forces those readers onto the CTE fallback, which
-	// walks from the authoritative best block and is consistent immediately
-	// after the INSERT commits. Mirrors InvalidateBlock's pattern.
-	s.mainChainRebuilding.Add(1)
-	defer s.mainChainRebuilding.Add(-1)
-
-	// Capture the best block hash before insert. Used both for:
-	//   1. Reorg detection after insert (existing logic, gated on useInMemoryChainCheck)
+	// Capture the best block ID + hash before insert. Used for:
+	//   1. Reorg detection after insert
 	//   2. Determining whether to set on_main_chain = true directly in the INSERT
 	//      (avoids a post-insert UPDATE for the common extend-chain case)
+	//   3. Identifying the old tip in applyOnMainChainSwitch on the reorg path
 	// getBestBlockID is cached, so this is essentially free.
+	//
+	// The mainChainRebuilding guard is taken only in the reorg branch below —
+	// the common extend path is fully consistent the moment the INSERT commits
+	// (the new tip's on_main_chain is written atomically with its row), so
+	// concurrent readers can stay on the indexed fast path during normal
+	// extends rather than being forced onto the CTE fallback.
+	var preBestID uint32
 	var preBestHash *chainhash.Hash
 	{
 		var preBestErr error
-		_, preBestHash, preBestErr = s.getBestBlockID(ctx)
+		preBestID, preBestHash, preBestErr = s.getBestBlockID(ctx)
 		if preBestErr != nil {
 			s.logger.Warnf("StoreBlock: failed to get pre-insert best block ID: %v", preBestErr)
 		}
@@ -201,8 +199,17 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
 		// Case 2: new block is the best but doesn't extend the old best (reorg),
-		// or preBestHash was unavailable — rebuild on_main_chain flags in the DB
-		// and the in-memory off-chain set.
+		// or preBestHash was unavailable.
+		//
+		// Hold mainChainRebuilding only here, around the on_main_chain diff:
+		// between the INSERT (which wrote on_main_chain=false for the new tip)
+		// and the diff UPDATE, readers on the fast path could see the new best
+		// with on_main_chain=false while the old tip still has on_main_chain=true.
+		// Forcing concurrent readers onto the CTE fallback during this brief
+		// window keeps them consistent.
+		s.mainChainRebuilding.Add(1)
+		defer s.mainChainRebuilding.Add(-1)
+
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 		if s.useInMemoryChainCheck {
@@ -210,8 +217,19 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-			s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		if preBestHash != nil {
+			// Diff path: flip only the divergent suffixes. ~handful of rows,
+			// no wide window scan, no DB lockup.
+			if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, uint32(newBlockID)); switchErr != nil {
+				s.logger.Errorf("StoreBlock: applyOnMainChainSwitch: %v", switchErr)
+			}
+		} else {
+			// preBestHash was unavailable (e.g. getBestBlockID errored above).
+			// Fall back to the bounded rebuild for safety — rare, and we don't
+			// know the old tip ID to feed the diff.
+			if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+			}
 		}
 		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
