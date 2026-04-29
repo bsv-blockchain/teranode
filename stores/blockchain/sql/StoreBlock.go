@@ -106,23 +106,18 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
-	// Capture the best block ID + hash before insert. Used for:
+	// Capture the best block hash before insert. Used for:
 	//   1. Reorg detection after insert
 	//   2. Determining whether to set on_main_chain = true directly in the INSERT
 	//      (avoids a post-insert UPDATE for the common extend-chain case)
-	//   3. Identifying the old tip in applyOnMainChainSwitch on the reorg path
-	// getBestBlockID is cached, so this is essentially free.
-	//
-	// The mainChainRebuilding guard is taken only in the reorg branch below —
-	// the common extend path is fully consistent the moment the INSERT commits
-	// (the new tip's on_main_chain is written atomically with its row), so
-	// concurrent readers can stay on the indexed fast path during normal
-	// extends rather than being forced onto the CTE fallback.
-	var preBestID uint32
+	// getBestBlockID is cached, so this is essentially free. The reorg-case
+	// reconciliation does not depend on the caller's pre-best snapshot —
+	// reconcileOnMainChain re-reads the actual best inside its own transaction
+	// to avoid races against concurrent fast-path inserts.
 	var preBestHash *chainhash.Hash
 	{
 		var preBestErr error
-		preBestID, preBestHash, preBestErr = s.getBestBlockID(ctx)
+		_, preBestHash, preBestErr = s.getBestBlockID(ctx)
 		if preBestErr != nil {
 			s.logger.Warnf("StoreBlock: failed to get pre-insert best block ID: %v", preBestErr)
 		}
@@ -224,7 +219,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// Case 2: new block is the best but doesn't extend the old best (reorg),
 		// or preBestHash was unavailable. The mainChainRebuilding guard and
 		// slowPathMu are already held from the !onMainChain branch above —
-		// they cover the full window from before the INSERT through the diff.
+		// they cover the full window from before the INSERT through reconcile.
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 		if s.useInMemoryChainCheck {
@@ -232,19 +227,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		if preBestHash != nil {
-			// Diff path: flip only the divergent suffixes. ~handful of rows,
-			// no wide window scan, no DB lockup.
-			if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, uint32(newBlockID)); switchErr != nil {
-				s.logger.Errorf("StoreBlock: applyOnMainChainSwitch: %v", switchErr)
-			}
-		} else {
-			// preBestHash was unavailable (e.g. getBestBlockID errored above).
-			// Fall back to the bounded rebuild for safety — rare, and we don't
-			// know the old tip ID to feed the diff.
-			if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-				s.logger.Errorf("StoreBlock: rebuildOnMainChainFlag: %v", rebuildErr)
-			}
+		// Reconcile against the actual chain_work-best block read inside the
+		// helper transaction. We pass no caller-side tip IDs because they are
+		// inherently racy (a concurrent fast-path StoreBlock can extend the
+		// best between our INSERT and the helper's transaction).
+		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
+			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
 		}
 		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {

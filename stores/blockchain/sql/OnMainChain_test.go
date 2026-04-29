@@ -932,28 +932,24 @@ func TestOnMainChain_ConsistentWithFindBlocksContainingSubtree(t *testing.T) {
 	}
 }
 
-// TestApplyOnMainChainSwitch_ReorgDiff verifies the helper flips only the
-// divergent suffixes between two tips, leaving common ancestors untouched.
-func TestApplyOnMainChainSwitch_ReorgDiff(t *testing.T) {
+// TestReconcileOnMainChain_ReorgDiff verifies the helper restores correct
+// on_main_chain flags after a typical reorg, leaving common ancestors
+// untouched.
+func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 
 	// Build main chain genesis → block1 → block2 → block3 (all on_main_chain).
 	storeBlocks(t, s, block1, block2, block3)
-	mainTipID := getBlockID(t, s, block3.Hash().CloneBytes())
 
 	// Build a longer fork off block1: block1 → altBlock2 → forkB3 → forkB4.
-	// Storing the fork blocks one by one will trigger the StoreBlock reorg
-	// path itself (which uses applyOnMainChainSwitch internally). To exercise
-	// the helper directly on a stable state we insert the fork via a different
-	// route: store the fork blocks (which causes a reorg via StoreBlock), then
-	// reset the flags manually and call the helper to re-apply.
+	// Storing the fork blocks via StoreBlock triggers the reorg path which
+	// already calls reconcile. To exercise the helper directly we then
+	// rewind the flags manually and re-run reconcile.
 	forkB3 := createBlock3OnFork(blockAlternative2)
 	forkB4 := createBlock3OnFork(forkB3)
 	storeBlocks(t, s, blockAlternative2, forkB3, forkB4)
-	forkTipID := getBlockID(t, s, forkB4.Hash().CloneBytes())
 
-	// At this point a reorg has already happened via StoreBlock. Reset to the
-	// pre-reorg flag state so the helper has actual work to do.
+	// Rewind flags to the pre-reorg world so reconcile has work to do.
 	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1 OR hash = $2 OR hash = $3`,
 		blockAlternative2.Hash().CloneBytes(), forkB3.Hash().CloneBytes(), forkB4.Hash().CloneBytes())
 	require.NoError(t, err)
@@ -969,8 +965,8 @@ func TestApplyOnMainChainSwitch_ReorgDiff(t *testing.T) {
 	require.False(t, getOnMainChain(t, s, forkB3.Hash().CloneBytes()))
 	require.False(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
 
-	// Apply the diff: switch from main tip (block3) to fork tip (forkB4).
-	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, forkTipID))
+	// Reconcile: walks from the actual best (forkB4 by chain_work) and fixes flags.
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
 
 	// Post-state: block1 (LCA) untouched, block2/block3 off-chain, fork chain on-chain.
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "LCA stays on main chain")
@@ -981,63 +977,182 @@ func TestApplyOnMainChainSwitch_ReorgDiff(t *testing.T) {
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()), "new branch flipped on (tip)")
 
 	// Idempotency: a second call against the now-correct state must be a no-op.
-	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, forkTipID))
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
 }
 
-// TestApplyOnMainChainSwitch_EqualTipNoOp verifies the helper short-circuits
-// cleanly when oldTipID == newTipID.
-func TestApplyOnMainChainSwitch_EqualTipNoOp(t *testing.T) {
+// TestReconcileOnMainChain_AlreadyConsistent verifies the helper is a no-op
+// when on_main_chain already reflects the chain_work-best lineage.
+func TestReconcileOnMainChain_AlreadyConsistent(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 	storeBlocks(t, s, block1, block2)
-	tipID := getBlockID(t, s, block2.Hash().CloneBytes())
 
-	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), tipID, tipID))
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
 }
 
-// TestApplyOnMainChainSwitch_StaleNewTipRejected verifies that the helper
-// refuses to apply a diff when the caller's newTipID no longer matches the
-// actual current best block. Without this guard, a slow-path writer that
-// captured a pre-best, lost a race to a higher-work writer, and then called
-// the helper would mark a losing branch on_main_chain=true and leave the
-// table with two branches flagged as main chain. The in-transaction re-read
-// catches the stale view and aborts cleanly.
-func TestApplyOnMainChainSwitch_StaleNewTipRejected(t *testing.T) {
+// TestReconcileOnMainChain_EmptyDB exercises the ErrNoRows branch: when the
+// blocks table is empty (no valid rows) reconcile commits cleanly without
+// running the UPDATE.
+func TestReconcileOnMainChain_EmptyDB(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 
-	// Build genesis → block1 → block2 → block3 (main chain).
+	_, err := s.db.Exec(`DELETE FROM blocks`)
+	require.NoError(t, err)
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()),
+		"reconcile must commit cleanly on an empty blocks table")
+}
+
+// TestReconcileOnMainChain_LowCoinbaseMaturityFloor exercises the maxDepth
+// floor branch (maxDepth = max(2*CoinbaseMaturity, 100)). With
+// CoinbaseMaturity = 0, maxDepth would be 0 without the floor; the floor
+// keeps the walk usable for tests with small consensus parameters.
+func TestReconcileOnMainChain_LowCoinbaseMaturityFloor(t *testing.T) {
+	s := newOnMainChainTestStoreWith(t, func(ts *settings.Settings) {
+		ts.ChainCfgParams.CoinbaseMaturity = 0
+	})
 	storeBlocks(t, s, block1, block2, block3)
-	mainTipID := getBlockID(t, s, block3.Hash().CloneBytes())
 
-	// blockAlternative2 is a fork of block2 with strictly less chain_work, so
-	// it is NOT the best block. Calling the helper with oldTip=block3 and
-	// newTip=blockAlternative2 simulates a slow-path writer whose view of
-	// "the new winning tip" is wrong. The helper must refuse the diff.
+	// Manually clear a flag inside the walk window; reconcile must restore it.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`,
+		block2.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()),
+		"floor-bounded walk must still cover the actual best's lineage")
+}
+
+// TestReconcileOnMainChain_BeginTxError exercises the BeginTx error branch
+// by closing the underlying DB before invocation. The deferred rollback in
+// the err != nil case is also exercised through this path.
+func TestReconcileOnMainChain_BeginTxError(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	require.NoError(t, s.db.Close())
+
+	err := s.reconcileOnMainChain(context.Background())
+	require.Error(t, err, "reconcile must return an error when the DB is unusable")
+}
+
+// TestReconcileOnMainChain_QueryError exercises the non-ErrNoRows scan error
+// branch via a pre-canceled context. The exact branch hit depends on whether
+// BeginTx or Scan checks the context first — both surface as a non-nil error
+// return from the helper.
+func TestReconcileOnMainChain_QueryError(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := s.reconcileOnMainChain(ctx)
+	require.Error(t, err, "reconcile must return an error when context is canceled")
+}
+
+// TestInvalidateBlock_CanceledContextErrorPath covers the QueryContext error
+// branch in InvalidateBlock by passing a pre-canceled context.
+func TestInvalidateBlock_CanceledContextErrorPath(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := s.InvalidateBlock(ctx, block2.Hash())
+	require.Error(t, err, "InvalidateBlock must surface a canceled-context error")
+}
+
+// TestRevalidateBlock_CanceledContextErrorPath covers the ExecContext error
+// branch in RevalidateBlock by passing a pre-canceled context.
+func TestRevalidateBlock_CanceledContextErrorPath(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+
+	// Invalidate first so RevalidateBlock has work to do; uses a fresh context.
+	_, err := s.InvalidateBlock(context.Background(), block2.Hash())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = s.RevalidateBlock(ctx, block2.Hash())
+	require.Error(t, err, "RevalidateBlock must surface a canceled-context error")
+}
+
+// TestReconcileOnMainChain_FillsFastPathDescendantGap is the regression test
+// for the race the reviewer flagged: a concurrent fast-path StoreBlock can
+// extend the actual best with on_main_chain=true while a slow-path writer is
+// in flight, leaving its ancestor flagged false. Reconcile must fill the gap
+// rather than skipping the diff because the caller's "expected" tip moved.
+//
+// We simulate the race deterministically by manually rewinding the on_main_chain
+// flag on a block that lies on the actual best's lineage, mimicking the state
+// the reviewer described (F+1 on_main_chain=true, F on_main_chain=false above
+// a still-flagged ancestor Y). Reconcile must restore F's flag.
+func TestReconcileOnMainChain_FillsFastPathDescendantGap(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build genesis → block1 → block2 → block3. block3 is the chain_work best.
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Manually create a "gap": clear block2's on_main_chain while leaving
+	// block1 and block3 flagged. This is exactly the inconsistent state a
+	// fast-path INSERT can produce when it extends a not-yet-flagged best
+	// during a slow-path window.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`,
+		block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "pre-condition: gap")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// Reconcile must walk the actual best's lineage and flip the gap closed.
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "gap on the actual main chain must be filled")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+}
+
+// TestReconcileOnMainChain_NoStaleBranchSurvives is the regression test for
+// the stale-old-tip race the reviewer flagged: a previous reconciliation
+// already marked branch A as the main chain, but a later reconciliation
+// using a stale snapshot would leave A flagged alongside the new winner B.
+// We simulate by leaving two branches flagged on_main_chain=true and asserting
+// reconcile clears the loser.
+func TestReconcileOnMainChain_NoStaleBranchSurvives(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Main chain genesis → block1 → block2 → block3 (block3 is best).
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Manually flag a fork block on_main_chain=true to simulate a stray
+	// "old branch" that a previous broken reconciliation left behind.
 	storeBlocks(t, s, blockAlternative2)
-	staleTipID := getBlockID(t, s, blockAlternative2.Hash().CloneBytes())
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = true WHERE hash = $1`,
+		blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: stale flag")
 
-	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, staleTipID))
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
 
-	// The chain state must be unchanged: main-chain blocks still on, fork still off.
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
 	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
 	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()),
-		"stale-tip diff must not flag the losing fork as main chain")
+		"stale on_main_chain=true on a non-best branch must be cleared")
 }
 
-// TestApplyOnMainChainSwitch_SingleMainChainAfterConcurrentInvalidates fires
+// TestReconcileOnMainChain_SingleMainChainAfterConcurrentInvalidates fires
 // invalidate calls from multiple goroutines and asserts the post-state has
-// exactly one block on_main_chain=true at any height. This is the regression
-// guard for the concurrent-writer scenario where two slow-path operations
-// would each capture a stale pre-best and each commit a diff, leaving
-// multiple flagged branches.
-func TestApplyOnMainChainSwitch_SingleMainChainAfterConcurrentInvalidates(t *testing.T) {
+// exactly one block on_main_chain=true at any height — the invariant that was
+// broken by the parameter-based switch helper under the same concurrency.
+func TestReconcileOnMainChain_SingleMainChainAfterConcurrentInvalidates(t *testing.T) {
 	s := newOnMainChainTestStore(t)
 
 	// Build a chain with a fork: genesis → block1 → block2 → block3 (main),

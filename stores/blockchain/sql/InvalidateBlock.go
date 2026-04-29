@@ -76,23 +76,11 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	}
 
 	// Serialize against StoreBlock's slow path and RevalidateBlock so the
-	// pre-best capture, the UPDATE, and applyOnMainChainSwitch all see a
-	// stable view of the chain tip. Without this, two concurrent slow-path
-	// writers can each capture the same pre-best, each commit a UPDATE,
-	// and each call the diff helper against their own (now-stale) view —
-	// leaving the table with multiple branches flagged on_main_chain=true.
+	// UPDATE and the follow-up reconciliation observe a stable view of the
+	// chain. The reconciliation itself derives the actual best inside its
+	// transaction, so we do not need to snapshot a pre-best on this side.
 	s.slowPathMu.Lock()
 	defer s.slowPathMu.Unlock()
-
-	// Capture the pre-invalidation best block ID. Used after the UPDATE to
-	// detect whether invalidation changed the chain tip; if so we flip the new
-	// winning branch's on_main_chain on via applyOnMainChainSwitch. The old
-	// branch is flipped off in the UPDATE below (on_main_chain = false in the
-	// SET clause), so applyOnMainChainSwitch only needs to handle the new side.
-	preBestID, _, preBestErr := s.getBestBlockID(ctx)
-	if preBestErr != nil {
-		s.logger.Warnf("InvalidateBlock: failed to get pre-invalidation best block: %v", preBestErr)
-	}
 
 	// recursively update all children blocks to invalid in 1 query.
 	// Also set mined_set = false (invalid blocks cannot be mined; this triggers
@@ -145,21 +133,13 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 
-		if preBestErr != nil {
-			// Couldn't capture the old tip before invalidation; fall back to
-			// the bounded full rebuild for safety.
-			if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-				s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
-			}
-		} else if newBestID, _, newBestErr := s.getBestBlockID(rebuildCtx); newBestErr != nil {
-			s.logger.Errorf("InvalidateBlock: post-invalidation getBestBlockID: %v", newBestErr)
-		} else if newBestID != preBestID {
-			// The invalidated subtree contained the old tip; flip the new
-			// winning branch's on_main_chain on. The old branch already had
-			// on_main_chain cleared by the UPDATE above.
-			if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, newBestID); switchErr != nil {
-				s.logger.Errorf("InvalidateBlock: applyOnMainChainSwitch: %v", switchErr)
-			}
+		// reconcileOnMainChain reads the actual chain_work-best block inside
+		// its own transaction and walks its lineage to fix up any flags. The
+		// extended UPDATE above already cleared on_main_chain on the
+		// invalidated subtree; reconcile takes care of any new winning branch
+		// and any fast-path descendant inserted between the UPDATE and now.
+		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
+			s.logger.Errorf("InvalidateBlock: reconcileOnMainChain: %v", reconcileErr)
 		}
 
 		if s.useInMemoryChainCheck {

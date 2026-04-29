@@ -21,23 +21,14 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	}
 
 	// Serialize against StoreBlock's slow path and InvalidateBlock so the
-	// pre-best capture, the UPDATE, and applyOnMainChainSwitch all see a
-	// stable view of the chain tip. See the matching note in InvalidateBlock
-	// for the failure mode this prevents.
+	// UPDATE and the follow-up reconciliation observe a stable view of the
+	// chain. See the matching note in InvalidateBlock.
 	s.slowPathMu.Lock()
 	defer s.slowPathMu.Unlock()
 
-	// Capture the pre-revalidation best block ID. If revalidation makes this
-	// block (or one of its now-valid descendants) the new best, we apply a
-	// diff via applyOnMainChainSwitch instead of a wide-window rebuild.
-	preBestID, _, preBestErr := s.getBestBlockID(ctx)
-	if preBestErr != nil {
-		s.logger.Warnf("RevalidateBlock: failed to get pre-revalidation best block: %v", preBestErr)
-	}
-
-	// Hold the rebuild guard from the UPDATE through the diff so concurrent
-	// readers fall back to the authoritative CTE path during the inconsistent
-	// window. Mirrors InvalidateBlock's pattern.
+	// Hold the rebuild guard from the UPDATE through the reconciliation so
+	// concurrent readers fall back to the authoritative CTE path during the
+	// inconsistent window. Mirrors InvalidateBlock's pattern.
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
@@ -62,18 +53,12 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		s.resetChainWalkCache()
 	}
 
-	if preBestErr != nil {
-		// Couldn't capture the old tip; fall back to the bounded full rebuild.
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
-			s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
-		}
-	} else if newBestID, _, newBestErr := s.getBestBlockID(rebuildCtx); newBestErr != nil {
-		s.logger.Errorf("RevalidateBlock: post-revalidation getBestBlockID: %v", newBestErr)
-	} else if newBestID != preBestID {
-		// Revalidation moved the tip — flip the divergent suffixes.
-		if switchErr := s.applyOnMainChainSwitch(rebuildCtx, preBestID, newBestID); switchErr != nil {
-			s.logger.Errorf("RevalidateBlock: applyOnMainChainSwitch: %v", switchErr)
-		}
+	// reconcileOnMainChain reads the actual chain_work-best block inside its
+	// own transaction; if revalidation moved the tip, the helper walks the
+	// new winning lineage and updates flags accordingly. If the tip is
+	// unchanged the call is a no-op.
+	if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
+		s.logger.Errorf("RevalidateBlock: reconcileOnMainChain: %v", reconcileErr)
 	}
 
 	if s.useInMemoryChainCheck {

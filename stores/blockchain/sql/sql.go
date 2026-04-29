@@ -1196,47 +1196,66 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	return onMainChainCount != bestHeight+1, nil
 }
 
-// applyOnMainChainSwitch flips on_main_chain along the divergent suffixes between
-// the old chain tip and the new chain tip. It is the hot-path replacement for
-// rebuildOnMainChainFlag's window scan: the walks stop at the lowest common
-// ancestor (LCA), so each visits only reorg-depth-many rows — typically 1-6 in
-// practice and bounded by CoinbaseMaturity by consensus.
+// reconcileOnMainChain restores the invariant that on_main_chain is true on
+// exactly the chain from genesis to the chain_work-best valid block. It is
+// the hot-path replacement for rebuildOnMainChainFlag's window scan and is
+// called by every chain-mutating slow path (StoreBlock reorg, InvalidateBlock,
+// RevalidateBlock).
 //
-// Algorithm (single transaction):
-//  1. Re-read the actual current best block id inside the transaction. If it
-//     no longer matches newTipID, a concurrent writer committed a higher-work
-//     tip after the caller's getBestBlockID; applying this diff would mark the
-//     wrong branch on_main_chain=true. Abort cleanly — the racing caller will
-//     run their own switch with the correct tips. Together with slowPathMu
-//     this guarantees the diff is always evaluated against the actual winning
-//     chain rather than a stale snapshot.
-//  2. Walk from newTipID backward along parent_id, collecting blocks while
-//     on_main_chain = false. The walk terminates at the first ancestor with
-//     on_main_chain = true — the LCA. That LCA's height is captured.
-//  3. Walk from oldTipID backward along parent_id, collecting blocks with
-//     on_main_chain = true and height strictly greater than the LCA height.
-//     This visits only the divergent old-suffix and stops at LCA.
-//  4. UPDATE the union: set on_main_chain = true for the new-walk rows,
-//     on_main_chain = false for the old-walk rows. The two sets are disjoint
-//     by construction.
+// The function takes no parameters: caller-supplied tips are unsafe under
+// realistic concurrency. Two specific failure modes parameter-free design
+// avoids:
 //
-// The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so that any
-// concurrent reader takes the CTE fallback during the brief commit window,
-// and s.slowPathMu so that concurrent writers cannot interleave diffs against
-// inconsistent views of the chain tip.
+//  1. Fast-path descendant. A concurrent fast-path StoreBlock can extend the
+//     actual current best with on_main_chain=true while a slow-path
+//     reconciliation is in flight (e.g. between an InvalidateBlock UPDATE
+//     and its deferred reconciliation). Trusting a caller's snapshot would
+//     either skip — leaving the descendant flagged true above a non-flagged
+//     ancestor (a "gap" in the main chain) — or apply a diff that misses
+//     the gap. We instead read the actual best by chain_work inside the
+//     transaction, walk its lineage, and ensure every ancestor in the walk
+//     is flagged true.
+//  2. Stale old tip. Two slow-path callers can both read the same pre-best
+//     before either acquires slowPathMu. After the first reconciliation
+//     marks branch A as main, the second sees the now-stale pre-best and
+//     would walk a branch that is no longer on_main_chain=true, leaving A
+//     flagged forever alongside the new winner. We instead identify any
+//     incorrectly-flagged blocks within the walked window directly from
+//     current on_main_chain state.
 //
-// Idempotent and safe under repeated calls: a no-op when oldTipID == newTipID,
-// and when newTipID is already on_main_chain = true the new-walk produces an
-// empty set (so does the old-walk).
-func (s *SQL) applyOnMainChainSwitch(ctx context.Context, oldTipID, newTipID uint32) (err error) {
-	if oldTipID == newTipID {
-		return nil
-	}
-
+// Algorithm (single transaction, single statement):
+//
+//  1. actualBestID = highest chain_work, invalid=false.
+//  2. Walk actualBestID's lineage backward via parent_id up to maxDepth
+//     steps, materializing new_path.
+//  3. UPDATE in one go:
+//     a. blocks in new_path with on_main_chain=false → true
+//     (covers reorgs and the fast-path-descendant gap).
+//     b. blocks NOT in new_path with on_main_chain=true and height
+//     within the walked window → false
+//     (clears the divergent suffix of any previous chain or any
+//     stray flagged sibling, regardless of whether the caller knew
+//     the right "old tip").
+//
+// Bounds: maxDepth = max(2*CoinbaseMaturity, 100). Reorgs deeper than
+// CoinbaseMaturity are consensus-invalid, so the bound is safe; the floor
+// of 100 covers tests with very small CoinbaseMaturity. Anything below the
+// walked window is invariant under any valid reorg and is left untouched —
+// the startup migration (rebuildOnMainChainFlag with full=true) is the
+// only path that touches the deep history.
+//
+// The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
+// readers take the CTE fallback during the brief commit window, and
+// s.slowPathMu so concurrent slow-path writers cannot interleave their
+// reconciliations.
+//
+// Idempotent: a no-op when on_main_chain already matches the actualBest's
+// lineage within the walked window.
+func (s *SQL) reconcileOnMainChain(ctx context.Context) (err error) {
 	var tx *sql.Tx
 	tx, err = s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.NewStorageError("applyOnMainChainSwitch: failed to begin transaction", err)
+		return errors.NewStorageError("reconcileOnMainChain: failed to begin transaction", err)
 	}
 	defer func() {
 		if err != nil {
@@ -1244,76 +1263,57 @@ func (s *SQL) applyOnMainChainSwitch(ctx context.Context, oldTipID, newTipID uin
 		}
 	}()
 
-	// Re-validate the caller's view of the new tip inside the transaction.
-	// Without this, a slow-path writer that captured a now-superseded best
-	// could commit a diff that flags a losing branch on_main_chain=true,
-	// leaving the table with multiple branches marked as main chain.
+	// Read the actual current best by chain_work inside the transaction, so
+	// the reconciliation always targets the winning chain regardless of what
+	// any caller observed before slowPathMu was acquired or what concurrent
+	// fast-path INSERTs may have committed in the meantime.
 	var actualBestID uint32
 	bestQ := `SELECT id FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
 	if err = tx.QueryRowContext(ctx, bestQ).Scan(&actualBestID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return tx.Commit() // empty DB — nothing to do
+			return tx.Commit() // empty DB — nothing to reconcile
 		}
-		return errors.NewStorageError("applyOnMainChainSwitch: failed to read current best", err)
-	}
-	if actualBestID != newTipID {
-		s.logger.Debugf("applyOnMainChainSwitch: stale newTipID=%d (actual best=%d) — skipping diff",
-			newTipID, actualBestID)
-		return tx.Commit()
+		return errors.NewStorageError("reconcileOnMainChain: failed to read current best", err)
 	}
 
-	// new_walk: ancestors of newTipID while on_main_chain = false. Stops at LCA.
-	// lca: the height of the LCA (single row). NULL/empty if newTipID is itself
-	//      already on_main_chain = true (no-op flip-on case) or if the walk
-	//      reaches genesis without finding an on-chain ancestor (only possible
-	//      if genesis itself is on_main_chain = false, which the startup
-	//      migration prevents).
-	// old_walk: ancestors of oldTipID currently on_main_chain = true above the
-	//      LCA height. The COALESCE on missing LCA falls back to -1, which
-	//      below any real height; combined with on_main_chain = true on every
-	//      step, the walk still terminates at genesis (parent_id = 0 → no row).
+	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
+	if maxDepth < 100 {
+		maxDepth = 100
+	}
+
+	// new_path materializes the actualBest's lineage up to maxDepth steps.
+	// window_floor is the deepest height visited by the walk; the second
+	// branch of the WHERE clause uses it to bound which currently-flagged
+	// blocks may be cleared, so anything below the walk window is left
+	// undisturbed (only the startup migration touches deep history).
 	q := `
 		WITH RECURSIVE
-		new_walk(id, parent_id, height, on_chain) AS (
-			SELECT id, parent_id, height, on_main_chain
-			FROM blocks
-			WHERE id = $1
+		new_path(id, parent_id, height, depth) AS (
+			SELECT id, parent_id, height, 0 FROM blocks WHERE id = $1
 			UNION ALL
-			SELECT b.id, b.parent_id, b.height, b.on_main_chain
+			SELECT b.id, b.parent_id, b.height, np.depth + 1
 			FROM blocks b
-			INNER JOIN new_walk n ON b.id = n.parent_id
-			WHERE b.id != n.id AND NOT n.on_chain
+			INNER JOIN new_path np ON b.id = np.parent_id
+			WHERE b.id != np.id AND np.depth < $2
 		),
-		lca(height) AS (
-			SELECT height FROM new_walk WHERE on_chain LIMIT 1
-		),
-		old_walk(id, parent_id) AS (
-			SELECT id, parent_id FROM blocks
-			WHERE id = $2
-			  AND on_main_chain = true
-			  AND height > COALESCE((SELECT height FROM lca), -1)
-			UNION ALL
-			SELECT b.id, b.parent_id
-			FROM blocks b
-			INNER JOIN old_walk o ON b.id = o.parent_id
-			WHERE b.id != o.id
-			  AND b.on_main_chain = true
-			  AND b.height > COALESCE((SELECT height FROM lca), -1)
+		window_floor(h) AS (
+			SELECT MIN(height) FROM new_path
 		)
 		UPDATE blocks
-		SET on_main_chain = CASE
-			WHEN id IN (SELECT id FROM new_walk WHERE NOT on_chain) THEN true
-			ELSE false
-		END
-		WHERE id IN (SELECT id FROM new_walk WHERE NOT on_chain)
-		   OR id IN (SELECT id FROM old_walk)
+		SET on_main_chain = (id IN (SELECT id FROM new_path))
+		WHERE
+			(on_main_chain = false AND id IN (SELECT id FROM new_path))
+			OR
+			(on_main_chain = true
+				AND height >= COALESCE((SELECT h FROM window_floor), 0)
+				AND id NOT IN (SELECT id FROM new_path))
 	`
-	if _, err = tx.ExecContext(ctx, q, newTipID, oldTipID); err != nil {
-		return errors.NewStorageError("applyOnMainChainSwitch: failed to apply diff", err)
+	if _, err = tx.ExecContext(ctx, q, actualBestID, maxDepth); err != nil {
+		return errors.NewStorageError("reconcileOnMainChain: failed to apply diff", err)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return errors.NewStorageError("applyOnMainChainSwitch: failed to commit", err)
+		return errors.NewStorageError("reconcileOnMainChain: failed to commit", err)
 	}
 	return nil
 }
@@ -1324,8 +1324,9 @@ func (s *SQL) applyOnMainChainSwitch(ctx context.Context, oldTipID, newTipID uin
 //
 // As of the diff-update refactor this is no longer called from any hot path —
 // StoreBlock (reorg case), InvalidateBlock and RevalidateBlock all use
-// applyOnMainChainSwitch instead, which touches only the divergent suffix and
-// avoids the wide UPDATE that previously held the blocks-table write lock.
+// reconcileOnMainChain instead, which walks only the recent lineage from the
+// actual chain_work-best block and avoids the wide UPDATE that previously held
+// the blocks-table write lock.
 // rebuildOnMainChainFlag remains in place for the startup migration only:
 //   - full=true: one-shot, runs once after the on_main_chain column is first
 //     added (column-add migration). Walks to genesis.
