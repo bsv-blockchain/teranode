@@ -61,9 +61,24 @@ const (
 	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
 
-	// maxP2PMessageSize limits P2P message sizes to prevent memory exhaustion attacks.
-	// Messages exceeding this limit are rejected before parsing.
+	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
+	// Anything larger is dropped before parsing. Per-topic limits below should
+	// always be tighter than this; this is the safety net.
 	maxP2PMessageSize = 10 * 1024 * 1024 // 10MB
+
+	// Per-topic size limits. Each topic's payload is well-bounded, so these are
+	// kept tight to drop obvious abuse (e.g. multi-MB blobs) before JSON parsing
+	// and to give us a clear ceiling per message type.
+	//
+	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
+	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	maxBlockMessageSize   = 32 * 1024 // 32KB
+	maxSubtreeMessageSize = 32 * 1024 // 32KB
+	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
+	// peers list. Allow generous headroom for very large meshes.
+	maxNodeStatusMessageSize = 64 * 1024 // 64KB
+	// rejected_tx messages carry: tx hash, short reason string, peer ID.
+	maxRejectedTxMessageSize = 16 * 1024 // 16KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -915,8 +930,8 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, peerID)
+	if len(m) > maxNodeStatusMessageSize {
+		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
 		return
 	}
 

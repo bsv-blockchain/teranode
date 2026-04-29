@@ -1144,3 +1144,138 @@ func TestAddBanScoreGRPC(t *testing.T) {
 		assert.True(t, resp.Ok)
 	})
 }
+
+// --- per-topic size limit tests ---
+//
+// Each topic handler enforces a tighter cap than the global maxP2PMessageSize.
+// We confirm that an oversized payload short-circuits before any peer-registry
+// side effect: if the handler had run past the size guard, LastMessageTime
+// would be updated.
+
+func newSizeLimitTestServer(t *testing.T) (*Server, peer.ID, *PeerRegistry) {
+	t.Helper()
+
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	selfPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	_, pub2, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	remotePeerID, err := peer.IDFromPublicKey(pub2)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = selfPeerID
+
+	registry := NewPeerRegistry()
+	registry.Put(remotePeerID, "", 0, nil, "")
+	// Force LastMessageTime to a known sentinel so we can detect updates.
+	registry.peers[remotePeerID].LastMessageTime = time.Time{}
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.ListenMode = settings.ListenModeFull
+
+	server := &Server{
+		logger:         ulogger.New("test"),
+		P2PClient:      mockP2P,
+		peerRegistry:   registry,
+		banManager:     NewPeerBanManager(context.Background(), nil, tSettings, registry),
+		settings:       tSettings,
+		notificationCh: make(chan *notificationMsg, 10),
+	}
+
+	return server, remotePeerID, registry
+}
+
+func TestHandleRejectedTxTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Build a syntactically valid RejectedTxMessage but pad the reason so the
+	// final JSON exceeds the per-topic limit. Without the size guard, the
+	// handler would update peer state.
+	padding := make([]byte, maxRejectedTxMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(RejectedTxMessage{
+		PeerID: remotePeerID.String(),
+		TxID:   "abc",
+		Reason: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxRejectedTxMessageSize)
+
+	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized rejected_tx must not advance LastMessageTime")
+}
+
+func TestHandleNodeStatusTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxNodeStatusMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	// ClientName isn't bounded by anything in the message itself, so it's a
+	// convenient field to inflate without changing semantics.
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:     remotePeerID.String(),
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxNodeStatusMessageSize)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized node_status must not advance LastMessageTime")
+}
+
+func TestHandleBlockTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxBlockMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       "deadbeef",
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxBlockMessageSize)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized block must not advance LastMessageTime")
+}
+
+func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxSubtreeMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       "deadbeef",
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxSubtreeMessageSize)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized subtree must not advance LastMessageTime")
+}

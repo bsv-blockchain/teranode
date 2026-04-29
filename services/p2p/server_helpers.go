@@ -32,8 +32,8 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleBlockTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxBlockMessageSize {
+		s.logger.Errorf("[handleBlockTopic] message size %d exceeds max %d from peer %s", len(m), maxBlockMessageSize, fromID)
 		return
 	}
 
@@ -147,8 +147,8 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleSubtreeTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxSubtreeMessageSize {
+		s.logger.Errorf("[handleSubtreeTopic] message size %d exceeds max %d from peer %s", len(m), maxSubtreeMessageSize, fromID)
 		return
 	}
 
@@ -375,8 +375,8 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleRejectedTxTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxRejectedTxMessageSize {
+		s.logger.Errorf("[handleRejectedTxTopic] message size %d exceeds max %d from peer %s", len(m), maxRejectedTxMessageSize, fromID)
 		return
 	}
 

@@ -50,7 +50,8 @@ These defaults are sensible for networks up to ~10K nodes. Latency is `O(log N)`
 - A peer publishing many *different* malformed messages would still propagate them, since the dedup is by message ID, not by content. See "Validators" below.
 
 ### Validators / rate limiting
-- **No `RegisterTopicValidator` calls anywhere.** No `pubsub.WithValidator`. No per-topic schema check before forwarding. A malformed-but-parseable JSON payload will be relayed by the whole mesh before any node catches the schema violation.
+- **No `RegisterTopicValidator` calls anywhere.** No `pubsub.WithValidator`. No per-topic schema check before forwarding. A malformed-but-parseable JSON payload will be relayed by the whole mesh before any node catches the schema violation. The library does not currently expose a hook for this — addressing it requires extending `go-p2p-message-bus` to surface `pubsub.RegisterTopicValidator` from libp2p.
+- Per-topic size limits are now enforced application-side (see `services/p2p/Server.go` constants `maxBlockMessageSize`, `maxSubtreeMessageSize`, `maxNodeStatusMessageSize`, `maxRejectedTxMessageSize`). A 5MB blob on `node_status` is now rejected at the topic handler instead of being parsed. This is defence in depth; gossipsub still forwards the message before the handler runs.
 - No per-peer rate limiting on inbound topic messages. A peer publishing 100 fake `node_status` messages per second produces 100 distinct message IDs and gossipsub will fan all of them out.
 
 ### NodeStatus heartbeat scaling
@@ -71,8 +72,8 @@ Four topics — block, subtree, node_status, rejected_tx (`Server.go:608-611`). 
 
 Already covered above:
 
-- **No validators** — schema and rate are not enforced at the gossipsub layer. **Application-layer parsing happens after the message has been forwarded to the mesh**, so garbage propagates one hop further than it needs to.
-- The 10 MB ceiling is generous for a metadata message. A 9.5 MB JSON blob still fits and still costs CPU to parse. Tighter per-topic limits (e.g. 1 MB for `node_status`, 256 KB for `rejected_tx`) would catch obvious abuse.
+- **No validators at gossipsub layer** — schema and rate are not enforced before relay. **Application-layer parsing happens after the message has been forwarded to the mesh**, so garbage propagates one hop further than it needs to. Closing this gap requires the library to expose `RegisterTopicValidator`; teranode can't reach the underlying `pubsub.PubSub` directly today.
+- Per-topic size limits are now enforced (see "Validators / rate limiting" above). The global 10 MB safety net remains, with tighter caps per topic so a 5 MB blob on `node_status` is rejected before JSON parsing.
 - No message signing / origin authentication. Today the network trusts `peer.FromID`. Acceptable while bootstrap peers are curated; risky once the network is open.
 
 ## 4. Reputation, ban management, peer-map
@@ -123,7 +124,7 @@ Already covered above:
 
 1. ~~**`StaticPeers` is dead code in `services/p2p/`.**~~ **Resolved.** Wired through `go-p2p-message-bus` v0.1.17 (`services/p2p/Server.go:334`).
 2. ~~**`PeerRegistry` has no eviction policy.**~~ **Resolved.** TTL + LRU eviction added (`services/p2p/peer_registry.go` `Cleanup`, with `p2p_peer_registry_max_size`/`_ttl`/`_cleanup_interval` settings). Connected and banned peers are exempt.
-3. **No gossipsub topic validators.** Schema and rate aren't enforced before relay. Garbage propagates through the entire mesh before any node rejects it on JSON unmarshal. Highest-leverage hardening change against an open network.
+3. **Pre-relay topic validators (`pubsub.RegisterTopicValidator`).** Per-topic size caps now run in handlers (mitigates the worst payloads), but schema and rate are still enforced *after* gossipsub fan-out. Closing this gap is a library change: extend `go-p2p-message-bus` so callers can register a validator function, then teranode supplies one per topic. Highest-leverage hardening change still outstanding.
 
 ### Should-fix
 
@@ -136,7 +137,7 @@ Already covered above:
 
 ### Nice-to-have
 
-10. Tighter per-topic size limits (`node_status` does not need 10MB).
+10. ~~Tighter per-topic size limits (`node_status` does not need 10MB).~~ Done (`services/p2p/Server.go` constants).
 11. Per-message origin signature so we can stop trusting `peer.FromID` once the network is open.
 12. Re-enable the disabled malicious-peer detection in `sync_coordinator.go:390-405`.
 13. Optional parallel sync from multiple peers, with the existing single-peer mode kept as the default.
@@ -147,7 +148,7 @@ Already covered above:
 1. ~~**Wire StaticPeers through to libp2p connect-and-supervise.**~~ Done in `go-p2p-message-bus` v0.1.17.
 2. ~~**PeerRegistry eviction.**~~ Done.
 3. **Persist reputation and bans.** Spec the storage format, decide on a file vs. SQLite.
-4. **Register gossipsub topic validators** for all four topics. Schema + per-peer rate limit.
+4. **Pre-relay gossipsub validators.** Two-step: (a) extend `go-p2p-message-bus` to expose `RegisterTopicValidator` (or accept a `MessageValidator` in `Config`), then (b) wire per-topic schema + rate-limit validators from `services/p2p/`. Per-topic size caps already landed application-side as a partial mitigation.
 5. **Heartbeat bandwidth at scale.** Either rate-adapt with cluster size or merge into block topic.
 6. **Expose connection-manager settings.** Min/Max/Grace as `settings.P2P.MaxConnections` etc.
 7. **Documentation pass on DHT "client" mode and mDNS production safety.**
