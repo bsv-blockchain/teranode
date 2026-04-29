@@ -1199,12 +1199,26 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // reconcileOnMainChain restores the invariant that on_main_chain is true on
 // exactly the chain from genesis to the chain_work-best valid block. It is
 // the hot-path replacement for rebuildOnMainChainFlag's window scan and is
-// called by every chain-mutating slow path (StoreBlock reorg, InvalidateBlock,
-// RevalidateBlock).
+// called from StoreBlock's reorg branch — the only chain-mutating path
+// where consensus bounds the divergence between the new chain and the old.
+//
+// InvalidateBlock and RevalidateBlock are administrative operations whose
+// fork point can lie arbitrarily deep below the current tip; reconciling
+// them with this bounded helper would silently leave incorrect flags below
+// the walked window. Those paths therefore use rebuildOnMainChainFlag with
+// full=true, which is slower but unbounded and correct.
 //
 // The function takes no parameters: caller-supplied tips are unsafe under
-// realistic concurrency. Two specific failure modes parameter-free design
-// avoids:
+// realistic concurrency. Reconciliation also runs as a single UPDATE
+// statement rather than a SELECT-then-UPDATE pair — under PostgreSQL's
+// READ COMMITTED isolation those two statements would use different
+// snapshots, allowing a fast-path INSERT slipped between them to be
+// included in the UPDATE's snapshot while new_path was still rooted at
+// the old tip; the UPDATE would then clear the now-best descendant. By
+// fusing best-block selection, lineage walk, and reconciliation into one
+// statement, all three CTEs and the UPDATE share one snapshot.
+//
+// Failure modes the design avoids:
 //
 //  1. Fast-path descendant. A concurrent fast-path StoreBlock can extend the
 //     actual current best with on_main_chain=true while a slow-path
@@ -1213,8 +1227,8 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //     either skip — leaving the descendant flagged true above a non-flagged
 //     ancestor (a "gap" in the main chain) — or apply a diff that misses
 //     the gap. We instead read the actual best by chain_work inside the
-//     transaction, walk its lineage, and ensure every ancestor in the walk
-//     is flagged true.
+//     UPDATE statement, walk its lineage in the same snapshot, and ensure
+//     every ancestor in the walk is flagged true.
 //  2. Stale old tip. Two slow-path callers can both read the same pre-best
 //     before either acquires slowPathMu. After the first reconciliation
 //     marks branch A as main, the second sees the now-stale pre-best and
@@ -1222,98 +1236,86 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 //     flagged forever alongside the new winner. We instead identify any
 //     incorrectly-flagged blocks within the walked window directly from
 //     current on_main_chain state.
+//  3. Snapshot drift between SELECT and UPDATE. With a separate SELECT to
+//     pick the tip followed by an UPDATE, READ COMMITTED would let a
+//     fast-path INSERT slip in between: the UPDATE's snapshot would
+//     include the new descendant but new_path would still be rooted at
+//     the old tip, so the second OR clause would clear the new best.
+//     Fusing into one statement eliminates the cross-statement window.
 //
-// Algorithm (single transaction, single statement):
+// Algorithm (single statement):
 //
-//  1. actualBestID = highest chain_work, invalid=false.
-//  2. Walk actualBestID's lineage backward via parent_id up to maxDepth
-//     steps, materializing new_path.
+//  1. best_block CTE: highest chain_work valid block.
+//  2. new_path CTE: walks best_block's lineage backward via parent_id up
+//     to maxDepth steps.
 //  3. UPDATE in one go:
 //     a. blocks in new_path with on_main_chain=false → true
 //     (covers reorgs and the fast-path-descendant gap).
 //     b. blocks NOT in new_path with on_main_chain=true and height
 //     within the walked window → false
-//     (clears the divergent suffix of any previous chain or any
-//     stray flagged sibling, regardless of whether the caller knew
-//     the right "old tip").
+//     (clears the divergent suffix of any previous chain or any stray
+//     flagged sibling, regardless of whether the caller knew the right
+//     "old tip").
 //
 // Bounds: maxDepth = max(2*CoinbaseMaturity, 100). Reorgs deeper than
-// CoinbaseMaturity are consensus-invalid, so the bound is safe; the floor
-// of 100 covers tests with very small CoinbaseMaturity. Anything below the
-// walked window is invariant under any valid reorg and is left untouched —
-// the startup migration (rebuildOnMainChainFlag with full=true) is the
-// only path that touches the deep history.
+// CoinbaseMaturity are consensus-invalid, so the bound is always safe
+// for StoreBlock-driven reorgs; the floor of 100 covers tests with very
+// small CoinbaseMaturity. The function does NOT include a deep-fork
+// fallback because the obvious cheap check (count of on_main_chain=true
+// vs bestHeight+1) is necessary but not sufficient: when a stale flag
+// at one height is replaced by a wrongly-flagged sibling at the same
+// height the count still matches. Callers that may produce deep
+// divergences must use rebuildOnMainChainFlag instead.
 //
 // The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
 // readers take the CTE fallback during the brief commit window, and
 // s.slowPathMu so concurrent slow-path writers cannot interleave their
 // reconciliations.
 //
-// Idempotent: a no-op when on_main_chain already matches the actualBest's
-// lineage within the walked window.
-func (s *SQL) reconcileOnMainChain(ctx context.Context) (err error) {
-	var tx *sql.Tx
-	tx, err = s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.NewStorageError("reconcileOnMainChain: failed to begin transaction", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	// Read the actual current best by chain_work inside the transaction, so
-	// the reconciliation always targets the winning chain regardless of what
-	// any caller observed before slowPathMu was acquired or what concurrent
-	// fast-path INSERTs may have committed in the meantime.
-	var actualBestID uint32
-	bestQ := `SELECT id FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
-	if err = tx.QueryRowContext(ctx, bestQ).Scan(&actualBestID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return tx.Commit() // empty DB — nothing to reconcile
-		}
-		return errors.NewStorageError("reconcileOnMainChain: failed to read current best", err)
-	}
-
+// Idempotent: a no-op when on_main_chain already matches the chain_work
+// best's lineage within the walked window.
+func (s *SQL) reconcileOnMainChain(ctx context.Context) error {
 	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
 	if maxDepth < 100 {
 		maxDepth = 100
 	}
 
-	// new_path materializes the actualBest's lineage up to maxDepth steps.
-	// window_floor is the deepest height visited by the walk; the second
-	// branch of the WHERE clause uses it to bound which currently-flagged
-	// blocks may be cleared, so anything below the walk window is left
-	// undisturbed (only the startup migration touches deep history).
+	// best_block, new_path, window_floor and the UPDATE all live in one
+	// statement so they share one snapshot. The EXISTS guard on best_block
+	// keeps the empty-DB / all-invalid case as a no-op (without it, an
+	// empty new_path would match every flagged row in the second OR clause).
 	q := `
 		WITH RECURSIVE
+		best_block(id) AS (
+			SELECT id FROM blocks WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
 		new_path(id, parent_id, height, depth) AS (
-			SELECT id, parent_id, height, 0 FROM blocks WHERE id = $1
+			SELECT id, parent_id, height, 0 FROM blocks
+			WHERE id IN (SELECT id FROM best_block)
 			UNION ALL
 			SELECT b.id, b.parent_id, b.height, np.depth + 1
 			FROM blocks b
 			INNER JOIN new_path np ON b.id = np.parent_id
-			WHERE b.id != np.id AND np.depth < $2
+			WHERE b.id != np.id AND np.depth < $1
 		),
 		window_floor(h) AS (
 			SELECT MIN(height) FROM new_path
 		)
 		UPDATE blocks
 		SET on_main_chain = (id IN (SELECT id FROM new_path))
-		WHERE
-			(on_main_chain = false AND id IN (SELECT id FROM new_path))
-			OR
-			(on_main_chain = true
-				AND height >= COALESCE((SELECT h FROM window_floor), 0)
-				AND id NOT IN (SELECT id FROM new_path))
+		WHERE EXISTS (SELECT 1 FROM best_block)
+		  AND (
+				(on_main_chain = false AND id IN (SELECT id FROM new_path))
+				OR
+				(on_main_chain = true
+					AND height >= COALESCE((SELECT h FROM window_floor), 0)
+					AND id NOT IN (SELECT id FROM new_path))
+			  )
 	`
-	if _, err = tx.ExecContext(ctx, q, actualBestID, maxDepth); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, maxDepth); err != nil {
 		return errors.NewStorageError("reconcileOnMainChain: failed to apply diff", err)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return errors.NewStorageError("reconcileOnMainChain: failed to commit", err)
 	}
 	return nil
 }

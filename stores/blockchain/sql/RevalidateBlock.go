@@ -42,10 +42,13 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
-	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+	// RevalidateBlock, like InvalidateBlock, can move the tip across an
+	// arbitrarily deep fork point. Use the full rebuild for correctness —
+	// see the matching note in InvalidateBlock.
+	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), migrationFullRebuildTimeout)
 	defer rebuildCancel()
 
-	// Invalidate caches FIRST so that getBestBlockID sees the freshly
+	// Invalidate caches FIRST so that the rebuild sees the freshly
 	// revalidated state rather than the pre-revalidation cached value.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
@@ -53,12 +56,8 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		s.resetChainWalkCache()
 	}
 
-	// reconcileOnMainChain reads the actual chain_work-best block inside its
-	// own transaction; if revalidation moved the tip, the helper walks the
-	// new winning lineage and updates flags accordingly. If the tip is
-	// unchanged the call is a no-op.
-	if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
-		s.logger.Errorf("RevalidateBlock: reconcileOnMainChain: %v", reconcileErr)
+	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
+		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 	}
 
 	if s.useInMemoryChainCheck {

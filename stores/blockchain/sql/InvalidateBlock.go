@@ -130,16 +130,18 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			s.resetChainWalkCache()
 		}
 
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		// InvalidateBlock can move the chain tip arbitrarily deep — an
+		// operator may invalidate a block far below the current tip, leaving
+		// the new winning branch's fork point well below the bounded walk
+		// in reconcileOnMainChain. Use the full rebuild here for correctness;
+		// invalidations are rare admin operations and can afford the wider
+		// lock window. migrationFullRebuildTimeout matches the startup
+		// migration's bound, generous enough for multi-million-block chains.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), migrationFullRebuildTimeout)
 		defer rebuildCancel()
 
-		// reconcileOnMainChain reads the actual chain_work-best block inside
-		// its own transaction and walks its lineage to fix up any flags. The
-		// extended UPDATE above already cleared on_main_chain on the
-		// invalidated subtree; reconcile takes care of any new winning branch
-		// and any fast-path descendant inserted between the UPDATE and now.
-		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
-			s.logger.Errorf("InvalidateBlock: reconcileOnMainChain: %v", reconcileErr)
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
+			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
 
 		if s.useInMemoryChainCheck {
