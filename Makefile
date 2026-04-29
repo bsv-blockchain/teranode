@@ -264,6 +264,13 @@ chainintegrity:
 	@mkdir -p /tmp/teranode-test-results
 	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
 
+.PHONY: network-chaos-test
+network-chaos-test:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
 .PHONY: nightly-tests
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
