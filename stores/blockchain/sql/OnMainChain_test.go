@@ -1148,6 +1148,58 @@ func TestReconcileOnMainChain_NoStaleBranchSurvives(t *testing.T) {
 		"stale on_main_chain=true on a non-best branch must be cleared")
 }
 
+// TestStoreBlock_NoTwoSiblingsFlaggedUnderRace is the regression test for the
+// reviewer's third-round finding: two concurrent same-parent StoreBlock calls
+// must not both end up with on_main_chain=true. Without slowPathMu in the
+// fast path, both calls could read the same cached preBestHash, both compute
+// onMainChain=true, both INSERT with on_main_chain=true, and both succeed at
+// the maxBlockID CAS in sequence (the CAS only proves ID-sequence headship,
+// not chain_work tiebreak winner). With serialization, the second writer
+// observes the first's row as the new best, so its onMainChain comes out
+// false and it is INSERTed correctly as a fork.
+func TestStoreBlock_NoTwoSiblingsFlaggedUnderRace(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1)
+
+	// block2 and blockAlternative2 both extend block1 — siblings at height 2.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _, _ = s.StoreBlock(context.Background(), block2, "peerA")
+	}()
+	go func() {
+		defer wg.Done()
+		_, _, _ = s.StoreBlock(context.Background(), blockAlternative2, "peerB")
+	}()
+	wg.Wait()
+
+	// Invariant: at every height (in particular height 2) at most one block
+	// is on_main_chain=true.
+	rows, err := s.db.Query(`
+		SELECT height, COUNT(*) FROM blocks
+		WHERE on_main_chain = true
+		GROUP BY height
+		HAVING COUNT(*) > 1
+	`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var h, c int64
+		require.NoError(t, rows.Scan(&h, &c))
+		t.Fatalf("multiple on_main_chain=true blocks at height %d (count=%d) — sibling race not serialized", h, c)
+	}
+	require.NoError(t, rows.Err())
+
+	// Sanity: exactly one of the two siblings is flagged.
+	var flagged int
+	require.NoError(t, s.db.QueryRow(`
+		SELECT COUNT(*) FROM blocks
+		WHERE on_main_chain = true AND height = 2
+	`).Scan(&flagged))
+	require.Equal(t, 1, flagged, "exactly one sibling at height 2 must be on_main_chain=true")
+}
+
 // TestReconcileOnMainChain_SingleMainChainAfterConcurrentInvalidates fires
 // invalidate calls from multiple goroutines and asserts the post-state has
 // exactly one block on_main_chain=true at any height — the invariant that was

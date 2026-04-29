@@ -106,6 +106,25 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
+	// Acquire slowPathMu for the duration of every StoreBlock call. The cost is
+	// one uncontended mutex acquire on the common path; the benefit is that
+	// the read of preBestHash, the INSERT, the maxBlockID CAS, and any
+	// post-INSERT classification all observe a serialized view of the chain.
+	//
+	// Without this lock, two concurrent same-parent extensions can both read
+	// the same cached preBestHash, both compute onMainChain=true, both INSERT
+	// rows with on_main_chain=true, and both succeed at the maxBlockID CAS in
+	// sequence — leaving two flagged siblings at the same height. The CAS
+	// only proves "I am at the head of the ID sequence", not "I have the
+	// chain_work tiebreak best": canonical selection is by chain_work DESC,
+	// peer_id ASC, id ASC, so a CAS-winning sibling can still be the loser.
+	// Serializing forces the second writer to observe the first's row as the
+	// new best, which makes its onMainChain calculation false (parent !=
+	// preBestHash anymore), routes it through the slow-path classifier, and
+	// reconciles correctly.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
 	// Capture the best block hash before insert. Used for:
 	//   1. Reorg detection after insert
 	//   2. Determining whether to set on_main_chain = true directly in the INSERT
@@ -132,25 +151,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// When the block does NOT extend the current best, the INSERT writes
-	// on_main_chain=false but the new row may immediately be the best (reorg)
-	// or change maxBlockID without yet being in the off-chain set (fork). Both
-	// expose the table to readers in an inconsistent state until the slow-path
-	// classifier finishes. We therefore acquire the rebuild guard *and* the
-	// slow-path mutex BEFORE the INSERT:
-	//   - mainChainRebuilding > 0 forces concurrent readers onto the CTE
-	//     fallback for the entire window between INSERT and the diff/off-chain
-	//     UPDATE.
-	//   - slowPathMu serializes against InvalidateBlock, RevalidateBlock and
-	//     other non-extend StoreBlock calls so the post-insert classifier
-	//     observes a stable best block and applyOnMainChainSwitch's diff is
-	//     evaluated against the actually winning chain.
-	// The fast extend path (onMainChain=true; INSERT writes on_main_chain=true
-	// atomically with the row) skips both — readers stay on the indexed
-	// fast path during normal extends.
+	// mainChainRebuilding only needs to cover the window where on_main_chain
+	// is in flux — i.e. when the INSERT writes false but the row may turn out
+	// to be the new best (reorg / fork). The common extend (onMainChain=true)
+	// is written atomically with on_main_chain=true and needs no guard.
 	if !onMainChain {
-		s.slowPathMu.Lock()
-		defer s.slowPathMu.Unlock()
 		s.mainChainRebuilding.Add(1)
 		defer s.mainChainRebuilding.Add(-1)
 	}
@@ -202,8 +207,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	if bestErr != nil {
 		s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
 	} else if uint64(postBestID) != newBlockID {
-		// Case 1: fork — new block is not the best. on_main_chain is already false
-		// from the INSERT, so no DB update needed. Just update the in-memory set.
+		// Case 1: fork — new block is not the best. The INSERT wrote
+		// on_main_chain=false when onMainChain was false at compute time, so
+		// no clear is needed in that path. But if onMainChain was true and
+		// the chain_work tiebreak nevertheless picked a sibling above us (a
+		// scenario that slowPathMu serialization should prevent under
+		// current code, but which the previous Case 1 comment glossed over),
+		// the row is now flagged true on a fork. Clear it defensively, with
+		// mainChainRebuilding bracketing so concurrent readers fall back to
+		// the CTE for the brief inconsistency window.
+		if onMainChain {
+			s.mainChainRebuilding.Add(1)
+			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
+				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
+			}
+			s.mainChainRebuilding.Add(-1)
+		}
 		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
