@@ -126,6 +126,16 @@ type SQL struct {
 	// startup + concurrent RPC) may overlap: a bool would be cleared by the first to
 	// finish, exposing readers while later callers are still mid-update.
 	mainChainRebuilding atomic.Int32
+	// slowPathMu serializes all chain-mutating slow paths that depend on
+	// "the current main-chain tip" being stable across an INSERT/UPDATE and
+	// the follow-up on_main_chain reconciliation: StoreBlock's non-extend
+	// branch, InvalidateBlock, RevalidateBlock, and applyOnMainChainSwitch.
+	// Without it two concurrent slow-path writers can each capture the same
+	// pre-best, each pick a different "winning" tip, and each commit a diff
+	// that leaves the table with multiple branches flagged on_main_chain=true.
+	// The fast extend path (parent == preBest, atomic INSERT, won the
+	// maxBlockID CAS) does NOT take this mutex.
+	slowPathMu sync.Mutex
 	// blockTimestampCache is a sliding-window cache of recent block timestamps,
 	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
 	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
@@ -1192,19 +1202,28 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // ancestor (LCA), so each visits only reorg-depth-many rows — typically 1-6 in
 // practice and bounded by CoinbaseMaturity by consensus.
 //
-// Algorithm (single transaction, single statement):
-//  1. Walk from newTipID backward along parent_id, collecting blocks while
+// Algorithm (single transaction):
+//  1. Re-read the actual current best block id inside the transaction. If it
+//     no longer matches newTipID, a concurrent writer committed a higher-work
+//     tip after the caller's getBestBlockID; applying this diff would mark the
+//     wrong branch on_main_chain=true. Abort cleanly — the racing caller will
+//     run their own switch with the correct tips. Together with slowPathMu
+//     this guarantees the diff is always evaluated against the actual winning
+//     chain rather than a stale snapshot.
+//  2. Walk from newTipID backward along parent_id, collecting blocks while
 //     on_main_chain = false. The walk terminates at the first ancestor with
 //     on_main_chain = true — the LCA. That LCA's height is captured.
-//  2. Walk from oldTipID backward along parent_id, collecting blocks with
+//  3. Walk from oldTipID backward along parent_id, collecting blocks with
 //     on_main_chain = true and height strictly greater than the LCA height.
 //     This visits only the divergent old-suffix and stops at LCA.
-//  3. UPDATE the union: set on_main_chain = true for the new-walk rows,
+//  4. UPDATE the union: set on_main_chain = true for the new-walk rows,
 //     on_main_chain = false for the old-walk rows. The two sets are disjoint
 //     by construction.
 //
 // The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so that any
-// concurrent reader takes the CTE fallback during the brief commit window.
+// concurrent reader takes the CTE fallback during the brief commit window,
+// and s.slowPathMu so that concurrent writers cannot interleave diffs against
+// inconsistent views of the chain tip.
 //
 // Idempotent and safe under repeated calls: a no-op when oldTipID == newTipID,
 // and when newTipID is already on_main_chain = true the new-walk produces an
@@ -1224,6 +1243,24 @@ func (s *SQL) applyOnMainChainSwitch(ctx context.Context, oldTipID, newTipID uin
 			_ = tx.Rollback()
 		}
 	}()
+
+	// Re-validate the caller's view of the new tip inside the transaction.
+	// Without this, a slow-path writer that captured a now-superseded best
+	// could commit a diff that flags a losing branch on_main_chain=true,
+	// leaving the table with multiple branches marked as main chain.
+	var actualBestID uint32
+	bestQ := `SELECT id FROM blocks WHERE invalid = false ORDER BY chain_work DESC, peer_id ASC, id ASC LIMIT 1`
+	if err = tx.QueryRowContext(ctx, bestQ).Scan(&actualBestID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tx.Commit() // empty DB — nothing to do
+		}
+		return errors.NewStorageError("applyOnMainChainSwitch: failed to read current best", err)
+	}
+	if actualBestID != newTipID {
+		s.logger.Debugf("applyOnMainChainSwitch: stale newTipID=%d (actual best=%d) — skipping diff",
+			newTipID, actualBestID)
+		return tx.Commit()
+	}
 
 	// new_walk: ancestors of newTipID while on_main_chain = false. Stops at LCA.
 	// lca: the height of the LCA (single row). NULL/empty if newTipID is itself

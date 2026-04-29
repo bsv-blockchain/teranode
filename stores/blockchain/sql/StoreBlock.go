@@ -137,6 +137,29 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
+	// When the block does NOT extend the current best, the INSERT writes
+	// on_main_chain=false but the new row may immediately be the best (reorg)
+	// or change maxBlockID without yet being in the off-chain set (fork). Both
+	// expose the table to readers in an inconsistent state until the slow-path
+	// classifier finishes. We therefore acquire the rebuild guard *and* the
+	// slow-path mutex BEFORE the INSERT:
+	//   - mainChainRebuilding > 0 forces concurrent readers onto the CTE
+	//     fallback for the entire window between INSERT and the diff/off-chain
+	//     UPDATE.
+	//   - slowPathMu serializes against InvalidateBlock, RevalidateBlock and
+	//     other non-extend StoreBlock calls so the post-insert classifier
+	//     observes a stable best block and applyOnMainChainSwitch's diff is
+	//     evaluated against the actually winning chain.
+	// The fast extend path (onMainChain=true; INSERT writes on_main_chain=true
+	// atomically with the row) skips both — readers stay on the indexed
+	// fast path during normal extends.
+	if !onMainChain {
+		s.slowPathMu.Lock()
+		defer s.slowPathMu.Unlock()
+		s.mainChainRebuilding.Add(1)
+		defer s.mainChainRebuilding.Add(-1)
+	}
+
 	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
 	if err != nil {
 		return 0, height, err
@@ -199,17 +222,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
 		// Case 2: new block is the best but doesn't extend the old best (reorg),
-		// or preBestHash was unavailable.
-		//
-		// Hold mainChainRebuilding only here, around the on_main_chain diff:
-		// between the INSERT (which wrote on_main_chain=false for the new tip)
-		// and the diff UPDATE, readers on the fast path could see the new best
-		// with on_main_chain=false while the old tip still has on_main_chain=true.
-		// Forcing concurrent readers onto the CTE fallback during this brief
-		// window keeps them consistent.
-		s.mainChainRebuilding.Add(1)
-		defer s.mainChainRebuilding.Add(-1)
-
+		// or preBestHash was unavailable. The mainChainRebuilding guard and
+		// slowPathMu are already held from the !onMainChain branch above —
+		// they cover the full window from before the INSERT through the diff.
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 		if s.useInMemoryChainCheck {

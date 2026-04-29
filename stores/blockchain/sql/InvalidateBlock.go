@@ -75,6 +75,15 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		return []chainhash.Hash{}, nil
 	}
 
+	// Serialize against StoreBlock's slow path and RevalidateBlock so the
+	// pre-best capture, the UPDATE, and applyOnMainChainSwitch all see a
+	// stable view of the chain tip. Without this, two concurrent slow-path
+	// writers can each capture the same pre-best, each commit a UPDATE,
+	// and each call the diff helper against their own (now-stale) view —
+	// leaving the table with multiple branches flagged on_main_chain=true.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
 	// Capture the pre-invalidation best block ID. Used after the UPDATE to
 	// detect whether invalidation changed the chain tip; if so we flip the new
 	// winning branch's on_main_chain on via applyOnMainChainSwitch. The old

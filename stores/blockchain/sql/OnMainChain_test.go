@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/url"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -997,6 +998,87 @@ func TestApplyOnMainChainSwitch_EqualTipNoOp(t *testing.T) {
 
 	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
 	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
+}
+
+// TestApplyOnMainChainSwitch_StaleNewTipRejected verifies that the helper
+// refuses to apply a diff when the caller's newTipID no longer matches the
+// actual current best block. Without this guard, a slow-path writer that
+// captured a pre-best, lost a race to a higher-work writer, and then called
+// the helper would mark a losing branch on_main_chain=true and leave the
+// table with two branches flagged as main chain. The in-transaction re-read
+// catches the stale view and aborts cleanly.
+func TestApplyOnMainChainSwitch_StaleNewTipRejected(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build genesis → block1 → block2 → block3 (main chain).
+	storeBlocks(t, s, block1, block2, block3)
+	mainTipID := getBlockID(t, s, block3.Hash().CloneBytes())
+
+	// blockAlternative2 is a fork of block2 with strictly less chain_work, so
+	// it is NOT the best block. Calling the helper with oldTip=block3 and
+	// newTip=blockAlternative2 simulates a slow-path writer whose view of
+	// "the new winning tip" is wrong. The helper must refuse the diff.
+	storeBlocks(t, s, blockAlternative2)
+	staleTipID := getBlockID(t, s, blockAlternative2.Hash().CloneBytes())
+
+	require.NoError(t, s.applyOnMainChainSwitch(context.Background(), mainTipID, staleTipID))
+
+	// The chain state must be unchanged: main-chain blocks still on, fork still off.
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()),
+		"stale-tip diff must not flag the losing fork as main chain")
+}
+
+// TestApplyOnMainChainSwitch_SingleMainChainAfterConcurrentInvalidates fires
+// invalidate calls from multiple goroutines and asserts the post-state has
+// exactly one block on_main_chain=true at any height. This is the regression
+// guard for the concurrent-writer scenario where two slow-path operations
+// would each capture a stale pre-best and each commit a diff, leaving
+// multiple flagged branches.
+func TestApplyOnMainChainSwitch_SingleMainChainAfterConcurrentInvalidates(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build a chain with a fork: genesis → block1 → block2 → block3 (main),
+	// plus blockAlternative2 (fork off block1).
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2)
+
+	// Concurrently: invalidate the fork tip, invalidate the main tip,
+	// and revalidate the main tip. The mutex must serialize them and the
+	// in-transaction best re-read must reject any stale diffs.
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_, _ = s.InvalidateBlock(context.Background(), blockAlternative2.Hash())
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = s.InvalidateBlock(context.Background(), block3.Hash())
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.RevalidateBlock(context.Background(), block3.Hash())
+	}()
+	wg.Wait()
+
+	// Whatever the final outcome, the invariant is: at every height there is
+	// at most one block with on_main_chain=true.
+	rows, err := s.db.Query(`
+		SELECT height, COUNT(*) FROM blocks
+		WHERE on_main_chain = true
+		GROUP BY height
+		HAVING COUNT(*) > 1
+	`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var h, c int64
+		require.NoError(t, rows.Scan(&h, &c))
+		t.Fatalf("multiple on_main_chain=true blocks at height %d (count=%d) — concurrency invariant broken", h, c)
+	}
+	require.NoError(t, rows.Err())
 }
 
 // TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout guards the invariant

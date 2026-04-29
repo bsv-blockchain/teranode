@@ -20,6 +20,13 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
+	// Serialize against StoreBlock's slow path and InvalidateBlock so the
+	// pre-best capture, the UPDATE, and applyOnMainChainSwitch all see a
+	// stable view of the chain tip. See the matching note in InvalidateBlock
+	// for the failure mode this prevents.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
 	// Capture the pre-revalidation best block ID. If revalidation makes this
 	// block (or one of its now-valid descendants) the new best, we apply a
 	// diff via applyOnMainChainSwitch instead of a wide-window rebuild.
