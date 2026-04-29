@@ -15,6 +15,12 @@ const (
 	// defaultScriptNumLen is the default number of bytes
 	// data being interpreted as an integer may be.
 	defaultScriptNumLen = 4
+
+	// maxScriptNumLen is the absolute upper bound on the number of bytes
+	// that can be decoded into a scriptNum. Beyond 8 bytes the value cannot
+	// be represented in an int64, and the per-byte shift in makeScriptNum
+	// (uint8(8*i)) would wrap and produce incorrect values.
+	maxScriptNumLen = 8
 )
 
 // scriptNum represents a numeric value used in the scripting engine with
@@ -96,19 +102,23 @@ func (n scriptNum) Bytes() []byte {
 		return nil
 	}
 
-	// Take the absolute value and keep track of whether it was originally
-	// negative.
+	// Compute the absolute value as uint64 so that math.MinInt64 round-trips
+	// safely. Negating math.MinInt64 as int64 overflows back to itself,
+	// leaving the loop below with no iterations and an empty result slice.
 	isNegative := n < 0
+	var absVal uint64
 	if isNegative {
-		n = -n
+		absVal = uint64(-(n + 1)) + 1
+	} else {
+		absVal = uint64(n)
 	}
 
 	// Encode to little endian.  The maximum number of encoded bytes is 9
 	// (8 bytes for max int64 plus a potential byte for sign extension).
 	result := make([]byte, 0, 9)
-	for n > 0 {
-		result = append(result, byte(n&0xff))
-		n >>= 8
+	for absVal > 0 {
+		result = append(result, byte(absVal&0xff))
+		absVal >>= 8
 	}
 
 	// When the most significant byte already has the high bit set, an
@@ -190,6 +200,18 @@ func makeScriptNum(v []byte, requireMinimal bool, scriptNumLen int) (scriptNum, 
 		str := fmt.Sprintf("numeric value encoded as %x is %d bytes "+
 			"which exceeds the max allowed of %d", v, len(v),
 			scriptNumLen)
+
+		return 0, scriptError(ErrNumberTooBig, str)
+	}
+
+	// Even when callers pass a larger scriptNumLen (OP_BIN2NUM / OP_NUM2BIN
+	// pass len(v), bounded only by MaxScriptElementSize), the decoded value
+	// must still fit in int64. Reject anything beyond 8 bytes so that the
+	// per-byte shift below cannot wrap modulo 256.
+	if len(v) > maxScriptNumLen {
+		str := fmt.Sprintf("numeric value encoded as %x is %d bytes "+
+			"which exceeds the int64 limit of %d", v, len(v),
+			maxScriptNumLen)
 
 		return 0, scriptError(ErrNumberTooBig, str)
 	}

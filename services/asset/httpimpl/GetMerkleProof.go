@@ -18,6 +18,8 @@ import (
 // as defined in BRC-74: https://github.com/bitcoin-sv/BRCs/blob/master/transactions/0074.md
 
 // LegacyMerkleProofResponse is kept for reference but no longer used.
+//
+// swagger:model LegacyMerkleProofResponse
 type LegacyMerkleProofResponse struct {
 	TxID             string   `json:"txid"`
 	BlockHash        string   `json:"blockHash"`

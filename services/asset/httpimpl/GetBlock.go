@@ -32,6 +32,8 @@ import (
 // Fields:
 // - Block: Embedded Block model containing all standard block data including header, transactions, etc.
 // - NextBlock: Hash of the next block in the chain, or nil if this is the tip of the chain
+//
+// swagger:model BlockExtended
 type BlockExtended struct {
 	*model.Block                 // Embedded Block model containing basic block data
 	NextBlock    *chainhash.Hash `json:"nextblock"` // Hash of the next block in the chain, if available
