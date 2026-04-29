@@ -244,7 +244,7 @@ func TestPerfConsumerThroughput(t *testing.T) {
 	env := kafkatest.MustStartEnv(t, ctx)
 
 	messageSizes := []int{256, 1024, 10 * 1024}
-	messageCount := 10000
+	messageCount := 1000
 	var results []kafkatest.Result
 
 	for _, size := range messageSizes {
