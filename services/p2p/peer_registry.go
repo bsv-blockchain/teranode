@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -704,6 +705,70 @@ func (pr *PeerRegistry) ResetReputation(peerIDStr string) int {
 	}
 
 	return peersReset
+}
+
+// Cleanup evicts stale peers to bound memory and lookup cost. Phase 1 (TTL)
+// drops peers whose LastMessageTime is older than ttl. Phase 2 (LRU) then
+// drops oldest-first until the registry is at or below maxSize. Connected
+// peers and banned peers are exempt from both phases — connected peers are
+// active, and banned entries must outlive the ban itself so lookups remain
+// effective. A maxSize of 0 disables the LRU phase.
+//
+// Returns (expired, lru) entry counts for logging.
+func (pr *PeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, int) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	now := time.Now()
+	expired := 0
+
+	for id, info := range pr.peers {
+		if isCleanupExempt(info) {
+			continue
+		}
+		if !info.LastMessageTime.IsZero() && now.Sub(info.LastMessageTime) <= ttl {
+			continue
+		}
+		delete(pr.peers, id)
+		expired++
+	}
+
+	if maxSize <= 0 || len(pr.peers) <= maxSize {
+		return expired, 0
+	}
+
+	type candidate struct {
+		id   peer.ID
+		last time.Time
+	}
+	candidates := make([]candidate, 0, len(pr.peers))
+	for id, info := range pr.peers {
+		if isCleanupExempt(info) {
+			continue
+		}
+		candidates = append(candidates, candidate{id: id, last: info.LastMessageTime})
+	}
+
+	// Oldest first; a zero LastMessageTime sorts as oldest, which is correct for
+	// cache-loaded peers we have not yet heard from.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].last.Before(candidates[j].last)
+	})
+
+	excess := len(pr.peers) - maxSize
+	lru := 0
+	for i := 0; i < len(candidates) && lru < excess; i++ {
+		delete(pr.peers, candidates[i].id)
+		lru++
+	}
+
+	return expired, lru
+}
+
+// isCleanupExempt reports whether a peer must be retained regardless of TTL
+// or size pressure. Caller must hold the registry lock.
+func isCleanupExempt(info *PeerInfo) bool {
+	return info.IsConnected || info.IsBanned
 }
 
 // GetPeersForCatchup returns peers suitable for catchup operations

@@ -121,8 +121,8 @@ Already covered above:
 
 ### Blocker
 
-1. **`StaticPeers` is dead code in `services/p2p/`.** Defined, parsed, displayed in diagnostics, never used. Operators who configure it expect persistent peer connections; they get nothing. This caused us to chase phantom flake in the multinode test harness for a week. Either make `services/p2p/Server.go` consume it (extending go-p2p-message-bus to handle auto-reconnect for static peers, or supervising it in teranode), or drop the setting entirely so it can't mislead.
-2. **`PeerRegistry` has no eviction policy.** In a network with regular peer churn the map grows without bound, exhausting memory and slowing down every O(n) lookup. Need TTL or LRU.
+1. ~~**`StaticPeers` is dead code in `services/p2p/`.**~~ **Resolved.** Wired through `go-p2p-message-bus` v0.1.17 (`services/p2p/Server.go:334`).
+2. ~~**`PeerRegistry` has no eviction policy.**~~ **Resolved.** TTL + LRU eviction added (`services/p2p/peer_registry.go` `Cleanup`, with `p2p_peer_registry_max_size`/`_ttl`/`_cleanup_interval` settings). Connected and banned peers are exempt.
 3. **No gossipsub topic validators.** Schema and rate aren't enforced before relay. Garbage propagates through the entire mesh before any node rejects it on JSON unmarshal. Highest-leverage hardening change against an open network.
 
 ### Should-fix
@@ -144,8 +144,8 @@ Already covered above:
 
 ## Suggested follow-up tickets
 
-1. **Wire StaticPeers through to libp2p connect-and-supervise.** Either extend `go-p2p-message-bus` to maintain static peers automatically, or call `Client.Connect` from `services/p2p/Server.go` on startup and supervise reconnects in teranode.
-2. **PeerRegistry eviction.** Add LRU + TTL using the existing `PeerMapMaxSize` / `PeerMapTTL` style settings.
+1. ~~**Wire StaticPeers through to libp2p connect-and-supervise.**~~ Done in `go-p2p-message-bus` v0.1.17.
+2. ~~**PeerRegistry eviction.**~~ Done.
 3. **Persist reputation and bans.** Spec the storage format, decide on a file vs. SQLite.
 4. **Register gossipsub topic validators** for all four topics. Schema + per-peer rate limit.
 5. **Heartbeat bandwidth at scale.** Either rate-adapt with cluster size or merge into block topic.

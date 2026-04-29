@@ -970,6 +970,45 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }
 
+// startPeerRegistryCleanup runs periodic TTL+LRU eviction on the peer registry
+// so it cannot grow unboundedly under churn.
+func (s *Server) startPeerRegistryCleanup(ctx context.Context) {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	interval := s.settings.P2P.PeerRegistryCleanupInterval
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ttl := s.settings.P2P.PeerRegistryTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	maxSize := s.settings.P2P.PeerRegistryMaxSize
+
+	s.peerRegistryCleanupTimer = time.NewTicker(interval)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Infof("[startPeerRegistryCleanup] stopping peer registry cleanup")
+				return
+			case <-s.peerRegistryCleanupTimer.C:
+				expired, lru := s.peerRegistry.Cleanup(maxSize, ttl)
+				if expired+lru > 0 {
+					s.logger.Infof("[startPeerRegistryCleanup] evicted %d expired and %d over-limit entries (registry size now %d)",
+						expired, lru, s.peerRegistry.PeerCount())
+				}
+			}
+		}
+	}()
+
+	s.logger.Infof("[startPeerRegistryCleanup] started peer registry cleanup with interval %v, ttl %v, max size %d",
+		interval, ttl, maxSize)
+}
+
 // startPeerRegistryCacheSave starts periodic saving of peer registry cache
 func (s *Server) startPeerRegistryCacheSave(ctx context.Context) {
 	// Save every 5 minutes

@@ -121,10 +121,11 @@ type Server struct {
 	syncConnectionTimes               sync.Map         // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
-	peerMapCleanupTicker    *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize          int           // Maximum number of entries in peer maps
-	peerMapTTL              time.Duration // Time-to-live for peer map entries
-	registryCacheSaveTicker *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerMapCleanupTicker     *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize           int           // Maximum number of entries in peer maps
+	peerMapTTL               time.Duration // Time-to-live for peer map entries
+	registryCacheSaveTicker  *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerRegistryCleanupTimer *time.Ticker  // Ticker for periodic eviction of stale peer registry entries
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -636,6 +637,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start periodic save of peer registry cache
 	s.startPeerRegistryCacheSave(ctx)
+
+	// Start periodic eviction of stale peer registry entries
+	s.startPeerRegistryCleanup(ctx)
 
 	// Start sync coordinator (it handles all sync logic internally)
 	if s.syncCoordinator != nil {
@@ -1632,6 +1636,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.peerMapCleanupTicker != nil {
 		s.peerMapCleanupTicker.Stop()
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
+	// Stop the peer registry cleanup ticker
+	if s.peerRegistryCleanupTimer != nil {
+		s.peerRegistryCleanupTimer.Stop()
+		s.logger.Infof("[Stop] stopped peer registry cleanup ticker")
 	}
 
 	// Clear the peer maps to free memory
