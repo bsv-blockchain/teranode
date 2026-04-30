@@ -75,9 +75,18 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		return []chainhash.Hash{}, nil
 	}
 
-	// recursively update all children blocks to invalid in 1 query
-	// we also set mined_set to false as an invalid block cannot be mined, this will trigger
-	// the mined go routing in block validation to reset any mining state for this block
+	// Serialize against StoreBlock's slow path and RevalidateBlock so the
+	// UPDATE and the follow-up reconciliation observe a stable view of the
+	// chain. The reconciliation itself derives the actual best inside its
+	// transaction, so we do not need to snapshot a pre-best on this side.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
+	// recursively update all children blocks to invalid in 1 query.
+	// Also set mined_set = false (invalid blocks cannot be mined; this triggers
+	// block-validation to reset mining state) and on_main_chain = false so the
+	// invalidated subtree is removed from the canonical chain in the same
+	// transaction — no follow-up wide-window UPDATE needed.
 	q := `
 		WITH RECURSIVE children AS (
 			SELECT id, hash, previous_hash
@@ -89,7 +98,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			INNER JOIN children c ON c.hash = b.previous_hash
 		)
 		UPDATE blocks
-		SET invalid = true, mined_set = false
+		SET invalid = true, mined_set = false, on_main_chain = false
 		WHERE id IN (SELECT id FROM children)
 		RETURNING hash
 	`
@@ -100,9 +109,9 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		hash      *chainhash.Hash
 	)
 
-	// Guard the entire window: from when invalid flags change until on_main_chain
-	// is corrected by rebuildOnMainChainFlag. Balanced by the defer so all exit
-	// paths (including the early error below) decrement.
+	// Guard the entire window: from when invalid/on_main_chain flags change
+	// until applyOnMainChainSwitch corrects the new winning branch. Balanced
+	// by the defer so all exit paths (including the early error below) decrement.
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
@@ -113,7 +122,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
-		// Invalidate caches FIRST so that rebuildOnMainChainFlag does not return a
+		// Invalidate caches FIRST so that getBestBlockID does not return a
 		// stale best block that included the now-invalid block.
 		s.blockTimestampCache.Clear()
 		s.ResetResponseCache()
@@ -121,10 +130,17 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			s.resetChainWalkCache()
 		}
 
-		// Rebuild on_main_chain flags to reflect the new canonical chain after invalidation.
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		// InvalidateBlock can move the chain tip arbitrarily deep — an
+		// operator may invalidate a block far below the current tip, leaving
+		// the new winning branch's fork point well below the bounded walk
+		// in reconcileOnMainChain. Use the full rebuild here for correctness;
+		// invalidations are rare admin operations and can afford the wider
+		// lock window. migrationFullRebuildTimeout matches the startup
+		// migration's bound, generous enough for multi-million-block chains.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), migrationFullRebuildTimeout)
 		defer rebuildCancel()
-		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+
+		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
 			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 		}
 

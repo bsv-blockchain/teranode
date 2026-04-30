@@ -234,16 +234,15 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return errors.NewTxInvalidError("transaction has no inputs or outputs")
 	}
 
-	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkTxSize(txSize); err != nil {
-			return err
-		}
+	// 2) Check transaction size against both consensus and policy limits
+	// Consensus limits are ALWAYS checked, policy limits only for mempool transactions
+	if err := tv.checkTxSize(txSize, blockHeight, validationOptions.SkipPolicyChecks); err != nil {
+		return err
 	}
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
 	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
-	if err := tv.checkInputs(tx, blockHeight); err != nil {
+	if err := tv.checkInputs(tx, blockHeight, validationOptions); err != nil {
 		return err
 	}
 
@@ -264,17 +263,6 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	// if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
 	// 	return err
 	// }
-
-	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
-	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
-	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
-	//       and therefore let's not enforce this check until then.
-	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-		// 9) The unlocking script (scriptSig) can only push numbers on the stack
-		if err := tv.pushDataCheck(tx); err != nil {
-			return err
-		}
-	}
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
@@ -461,63 +449,15 @@ func isUnspendableOutput(script *bscript.Script) bool {
 	return false
 }
 
-// isStandardInputScript checks if an input script (unlocking script) is standard
-// Standard input scripts should only contain data pushes (no other opcodes)
-// This uses the same interpreter as the SV node for consistency
-// Before UAHF height, all scripts are considered standard (no push-only requirement)
-func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeight uint32) bool {
-	// Before UAHF, there was no push-only requirement for input scripts
-	if blockHeight <= uahfHeight {
-		// Any parseable script is considered standard before UAHF
-		// Return true unless script is nil
-		return script != nil
-	}
-
-	if script == nil {
-		// Nil scripts are not standard (matches pushDataCheck behavior)
-		return false
-	}
-
-	// Use the same parser as pushDataCheck for consistency
-	parser := interpreter.DefaultOpcodeParser{}
-	parsedScript, err := parser.Parse(script)
-	if err != nil {
-		// If we can't parse the script, it's not standard
-		return false
-	}
-
-	// Check if the parsed script is push-only
-	return parsedScript.IsPushOnly()
-}
-
 // checkOutputs validates transaction outputs according to consensus and policy rules.
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
 
-	// Note: We use > instead of >= to exclude the Genesis activation block itself
-	// because transactions in block 620538 were created before Genesis rules existed
-	isGenesisActivated := blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight
-
 	for index, output := range tx.Outputs {
-		// Check P2SH output after genesis activation
-		if !validationOptions.SkipPolicyChecks && isGenesisActivated && output.LockingScript.IsP2SH() {
-			// See https://github.com/bitcoin-sv/teranode/issues/4333
-			return errors.NewTxInvalidError("transaction output %d is p2sh after genesis activation", index)
-		}
 
 		if output.Satoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		}
-
-		// Check dust limit after genesis activation
-		// Dust checks are policy rules, not consensus rules - they only apply to mempool/relay
-		if !validationOptions.SkipPolicyChecks && isGenesisActivated {
-			// Only enforce dust limit for spendable outputs when RequireStandard is true
-			if tv.settings.ChainCfgParams.RequireStandard && output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
-				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
-			}
-		}
-
 		total += output.Satoshis
 	}
 
@@ -529,8 +469,10 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOpt
 }
 
 // checkInputs validates transaction inputs according to consensus rules.
-func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
+	accumulatedPrevUTXOSize := uint64(0)
+	maxCoinsViewCacheSize := tv.settings.Policy.GetMaxCoinsViewCacheSize()
 
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
@@ -574,6 +516,20 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		}
 
 		total += input.PreviousTxSatoshis
+
+		// Check accumulated previous utxo size if maxcoinsviewcachesize is enabled
+		// See BSV Node CCoinsViewCache::Shard::HaveInputsLimited
+		//    https://github.com/teranode-group/bitcoin-sv-staging/blob/develop/src/coins.cpp#L131
+		if !validationOptions.SkipPolicyChecks && maxCoinsViewCacheSize > 0 {
+			if input.PreviousTxScript == nil {
+				return errors.NewTxPolicyError("bad-txns-inputs-too-large")
+			}
+
+			accumulatedPrevUTXOSize += uint64(len(*input.PreviousTxScript))
+			if accumulatedPrevUTXOSize > maxCoinsViewCacheSize {
+				return errors.NewTxPolicyError("bad-txns-inputs-too-large")
+			}
+		}
 	}
 
 	// if total == 0 && blockHeight >= tv.Params().GenesisActivationHeight {
@@ -588,16 +544,44 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	return nil
 }
 
-// checkTxSize validates that the transaction size complies with policy limits.
-func (tv *TxValidator) checkTxSize(txSize int) error {
-	maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
-	if maxTxSizePolicy == 0 {
-		// no policy found for tx size, use max block size
-		maxTxSizePolicy = MaxBlockSize
+// checkTxSize validates that the transaction size complies with consensus and policy limits.
+// This method enforces two types of checks:
+// 1. Consensus check (ALWAYS enforced): Ensures transaction doesn't exceed consensus size limit
+//   - Before Genesis: 1 MB (MaxTxSizeConsensusBeforeGenesis)
+//   - After Genesis: 1 GB (MaxTxSizeConsensusAfterGenesis)
+//   - Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:536
+//
+// 2. Policy check (only when skipPolicy=false): Ensures transaction doesn't exceed policy size limit
+//
+// Parameters:
+//   - txSize: The transaction size in bytes
+//   - blockHeight: Current block height to determine if Genesis is active
+//   - skipPolicy: If true, skip policy checks (used for block validation)
+func (tv *TxValidator) checkTxSize(txSize int, blockHeight uint32, skipPolicy bool) error {
+	// Consensus check: ALWAYS enforced regardless of skipPolicy
+	// Matches C++ bitcoin-sv implementation: CheckTransactionCommon in validation.cpp:536
+	// where it checks: if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION) > maxTxSizeConsensus)
+	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	isPostGenesis := blockHeight >= genesisActivationHeight
+	maxTxSizeConsensus := MaxTxSizeConsensusBeforeGenesis
+	if isPostGenesis {
+		maxTxSizeConsensus = MaxTxSizeConsensusAfterGenesis
+	}
+	if txSize > maxTxSizeConsensus {
+		return errors.NewTxInvalidError("bad-txns-oversize")
 	}
 
-	if txSize > maxTxSizePolicy {
-		return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
+	// Policy check: Only enforced for mempool transactions (when skipPolicy=false)
+	if !skipPolicy {
+		maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
+		if maxTxSizePolicy == 0 {
+			// no policy found for tx size, use max block size
+			maxTxSizePolicy = MaxBlockSize
+		}
+
+		if txSize > maxTxSizePolicy {
+			return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
+		}
 	}
 
 	return nil
@@ -756,7 +740,6 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 	// Get configuration settings
 	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
 	maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
-	acceptNonStdInputs := tv.settings.Policy.GetAcceptNonStdConsolidationInput()
 
 	// Dust return transactions don't require confirmations
 	if isDustReturn {
@@ -786,9 +769,7 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 
 		// Rule 5: Standard Script Rule
 		// If acceptNonStdConsolidationInput = 0, all inputs must use standard scripts
-		if !acceptNonStdInputs && !isStandardInputScript(input.UnlockingScript, currentHeight, tv.settings.ChainCfgParams.UahfForkHeight) {
-			return false
-		}
+		// This is checked in bdk
 	}
 
 	// Transaction qualifies as a consolidation transaction
@@ -820,28 +801,6 @@ func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error 
 					return errors.NewTxInvalidError("transaction unlocking scripts have too many sigops (%d)", numSigOps)
 				}
 			}
-		}
-	}
-
-	return nil
-}
-
-// pushDataCheck validates that transaction input scripts contain only data pushes.
-func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
-	for index, input := range tx.Inputs {
-		if input.UnlockingScript == nil {
-			return errors.NewTxInvalidError("transaction input %d unlocking script is empty", index)
-		}
-
-		parser := interpreter.DefaultOpcodeParser{}
-		parsedUnlockingScript, err := parser.Parse(input.UnlockingScript)
-
-		if err != nil {
-			return err
-		}
-
-		if !parsedUnlockingScript.IsPushOnly() {
-			return errors.NewTxInvalidError("transaction input %d unlocking script is not push only", index)
 		}
 	}
 

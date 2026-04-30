@@ -20,9 +20,15 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
-	// Hold the rebuild guard from the UPDATE through the rebuild so concurrent
-	// readers fall back to the authoritative CTE path during the inconsistent
-	// window. Mirrors InvalidateBlock's pattern.
+	// Serialize against StoreBlock's slow path and InvalidateBlock so the
+	// UPDATE and the follow-up reconciliation observe a stable view of the
+	// chain. See the matching note in InvalidateBlock.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
+	// Hold the rebuild guard from the UPDATE through the reconciliation so
+	// concurrent readers fall back to the authoritative CTE path during the
+	// inconsistent window. Mirrors InvalidateBlock's pattern.
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
@@ -36,19 +42,21 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
-	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+	// RevalidateBlock, like InvalidateBlock, can move the tip across an
+	// arbitrarily deep fork point. Use the full rebuild for correctness —
+	// see the matching note in InvalidateBlock.
+	rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), migrationFullRebuildTimeout)
 	defer rebuildCancel()
 
-	// Invalidate caches FIRST so that rebuildOnMainChainFlag's getBestBlockID call
-	// sees the freshly revalidated state rather than the pre-revalidation cached value.
+	// Invalidate caches FIRST so that the rebuild sees the freshly
+	// revalidated state rather than the pre-revalidation cached value.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()
 	}
 
-	// Rebuild on_main_chain flags to reflect the potentially new canonical chain.
-	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, false); rebuildErr != nil {
+	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
 		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
 	}
 
