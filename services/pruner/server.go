@@ -266,9 +266,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Wait for blockchain FSM to be ready
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.IsContextError(err) {
 			s.logger.Infof("[Pruner Service] Shutting down during FSM wait")
-			return ctx.Err()
+			return err
 		}
 		return err
 	}

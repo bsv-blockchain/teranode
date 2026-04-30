@@ -325,9 +325,9 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.IsContextError(err) {
 			v.logger.Infof("[Validator] Shutting down during FSM wait")
-			return ctx.Err()
+			return err
 		}
 		v.logger.Errorf("[Validator] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
