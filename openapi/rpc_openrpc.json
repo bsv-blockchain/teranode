@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "license": {
       "name": "Open BSV License",
-      "url": "https://github.com/bsv-blockchain/teranode/blob/master/LICENSE"
+      "url": "https://github.com/bsv-blockchain/teranode/blob/main/LICENSE"
     }
   },
   "servers": [
@@ -387,9 +387,16 @@
             "id": { "type": "string" },
             "prevhash": { "type": "string" },
             "coinbaseValue": { "type": "integer" },
+            "version": { "type": "integer" },
+            "nBits": { "type": "string" },
+            "time": { "type": "integer" },
+            "height": { "type": "integer" },
             "num_tx": { "type": "integer" },
             "sizeWithoutCoinbase": { "type": "integer" },
-            "merkleProof": { "type": "array", "items": { "type": "string" } }
+            "merkleProof": { "type": "array", "items": { "type": "string" } },
+            "difficulty": { "type": "number" },
+            "coinbase": { "type": "string" },
+            "subtreeHashes": { "type": "array", "items": { "type": "string" } }
           }
         }
       }
