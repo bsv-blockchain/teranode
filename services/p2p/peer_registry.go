@@ -709,10 +709,16 @@ func (pr *PeerRegistry) ResetReputation(peerIDStr string) int {
 
 // Cleanup evicts stale peers to bound memory and lookup cost. Phase 1 (TTL)
 // drops peers whose LastMessageTime is older than ttl. Phase 2 (LRU) then
-// drops oldest-first until the registry is at or below maxSize. Connected
-// peers and banned peers are exempt from both phases — connected peers are
-// active, and banned entries must outlive the ban itself so lookups remain
-// effective. A maxSize of 0 disables the LRU phase.
+// drops oldest-first until the non-exempt portion of the registry fits under
+// maxSize. Connected peers and banned peers are exempt from both phases —
+// connected peers are active, and banned entries must outlive the ban itself
+// so lookups remain effective. A maxSize of 0 disables the LRU phase.
+//
+// If the exempt count alone exceeds maxSize the registry will stay over the
+// cap until exempts naturally roll off (peer disconnects or ban expires);
+// LRU evicts every non-exempt entry in that case but cannot do more.
+// PeerCount() after Cleanup is the authoritative size — callers should log a
+// warning when it exceeds maxSize.
 //
 // Returns (expired, lru) entry counts for logging.
 func (pr *PeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, int) {
@@ -733,7 +739,7 @@ func (pr *PeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, int) {
 		expired++
 	}
 
-	if maxSize <= 0 || len(pr.peers) <= maxSize {
+	if maxSize <= 0 {
 		return expired, 0
 	}
 
@@ -742,11 +748,27 @@ func (pr *PeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, int) {
 		last time.Time
 	}
 	candidates := make([]candidate, 0, len(pr.peers))
+	exemptCount := 0
 	for id, info := range pr.peers {
 		if isCleanupExempt(info) {
+			exemptCount++
 			continue
 		}
 		candidates = append(candidates, candidate{id: id, last: info.LastMessageTime})
+	}
+
+	// How many non-exempt peers we can keep without breaching maxSize. When the
+	// exempt count alone is at or above maxSize, target is 0 — evict every
+	// non-exempt and accept the over-cap. Computing against exemptCount (rather
+	// than total registry size) makes the intent obvious: we are bounding the
+	// evictable-and-aging portion, not the total.
+	target := maxSize - exemptCount
+	if target < 0 {
+		target = 0
+	}
+	toEvict := len(candidates) - target
+	if toEvict <= 0 {
+		return expired, 0
 	}
 
 	// Oldest first; a zero LastMessageTime sorts as oldest, which is correct for
@@ -755,14 +777,11 @@ func (pr *PeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, int) {
 		return candidates[i].last.Before(candidates[j].last)
 	})
 
-	excess := len(pr.peers) - maxSize
-	lru := 0
-	for i := 0; i < len(candidates) && lru < excess; i++ {
+	for i := 0; i < toEvict; i++ {
 		delete(pr.peers, candidates[i].id)
-		lru++
 	}
 
-	return expired, lru
+	return expired, toEvict
 }
 
 // isCleanupExempt reports whether a peer must be retained regardless of TTL

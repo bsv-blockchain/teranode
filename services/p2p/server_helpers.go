@@ -997,9 +997,17 @@ func (s *Server) startPeerRegistryCleanup(ctx context.Context) {
 				return
 			case <-s.peerRegistryCleanupTimer.C:
 				expired, lru := s.peerRegistry.Cleanup(maxSize, ttl)
+				size := s.peerRegistry.PeerCount()
 				if expired+lru > 0 {
 					s.logger.Infof("[startPeerRegistryCleanup] evicted %d expired and %d over-limit entries (registry size now %d)",
-						expired, lru, s.peerRegistry.PeerCount())
+						expired, lru, size)
+				}
+				// LRU cannot evict connected/banned peers; if exempt entries alone
+				// exceed maxSize, the registry stays over-cap until they age out.
+				// Surface that explicitly so it does not look like cleanup is broken.
+				if maxSize > 0 && size > maxSize {
+					s.logger.Warnf("[startPeerRegistryCleanup] registry size %d exceeds max %d — exempt (connected or banned) peers cannot be evicted",
+						size, maxSize)
 				}
 			}
 		}

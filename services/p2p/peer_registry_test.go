@@ -724,6 +724,39 @@ func TestPeerRegistry_Cleanup_LRU(t *testing.T) {
 	assert.True(t, ok, "second-newest peer retained")
 }
 
+func TestPeerRegistry_Cleanup_ExemptSaturation(t *testing.T) {
+	// When the exempt (connected/banned) count alone is at or above maxSize,
+	// LRU should evict every non-exempt entry and report the registry as
+	// over-cap. This exercises the worst-case path that Cleanup deliberately
+	// cannot fix on its own — exempts can only roll off via disconnect or
+	// ban expiry.
+	pr := NewPeerRegistry()
+	ids := GenerateTestPeerIDs(6)
+
+	// Four connected peers (exempt) plus two stale non-exempt peers.
+	for i, id := range ids {
+		pr.Put(id, "", 0, nil, "")
+		pr.peers[id].LastMessageTime = time.Now().Add(-time.Duration(i+1) * time.Minute)
+	}
+	for i := 0; i < 4; i++ {
+		pr.UpdateConnectionState(ids[i], true)
+	}
+
+	expired, lru := pr.Cleanup(3, time.Hour)
+	assert.Equal(t, 0, expired, "all entries within TTL")
+	assert.Equal(t, 2, lru, "every non-exempt evicted")
+	assert.Equal(t, 4, pr.PeerCount(), "exempt count exceeds maxSize so registry stays over-cap")
+
+	for i := 0; i < 4; i++ {
+		_, ok := pr.Get(ids[i])
+		assert.True(t, ok, "exempt peer %d retained", i)
+	}
+	for i := 4; i < 6; i++ {
+		_, ok := pr.Get(ids[i])
+		assert.False(t, ok, "non-exempt peer %d evicted", i)
+	}
+}
+
 func TestPeerRegistry_Cleanup_Noop(t *testing.T) {
 	pr := NewPeerRegistry()
 	ids := GenerateTestPeerIDs(3)
