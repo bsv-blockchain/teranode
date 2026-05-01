@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/thirdPartySoftwareRequirements/">
       
       
         <link rel="prev" href="../testingTechnicalReference/">
@@ -16,7 +20,7 @@
         
       
       
-      <link rel="icon" href="../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -27,6 +31,9 @@
     
       <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -39,8 +46,8 @@
         
         
         
-        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -55,7 +62,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -82,7 +96,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -105,6 +119,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -130,6 +170,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -153,6 +198,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -193,6 +250,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -213,6 +272,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -232,6 +293,8 @@
         <a href="../../topics/teranodeIntro/" class="md-tabs__link">
           
   
+  
+    
   
   Key Topics
 
@@ -254,6 +317,8 @@
         <a href="../projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -293,11 +358,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -336,6 +413,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -348,9 +433,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -481,6 +564,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -493,9 +602,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -843,6 +950,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -855,9 +982,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -897,6 +1022,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -909,9 +1044,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1071,6 +1204,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1083,9 +1230,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1301,6 +1446,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1313,9 +1464,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1419,6 +1568,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1431,9 +1586,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1537,6 +1690,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1549,9 +1708,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1655,6 +1812,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1667,9 +1830,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1773,6 +1934,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1785,9 +1952,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1891,6 +2056,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1903,9 +2074,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2009,6 +2178,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2021,9 +2202,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2226,6 +2405,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2238,9 +2459,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2588,6 +2807,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2600,9 +2827,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2790,6 +3015,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2802,9 +3045,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3076,6 +3317,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3088,9 +3345,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3334,6 +3589,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3346,9 +3607,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3452,6 +3711,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3464,9 +3735,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3654,6 +3923,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3666,9 +3939,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3744,6 +4015,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3756,9 +4031,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3843,6 +4116,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3926,6 +4215,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3941,9 +4244,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
@@ -4123,6 +4424,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4135,9 +4460,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4501,6 +4824,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4516,9 +4857,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="">
@@ -4790,6 +5129,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4805,9 +5158,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
@@ -5023,6 +5374,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5038,9 +5395,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="">
@@ -5144,6 +5499,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5159,9 +5530,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="">
@@ -5341,6 +5710,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5353,9 +5752,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -5795,6 +6192,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5807,9 +6212,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -5950,6 +6353,22 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -6993,14 +7412,83 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../projectStructure/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../misc/BIP-239/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Miscellaneous
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="teranode-third-party-software-requirements">Teranode Third Party Software Requirements</h1>
-<h2 id="index">Index</h2>
+
+<h1 id="teranode-third-party-software-requirements">Teranode Third Party Software Requirements<a class="headerlink" href="#teranode-third-party-software-requirements" title="Permanent link">&para;</a></h1>
+<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="#introduction">Introduction</a></li>
 <li><a href="#apache-kafka">Apache Kafka</a><ul>
@@ -7039,15 +7527,15 @@
 </li>
 <li><a href="#additional-components">Additional Components</a></li>
 </ul>
-<h2 id="introduction">Introduction</h2>
+<h2 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">&para;</a></h2>
 <p>Teranode relies on a number of third-party software dependencies, some of which can be sourced from different vendors. The modular architecture allows operators to choose between different storage backends and configurations based on their specific requirements, performance needs, and infrastructure constraints.</p>
 <p>BSV provides both a <code>docker compose</code> that initializes all dependencies within a single server node, and a <code>Kubernetes operator</code> that provides a production-ready multi-node setup.</p>
 <p>This document outlines the various third-party dependencies used in Teranode, their roles, and the available alternatives for different deployment scenarios.</p>
-<h2 id="apache-kafka">Apache Kafka</h2>
-<h3 id="what-is-kafka">What is Kafka?</h3>
+<h2 id="apache-kafka">Apache Kafka<a class="headerlink" href="#apache-kafka" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-kafka">What is Kafka?<a class="headerlink" href="#what-is-kafka" title="Permanent link">&para;</a></h3>
 <p>Apache Kafka is an open-source platform for handling real-time data feeds, designed to provide high-throughput, low-latency data pipelines and stream processing. It supports publish-subscribe messaging, fault-tolerant storage, and real-time stream processing.</p>
 <p>To know more, please refer to the Kafka official site: <a href="https://kafka.apache.org/">https://kafka.apache.org/</a>.</p>
-<h3 id="kafka-in-bsv-teranode">Kafka in BSV Teranode</h3>
+<h3 id="kafka-in-bsv-teranode">Kafka in BSV Teranode<a class="headerlink" href="#kafka-in-bsv-teranode" title="Permanent link">&para;</a></h3>
 <p>In BSV Teranode, Kafka serves as the event-driven messaging backbone for asynchronous communication between microservices. It enables services to process blockchain events independently and at scale.</p>
 <ul>
 <li><strong>Transaction Processing</strong>: <code>txmeta</code>, <code>validatortxs</code>, <code>rejectedtx</code> topics</li>
@@ -7077,8 +7565,8 @@
 <li><strong>Legacy Service</strong>: Bridges legacy Bitcoin protocol messages to Kafka topics</li>
 </ul>
 <p>Kafka's distributed architecture ensures data consistency and fault tolerance across the Teranode network, enabling horizontal scaling of transaction and block processing.</p>
-<h2 id="postgresql">PostgreSQL</h2>
-<h3 id="what-is-postgresql">What is PostgreSQL?</h3>
+<h2 id="postgresql">PostgreSQL<a class="headerlink" href="#postgresql" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-postgresql">What is PostgreSQL?<a class="headerlink" href="#what-is-postgresql" title="Permanent link">&para;</a></h3>
 <p>Postgres, short for PostgreSQL, is an advanced, open-source relational database management system (RDBMS). It is known for its robustness, extensibility, and standards compliance. Postgres supports SQL for querying and managing data, and it also provides features like:</p>
 <ul>
 <li><strong>ACID Compliance:</strong> Ensures reliable transactions.</li>
@@ -7088,7 +7576,7 @@
 <li><strong>Data Integrity:</strong> Supports constraints, triggers, and foreign keys to maintain data accuracy.</li>
 </ul>
 <p>To know more, please refer to the PostgreSQL official site: <a href="https://www.postgresql.org/">https://www.postgresql.org/</a></p>
-<h3 id="postgresql-in-teranode">PostgreSQL in Teranode</h3>
+<h3 id="postgresql-in-teranode">PostgreSQL in Teranode<a class="headerlink" href="#postgresql-in-teranode" title="Permanent link">&para;</a></h3>
 <p>In Teranode, PostgreSQL is the primary backend for <strong>Blockchain Storage</strong>, storing the complete blockchain state and block metadata.</p>
 <p><strong>Schema Overview:</strong></p>
 <ul>
@@ -7129,10 +7617,10 @@
 <li><strong>Reliability</strong>: Production-proven for critical financial data storage</li>
 </ul>
 <p>PostgreSQL provides a reliable and efficient database solution for handling large volumes of block data while maintaining the integrity required for blockchain consensus operations.</p>
-<h2 id="utxo-storage">UTXO Storage</h2>
+<h2 id="utxo-storage">UTXO Storage<a class="headerlink" href="#utxo-storage" title="Permanent link">&para;</a></h2>
 <p>The Unspent Transaction Output (UTXO) store is a critical component that tracks all spendable transaction outputs in the blockchain. This requires high-performance, low-latency storage capable of handling millions of read/write operations per second.</p>
-<h3 id="aerospike">Aerospike</h3>
-<h4 id="what-is-aerospike">What is Aerospike?</h4>
+<h3 id="aerospike">Aerospike<a class="headerlink" href="#aerospike" title="Permanent link">&para;</a></h3>
+<h4 id="what-is-aerospike">What is Aerospike?<a class="headerlink" href="#what-is-aerospike" title="Permanent link">&para;</a></h4>
 <p>Aerospike is an open-source, high-performance, NoSQL database designed for real-time analytics and high-speed transaction processing. It is known for its ability to handle large-scale data with low latency and high reliability. Key features include:</p>
 <ul>
 <li><strong>High Performance:</strong> Optimized for fast read and write operations.</li>
@@ -7140,7 +7628,7 @@
 <li><strong>Consistency and Reliability:</strong> Ensures data consistency and supports ACID transactions.</li>
 <li><strong>Hybrid Memory Architecture:</strong> Utilizes both RAM and flash storage for efficient data management.</li>
 </ul>
-<h4 id="how-aerospike-is-used-in-teranode">How Aerospike is Used in Teranode</h4>
+<h4 id="how-aerospike-is-used-in-teranode">How Aerospike is Used in Teranode<a class="headerlink" href="#how-aerospike-is-used-in-teranode" title="Permanent link">&para;</a></h4>
 <p>In the context of Teranode, Aerospike is the recommended production backend for <strong>UTXO (Unspent Transaction Output) storage</strong>, which requires a robust, high-performance, and reliable solution.</p>
 <p><strong>Why Aerospike for UTXO Storage?</strong></p>
 <ul>
@@ -7151,7 +7639,7 @@
 <li><strong>Data replication</strong>: Ensures UTXO availability across cluster nodes</li>
 </ul>
 <p>Aerospike's performance characteristics make it ideal for Teranode's high-throughput transaction validation requirements.</p>
-<h3 id="sql-based-utxo-storage">SQL-Based UTXO Storage</h3>
+<h3 id="sql-based-utxo-storage">SQL-Based UTXO Storage<a class="headerlink" href="#sql-based-utxo-storage" title="Permanent link">&para;</a></h3>
 <p>For development, testing, or lower-throughput environments, Teranode supports <strong>SQL-based UTXO storage</strong> using PostgreSQL or SQLite backends.</p>
 <p><strong>When to Use SQL UTXO Storage:</strong></p>
 <ul>
@@ -7168,9 +7656,9 @@
 <li>Suitable for nodes processing &lt; 10,000 transactions per second</li>
 </ul>
 <p>The SQL backend implements the same UTXO store interface, allowing seamless switching between storage engines via configuration.</p>
-<h2 id="blob-storage">Blob Storage</h2>
+<h2 id="blob-storage">Blob Storage<a class="headerlink" href="#blob-storage" title="Permanent link">&para;</a></h2>
 <p>Teranode requires robust blob storage for <strong>transaction data</strong> and <strong>merkle subtrees</strong>. Multiple backend options are available depending on deployment requirements.</p>
-<h3 id="shared-filesystem-storage">Shared Filesystem Storage</h3>
+<h3 id="shared-filesystem-storage">Shared Filesystem Storage<a class="headerlink" href="#shared-filesystem-storage" title="Permanent link">&para;</a></h3>
 <p>For production deployments, Teranode uses high-performance shared filesystems like <strong>Lustre</strong> (AWS FSx for Lustre) for optimal performance and scalability.</p>
 <p><strong>Benefits of Using Lustre:</strong></p>
 <ul>
@@ -7188,7 +7676,7 @@
 <li><strong>Asset Server</strong>: Serves transaction data to external clients</li>
 <li><strong>UTXO Persister</strong>: Archives UTXO snapshots</li>
 </ul>
-<h3 id="s3-compatible-storage">S3-Compatible Storage</h3>
+<h3 id="s3-compatible-storage">S3-Compatible Storage<a class="headerlink" href="#s3-compatible-storage" title="Permanent link">&para;</a></h3>
 <p>Teranode supports <strong>S3-compatible blob storage</strong> for cloud-native deployments or long-term archival.</p>
 <p><strong>Use Cases:</strong></p>
 <ul>
@@ -7198,7 +7686,7 @@
 <li>Cost-effective storage for infrequently accessed data</li>
 </ul>
 <p><strong>Configuration:</strong> Set blob store URL scheme to <code>s3://</code> in settings.conf</p>
-<h3 id="http-blob-storage">HTTP Blob Storage</h3>
+<h3 id="http-blob-storage">HTTP Blob Storage<a class="headerlink" href="#http-blob-storage" title="Permanent link">&para;</a></h3>
 <p>For distributed deployments or CDN-backed scenarios, Teranode supports <strong>HTTP/HTTPS blob storage</strong> where blobs are fetched via HTTP requests.</p>
 <p><strong>Use Cases:</strong></p>
 <ul>
@@ -7207,7 +7695,7 @@
 <li>Hybrid architectures with external blob storage services</li>
 </ul>
 <p><strong>Configuration:</strong> Set blob store URL scheme to <code>http://</code> or <code>https://</code> in settings.conf</p>
-<h3 id="file-system-storage">File System Storage</h3>
+<h3 id="file-system-storage">File System Storage<a class="headerlink" href="#file-system-storage" title="Permanent link">&para;</a></h3>
 <p>For development and testing environments, <strong>local filesystem storage</strong> provides the simplest blob storage option.</p>
 <p><strong>Use Cases:</strong></p>
 <ul>
@@ -7218,7 +7706,7 @@
 </ul>
 <p><strong>Configuration:</strong> Set blob store URL scheme to <code>file://</code> in settings.conf</p>
 <p><strong>Note:</strong> When using Docker Compose, shared Docker storage is automatically managed by <code>docker compose</code>, providing an accessible testing environment while allowing for essential functionality and performance evaluation.</p>
-<h2 id="transaction-metadata-cache">Transaction Metadata Cache</h2>
+<h2 id="transaction-metadata-cache">Transaction Metadata Cache<a class="headerlink" href="#transaction-metadata-cache" title="Permanent link">&para;</a></h2>
 <p>Teranode includes a <strong>transaction metadata cache</strong> (<code>txmetacache</code>) that stores frequently accessed transaction information to reduce database and blob storage queries.</p>
 <p><strong>Purpose:</strong></p>
 <ul>
@@ -7233,14 +7721,14 @@
 <li>Automatically expires old entries based on TTL</li>
 </ul>
 <p>This cache layer significantly improves Teranode's performance when handling high query volumes from external clients or internal validation processes.</p>
-<h2 id="grafana-and-prometheus">Grafana and Prometheus</h2>
-<h3 id="what-is-grafana">What is Grafana?</h3>
+<h2 id="grafana-and-prometheus">Grafana and Prometheus<a class="headerlink" href="#grafana-and-prometheus" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-grafana">What is Grafana?<a class="headerlink" href="#what-is-grafana" title="Permanent link">&para;</a></h3>
 <p><strong>Grafana</strong> is an open-source platform used for monitoring, visualization, and analysis of data. It allows users to create and share interactive dashboards to visualize real-time data from various sources.</p>
-<h3 id="what-is-prometheus">What is Prometheus?</h3>
+<h3 id="what-is-prometheus">What is Prometheus?<a class="headerlink" href="#what-is-prometheus" title="Permanent link">&para;</a></h3>
 <p><strong>Prometheus</strong> is an open-source systems monitoring and alerting toolkit. It is particularly well-suited for monitoring dynamic and cloud-native environments.</p>
 <p>Grafana and Prometheus are used together to provide a comprehensive monitoring and visualization solution. Prometheus scrapes metrics from configured targets at regular intervals, and stores them in its time series database. Grafana then connects to Prometheus as a data source.</p>
 <p>Users can create dashboards in Grafana to visualize the metrics collected by Prometheus. Additionally, both Prometheus and Grafana support alerting.</p>
-<h3 id="grafana-and-prometheus-in-teranode">Grafana and Prometheus in Teranode</h3>
+<h3 id="grafana-and-prometheus-in-teranode">Grafana and Prometheus in Teranode<a class="headerlink" href="#grafana-and-prometheus-in-teranode" title="Permanent link">&para;</a></h3>
 <p>In the context of Teranode, Grafana and Prometheus are used to provide comprehensive monitoring and visualization of the blockchain node's performance, health, and various metrics.</p>
 <p><strong>Metrics Monitored:</strong></p>
 <ul>
@@ -7261,7 +7749,7 @@
 <li>Transaction validation pipeline metrics</li>
 </ul>
 <p>These monitoring tools are essential for operators to ensure optimal performance and quickly identify issues in production deployments.</p>
-<h2 id="docker-compose">Docker Compose</h2>
+<h2 id="docker-compose">Docker Compose<a class="headerlink" href="#docker-compose" title="Permanent link">&para;</a></h2>
 <p><strong>Docker Compose</strong> is used extensively in Teranode for orchestrating multi-container development and testing environments.</p>
 <p><strong>Purpose:</strong></p>
 <ul>
@@ -7305,8 +7793,8 @@
 <li>Multi-node deployment support</li>
 </ul>
 <p><strong>Configuration</strong>: See <code>deploy/docker/base/docker-services.yml</code> for setup and <code>deploy/docker/base/grafana_dashboards/</code> for dashboard definitions.</p>
-<h2 id="jaeger">Jaeger</h2>
-<h3 id="what-is-jaeger">What is Jaeger?</h3>
+<h2 id="jaeger">Jaeger<a class="headerlink" href="#jaeger" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-jaeger">What is Jaeger?<a class="headerlink" href="#what-is-jaeger" title="Permanent link">&para;</a></h3>
 <p><strong>Jaeger</strong> is an open-source, distributed tracing system originally developed by Uber. It is used for monitoring and troubleshooting microservices-based distributed systems. Jaeger helps track requests as they flow through multiple services, providing insights into performance bottlenecks and system behavior.</p>
 <p>Key features include:</p>
 <ul>
@@ -7315,7 +7803,7 @@
 <li><strong>Root Cause Analysis</strong>: Helps diagnose issues in complex distributed systems</li>
 <li><strong>Service Dependency Analysis</strong>: Visualizes service interactions and dependencies</li>
 </ul>
-<h3 id="jaeger-in-teranode">Jaeger in Teranode</h3>
+<h3 id="jaeger-in-teranode">Jaeger in Teranode<a class="headerlink" href="#jaeger-in-teranode" title="Permanent link">&para;</a></h3>
 <p>Distributed tracing across Teranode's microservices architecture:</p>
 <p><strong>Tracing Capabilities:</strong></p>
 <ul>
@@ -7327,7 +7815,7 @@
 </ul>
 <p><strong>Features</strong>: OpenTelemetry integration, configurable sampling, web UI for trace analysis.</p>
 <p><strong>Configuration</strong>: See <code>util/tracing/</code> for implementation and Docker compose files for deployment setup.</p>
-<h2 id="additional-components">Additional Components</h2>
+<h2 id="additional-components">Additional Components<a class="headerlink" href="#additional-components" title="Permanent link">&para;</a></h2>
 <p><strong>RedPanda Console</strong>: Web-based Kafka management interface for topic management and message inspection.</p>
 <p><strong>Nginx Asset Cache</strong>: HTTP caching layer for asset service responses with reverse proxy capabilities.</p>
 <p><strong>OpenTelemetry</strong>: Observability framework used with Jaeger for comprehensive tracing.</p>
@@ -7350,37 +7838,49 @@
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../testingTechnicalReference/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Testing Technical Reference">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Testing Technical Reference
+              </div>
+            </div>
+          </a>
+        
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -7397,12 +7897,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

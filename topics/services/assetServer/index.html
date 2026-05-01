@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/services/assetServer/">
       
       
         <link rel="prev" href="../alert/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -214,6 +273,8 @@
         <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2229,6 +2408,48 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2593,6 +2814,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2608,9 +2837,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
@@ -2799,6 +3026,24 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -3797,6 +4042,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3812,9 +4073,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
@@ -4058,6 +4317,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4073,9 +4338,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="">
@@ -4179,6 +4442,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4194,9 +4469,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="">
@@ -4384,6 +4657,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4399,9 +4676,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
@@ -4477,6 +4752,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4492,9 +4771,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
@@ -4577,6 +4854,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4589,9 +4882,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4659,6 +4950,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4671,9 +4976,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4853,6 +5156,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4865,9 +5192,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -5231,6 +5556,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5243,9 +5586,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5517,6 +5858,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5529,9 +5884,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5747,6 +6100,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5759,9 +6118,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5865,6 +6222,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5877,9 +6250,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -6059,6 +6430,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6071,9 +6472,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6513,6 +6912,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6525,9 +6932,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6667,6 +7072,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6679,9 +7100,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7624,14 +8043,83 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../alert/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Core Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="asset-server">🗂️ Asset Server</h1>
-<h2 id="index">Index</h2>
+
+<h1 id="asset-server">🗂️ Asset Server<a class="headerlink" href="#asset-server" title="Permanent link">&para;</a></h1>
+<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
 <ol>
 <li><a href="#1-description">Description</a></li>
 <li><a href="#2-architecture">Architecture</a></li>
@@ -7681,7 +8169,7 @@
 </li>
 <li><a href="#8-other-resources">Other Resources</a></li>
 </ol>
-<h2 id="1-description">1. Description</h2>
+<h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
 <p>The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:</p>
 <ul>
 <li>
@@ -7704,7 +8192,7 @@
 <p>The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.</p>
 <p>The various micro-services typically write directly to the data stores, but the asset service fronts them as a common interface.</p>
 <p>Finally, the Asset Service also offers a WebSocket interface, allowing clients to receive real-time notifications when new subtrees and blocks are added to the blockchain.</p>
-<h2 id="2-architecture">2. Architecture</h2>
+<h2 id="2-architecture">2. Architecture<a class="headerlink" href="#2-architecture" title="Permanent link">&para;</a></h2>
 <p><img alt="Asset_Server_System_Context_Diagram.png" src="../img/Asset_Server_System_Context_Diagram.png" /></p>
 <p>Using HTTP, the Asset Server provides data both to other Teranode components, and to remote Teranodes. It also provides data to external clients over HTTP / Websockets, such as the Teranode UI Dashboard.</p>
 <p>All data is retrieved from other Teranode services / stores.</p>
@@ -7719,7 +8207,7 @@
 <li><strong>Blob Store</strong>: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.</li>
 <li><strong>Blockchain Server</strong>: Provides blockchain data (blocks and block headers) to the Asset Server.</li>
 </ul>
-<h3 id="lustre-filesystem-integration">Lustre Filesystem Integration</h3>
+<h3 id="lustre-filesystem-integration">Lustre Filesystem Integration<a class="headerlink" href="#lustre-filesystem-integration" title="Permanent link">&para;</a></h3>
 <p>The Asset Server benefits significantly from Lustre Fs (filesystem) integration for high-performance data access. Lustre is a parallel distributed file system primarily used for large-scale cluster computing, designed to support high-performance, large-scale data storage and workloads.</p>
 <p><strong>Benefits for Asset Server:</strong></p>
 <ul>
@@ -7731,7 +8219,7 @@
 <p><strong>Data Sharing Pattern:</strong></p>
 <p>The services sharing subtree data through Lustre include Asset Server, Block Validation, Subtree Validation, and Block Persister. This shared filesystem approach enables:</p>
 <p><img alt="lustre_fs.svg" src="../img/plantuml/lustre_fs.svg" /></p>
-<h2 id="3-data-model">3. Data Model</h2>
+<h2 id="3-data-model">3. Data Model<a class="headerlink" href="#3-data-model" title="Permanent link">&para;</a></h2>
 <p>The following data types are provided by the Asset Server:</p>
 <ul>
 <li><a href="../../datamodel/block_data_model/">Block Data Model</a>: Contain lists of subtree identifiers.</li>
@@ -7740,10 +8228,10 @@
 <li><a href="../../datamodel/transaction_data_model/">Extended Transaction Data Model</a>: Include additional metadata to facilitate processing.</li>
 <li><a href="../../datamodel/utxo_data_model/">UTXO Data Model</a>: Include additional metadata to facilitate processing.</li>
 </ul>
-<h2 id="4-use-cases">4. Use Cases</h2>
-<h3 id="41-http">4.1. HTTP</h3>
+<h2 id="4-use-cases">4. Use Cases<a class="headerlink" href="#4-use-cases" title="Permanent link">&para;</a></h2>
+<h3 id="41-http">4.1. HTTP<a class="headerlink" href="#41-http" title="Permanent link">&para;</a></h3>
 <p>The Asset Service exposes the following HTTP methods:</p>
-<h4 id="response-format-conventions">Response Format Conventions</h4>
+<h4 id="response-format-conventions">Response Format Conventions<a class="headerlink" href="#response-format-conventions" title="Permanent link">&para;</a></h4>
 <p>Many API endpoints support multiple response formats through URL path suffixes. The Asset Server follows a consistent pattern for format specification:</p>
 <ul>
 <li><strong>Base path</strong> (no suffix): Returns binary stream format (<code>application/octet-stream</code>)</li>
@@ -7751,12 +8239,12 @@
 <li><strong><code>/json</code> suffix</strong>: Returns JSON-formatted response with structured data</li>
 </ul>
 <p><strong>Example Format Variations:</strong></p>
-<div class="highlight"><pre><span></span><code>GET /api/v1/tx/{hash}       # Binary stream
-GET /api/v1/tx/{hash}/hex   # Hexadecimal string
-GET /api/v1/tx/{hash}/json  # JSON object
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/v1/tx/{hash}       # Binary stream
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>GET /api/v1/tx/{hash}/hex   # Hexadecimal string
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>GET /api/v1/tx/{hash}/json  # JSON object
+</span></code></pre></div>
 <p>This pattern applies to most endpoints that return blockchain data including transactions, blocks, headers, subtrees, and UTXOs. Endpoints that only support a single format will explicitly state their response format.</p>
-<h3 id="411-gettransaction-and-gettransactions">4.1.1. getTransaction() and getTransactions()</h3>
+<h3 id="411-gettransaction-and-gettransactions">4.1.1. getTransaction() and getTransactions()<a class="headerlink" href="#411-gettransaction-and-gettransactions" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>URL</strong>: <code>/tx/:hash</code> (single transaction), <code>/txs</code> (multiple transactions via POST)</li>
 <li><strong>Method</strong>: GET (single), POST (multiple)</li>
@@ -7764,7 +8252,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Transaction data with extended metadata</li>
 </ul>
 <p><img alt="asset_server_http_get_transaction.svg" src="../img/plantuml/assetserver/asset_server_http_get_transaction.svg" /></p>
-<h3 id="412-gettransactionmeta">4.1.2. GetTransactionMeta()</h3>
+<h3 id="412-gettransactionmeta">4.1.2. GetTransactionMeta()<a class="headerlink" href="#412-gettransactionmeta" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>URL</strong>: <code>/tx/:hash/meta</code></li>
 <li><strong>Method</strong>: GET</li>
@@ -7772,7 +8260,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Transaction metadata including UTXO information</li>
 </ul>
 <p><img alt="asset_server_http_get_transaction_meta.svg" src="../img/plantuml/assetserver/asset_server_http_get_transaction_meta.svg" /></p>
-<h3 id="413-getblockbyhash">4.1.3. GetBlockByHash()</h3>
+<h3 id="413-getblockbyhash">4.1.3. GetBlockByHash()<a class="headerlink" href="#413-getblockbyhash" title="Permanent link">&para;</a></h3>
 <p>Retrieves a single block by its hash.</p>
 <ul>
 <li><strong>URL</strong>: <code>/block/:hash</code> (with <code>/hex</code>, <code>/json</code> variants)</li>
@@ -7781,7 +8269,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Block header data including previous block ID and metadata</li>
 </ul>
 <p><img alt="asset_server_http_get_block_header.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_header.svg" /></p>
-<h3 id="415-getblockbyhash-getblocks-and-getlastnblocks">4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()</h3>
+<h3 id="415-getblockbyhash-getblocks-and-getlastnblocks">4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()<a class="headerlink" href="#415-getblockbyhash-getblocks-and-getlastnblocks" title="Permanent link">&para;</a></h3>
 <p><strong>GetBlockByHash</strong> - Get a single block by hash:</p>
 <ul>
 <li><strong>URL</strong>: <code>/api/v1/block/:hash</code> (also available: <code>/api/v1/block/:hash/hex</code>, <code>/api/v1/block/:hash/json</code>)</li>
@@ -7826,7 +8314,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_block.svg" src="../img/plantuml/assetserver/asset_server_http_get_block.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes. Binary response returns raw block data, hex returns hexadecimal string, and JSON returns structured block data with metadata.</p>
-<h3 id="414-getblocks">4.1.4. GetBlocks()</h3>
+<h3 id="414-getblocks">4.1.4. GetBlocks()<a class="headerlink" href="#414-getblocks" title="Permanent link">&para;</a></h3>
 <p>Retrieves a paginated list of blocks.</p>
 <ul>
 <li><strong>URL</strong>: <code>/blocks</code></li>
@@ -7843,7 +8331,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </li>
 </ul>
 <p>Returns blocks with comprehensive metadata including miner information, coinbase value, transaction count, and block size.</p>
-<h3 id="415-getlastnblocks">4.1.5. GetLastNBlocks()</h3>
+<h3 id="415-getlastnblocks">4.1.5. GetLastNBlocks()<a class="headerlink" href="#415-getlastnblocks" title="Permanent link">&para;</a></h3>
 <p>Retrieves the most recent blocks in the blockchain.</p>
 <ul>
 <li><strong>URL</strong>: <code>/lastblocks</code></li>
@@ -7861,7 +8349,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_last_blocks.svg" src="../img/plantuml/assetserver/asset_server_http_get_last_blocks.svg" /></p>
 <p>Returns recent blocks in descending order (newest first) with comprehensive metadata including miner information, coinbase value, transaction count, and block size.</p>
-<h3 id="416-getblockstats">4.1.6. GetBlockStats()</h3>
+<h3 id="416-getblockstats">4.1.6. GetBlockStats()<a class="headerlink" href="#416-getblockstats" title="Permanent link">&para;</a></h3>
 <p>Retrieves block statistics.</p>
 <ul>
 <li><strong>URL</strong>: <code>/block/:hash/stats</code></li>
@@ -7870,7 +8358,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Block statistics and performance metrics</li>
 </ul>
 <p><img alt="asset_server_http_get_block_stats.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_stats.svg" /></p>
-<h3 id="417-getblockgraphdata">4.1.7. GetBlockGraphData()</h3>
+<h3 id="417-getblockgraphdata">4.1.7. GetBlockGraphData()<a class="headerlink" href="#417-getblockgraphdata" title="Permanent link">&para;</a></h3>
 <p>Retrieves block graph data for a given period</p>
 <ul>
 <li><strong>URL</strong>: <code>/blocks/graph/:period</code></li>
@@ -7879,7 +8367,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Block graph data and visualization metrics for specified time period</li>
 </ul>
 <p><img alt="asset_server_http_get_block_graph_data.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_graph_data.svg" /></p>
-<h3 id="418-getblockforks">4.1.8. GetBlockForks()</h3>
+<h3 id="418-getblockforks">4.1.8. GetBlockForks()<a class="headerlink" href="#418-getblockforks" title="Permanent link">&para;</a></h3>
 <p>Retrieves information about block forks</p>
 <ul>
 <li><strong>URL</strong>: <code>/blocks/forks</code></li>
@@ -7888,7 +8376,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Information about blockchain forks and alternative chains</li>
 </ul>
 <p><img alt="asset_server_http_get_block_forks.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_forks.svg" /></p>
-<h3 id="419-getlegacyblock">4.1.9. GetLegacyBlock()</h3>
+<h3 id="419-getlegacyblock">4.1.9. GetLegacyBlock()<a class="headerlink" href="#419-getlegacyblock" title="Permanent link">&para;</a></h3>
 <p>Retrieves a block in legacy format, and as a binary stream.</p>
 <ul>
 <li><strong>URL</strong>: <code>/block_legacy/:hash</code></li>
@@ -7897,7 +8385,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Block in legacy Bitcoin protocol format</li>
 </ul>
 <p><img alt="asset_server_http_get_legacy_block.svg" src="../img/plantuml/assetserver/asset_server_http_get_legacy_block.svg" /></p>
-<h3 id="4110-getlegacyblockrest">4.1.10. GetLegacyBlockREST()</h3>
+<h3 id="4110-getlegacyblockrest">4.1.10. GetLegacyBlockREST()<a class="headerlink" href="#4110-getlegacyblockrest" title="Permanent link">&para;</a></h3>
 <p>Legacy REST endpoint for block retrieval in binary format.</p>
 <ul>
 <li><strong>URL</strong>: <code>/rest/block/:hash.bin</code></li>
@@ -7907,7 +8395,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_legacy_block_rest.svg" src="../img/plantuml/assetserver/asset_server_http_get_legacy_block_rest.svg" /></p>
 <p>Maintains backward compatibility with legacy Bitcoin clients. Returns blocks in the original Bitcoin binary format.</p>
-<h3 id="4111-getblockheader-and-getbestblockheader">4.1.11. GetBlockHeader() and GetBestBlockHeader()</h3>
+<h3 id="4111-getblockheader-and-getbestblockheader">4.1.11. GetBlockHeader() and GetBestBlockHeader()<a class="headerlink" href="#4111-getblockheader-and-getbestblockheader" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>URL</strong>: <code>/header/:hash</code> (single with <code>/hex</code>, <code>/json</code> variants), <code>/bestblockheader</code> (best block with <code>/hex</code>, <code>/json</code> variants)</li>
 <li><strong>Method</strong>: GET</li>
@@ -7916,7 +8404,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_block_header.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_header.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes for both endpoints.</p>
-<h3 id="4112-getheaders">4.1.12. GetHeaders()</h3>
+<h3 id="4112-getheaders">4.1.12. GetHeaders()<a class="headerlink" href="#4112-getheaders" title="Permanent link">&para;</a></h3>
 <p>Retrieves multiple consecutive block headers starting from a specific block hash.</p>
 <ul>
 <li><strong>URL</strong>: <code>/headers/:hash</code> (with <code>/hex</code>, <code>/json</code> variants)</li>
@@ -7932,7 +8420,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_headers.svg" src="../img/plantuml/assetserver/asset_server_http_get_headers.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes. Binary response returns concatenated 80-byte headers, hex returns hexadecimal string, and JSON returns structured header data with metadata.</p>
-<h3 id="4113-getheadersfromcommonancestor">4.1.13. GetHeadersFromCommonAncestor()</h3>
+<h3 id="4113-getheadersfromcommonancestor">4.1.13. GetHeadersFromCommonAncestor()<a class="headerlink" href="#4113-getheadersfromcommonancestor" title="Permanent link">&para;</a></h3>
 <p>Retrieves block headers from a common ancestor point for chain synchronization.</p>
 <ul>
 <li><strong>URL</strong>: <code>/headers_from_common_ancestor/:hash</code> (with <code>/hex</code>, <code>/json</code> variants)</li>
@@ -7949,7 +8437,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_headers_from_common_ancestor.svg" src="../img/plantuml/assetserver/asset_server_http_get_headers_from_common_ancestor.svg" /></p>
 <p>Useful for chain synchronization after forks. Finds the common ancestor between the local chain and the provided locator hashes, then returns headers from that point.</p>
-<h3 id="4114-getblocklocator">4.1.14. GetBlockLocator()</h3>
+<h3 id="4114-getblocklocator">4.1.14. GetBlockLocator()<a class="headerlink" href="#4114-getblocklocator" title="Permanent link">&para;</a></h3>
 <p>Retrieves block locator hashes for efficient blockchain synchronization.</p>
 <ul>
 <li><strong>URL</strong>: <code>/block_locator</code></li>
@@ -7966,7 +8454,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_block_locator.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_locator.svg" /></p>
 <p>Returns a strategically selected set of block hashes used by peers to efficiently identify blockchain state and find common ancestors. Uses exponential backoff (first 10 blocks, then doubles) and always includes the genesis block.</p>
-<h3 id="4115-getsubtree">4.1.15. GetSubtree()</h3>
+<h3 id="4115-getsubtree">4.1.15. GetSubtree()<a class="headerlink" href="#4115-getsubtree" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>URL</strong>: <code>/subtree/:hash</code> (with <code>/hex</code>, <code>/json</code> variants)</li>
 <li><strong>Method</strong>: GET</li>
@@ -7975,7 +8463,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_subtree.svg" src="../img/plantuml/assetserver/asset_server_http_get_subtree.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes.</p>
-<h3 id="4116-getsubtreedata">4.1.16. GetSubtreeData()</h3>
+<h3 id="4116-getsubtreedata">4.1.16. GetSubtreeData()<a class="headerlink" href="#4116-getsubtreedata" title="Permanent link">&para;</a></h3>
 <p>Retrieves raw subtree transaction data as a binary stream.</p>
 <ul>
 <li><strong>URL</strong>: <code>/subtree_data/:hash</code></li>
@@ -7985,7 +8473,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_subtree_data.svg" src="../img/plantuml/assetserver/asset_server_http_get_subtree_data.svg" /></p>
 <p>This endpoint streams all transactions within a subtree as raw binary data, optimized for efficient data transfer without JSON overhead.</p>
-<h3 id="4117-getsubtreetransactions">4.1.17. GetSubtreeTransactions()</h3>
+<h3 id="4117-getsubtreetransactions">4.1.17. GetSubtreeTransactions()<a class="headerlink" href="#4117-getsubtreetransactions" title="Permanent link">&para;</a></h3>
 <p>Retrieves transaction details from a subtree with pagination support.</p>
 <ul>
 <li><strong>URL</strong>: <code>/subtree/:hash/txs/json</code></li>
@@ -8002,7 +8490,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_get_subtree_transactions.svg" src="../img/plantuml/assetserver/asset_server_http_get_subtree_transactions.svg" /></p>
 <p>Returns detailed transaction information including transaction ID, input/output counts, size, and fees. Missing transactions are skipped in the response.</p>
-<h3 id="4118-getblocksubtrees">4.1.18. GetBlockSubtrees()</h3>
+<h3 id="4118-getblocksubtrees">4.1.18. GetBlockSubtrees()<a class="headerlink" href="#4118-getblocksubtrees" title="Permanent link">&para;</a></h3>
 <p>Retrieves subtrees for a block in JSON format</p>
 <ul>
 <li><strong>URL</strong>: <code>/block/:hash/subtrees/json</code></li>
@@ -8011,7 +8499,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Content</strong>: Subtrees data for a specific block with transaction IDs and Merkle roots</li>
 </ul>
 <p><img alt="asset_server_http_get_block_subtrees.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_subtrees.svg" /></p>
-<h3 id="4119-getutxo-and-getutxosbytxid">4.1.19. GetUTXO() and GetUTXOsByTXID()</h3>
+<h3 id="4119-getutxo-and-getutxosbytxid">4.1.19. GetUTXO() and GetUTXOsByTXID()<a class="headerlink" href="#4119-getutxo-and-getutxosbytxid" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>URL</strong>: <code>/utxo/:hash</code> (single UTXO with <code>/hex</code>, <code>/json</code> variants), <code>/utxos/:hash/json</code> (UTXOs by transaction ID)</li>
 <li><strong>Method</strong>: GET</li>
@@ -8027,7 +8515,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <p>For getting UTXOs by a transaction ID (<code>/utxos/:hash/json</code>), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.</p>
 </li>
 </ul>
-<h3 id="4120-search">4.1.20. Search()</h3>
+<h3 id="4120-search">4.1.20. Search()<a class="headerlink" href="#4120-search" title="Permanent link">&para;</a></h3>
 <p>Generic hash or block height search. The server searches for a hash in the blockchain, UTXO store, and subtree store, or retrieves a block by height.</p>
 <ul>
 <li><strong>URL</strong>: <code>/search</code></li>
@@ -8043,7 +8531,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 <p><img alt="asset_server_http_search.svg" src="../img/plantuml/assetserver/asset_server_http_search.svg" /></p>
 <p>Returns the entity type (<code>block</code>, <code>tx</code>, or <code>subtree</code>) and hash of the found item.</p>
-<h3 id="4121-fsm-state-management">4.1.21. FSM State Management</h3>
+<h3 id="4121-fsm-state-management">4.1.21. FSM State Management<a class="headerlink" href="#4121-fsm-state-management" title="Permanent link">&para;</a></h3>
 <p>The Asset Server provides an interface to the Finite State Machine (FSM) of the blockchain service. These endpoints allow for monitoring and controlling the blockchain state:</p>
 <p><img alt="asset_server_http_fsm_state_management.svg" src="../img/plantuml/assetserver/asset_server_http_fsm_state_management.svg" /></p>
 <ul>
@@ -8052,7 +8540,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>GET /api/v1/fsm/events</strong>: Lists all available FSM events</li>
 <li><strong>GET /api/v1/fsm/states</strong>: Lists all possible FSM states</li>
 </ul>
-<h3 id="4122-block-validation-management">4.1.22. Block Validation Management</h3>
+<h3 id="4122-block-validation-management">4.1.22. Block Validation Management<a class="headerlink" href="#4122-block-validation-management" title="Permanent link">&para;</a></h3>
 <p>The Asset Server offers endpoints for block validation control:</p>
 <p><img alt="asset_server_http_block_validation.svg" src="../img/plantuml/assetserver/asset_server_http_block_validation.svg" /></p>
 <ul>
@@ -8060,7 +8548,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>POST /api/v1/block/revalidate</strong>: Revalidates a previously invalidated block</li>
 <li><strong>GET /api/v1/blocks/invalid</strong>: Retrieves a list of invalid blocks</li>
 </ul>
-<h3 id="4123-health-and-liveness-endpoints">4.1.23. Health and Liveness Endpoints</h3>
+<h3 id="4123-health-and-liveness-endpoints">4.1.23. Health and Liveness Endpoints<a class="headerlink" href="#4123-health-and-liveness-endpoints" title="Permanent link">&para;</a></h3>
 <p>The Asset Server provides health check endpoints for monitoring and orchestration systems like Kubernetes:</p>
 <ul>
 <li>
@@ -8084,23 +8572,23 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </li>
 </ul>
 <p><strong>Kubernetes Integration Example:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="nt">livenessProbe</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/alive</span>
-<span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
-<span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
-<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
-
-<span class="nt">readinessProbe</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/health</span>
-<span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
-<span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
-<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
-</code></pre></div>
-<h3 id="42-websocket-real-time-updates">4.2. WebSocket Real-time Updates</h3>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">livenessProbe</span><span class="p">:</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/alive</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">readinessProbe</span><span class="p">:</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/health</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</span></code></pre></div>
+<h3 id="42-websocket-real-time-updates">4.2. WebSocket Real-time Updates<a class="headerlink" href="#42-websocket-real-time-updates" title="Permanent link">&para;</a></h3>
 <p>The Asset Server provides real-time blockchain event notifications through WebSocket connections using the Centrifuge protocol.</p>
-<h4 id="connection-endpoint">Connection Endpoint</h4>
+<h4 id="connection-endpoint">Connection Endpoint<a class="headerlink" href="#connection-endpoint" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>WebSocket URL</strong>: <code>/connection/websocket</code><ul>
 <li>Protocol: WebSocket (ws:// or wss://)</li>
@@ -8110,7 +8598,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ul>
-<h4 id="subscription-management">Subscription Management</h4>
+<h4 id="subscription-management">Subscription Management<a class="headerlink" href="#subscription-management" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong>POST /subscribe</strong>: Subscribe to channels</p>
@@ -8127,7 +8615,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ul>
-<h4 id="available-channels">Available Channels</h4>
+<h4 id="available-channels">Available Channels<a class="headerlink" href="#available-channels" title="Permanent link">&para;</a></h4>
 <p>Clients can receive real-time updates on the following channels:</p>
 <ul>
 <li><strong>ping</strong>: Connection health checks and keep-alive messages</li>
@@ -8145,26 +8633,26 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ul>
-<h4 id="message-format">Message Format</h4>
+<h4 id="message-format">Message Format<a class="headerlink" href="#message-format" title="Permanent link">&para;</a></h4>
 <p>Messages are published in JSON format with event-specific structure. Example block notification:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0000000000000000...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">800000</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;header&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;coinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;subtrees&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;baseUrl&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8090/api/v1&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;miner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Miner Name&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<h4 id="connection-behavior">Connection Behavior</h4>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0000000000000000...&quot;</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">800000</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;header&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">},</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;coinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;subtrees&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">],</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;baseUrl&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8090/api/v1&quot;</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;miner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Miner Name&quot;</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<h4 id="connection-behavior">Connection Behavior<a class="headerlink" href="#connection-behavior" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Readiness Requirement</strong>: WebSocket connections are rejected with HTTP 503 if the asset service hasn't cached the current node status</li>
 <li><strong>Auto-subscription</strong>: Upon connection, clients are automatically subscribed to all available channels</li>
 <li><strong>Reconnection</strong>: Clients should implement reconnection logic with exponential backoff</li>
 <li><strong>Status Caching</strong>: New clients immediately receive the cached current node status upon connection</li>
 </ul>
-<h2 id="5-technology">5. Technology</h2>
+<h2 id="5-technology">5. Technology<a class="headerlink" href="#5-technology" title="Permanent link">&para;</a></h2>
 <p>Key technologies involved:</p>
 <ol>
 <li>
@@ -8197,66 +8685,66 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ol>
-<h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files</h2>
-<div class="highlight"><pre><span></span><code>./services/asset
-├── Server.go                  # Server logic for the Asset Service.
-├── Server_test.go             # Tests for the server functionality.
-├── asset_api
-│   ├── asset_api.pb.go        # Generated protobuf code for the asset API.
-│   └── asset_api.proto        # Protobuf definitions for the asset API.
-├── centrifuge_impl            # Implementation using Centrifuge for real-time updates.
-│   ├── centrifuge.go          # Core Centrifuge implementation.
-│   ├── client
-│   │   ├── client.go          # Client-side implementation for Centrifuge.
-│   │   └── index.html         # HTML template for client-side rendering.
-│   └── websocket.go           # WebSocket implementation for real-time communication.
-├── httpimpl                   # HTTP implementation of the asset service.
-│   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
-│   ├── GetBlock.go            # Logic to retrieve a specific block.
-│   ├── GetBlockForks.go       # Logic to retrieve information about block forks.
-│   ├── GetBlockGraphData.go   # Logic to retrieve block graph data.
-│   ├── GetBlockHeader.go      # Logic to retrieve a block header.
-│   ├── GetBlockHeaders.go     # Logic to retrieve multiple block headers.
-│   ├── GetBlockHeadersToCommonAncestor.go # Logic to retrieve headers to common ancestor.
-│   ├── GetBlockStats.go       # Logic to retrieve block statistics.
-│   ├── GetBlockSubtrees.go    # Logic to retrieve block subtrees.
-│   ├── GetBlocks.go           # Logic to retrieve multiple blocks.
-│   ├── GetLastNBlocks.go      # Logic to retrieve the last N blocks.
-│   ├── GetLegacyBlock.go      # Logic to retrieve legacy block format.
-│   ├── GetNBlocks.go          # Logic to retrieve N blocks from a specific point.
-│   ├── GetSubtree.go          # Logic to retrieve a subtree.
-│   ├── GetSubtreeTxs.go       # Logic to retrieve transactions in a subtree.
-│   ├── GetTransaction.go      # Logic to retrieve a specific transaction.
-│   ├── GetTransactionMeta.go  # Logic to retrieve transaction metadata.
-│   ├── GetTransactions.go     # Logic to retrieve multiple transactions.
-│   ├── GetTxMetaByTXID.go     # Logic to retrieve transaction metadata by TXID.
-│   ├── GetUTXO.go             # Logic to retrieve UTXO data.
-│   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
-│   ├── Readmode.go            # Manages read-only mode settings.
-│   ├── Search.go              # Implements search functionality.
-│   ├── block_handler.go       # Handles block validation operations.
-│   ├── blockHeaderResponse.go # Formats block header responses.
-│   ├── fsm_handler.go         # Handles FSM state and event operations.
-│   ├── helpers.go             # Helper functions for HTTP implementation.
-│   ├── http.go                # Core HTTP implementation.
-│   ├── metrics.go             # HTTP-specific metrics.
-│   ├── sendError.go           # Utility for sending error responses.
-│   └── *_test.go files        # Various test files for each component.
-└── repository                 # Repository layer managing data interactions.
-    ├── GetLegacyBlock.go      # Repository logic for retrieving legacy blocks.
-    ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
-    ├── repository.go          # Core repository implementation.
-    └── repository_test.go     # Tests for the repository implementation.
-</code></pre></div>
-<h2 id="7-how-to-run">7. How to run</h2>
-<h3 id="71-how-to-run">7.1 How to run</h3>
+<h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files<a class="headerlink" href="#6-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./services/asset
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── Server.go                  # Server logic for the Asset Service.
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>├── Server_test.go             # Tests for the server functionality.
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>├── asset_api
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│   ├── asset_api.pb.go        # Generated protobuf code for the asset API.
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│   └── asset_api.proto        # Protobuf definitions for the asset API.
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>├── centrifuge_impl            # Implementation using Centrifuge for real-time updates.
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│   ├── centrifuge.go          # Core Centrifuge implementation.
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│   ├── client
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>│   │   ├── client.go          # Client-side implementation for Centrifuge.
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>│   │   └── index.html         # HTML template for client-side rendering.
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>│   └── websocket.go           # WebSocket implementation for real-time communication.
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>├── httpimpl                   # HTTP implementation of the asset service.
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>│   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>│   ├── GetBlock.go            # Logic to retrieve a specific block.
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>│   ├── GetBlockForks.go       # Logic to retrieve information about block forks.
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>│   ├── GetBlockGraphData.go   # Logic to retrieve block graph data.
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>│   ├── GetBlockHeader.go      # Logic to retrieve a block header.
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>│   ├── GetBlockHeaders.go     # Logic to retrieve multiple block headers.
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>│   ├── GetBlockHeadersToCommonAncestor.go # Logic to retrieve headers to common ancestor.
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>│   ├── GetBlockStats.go       # Logic to retrieve block statistics.
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>│   ├── GetBlockSubtrees.go    # Logic to retrieve block subtrees.
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>│   ├── GetBlocks.go           # Logic to retrieve multiple blocks.
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>│   ├── GetLastNBlocks.go      # Logic to retrieve the last N blocks.
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>│   ├── GetLegacyBlock.go      # Logic to retrieve legacy block format.
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>│   ├── GetNBlocks.go          # Logic to retrieve N blocks from a specific point.
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>│   ├── GetSubtree.go          # Logic to retrieve a subtree.
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>│   ├── GetSubtreeTxs.go       # Logic to retrieve transactions in a subtree.
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>│   ├── GetTransaction.go      # Logic to retrieve a specific transaction.
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>│   ├── GetTransactionMeta.go  # Logic to retrieve transaction metadata.
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>│   ├── GetTransactions.go     # Logic to retrieve multiple transactions.
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>│   ├── GetTxMetaByTXID.go     # Logic to retrieve transaction metadata by TXID.
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>│   ├── GetUTXO.go             # Logic to retrieve UTXO data.
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>│   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>│   ├── Readmode.go            # Manages read-only mode settings.
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>│   ├── Search.go              # Implements search functionality.
+</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>│   ├── block_handler.go       # Handles block validation operations.
+</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>│   ├── blockHeaderResponse.go # Formats block header responses.
+</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a>│   ├── fsm_handler.go         # Handles FSM state and event operations.
+</span><span id="__span-3-40"><a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a>│   ├── helpers.go             # Helper functions for HTTP implementation.
+</span><span id="__span-3-41"><a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a>│   ├── http.go                # Core HTTP implementation.
+</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a>│   ├── metrics.go             # HTTP-specific metrics.
+</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a>│   ├── sendError.go           # Utility for sending error responses.
+</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a>│   └── *_test.go files        # Various test files for each component.
+</span><span id="__span-3-45"><a id="__codelineno-3-45" name="__codelineno-3-45" href="#__codelineno-3-45"></a>└── repository                 # Repository layer managing data interactions.
+</span><span id="__span-3-46"><a id="__codelineno-3-46" name="__codelineno-3-46" href="#__codelineno-3-46"></a>    ├── GetLegacyBlock.go      # Repository logic for retrieving legacy blocks.
+</span><span id="__span-3-47"><a id="__codelineno-3-47" name="__codelineno-3-47" href="#__codelineno-3-47"></a>    ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
+</span><span id="__span-3-48"><a id="__codelineno-3-48" name="__codelineno-3-48" href="#__codelineno-3-48"></a>    ├── repository.go          # Core repository implementation.
+</span><span id="__span-3-49"><a id="__codelineno-3-49" name="__codelineno-3-49" href="#__codelineno-3-49"></a>    └── repository_test.go     # Tests for the repository implementation.
+</span></code></pre></div>
+<h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
+<h3 id="71-how-to-run">7.1 How to run<a class="headerlink" href="#71-how-to-run" title="Permanent link">&para;</a></h3>
 <p>To run the Asset Server locally, you can execute the following command:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-asset<span class="o">=</span><span class="m">1</span>
-</code></pre></div>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-asset<span class="o">=</span><span class="m">1</span>
+</span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running the Asset Server locally.</p>
-<h3 id="72-configuration-options-settings-flags">7.2 Configuration Options (Settings Flags)</h3>
+<h3 id="72-configuration-options-settings-flags">7.2 Configuration Options (Settings Flags)<a class="headerlink" href="#72-configuration-options-settings-flags" title="Permanent link">&para;</a></h3>
 <p>The Asset Server can be configured using various settings that control its behavior, network connectivity, security features, and performance characteristics. This section provides a comprehensive reference of all configuration options and their interactions.</p>
-<h4 id="721-core-asset-server-configuration">7.2.1 Core Asset Server Configuration</h4>
+<h4 id="721-core-asset-server-configuration">7.2.1 Core Asset Server Configuration<a class="headerlink" href="#721-core-asset-server-configuration" title="Permanent link">&para;</a></h4>
 <p><strong>HTTP Server Settings:</strong></p>
 <ul>
 <li>
@@ -8330,7 +8818,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ul>
-<h4 id="722-centrifuge-real-time-updates-configuration">7.2.2 Centrifuge Real-time Updates Configuration</h4>
+<h4 id="722-centrifuge-real-time-updates-configuration">7.2.2 Centrifuge Real-time Updates Configuration<a class="headerlink" href="#722-centrifuge-real-time-updates-configuration" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong>Asset Centrifuge Disable (<code>asset_centrifuge_disable</code>)</strong>: Controls Centrifuge server initialization.</p>
@@ -8362,7 +8850,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><code>mining_on</code>: For mining status updates</li>
 <li><code>node_status</code>: For node status updates and health information</li>
 </ul>
-<h4 id="723-security-configuration-global-settings">7.2.3 Security Configuration (Global Settings)</h4>
+<h4 id="723-security-configuration-global-settings">7.2.3 Security Configuration (Global Settings)<a class="headerlink" href="#723-security-configuration-global-settings" title="Permanent link">&para;</a></h4>
 <p><strong>HTTPS Settings:</strong></p>
 <ul>
 <li>
@@ -8419,7 +8907,7 @@ GET /api/v1/tx/{hash}/json  # JSON object
 </ul>
 </li>
 </ul>
-<h4 id="724-configuration-dependencies-and-interactions">7.2.4 Configuration Dependencies and Interactions</h4>
+<h4 id="724-configuration-dependencies-and-interactions">7.2.4 Configuration Dependencies and Interactions<a class="headerlink" href="#724-configuration-dependencies-and-interactions" title="Permanent link">&para;</a></h4>
 <p><strong>HTTP Server Operation:</strong></p>
 <ul>
 <li><strong>Primary Setting</strong>: <code>asset_httpListenAddress</code> (required)</li>
@@ -8446,24 +8934,24 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><strong>Dependency</strong>: <code>p2p_private_key</code></li>
 <li><strong>Interaction</strong>: Requires valid P2P private key; invalid keys logged as errors but don't prevent startup</li>
 </ul>
-<h4 id="725-error-conditions-and-validation">7.2.5 Error Conditions and Validation</h4>
+<h4 id="725-error-conditions-and-validation">7.2.5 Error Conditions and Validation<a class="headerlink" href="#725-error-conditions-and-validation" title="Permanent link">&para;</a></h4>
 <p><strong>Configuration Errors from Code:</strong></p>
-<div class="highlight"><pre><span></span><code>Error: &quot;no asset_httpListenAddress setting found&quot;
-Cause: Missing or empty asset_httpListenAddress setting
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>Error: &quot;asset_httpAddress not found in config&quot;
-Cause: Missing asset_httpAddress when Centrifuge is enabled
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>Error: &quot;asset_httpAddress is not a valid URL&quot;
-Cause: Invalid URL format in asset_httpAddress setting
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>Error: &quot;server_certFile is required for HTTPS&quot;
-Cause: Missing server_certFile when securityLevelHTTP is non-zero
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>Error: &quot;server_keyFile is required for HTTPS&quot;
-Cause: Missing server_keyFile when securityLevelHTTP is non-zero
-</code></pre></div>
-<h4 id="726-environment-variables">7.2.6 Environment Variables</h4>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Error: &quot;no asset_httpListenAddress setting found&quot;
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Cause: Missing or empty asset_httpListenAddress setting
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Error: &quot;asset_httpAddress not found in config&quot;
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>Cause: Missing asset_httpAddress when Centrifuge is enabled
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Error: &quot;asset_httpAddress is not a valid URL&quot;
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>Cause: Invalid URL format in asset_httpAddress setting
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Error: &quot;server_certFile is required for HTTPS&quot;
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Cause: Missing server_certFile when securityLevelHTTP is non-zero
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Error: &quot;server_keyFile is required for HTTPS&quot;
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Cause: Missing server_keyFile when securityLevelHTTP is non-zero
+</span></code></pre></div>
+<h4 id="726-environment-variables">7.2.6 Environment Variables<a class="headerlink" href="#726-environment-variables" title="Permanent link">&para;</a></h4>
 <p><strong>Standard Environment Variables:</strong></p>
 <ul>
 <li><code>TERANODE_ASSET_HTTPLISTENADDRESS</code> - HTTP server listen address</li>
@@ -8484,7 +8972,7 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 <li><code>ECHO_DEBUG</code> - Echo framework debug mode</li>
 <li><code>ASSET_HTTP_PORT</code> - HTTP port (configuration placeholder)</li>
 </ul>
-<h4 id="727-dependency-configuration">7.2.7 Dependency Configuration</h4>
+<h4 id="727-dependency-configuration">7.2.7 Dependency Configuration<a class="headerlink" href="#727-dependency-configuration" title="Permanent link">&para;</a></h4>
 <p>The Asset Server depends on several services for data access. These must be properly configured for the Asset Server to function:</p>
 <table>
 <thead>
@@ -8529,21 +9017,21 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 </tbody>
 </table>
 <p><strong>Example Dependency Configuration:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
-<span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
-<span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
-<span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
-<span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
-</code></pre></div>
-<h4 id="728-environment-variable-examples">7.2.8 Environment Variable Examples</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
+</span></code></pre></div>
+<h4 id="728-environment-variable-examples">7.2.8 Environment Variable Examples<a class="headerlink" href="#728-environment-variable-examples" title="Permanent link">&para;</a></h4>
 <p>All configuration options can be set using environment variables with the prefix <code>TERANODE_</code>. For example:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
-<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
-</code></pre></div>
-<h3 id="73-configuration-examples">7.3 Configuration Examples</h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
+</span></code></pre></div>
+<h3 id="73-configuration-examples">7.3 Configuration Examples<a class="headerlink" href="#73-configuration-examples" title="Permanent link">&para;</a></h3>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/services/asset_settings/">asset Server Settings Reference</a>.</p>
-<h3 id="74-fsm-configuration">7.4 FSM Configuration</h3>
+<h3 id="74-fsm-configuration">7.4 FSM Configuration<a class="headerlink" href="#74-fsm-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>fsm_state_restore</strong>: Enables or disables the restore state for the Finite State Machine.<ul>
 <li>Example: <code>fsm_state_restore=false</code></li>
@@ -8551,14 +9039,14 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 </li>
 <li><strong>FSM Functionality</strong>: The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.</li>
 </ul>
-<h3 id="75-coinbase-configuration">7.5 Coinbase Configuration</h3>
+<h3 id="75-coinbase-configuration">7.5 Coinbase Configuration<a class="headerlink" href="#75-coinbase-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>coinbase_grpcAddress</strong>: gRPC address for coinbase-related operations.<ul>
 <li>Example: <code>coinbase_grpcAddress=localhost:50051</code></li>
 </ul>
 </li>
 </ul>
-<h3 id="76-dashboard-configuration">7.6 Dashboard Configuration</h3>
+<h3 id="76-dashboard-configuration">7.6 Dashboard Configuration<a class="headerlink" href="#76-dashboard-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>dashboard_enabled</strong>: Enables or disables the Teranode dashboard UI.<ul>
 <li>Example: <code>dashboard_enabled=true</code></li>
@@ -8566,11 +9054,11 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 </li>
 <li><strong>Dashboard Features</strong>: Dashboard-related settings control authentication and user interface features.</li>
 </ul>
-<h3 id="77-block-validation">7.7 Block Validation</h3>
+<h3 id="77-block-validation">7.7 Block Validation<a class="headerlink" href="#77-block-validation" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Block Management</strong>: The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.</li>
 </ul>
-<h2 id="8-other-resources">8. Other Resources</h2>
+<h2 id="8-other-resources">8. Other Resources<a class="headerlink" href="#8-other-resources" title="Permanent link">&para;</a></h2>
 <p><a href="../../../references/services/asset_reference/">Asset Reference</a></p>
 
 
@@ -8589,37 +9077,65 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../alert/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Alert Service">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Alert Service
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../blockAssembly/" class="md-footer__link md-footer__link--next" aria-label="Next: Block Assembly">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Block Assembly
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -8636,12 +9152,10 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

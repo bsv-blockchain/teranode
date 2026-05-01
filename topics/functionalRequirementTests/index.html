@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/functionalRequirementTests/">
       
       
         <link rel="prev" href="../understandingTheTestingFramework/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -214,6 +273,8 @@
         <a href="../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2229,6 +2408,48 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -3422,6 +3643,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3437,9 +3666,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
@@ -3627,6 +3854,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3642,9 +3887,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="">
@@ -3916,6 +4159,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3931,9 +4190,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
@@ -4177,6 +4434,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4192,9 +4455,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="">
@@ -4298,6 +4559,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4313,9 +4586,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="">
@@ -4503,6 +4774,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4518,9 +4793,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
@@ -4596,6 +4869,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4611,9 +4888,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
@@ -4696,6 +4971,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4708,9 +4999,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4778,6 +5067,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4790,9 +5093,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4972,6 +5273,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4984,9 +5309,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -5350,6 +5673,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5362,9 +5703,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5636,6 +5975,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5648,9 +6001,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5866,6 +6217,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5878,9 +6235,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5984,6 +6339,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5996,9 +6367,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -6178,6 +6547,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6190,9 +6589,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6632,6 +7029,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6644,9 +7049,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6786,6 +7189,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6798,9 +7217,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7862,17 +8279,68 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="qa-guide-instructions-for-functional-requirement-tests">QA Guide &amp; Instructions for Functional Requirement Tests</h1>
-<h2 id="scope">Scope</h2>
+
+<h1 id="qa-guide-instructions-for-functional-requirement-tests">QA Guide &amp; Instructions for Functional Requirement Tests<a class="headerlink" href="#qa-guide-instructions-for-functional-requirement-tests" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
 <p>This document explains how tests are structured within the TERANODE codebase and how they are organized within the test folder in relation to the Functional Requirements for Teranode document.</p>
 <p>The Functional Requirements for Teranode document describes the responsibilities and features of Teranode. Accordingly, the tests are organized to verify that these responsibilities and features are correctly implemented in the code.</p>
-<h2 id="structure">Structure</h2>
+<h2 id="structure">Structure<a class="headerlink" href="#structure" title="Permanent link">&para;</a></h2>
 <p>The functional requirements are organized into the following categories:</p>
 <ul>
 <li>Node responsibilities (TNA)</li>
@@ -7890,7 +8358,7 @@
 <li>Joining the Network (TNM)</li>
 <li>Technical Errors (TEC)</li>
 </ul>
-<h2 id="test-organization">Test Organization</h2>
+<h2 id="test-organization">Test Organization<a class="headerlink" href="#test-organization" title="Permanent link">&para;</a></h2>
 <p>Tests are organized in two main locations:</p>
 <ol>
 <li>
@@ -7914,54 +8382,54 @@
 </li>
 </ol>
 <p>Test files follow a naming convention: <code>tn[x][number]_test.go</code> where x is the category letter and number corresponds to the specific requirement.</p>
-<h2 id="test-framework">Test Framework</h2>
+<h2 id="test-framework">Test Framework<a class="headerlink" href="#test-framework" title="Permanent link">&para;</a></h2>
 <p>The test framework is built on the testify suite package and is defined primarily in <code>test/utils/arrange.go</code> and <code>test/utils/testenv.go</code>. These files contain the main structs and functions used to set up, run, and control the execution of the test suites.</p>
-<h2 id="test-suites-and-setup">Test Suites and Setup</h2>
+<h2 id="test-suites-and-setup">Test Suites and Setup<a class="headerlink" href="#test-suites-and-setup" title="Permanent link">&para;</a></h2>
 <p>The test framework provides two main components:</p>
 <ul>
 <li><strong>TeranodeTestSuite</strong> (<code>test/utils/arrange.go</code>): Base test suite that embeds testify's suite.Suite and provides common test setup/teardown</li>
 <li><strong>TeranodeTestEnv</strong> (<code>test/utils/testenv.go</code>): Manages the test environment including Docker Compose stacks, node clients, and service connections</li>
 </ul>
 <p>Each test suite can customize its configuration through the TConfig system, which defines settings contexts and Docker Compose files to use when running tests.</p>
-<h2 id="test-execution">Test Execution</h2>
+<h2 id="test-execution">Test Execution<a class="headerlink" href="#test-execution" title="Permanent link">&para;</a></h2>
 <p>Prerequisites:</p>
 <ul>
 <li>Docker must be running</li>
 <li>Docker compose must be installed</li>
 </ul>
 <p>To execute a given test suite (e.g., TNA, TNB, TNJ), use the following standard command template from the terminal:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/&lt;test-suite-folder&gt;
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tn<span class="o">[</span>x<span class="o">]</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/&lt;test-suite-folder&gt;
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tn<span class="o">[</span>x<span class="o">]</span>
+</span></code></pre></div>
 <p>Where [x] should be replaced with the letter corresponding to the desired suite. For example:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># For TNA tests</span>
-<span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
-
-<span class="c1"># For TNJ tests</span>
-<span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnj
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># For TNA tests</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># For TNJ tests</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnj
+</span></code></pre></div>
 <p><strong>Note</strong>: Some tests don't require build tags and can be run directly:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># For TNC tests in e2e/daemon</span>
-<span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># For TNC tests in e2e/daemon</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span>
+</span></code></pre></div>
 <p>To execute a single test, use:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># For tests using testify suites</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>&lt;build_tag&gt;
-
-<span class="c1"># For standalone tests</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestName&gt;</span>$<span class="s2">&quot;</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># For tests using testify suites</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>&lt;build_tag&gt;
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># For standalone tests</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestName&gt;</span>$<span class="s2">&quot;</span>
+</span></code></pre></div>
 <p>For example:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Suite-based test (TNA)</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>./test/tna/tna1_test.go
-
-<span class="c1"># Standalone test (TNC in e2e/daemon)</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span><span class="w"> </span>./test/e2e/daemon/tnc1_3_test.go
-</code></pre></div>
-<h2 id="tna">TNA</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Suite-based test (TNA)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>./test/tna/tna1_test.go
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Standalone test (TNC in e2e/daemon)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span><span class="w"> </span>./test/e2e/daemon/tnc1_3_test.go
+</span></code></pre></div>
+<h2 id="tna">TNA<a class="headerlink" href="#tna" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tna</code> folder verify the essential conditions that a node must follow in order to be part of the BSV network.</p>
 <p>The naming convention for files in this folder is as follows:</p>
 <p><code>tna_&lt;number&gt;.go</code> corresponds to the TNA-<number> test in the Functional Requirements for Teranode document.</p>
@@ -8012,52 +8480,52 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </ul>
 </li>
 </ul>
-<h3 id="running-tna-tests">Running TNA Tests</h3>
-<h4 id="running-all-tna-tests">Running All TNA Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
-</code></pre></div>
-<h4 id="running-specific-tna-tests">Running Specific TNA Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestTNA1</span>$<span class="s2">&quot;</span>
-</code></pre></div>
+<h3 id="running-tna-tests">Running TNA Tests<a class="headerlink" href="#running-tna-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-all-tna-tests">Running All TNA Tests<a class="headerlink" href="#running-all-tna-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span></code></pre></div>
+<h4 id="running-specific-tna-tests">Running Specific TNA Tests<a class="headerlink" href="#running-specific-tna-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestTNA1</span>$<span class="s2">&quot;</span>
+</span></code></pre></div>
 <p>Examples for each TNA test:</p>
 <ul>
 <li>For TNA-1 (transaction broadcasting):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span></code></pre></div>
 <ul>
 <li>For TNA-2 (transaction collection):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA2TestSuite</span>$<span class="s2">/TestTxsReceivedAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA2TestSuite</span>$<span class="s2">/TestTxsReceivedAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span></code></pre></div>
 <ul>
 <li>For TNA-4 (block broadcasting):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA4TestSuite</span>$<span class="s2">/TestBlockBroadcast</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA4TestSuite</span>$<span class="s2">/TestBlockBroadcast</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span></code></pre></div>
 <ul>
 <li>For TNA-6 (block acceptance):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA6TestSuite</span>$<span class="s2">/TestAcceptanceNextBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
-</code></pre></div>
-<h2 id="tnb">TNB</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA6TestSuite</span>$<span class="s2">/TestAcceptanceNextBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</span></code></pre></div>
+<h2 id="tnb">TNB<a class="headerlink" href="#tnb" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnb</code> folder verify that transactions are correctly validated and processed within Teranode. These tests ensure that transaction validation rules are correctly enforced and that the UTXO set is properly maintained.</p>
 <p>The naming convention for files in this folder is as follows:</p>
 <p><code>tnb&lt;number&gt;_test.go</code> corresponds to the TNB-<number> test in the Functional Requirements for Teranode document.</p>
-<h3 id="tnb1-test-description">TNB1 Test Description</h3>
-<h4 id="tnb-1-transaction-processing">TNB-1: Transaction Processing</h4>
+<h3 id="tnb1-test-description">TNB1 Test Description<a class="headerlink" href="#tnb1-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnb-1-transaction-processing">TNB-1: Transaction Processing<a class="headerlink" href="#tnb-1-transaction-processing" title="Permanent link">&para;</a></h4>
 <p><code>tnb1_test.go</code> covers TNB-1: Teranode must receive transactions sent by any node and add them to its mempool if they are valid.</p>
 <ul>
 <li><strong>Implementation</strong>: The test, <code>TestSendTxsInBatch</code>, creates and sends a batch of transactions concurrently to a Teranode node. It then subscribes to blockchain notifications to receive subtree notifications, retrieves transaction hashes from the subtree, and verifies that all sent transactions are included in the subtree. The test ensures that transactions are correctly received, validated, and included in mining candidates, demonstrating that Teranode properly processes transactions in batches and maintains them for block assembly.</li>
 </ul>
-<h3 id="tnb2-test-description">TNB2 Test Description</h3>
-<h4 id="tnb-2-transaction-validation">TNB-2: Transaction Validation</h4>
+<h3 id="tnb2-test-description">TNB2 Test Description<a class="headerlink" href="#tnb2-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnb-2-transaction-validation">TNB-2: Transaction Validation<a class="headerlink" href="#tnb-2-transaction-validation" title="Permanent link">&para;</a></h4>
 <p><code>tnb2_test.go</code> covers TNB-2: Teranode must validate transactions to ensure they follow consensus rules.</p>
 <ul>
 <li>
@@ -8068,7 +8536,7 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </ol>
 </li>
 </ul>
-<h5 id="additional-network-policy-and-integration-tests">Additional Network Policy and Integration Tests</h5>
+<h5 id="additional-network-policy-and-integration-tests">Additional Network Policy and Integration Tests<a class="headerlink" href="#additional-network-policy-and-integration-tests" title="Permanent link">&para;</a></h5>
 <p>In addition to the functional test suite, there are two important test files in the <code>services/validator</code> directory that provide comprehensive testing of transaction validation:</p>
 <ol>
 <li>
@@ -8093,64 +8561,64 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </li>
 </ol>
 <p>Together, these tests ensure that Teranode maintains proper network health by enforcing transaction validation rules and correctly integrating with the block assembly process, UTXO management, and Kafka messaging. They provide critical protection against potential denial-of-service vectors and ensure that transactions are properly processed throughout the entire validation pipeline.</p>
-<h3 id="tnb6-test-description">TNB6 Test Description</h3>
-<h4 id="tnb-6-utxo-set-management">TNB-6: UTXO Set Management</h4>
+<h3 id="tnb6-test-description">TNB6 Test Description<a class="headerlink" href="#tnb6-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnb-6-utxo-set-management">TNB-6: UTXO Set Management<a class="headerlink" href="#tnb-6-utxo-set-management" title="Permanent link">&para;</a></h4>
 <p><code>tnb6_test.go</code> covers TNB-6: All outputs of validated transactions must be added to Teranode's unspent transaction output (UTXO) set.</p>
 <ul>
 <li><strong>Implementation</strong>: The <code>TestUnspentTransactionOutputs</code> test case verifies proper UTXO set management by creating a transaction with multiple outputs, sending it to a node, and then verifying that all outputs are correctly added to the UTXO set. The test checks UTXO metadata (amounts, scripts) and verifies the spending status of each output, ensuring that the UTXO store correctly maintains all transaction outputs for future spending.</li>
 </ul>
-<h3 id="tnb7-test-description">TNB7 Test Description</h3>
-<h4 id="tnb-7-transaction-input-spending">TNB-7: Transaction Input Spending</h4>
+<h3 id="tnb7-test-description">TNB7 Test Description<a class="headerlink" href="#tnb7-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnb-7-transaction-input-spending">TNB-7: Transaction Input Spending<a class="headerlink" href="#tnb-7-transaction-input-spending" title="Permanent link">&para;</a></h4>
 <p><code>tnb7_test.go</code> covers TNB-7: All inputs of validated transactions must be marked as spent in Teranode's UTXO set.</p>
 <ul>
 <li><strong>Implementation</strong>: The <code>TestValidatedTxShouldSpendInputs</code> test case creates a transaction that spends a coinbase output, sends it to a node, and then verifies that the input is correctly marked as spent in the UTXO store. It checks the spending status and confirms that the spending transaction ID is correctly recorded, ensuring that Teranode properly updates the UTXO set when transactions are processed.</li>
 </ul>
-<h3 id="running-tnb-tests">Running TNB Tests</h3>
-<h4 id="running-all-tnb-tests">Running All TNB Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
-<h4 id="running-specific-tnb-tests">Running Specific TNB Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
+<h3 id="running-tnb-tests">Running TNB Tests<a class="headerlink" href="#running-tnb-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-all-tnb-tests">Running All TNB Tests<a class="headerlink" href="#running-all-tnb-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
+<h4 id="running-specific-tnb-tests">Running Specific TNB Tests<a class="headerlink" href="#running-specific-tnb-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
 <p>Examples for each TNB test:</p>
 <ul>
 <li>For TNB-1 (transaction processing):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB1TestSuite</span>$<span class="s2">/TestSendTxsInBatch</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
 <ul>
 <li>For TNB-2 (transaction validation):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB2TestSuite</span>$<span class="s2">/TestUTXOValidation</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB2TestSuite</span>$<span class="s2">/TestUTXOValidation</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
 <ul>
 <li>For TNB-6 (UTXO set management):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB6TestSuite</span>$<span class="s2">/TestUnspentTransactionOutputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB6TestSuite</span>$<span class="s2">/TestUnspentTransactionOutputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
 <ul>
 <li>For TNB-7 (transaction input spending):</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB7TestSuite</span>$<span class="s2">/TestValidatedTxShouldSpendInputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
-</code></pre></div>
-<h2 id="tnc">TNC</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNB7TestSuite</span>$<span class="s2">/TestValidatedTxShouldSpendInputs</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnb
+</span></code></pre></div>
+<h2 id="tnc">TNC<a class="headerlink" href="#tnc" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the TNC tests verify that transactions are correctly assembled into Merkle tree structures and consequently organized into valid blocks to propagate to mining pool software.</p>
 <p><strong>Note</strong>: TNC tests are located in <code>/test/e2e/daemon/</code> rather than a dedicated <code>/test/tnc/</code> folder, as they require full daemon integration.</p>
 <p>The naming convention for these test files is:</p>
 <p><code>tnc&lt;number&gt;_&lt;subnumber&gt;_test.go</code> corresponds to the TNC-<number>.<subnumber> test in the Functional Requirements for Teranode document.</p>
-<h3 id="tnc1-test-description">TNC1 Test Description</h3>
-<h4 id="tnc-11-merkle-root-calculation">TNC-1.1: Merkle Root Calculation</h4>
+<h3 id="tnc1-test-description">TNC1 Test Description<a class="headerlink" href="#tnc1-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnc-11-merkle-root-calculation">TNC-1.1: Merkle Root Calculation<a class="headerlink" href="#tnc-11-merkle-root-calculation" title="Permanent link">&para;</a></h4>
 <p><code>tnc1_1_test.go</code> covers TNC-1.1: Teranode must calculate the Merkle root of all the transactions included in the candidate block.</p>
 <ul>
 <li><strong>Implementation</strong>: The test verifies the Merkle root calculation by first obtaining a mining candidate with no additional transactions. It then mines a block and retrieves the best block. The test validates that the block properly validates its subtrees and that the Merkle root is correctly calculated. This ensures that Teranode is capable of properly calculating the Merkle root for blocks, even in the simplest case of a coinbase-only block.</li>
 </ul>
-<h4 id="tnc-12-previous-block-hash-reference">TNC-1.2: Previous Block Hash Reference</h4>
+<h4 id="tnc-12-previous-block-hash-reference">TNC-1.2: Previous Block Hash Reference<a class="headerlink" href="#tnc-12-previous-block-hash-reference" title="Permanent link">&para;</a></h4>
 <p><code>tnc1_2_test.go</code> covers TNC-1.2: Teranode must refer to the hash of the previous block upon which the candidate block is being built.</p>
 <ul>
 <li>
@@ -8161,7 +8629,7 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </ol>
 </li>
 </ul>
-<h4 id="tnc-13-coinbase-transaction">TNC-1.3: Coinbase Transaction</h4>
+<h4 id="tnc-13-coinbase-transaction">TNC-1.3: Coinbase Transaction<a class="headerlink" href="#tnc-13-coinbase-transaction" title="Permanent link">&para;</a></h4>
 <p><code>tnc1_3_test.go</code> covers TNC-1.3: Teranode must add a Coinbase transaction in the block, the amount of this transaction corresponding to the sum of the block reward and the sum of all transaction fees.</p>
 <ul>
 <li>
@@ -8174,8 +8642,8 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </ol>
 </li>
 </ul>
-<h3 id="tnc2-test-description">TNC2 Test Description</h3>
-<h4 id="tnc-21-unique-candidate-identifiers">TNC-2.1: Unique Candidate Identifiers</h4>
+<h3 id="tnc2-test-description">TNC2 Test Description<a class="headerlink" href="#tnc2-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnc-21-unique-candidate-identifiers">TNC-2.1: Unique Candidate Identifiers<a class="headerlink" href="#tnc-21-unique-candidate-identifiers" title="Permanent link">&para;</a></h4>
 <p><code>tnc2_1_test.go</code> covers TNC-2.1: Each candidate block must have a unique identifier.</p>
 <ul>
 <li>
@@ -8186,7 +8654,7 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </ol>
 </li>
 </ul>
-<h3 id="additional-block-assembly-system-tests">Additional Block Assembly System Tests</h3>
+<h3 id="additional-block-assembly-system-tests">Additional Block Assembly System Tests<a class="headerlink" href="#additional-block-assembly-system-tests" title="Permanent link">&para;</a></h3>
 <p>In addition to the functional test suite, <code>services/blockassembly/blockassembly_system_test.go</code> provides comprehensive system-level testing that covers aspects of both TNC and TNA requirements. These tests examine the block assembly process in an integrated system environment:</p>
 <ul>
 <li>
@@ -8215,7 +8683,7 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </li>
 </ul>
 <p>These system tests provide a more integrated view of how block assembly functions within the complete Teranode system, complementing the more focused functional tests in the TNC directory.</p>
-<h3 id="additional-unit-tests-for-block-assembly">Additional Unit Tests for Block Assembly</h3>
+<h3 id="additional-unit-tests-for-block-assembly">Additional Unit Tests for Block Assembly<a class="headerlink" href="#additional-unit-tests-for-block-assembly" title="Permanent link">&para;</a></h3>
 <p>In addition to the TNC functional tests and system tests, <code>services/blockassembly/BlockAssembler_test.go</code> provides unit-level testing for the core block assembly component, covering key TNC requirements:</p>
 <ul>
 <li>
@@ -8229,54 +8697,54 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </li>
 </ul>
 <p>These unit tests provide additional verification of the core block assembly functionality at a lower level than the functional tests, ensuring that the individual components work correctly before they're integrated into the complete system.</p>
-<h2 id="tnd">TND</h2>
+<h2 id="tnd">TND<a class="headerlink" href="#tnd" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnd</code> folder verify the block propagation functionality between nodes in the network.</p>
 <p>The naming convention for files in this folder is as follows:</p>
 <p><code>tnd&lt;number&gt;_&lt;subnumber&gt;_test.go</code> corresponds to the TND-<number>.<subnumber> test in the Functional Requirements for Teranode document.</p>
-<h3 id="tnd1-test-description">TND1 Test Description</h3>
-<h4 id="tnd-11-block-propagation">TND-1.1: Block Propagation</h4>
+<h3 id="tnd1-test-description">TND1 Test Description<a class="headerlink" href="#tnd1-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnd-11-block-propagation">TND-1.1: Block Propagation<a class="headerlink" href="#tnd-11-block-propagation" title="Permanent link">&para;</a></h4>
 <p><code>tnd1_1_test.go</code> covers TND-1.1: Teranode must propagate blocks to all connected nodes after they are mined.</p>
 <ul>
 <li><strong>Implementation</strong>: The test establishes a three-node Teranode network and verifies block propagation functionality. It first mines a block on one node and then checks that the block hash is properly propagated to all connected nodes through the network. The test confirms this by retrieving the best block header from each node and verifying they all have the same block hash, proving that block propagation functions correctly across the network.</li>
 </ul>
-<h3 id="running-tnd-tests">Running TND Tests</h3>
-<h4 id="running-all-tnd-tests">Running All TND Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnd
-</code></pre></div>
-<h4 id="running-specific-tnd-tests">Running Specific TND Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTND1TestSuite</span>$<span class="s2">/TestTND1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnd
-</code></pre></div>
-<h2 id="tne">TNE</h2>
+<h3 id="running-tnd-tests">Running TND Tests<a class="headerlink" href="#running-tnd-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-all-tnd-tests">Running All TND Tests<a class="headerlink" href="#running-all-tnd-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnd
+</span></code></pre></div>
+<h4 id="running-specific-tnd-tests">Running Specific TND Tests<a class="headerlink" href="#running-specific-tnd-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTND1TestSuite</span>$<span class="s2">/TestTND1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnd
+</span></code></pre></div>
+<h2 id="tne">TNE<a class="headerlink" href="#tne" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the TNE tests verify that nodes correctly validate blocks received from the network and optimize verification processes.</p>
 <p><strong>Note</strong>: TNE tests are located in <code>/test/e2e/daemon/</code> rather than a dedicated <code>/test/tne/</code> folder, as they require full daemon integration.</p>
 <p>The naming convention for these test files is:</p>
 <p><code>tne&lt;number&gt;_&lt;subnumber&gt;_test.go</code> corresponds to the TNE-<number>.<subnumber> test in the Functional Requirements for Teranode document.</p>
-<h3 id="tne1-test-description">TNE1 Test Description</h3>
-<h4 id="tne-11-optimized-transaction-verification">TNE-1.1: Optimized Transaction Verification</h4>
+<h3 id="tne1-test-description">TNE1 Test Description<a class="headerlink" href="#tne1-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tne-11-optimized-transaction-verification">TNE-1.1: Optimized Transaction Verification<a class="headerlink" href="#tne-11-optimized-transaction-verification" title="Permanent link">&para;</a></h4>
 <p><code>tne1_1_test.go</code> covers TNE-1.1: Teranode must not re-verify transactions that it has already verified.</p>
 <ul>
 <li><strong>Implementation</strong>: The test establishes a Teranode network and verifies that transactions are not re-verified once they've been processed. It sends a set of transactions to a node, confirms they are processed, and then mines blocks containing these transactions. The test then verifies that when these transactions appear in blocks, they aren't re-verified by examining internal metrics and logs. This ensures efficiency in block processing, particularly when handling blocks that contain transactions already present in the node's mempool.</li>
 </ul>
-<h3 id="running-tne-tests">Running TNE Tests</h3>
-<h4 id="running-tne-tests_1">Running TNE Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
-<span class="c1"># Run specific TNE test</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNE1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>tne1_1_test.go
-</code></pre></div>
+<h3 id="running-tne-tests">Running TNE Tests<a class="headerlink" href="#running-tne-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-tne-tests_1">Running TNE Tests<a class="headerlink" href="#running-tne-tests_1" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># Run specific TNE test</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNE1_1</span>$<span class="s2">&quot;</span><span class="w"> </span>tne1_1_test.go
+</span></code></pre></div>
 <p><strong>Note</strong>: TNE tests are integration tests in the e2e/daemon directory and typically don't require build tags.</p>
-<h2 id="tnf">TNF</h2>
+<h2 id="tnf">TNF<a class="headerlink" href="#tnf" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnf</code> folder verify that Teranode correctly tracks and maintains the longest honest chain, including handling chain reorganizations and block invalidation.</p>
 <p>The naming convention for files in this folder is as follows:</p>
 <p><code>tnf&lt;number&gt;_test.go</code> corresponds to the TNF-<number> test in the Functional Requirements for Teranode document.</p>
-<h3 id="tnf6-test-description">TNF6 Test Description</h3>
-<h4 id="tnf-6-block-invalidation">TNF-6: Block Invalidation</h4>
+<h3 id="tnf6-test-description">TNF6 Test Description<a class="headerlink" href="#tnf6-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnf-6-block-invalidation">TNF-6: Block Invalidation<a class="headerlink" href="#tnf-6-block-invalidation" title="Permanent link">&para;</a></h4>
 <p><code>tnf6_test.go</code> covers TNF-6: Teranode must allow for manual invalidation of blocks to handle potentially malicious or invalid chains.</p>
 <ul>
 <li><strong>Implementation</strong>: The test establishes a three-node Teranode network to verify block invalidation functionality. It first ensures all nodes are synchronized on the same chain, then restarts one node with modified settings to trigger a specific blockchain state. The test then identifies blocks mined by a specific miner and uses the <code>InvalidateBlock</code> API to manually invalidate those blocks across all nodes. After invalidation, it verifies that the best block on all nodes has changed and no longer references the invalidated miner, confirming that Teranode properly handles manual block invalidation. This capability is crucial for network resilience against potentially malicious chains.</li>
 </ul>
-<h3 id="additional-chain-reorganization-tests">Additional Chain Reorganization Tests</h3>
+<h3 id="additional-chain-reorganization-tests">Additional Chain Reorganization Tests<a class="headerlink" href="#additional-chain-reorganization-tests" title="Permanent link">&para;</a></h3>
 <p>In addition to the dedicated TNF tests, the <code>test/e2e/daemon/reorg_test.go</code> file provides more comprehensive e2e tests for blockchain reorganization handling, which is a key aspect of keeping track of the longest honest chain:</p>
 <ul>
 <li>
@@ -8290,25 +8758,25 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </li>
 </ul>
 <p>These smoke tests provide additional verification of the chain reorganization functionality in more realistic network scenarios with actual running nodes, complementing the more focused TNF unit tests.</p>
-<h3 id="running-tnf-tests">Running TNF Tests</h3>
-<h4 id="running-all-tnf-tests">Running All TNF Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnf
-</code></pre></div>
-<h4 id="running-specific-tnf-tests">Running Specific TNF Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnf
-</code></pre></div>
-<h2 id="tnj">TNJ</h2>
+<h3 id="running-tnf-tests">Running TNF Tests<a class="headerlink" href="#running-tnf-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-all-tnf-tests">Running All TNF Tests<a class="headerlink" href="#running-all-tnf-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnf
+</span></code></pre></div>
+<h4 id="running-specific-tnf-tests">Running Specific TNF Tests<a class="headerlink" href="#running-specific-tnf-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnf
+</span></code></pre></div>
+<h2 id="tnj">TNJ<a class="headerlink" href="#tnj" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnj</code> folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin protocol.</p>
 <p>The naming convention for files in this folder is descriptive, using names like <code>locktime_test.go</code> that indicate the specific consensus rule being tested. Some TNJ tests may also be found in other directories (e.g., <code>test/e2e/daemon/</code>) when they require full daemon integration.</p>
-<h3 id="consensus-rules-test-description">Consensus Rules Test Description</h3>
-<h4 id="tnj-4-coinbase-transaction-maturity">TNJ-4: Coinbase Transaction Maturity</h4>
+<h3 id="consensus-rules-test-description">Consensus Rules Test Description<a class="headerlink" href="#consensus-rules-test-description" title="Permanent link">&para;</a></h3>
+<h4 id="tnj-4-coinbase-transaction-maturity">TNJ-4: Coinbase Transaction Maturity<a class="headerlink" href="#tnj-4-coinbase-transaction-maturity" title="Permanent link">&para;</a></h4>
 <p><code>block_subsidy_test.go</code> (located in <code>test/e2e/daemon/</code>) covers TNJ-4: Coinbase transactions must not be spent until they have matured (reached 100 blocks of confirmation).</p>
 <ul>
 <li><strong>Implementation</strong>: The test establishes a multi-node Teranode network to verify coinbase transaction maturity rules. It creates a block with a coinbase transaction, then attempts to spend the outputs from that coinbase transaction immediately. The test verifies that this transaction is not included in subsequent blocks, demonstrating that Teranode correctly enforces the coinbase maturity rule. After generating 100 blocks to ensure maturity, it then confirms that the transaction spending from the mature coinbase can now be included in a block. This test ensures that Teranode enforces one of the fundamental consensus rules regarding coinbase outputs.</li>
 </ul>
-<h4 id="transaction-locktime-rules">Transaction Locktime Rules</h4>
+<h4 id="transaction-locktime-rules">Transaction Locktime Rules<a class="headerlink" href="#transaction-locktime-rules" title="Permanent link">&para;</a></h4>
 <p><code>locktime_test.go</code> covers the consensus rules regarding transaction locktime enforcement:</p>
 <ul>
 <li>
@@ -8322,19 +8790,19 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 <p>These tests verify that Teranode correctly implements Bitcoin's locktime functionality, which allows transactions to be time-locked until a specific block height or time is reached, unless overridden by setting all input sequence numbers to 0xFFFFFFFF.</p>
 </li>
 </ul>
-<h3 id="running-tnj-tests">Running TNJ Tests</h3>
-<h4 id="running-all-tnj-tests">Running All TNJ Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnj
-</code></pre></div>
-<h4 id="running-specific-tnj-tests">Running Specific TNJ Tests</h4>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestBlockSubsidy</span>$<span class="s2">&quot;</span>
-</code></pre></div>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNJLockTimeTestSuite</span>$<span class="s2">/TestLocktimeScenarios</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnj
-</code></pre></div>
-<h2 id="tec">TEC</h2>
+<h3 id="running-tnj-tests">Running TNJ Tests<a class="headerlink" href="#running-tnj-tests" title="Permanent link">&para;</a></h3>
+<h4 id="running-all-tnj-tests">Running All TNJ Tests<a class="headerlink" href="#running-all-tnj-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnj
+</span></code></pre></div>
+<h4 id="running-specific-tnj-tests">Running Specific TNJ Tests<a class="headerlink" href="#running-specific-tnj-tests" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/e2e/daemon
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestBlockSubsidy</span>$<span class="s2">&quot;</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnj
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNJLockTimeTestSuite</span>$<span class="s2">/TestLocktimeScenarios</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnj
+</span></code></pre></div>
+<h2 id="tec">TEC<a class="headerlink" href="#tec" title="Permanent link">&para;</a></h2>
 <p>The tests in the <code>/test/tec</code> folder check  Teranode's ability to recover from multiple types of errors, from incorrect settings to communication errors on the message channels between microservices.</p>
 <p>The naming convention for files in this folder is as follows:</p>
 <p><code>tec_blk_&lt;number&gt;_test.go</code> corresponds to the TEC-<number> test in the Functional Requirements for Teranode document.</p>
@@ -8364,37 +8832,65 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../understandingTheTestingFramework/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Understanding the Testing Framework">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Understanding the Testing Framework
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../features/two_phase_commit/" class="md-footer__link md-footer__link--next" aria-label="Next: Two Phase Commit">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Two Phase Commit
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -8411,12 +8907,10 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

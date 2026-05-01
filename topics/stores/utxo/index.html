@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/stores/utxo/">
       
       
         <link rel="prev" href="../blob/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -214,6 +273,8 @@
         <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2229,6 +2408,48 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2593,6 +2814,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2608,9 +2837,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
@@ -2798,6 +3025,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2813,9 +3058,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="">
@@ -3087,6 +3330,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3102,9 +3361,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
@@ -3349,6 +3606,12 @@
   
   
     
+    
+      
+        
+      
+        
+      
     
     
     
@@ -3921,6 +4184,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3936,9 +4211,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="">
@@ -4126,6 +4399,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4141,9 +4418,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
@@ -4219,6 +4494,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4234,9 +4513,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
@@ -4319,6 +4596,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4331,9 +4624,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4401,6 +4692,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4413,9 +4718,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4595,6 +4898,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4607,9 +4934,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4973,6 +5298,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4985,9 +5328,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5259,6 +5600,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5271,9 +5626,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5489,6 +5842,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5501,9 +5860,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5607,6 +5964,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5619,9 +5992,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -5801,6 +6172,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5813,9 +6214,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6255,6 +6654,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6267,9 +6674,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6409,6 +6814,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6421,9 +6842,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7108,14 +7527,83 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../blob/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Stores
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="utxo-store">UTXO Store</h1>
-<h2 id="index">Index</h2>
+
+<h1 id="utxo-store">UTXO Store<a class="headerlink" href="#utxo-store" title="Permanent link">&para;</a></h1>
+<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
 <ol>
 <li><a href="#1-description">Description</a></li>
 <li><a href="#2-architecture">Architecture</a></li>
@@ -7155,7 +7643,7 @@
 <li><a href="#9-configuration-and-settings">Configuration and Settings</a></li>
 <li><a href="#10-other-resources">Other Resources</a></li>
 </ol>
-<h2 id="1-description">1. Description</h2>
+<h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
 <p>The UTXO set represents the current state of ownership of all Satoshi tokens in existence. Except for Coinbase transactions, every other valid transaction spends at least one UTXO and creates zero or more new UTXOs, plus zero or more locked outputs. The UTXOs that are being ‘spent’ come from previously successful transactions, and these may be recorded in the current or a previous block. An unspent output may be created and spent in a few milliseconds, or it may remain unspent for decades, meaning that the unspent outputs must persist for as long as they remain unspent.</p>
 <p>The UTXO Store is responsible for tracking spendable UTXOs (the UTXO set), based on the longest <em>honest</em> chain-tip in the network. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is an internal datastore used by some of the services, such as the Asset Server, the TX Validator and the Block Assembly. The main purpose of this store is to maintain the UTXO data on behalf of other micro-services.</p>
 <p>It handles the core functionalities of the UTXO Store:</p>
@@ -7183,35 +7671,35 @@
 <li>BSV is the only blockchain that allows legal recourse for lost asset (token) recovery to legally rightful owners by design. The Alert System can also freeze assets based on court injunctions and legal notices.</li>
 <li>Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.</li>
 </ul>
-<h2 id="2-architecture">2. Architecture</h2>
+<h2 id="2-architecture">2. Architecture<a class="headerlink" href="#2-architecture" title="Permanent link">&para;</a></h2>
 <p>The UTXO Store is a shared library component that is used by multiple Teranode services to retrieve, store, and modify UTXOs.</p>
 <p><img alt="UTXO_Store_Container_Context_Diagram.png" src="../../services/img/UTXO_Store_Container_Context_Diagram.png" /></p>
 <p>The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.</p>
 <p><img alt="UTXO_Store_Component_Context_Diagram.png" src="../../services/img/UTXO_Store_Component_Context_Diagram.png" /></p>
-<h3 id="utxo-store-operations-flow">UTXO Store Operations Flow</h3>
+<h3 id="utxo-store-operations-flow">UTXO Store Operations Flow<a class="headerlink" href="#utxo-store-operations-flow" title="Permanent link">&para;</a></h3>
 <p>The following diagram illustrates the complete flow of UTXO operations across all services, including transaction validation, conflict resolution, block mining, reorganization handling, alert system operations, and subtree validation:</p>
 <p><img alt="utxo_operations_flow.svg" src="../../services/img/plantuml/utxo/utxo_operations_flow.svg" /></p>
 <p>The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (<code>utxostore</code>), as it can be seen in the following code example:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">getUtxoStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">utxoStore</span>
-<span class="w"> </span><span class="p">}</span>
-
-<span class="w"> </span><span class="nx">utxoStoreURL</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetURL</span><span class="p">(</span><span class="s">&quot;utxostore&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="s">&quot;no utxostore setting found&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="nx">utxoStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">utxo_factory</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStoreURL</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-
-<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">utxoStore</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">getUtxoStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">utxoStore</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w"> </span><span class="nx">utxoStoreURL</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetURL</span><span class="p">(</span><span class="s">&quot;utxostore&quot;</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="s">&quot;no utxostore setting found&quot;</span><span class="p">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w"> </span><span class="nx">utxoStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">utxo_factory</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStoreURL</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">utxoStore</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:</p>
 <blockquote>
 <p><strong>Note</strong>: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Pruner Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.</p>
@@ -7234,18 +7722,18 @@
 </ol>
 <p>Notice how SqlLite and the In-Memory store are in-memory, while Aerospike and Postgres are persistent (and shared with other services).</p>
 <p>More details about the specific stores can be found in the <a href="#5-technology">Technology</a> section.</p>
-<h2 id="3-utxo-data-model">3. UTXO: Data Model</h2>
-<h3 id="31-what-is-an-utxo">3.1. What is an UTXO?</h3>
+<h2 id="3-utxo-data-model">3. UTXO: Data Model<a class="headerlink" href="#3-utxo-data-model" title="Permanent link">&para;</a></h2>
+<h3 id="31-what-is-an-utxo">3.1. What is an UTXO?<a class="headerlink" href="#31-what-is-an-utxo" title="Permanent link">&para;</a></h3>
 <p>The Teranode UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:</p>
 <ul>
 <li><strong>Transaction Outputs</strong>: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).</li>
 </ul>
 <p>Under the external library <code>github.com/bsv-blockchain/go-bt/v2</code>, we can see the structure of a transaction output.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Output</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="nx">Satoshis</span><span class="w">      </span><span class="kt">uint64</span><span class="w">          </span><span class="s">`json:&quot;satoshis&quot;`</span>
-<span class="w"> </span><span class="nx">LockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="w"> </span><span class="s">`json:&quot;locking_script&quot;`</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Output</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w"> </span><span class="nx">Satoshis</span><span class="w">      </span><span class="kt">uint64</span><span class="w">          </span><span class="s">`json:&quot;satoshis&quot;`</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w"> </span><span class="nx">LockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="w"> </span><span class="s">`json:&quot;locking_script&quot;`</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>Components of the <code>Output</code> struct:</p>
 <ol>
 <li>
@@ -7265,13 +7753,13 @@
 </li>
 </ol>
 <p>Equally, we can see how a list of outputs is part of a transaction (<code>github.com/bsv-blockchain/go-bt/v2</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Tx</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="nx">Inputs</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">Input</span><span class="w">  </span><span class="s">`json:&quot;inputs&quot;`</span>
-<span class="w"> </span><span class="nx">Outputs</span><span class="w">  </span><span class="p">[]</span><span class="o">*</span><span class="nx">Output</span><span class="w"> </span><span class="s">`json:&quot;outputs&quot;`</span>
-<span class="w"> </span><span class="nx">Version</span><span class="w">  </span><span class="kt">uint32</span><span class="w">    </span><span class="s">`json:&quot;version&quot;`</span>
-<span class="w"> </span><span class="nx">LockTime</span><span class="w"> </span><span class="kt">uint32</span><span class="w">    </span><span class="s">`json:&quot;locktime&quot;`</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tx</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w"> </span><span class="nx">Inputs</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">Input</span><span class="w">  </span><span class="s">`json:&quot;inputs&quot;`</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w"> </span><span class="nx">Outputs</span><span class="w">  </span><span class="p">[]</span><span class="o">*</span><span class="nx">Output</span><span class="w"> </span><span class="s">`json:&quot;outputs&quot;`</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w"> </span><span class="nx">Version</span><span class="w">  </span><span class="kt">uint32</span><span class="w">    </span><span class="s">`json:&quot;version&quot;`</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w"> </span><span class="nx">LockTime</span><span class="w"> </span><span class="kt">uint32</span><span class="w">    </span><span class="s">`json:&quot;locktime&quot;`</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
+</span></code></pre></div>
 <ul>
 <li><strong>Unspent Transaction Outputs (UTXOs)</strong>: A UTXO is a transaction output that hasn't been used as an input in a new transaction.</li>
 </ul>
@@ -7281,7 +7769,7 @@
 <p>Independent UTXOs can be processed in parallel, potentially improving the efficiency of transaction validation.</p>
 <p>UTXOs now have an additional state: frozen. A frozen UTXO cannot be spent until it is unfrozen.</p>
 <p>To know more about UTXOs, please check <a href="https://protocol.bsvblockchain.org/transaction-lifecycle/transaction-inputs-and-outputs">https://protocol.bsvblockchain.org/transaction-lifecycle/transaction-inputs-and-outputs</a>.</p>
-<h3 id="32-how-are-utxos-stored">3.2. How are UTXOs stored?</h3>
+<h3 id="32-how-are-utxos-stored">3.2. How are UTXOs stored?<a class="headerlink" href="#32-how-are-utxos-stored" title="Permanent link">&para;</a></h3>
 <p>When storing the UTXOs (Unspent Transaction Outputs) associated to a given Tx in Aerospike (see <code>stores/utxo/aerospike/aerospike.go</code>, our primary persisted datastore, the following information is kept:</p>
 <ol>
 <li>
@@ -7325,41 +7813,41 @@
 <p>The hashing logic can be found in <code>util/utxo_hash.go</code>:</p>
 </li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">UTXOHash</span><span class="p">(</span><span class="nx">previousTxid</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">index</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="p">,</span><span class="w"> </span><span class="nx">satoshis</span><span class="w"> </span><span class="kt">uint64</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;locking script is nil&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">previousTxid</span><span class="p">.</span><span class="nx">CloneBytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">index</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">lockingScript</span><span class="o">...</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">satoshis</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
-
-<span class="w"> </span><span class="nx">chHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">HashH</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">)</span>
-
-<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">chHash</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">UTXOHash</span><span class="p">(</span><span class="nx">previousTxid</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">index</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="p">,</span><span class="w"> </span><span class="nx">satoshis</span><span class="w"> </span><span class="kt">uint64</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;locking script is nil&quot;</span><span class="p">)</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">previousTxid</span><span class="p">.</span><span class="nx">CloneBytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">index</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">lockingScript</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">satoshis</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w"> </span><span class="nx">chHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">HashH</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">)</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">chHash</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="p">}</span>
+</span></code></pre></div>
 <ul>
 <li>The existence of the key confirms the details of the UTXO are the same as what the caller has.</li>
 </ul>
-<h3 id="33-utxo-meta-data">3.3. UTXO Meta Data</h3>
+<h3 id="33-utxo-meta-data">3.3. UTXO Meta Data<a class="headerlink" href="#33-utxo-meta-data" title="Permanent link">&para;</a></h3>
 <p>The <code>Data</code> struct (<code>stores/utxo/meta/data.go</code>), referred moving forward as <code>UTXO Meta Data</code>, provides a convenience structure to retrieve meta data associated to a transaction out of the UTXO Store.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Data</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="nx">Tx</span><span class="w">             </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="w">           </span><span class="s">`json:&quot;tx&quot;`</span>
-<span class="w"> </span><span class="nx">ParentTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w"> </span><span class="s">`json:&quot;parentTxHashes&quot;`</span>
-<span class="w"> </span><span class="nx">BlockIDs</span><span class="w">       </span><span class="p">[]</span><span class="kt">uint32</span><span class="w">         </span><span class="s">`json:&quot;blockIDs&quot;`</span>
-<span class="w"> </span><span class="nx">Fee</span><span class="w">            </span><span class="kt">uint64</span><span class="w">           </span><span class="s">`json:&quot;fee&quot;`</span>
-<span class="w"> </span><span class="nx">SizeInBytes</span><span class="w">    </span><span class="kt">uint64</span><span class="w">           </span><span class="s">`json:&quot;sizeInBytes&quot;`</span>
-<span class="w"> </span><span class="nx">IsCoinbase</span><span class="w">     </span><span class="kt">bool</span><span class="w">             </span><span class="s">`json:&quot;isCoinbase&quot;`</span>
-<span class="w"> </span><span class="nx">LockTime</span><span class="w">       </span><span class="kt">uint32</span><span class="w">           </span><span class="s">`json:&quot;lockTime&quot;`</span><span class="w"> </span><span class="c1">// lock time can be different from the transaction lock time, for instance in coinbase transactions</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Data</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w"> </span><span class="nx">Tx</span><span class="w">             </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="w">           </span><span class="s">`json:&quot;tx&quot;`</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w"> </span><span class="nx">ParentTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w"> </span><span class="s">`json:&quot;parentTxHashes&quot;`</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w"> </span><span class="nx">BlockIDs</span><span class="w">       </span><span class="p">[]</span><span class="kt">uint32</span><span class="w">         </span><span class="s">`json:&quot;blockIDs&quot;`</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w"> </span><span class="nx">Fee</span><span class="w">            </span><span class="kt">uint64</span><span class="w">           </span><span class="s">`json:&quot;fee&quot;`</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w"> </span><span class="nx">SizeInBytes</span><span class="w">    </span><span class="kt">uint64</span><span class="w">           </span><span class="s">`json:&quot;sizeInBytes&quot;`</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w"> </span><span class="nx">IsCoinbase</span><span class="w">     </span><span class="kt">bool</span><span class="w">             </span><span class="s">`json:&quot;isCoinbase&quot;`</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w"> </span><span class="nx">LockTime</span><span class="w">       </span><span class="kt">uint32</span><span class="w">           </span><span class="s">`json:&quot;lockTime&quot;`</span><span class="w"> </span><span class="c1">// lock time can be different from the transaction lock time, for instance in coinbase transactions</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>This is widely used by all services, given it is a comprehensive set of data going well beyond the extended Tx data set.</p>
 <p>To know more about the UTXO data model, please refer to the <a href="../../datamodel/utxo_data_model/">UTXO Data Model documentation</a>.</p>
-<h2 id="4-use-cases">4. Use Cases</h2>
-<h3 id="41-asset-server">4.1. Asset Server</h3>
+<h2 id="4-use-cases">4. Use Cases<a class="headerlink" href="#4-use-cases" title="Permanent link">&para;</a></h2>
+<h3 id="41-asset-server">4.1. Asset Server<a class="headerlink" href="#41-asset-server" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_asset_service_diagram.svg" src="../../services/img/plantuml/utxo/utxo_asset_service_diagram.svg" /></p>
 <ol>
 <li>The <strong>UI Dashboard</strong> sends a request to the AssetService for UTXO data.</li>
@@ -7370,7 +7858,7 @@
 <li>Finally, the AssetService responds back to the UI Dashboard.</li>
 </ol>
 <p>To know more about the AssetService, please check its specific service documentation.</p>
-<h3 id="42-block-persister">4.2. Block Persister</h3>
+<h3 id="42-block-persister">4.2. Block Persister<a class="headerlink" href="#42-block-persister" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_block_persister_service_diagram.svg" src="../../services/img/plantuml/utxo/utxo_block_persister_service_diagram.svg" /></p>
 <ol>
 <li>
@@ -7380,7 +7868,7 @@
 <p>Depending on the settings Block Persister operates under, the persister will request the utxo meta data in batches or one by one. In general, and depending on the specific UTXO store implementation, the batched processing is more efficient.</p>
 </li>
 </ol>
-<h3 id="43-block-assembly">4.3. Block Assembly</h3>
+<h3 id="43-block-assembly">4.3. Block Assembly<a class="headerlink" href="#43-block-assembly" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_block_assembly.svg" src="../../services/img/plantuml/utxo/utxo_block_assembly.svg" /></p>
 <p>Coinbase Transaction creation (UTXO step):</p>
 <ol>
@@ -7395,17 +7883,17 @@
 <li>The <strong>UTXO Store</strong> interacts with the underlying <strong>Datastore</strong> implementation to delete the Coinbase UTXO.</li>
 </ol>
 <p>To know more about the Block Assembly, please check its specific service documentation.</p>
-<h3 id="44-block-validation">4.4. Block Validation</h3>
+<h3 id="44-block-validation">4.4. Block Validation<a class="headerlink" href="#44-block-validation" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_block_validation.svg" src="../../services/img/plantuml/utxo/utxo_block_validation.svg" /></p>
 <ol>
 <li>The <strong>Block Validator</strong> service validates the block by checking the integrity of the transactions and UTXOs.</li>
 <li>Once a block is validated, the <strong>Block Validator</strong> service stores the coinbase tx and their associated UTXO data in the <strong>UTXO Store</strong>.</li>
 <li>The <strong>UTXO Store</strong> interacts with the underlying <strong>Datastore</strong> implementation to store the coinbase tx and UTXO data.</li>
 </ol>
-<h3 id="45-subtree-validation">4.5. Subtree Validation</h3>
+<h3 id="45-subtree-validation">4.5. Subtree Validation<a class="headerlink" href="#45-subtree-validation" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_subtree_validation_service_diagram.svg" src="../../services/img/plantuml/utxo/utxo_subtree_validation_service_diagram.svg" /></p>
 <p>In order to validate subtrees, the Subtree Validation service will retrieve the UTXO meta data for each tx in the subtree. This is done by sending a request to the UTXO Store, either in batches or one by one, depending on the settings.</p>
-<h3 id="46-transaction-validator">4.6. Transaction Validator</h3>
+<h3 id="46-transaction-validator">4.6. Transaction Validator<a class="headerlink" href="#46-transaction-validator" title="Permanent link">&para;</a></h3>
 <p><img alt="utxo_transaction_validator.svg" src="../../services/img/plantuml/utxo/utxo_transaction_validator.svg" /></p>
 <p>The Transaction Validator uses the UTXO Store to perform a number of UTXO related operations:</p>
 <ol>
@@ -7420,12 +7908,12 @@
 <p>On the other hand, we can see the process for unspending an UTXO here:</p>
 <p><img alt="utxo_unspend_process.svg" src="../../services/img/plantuml/utxo/utxo_unspend_process.svg" /></p>
 <p>To know more about the Transaction Validator, please check its specific service documentation.</p>
-<h3 id="47-utxo-batch-processing-and-external-storage-mode">4.7. UTXO Batch Processing and External Storage mode</h3>
+<h3 id="47-utxo-batch-processing-and-external-storage-mode">4.7. UTXO Batch Processing and External Storage mode<a class="headerlink" href="#47-utxo-batch-processing-and-external-storage-mode" title="Permanent link">&para;</a></h3>
 <p>Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation of 1MB, the system implements an external storage mechanism for large transactions.</p>
 <p>If a transaction is too large to fit in a single Aerospike record (indicated by a <code>RECORD_TOO_BIG</code> error), or if the system is configured to externalize all transactions, the UTXO store will store the full transaction data in an external storage (typically AWS S3, but any external storage can be used).</p>
 <p>In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an <code>external</code> flag set to true, indicating that the full transaction data is stored externally.</p>
 <p>When the UTXO data is needed, the system will first check the Aerospike record. If the <code>external</code> flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.</p>
-<h4 id="external-transaction-cache">External Transaction Cache</h4>
+<h4 id="external-transaction-cache">External Transaction Cache<a class="headerlink" href="#external-transaction-cache" title="Permanent link">&para;</a></h4>
 <p>To optimize performance when reading externally stored transactions, the UTXO store implements an optional external transaction cache (configured via <code>utxostore_useExternalTxCache</code>, enabled by default). This short-lived cache (10-second expiration) is particularly beneficial for:</p>
 <ul>
 <li>Transactions with many outputs being spent concurrently</li>
@@ -7433,7 +7921,7 @@
 <li>Reducing redundant external storage reads during high-throughput validation</li>
 </ul>
 <p>The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.</p>
-<h4 id="lock-record-pattern-for-multi-record-transactions">Lock Record Pattern for Multi-Record Transactions</h4>
+<h4 id="lock-record-pattern-for-multi-record-transactions">Lock Record Pattern for Multi-Record Transactions<a class="headerlink" href="#lock-record-pattern-for-multi-record-transactions" title="Permanent link">&para;</a></h4>
 <p>When a transaction has more than 20,000 outputs (configurable via <code>utxo_store_batch_size</code>), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.</p>
 <p><strong>Key Components:</strong></p>
 <ol>
@@ -7458,7 +7946,7 @@
 </ul>
 <p>Lock records have dynamic TTL (30-300 seconds based on record count) to prevent permanent locks on process crashes.</p>
 <p>For detailed documentation, see <a href="../../features/utxo_lock_records/">UTXO Lock Record Pattern for Multi-Record Transactions</a>.</p>
-<h3 id="48-alert-system-and-utxo-management">4.8. Alert System and UTXO Management</h3>
+<h3 id="48-alert-system-and-utxo-management">4.8. Alert System and UTXO Management<a class="headerlink" href="#48-alert-system-and-utxo-management" title="Permanent link">&para;</a></h3>
 <p>The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.</p>
 <p><img alt="utxo_freeze_reassign.svg" src="../../services/img/plantuml/utxo/utxo_freeze_reassign.svg" /></p>
 <ol>
@@ -7490,7 +7978,7 @@
 </ul>
 </li>
 </ol>
-<h3 id="49-unmined-transaction-management">4.9. Unmined Transaction Management</h3>
+<h3 id="49-unmined-transaction-management">4.9. Unmined Transaction Management<a class="headerlink" href="#49-unmined-transaction-management" title="Permanent link">&para;</a></h3>
 <p>The UTXO Store tracks unmined transactions to support transaction recovery and continuity across service restarts. This functionality is crucial for maintaining a reliable transaction processing pipeline.</p>
 <p><img alt="unmined_transaction_lifecycle.svg" src="../../services/img/plantuml/utxo/unmined_transaction_lifecycle.svg" /></p>
 <p><strong>Key Components:</strong></p>
@@ -7513,8 +8001,8 @@
 <li><strong>Resource Management</strong>: Automatic cleanup prevents unbounded growth while preserving transaction dependencies</li>
 <li><strong>Conflict Detection</strong>: Helps identify transactions that conflict with mined blocks</li>
 </ul>
-<h2 id="5-technology">5. Technology</h2>
-<h3 id="51-language-and-libraries">5.1. Language and Libraries</h3>
+<h2 id="5-technology">5. Technology<a class="headerlink" href="#5-technology" title="Permanent link">&para;</a></h2>
+<h3 id="51-language-and-libraries">5.1. Language and Libraries<a class="headerlink" href="#51-language-and-libraries" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
 <p><strong>Go Programming Language (Golang)</strong>:
@@ -7525,7 +8013,7 @@ The primary language used for implementing the service's logic.</p>
 <p><strong>Bitcoin Transaction (BT) GoLang library</strong>: <code>github.com/bsv-blockchain/go-bt/v2</code> - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.</p>
 </li>
 </ol>
-<h3 id="52-data-stores">5.2. Data Stores</h3>
+<h3 id="52-data-stores">5.2. Data Stores<a class="headerlink" href="#52-data-stores" title="Permanent link">&para;</a></h3>
 <p>The following datastores are supported (either in development / experimental or production mode):</p>
 <ol>
 <li>
@@ -7571,7 +8059,7 @@ The primary language used for implementing the service's logic.</p>
 <li>Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.</li>
 <li>Nullstore is more appropriate for testing, development, or lightweight applications.</li>
 </ul>
-<h3 id="53-data-pruning">5.3. Data Pruning</h3>
+<h3 id="53-data-pruning">5.3. Data Pruning<a class="headerlink" href="#53-data-pruning" title="Permanent link">&para;</a></h3>
 <p>Stored data is automatically pruned to prevent the datastore from growing indefinitely. The UTXO Store works in conjunction with the <strong>Pruner Service</strong>, a standalone microservice responsible for managing UTXO data pruning operations.</p>
 <p><strong>Pruning Mechanisms:</strong></p>
 <ol>
@@ -7593,24 +8081,24 @@ The primary language used for implementing the service's logic.</p>
 <li><a href="../../../references/settings/services/pruner_settings/">Pruner Settings Reference</a></li>
 <li><a href="../../datamodel/utxo_data_model/">UTXO Data Model</a> (DeleteAtHeight field documentation)</li>
 </ul>
-<h2 id="6-performance-optimizations">6. Performance Optimizations</h2>
-<h3 id="61-shared-buffer-optimization">6.1. Shared Buffer Optimization</h3>
+<h2 id="6-performance-optimizations">6. Performance Optimizations<a class="headerlink" href="#6-performance-optimizations" title="Permanent link">&para;</a></h2>
+<h3 id="61-shared-buffer-optimization">6.1. Shared Buffer Optimization<a class="headerlink" href="#61-shared-buffer-optimization" title="Permanent link">&para;</a></h3>
 <p>To improve performance when reading large batches of UTXOs, Teranode implements a shared buffer optimization that significantly reduces memory allocations and garbage collection pressure.</p>
-<h4 id="how-it-works">How It Works</h4>
+<h4 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h4>
 <p>The shared buffer optimization is implemented in the Aerospike UTXO store's batch operations:</p>
 <ol>
 <li><strong>Single Buffer Allocation</strong>: Instead of allocating individual buffers for each UTXO read operation, the system allocates a single large shared buffer</li>
 <li><strong>Buffer Reuse</strong>: This buffer is reused across multiple UTXO reads within the same batch operation</li>
 <li><strong>Slice References</strong>: Each UTXO's data is referenced as a slice of the shared buffer, avoiding data copying</li>
 </ol>
-<h4 id="performance-benefits">Performance Benefits</h4>
+<h4 id="performance-benefits">Performance Benefits<a class="headerlink" href="#performance-benefits" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Reduced Memory Allocations</strong>: Decreases the number of memory allocations from O(n) to O(1) for batch operations</li>
 <li><strong>Lower GC Pressure</strong>: Fewer allocations mean less work for the garbage collector</li>
 <li><strong>Improved Throughput</strong>: Particularly beneficial when reading UTXO sets for block validation or subtree processing</li>
 <li><strong>Better Cache Locality</strong>: Contiguous memory access patterns improve CPU cache utilization</li>
 </ul>
-<h4 id="implementation-details">Implementation Details</h4>
+<h4 id="implementation-details">Implementation Details<a class="headerlink" href="#implementation-details" title="Permanent link">&para;</a></h4>
 <p>The optimization is automatically applied when:</p>
 <ul>
 <li>Batch reading operations are performed through <code>GetMetaBatch</code> or similar methods</li>
@@ -7629,63 +8117,63 @@ The primary language used for implementing the service's logic.</p>
 <li>UTXO set snapshots and exports</li>
 <li>High-throughput transaction validation</li>
 </ul>
-<h2 id="7-directory-structure-and-main-files">7. Directory Structure and Main Files</h2>
-<div class="highlight"><pre><span></span><code>UTXO Store Package Structure (stores/utxo)
-├── Interface.go                    # Defines the interface for the UTXO Store
-├── _factory                        # Contains different store implementations
-│   ├── aerospike.go                # Factory setup for Aerospike UTXO Store
-│   ├── memory.go                   # Factory setup for in-memory UTXO Store
-│   └── utxo.go                     # Common UTXO store setup
-├── aerospike                       # Aerospike-specific UTXO Store implementation
-│   ├── aerospike.go                # Main Aerospike UTXO store implementation
-│   │   └── Store                   # Struct representing the Aerospike UTXO store
-│   │       ├── url                 # The Aerospike URL
-│   │       ├── client              # The Aerospike client instance
-│   │       ├── namespace           # The Aerospike namespace used
-│   │       ├── setName             # The set name for storing UTXOs
-│   │       ├── expiration          # The expiration time for UTXO records
-│   │       ├── blockHeight         # The current blockchain height
-│   │       ├── logger              # The logger instance
-│   │       ├── storeBatcher        # Batcher for store operations
-│   │       ├── getBatcher          # Batcher for get operations
-│   │       ├── spendBatcher        # Batcher for spend operations
-│   │       ├── lastSpendBatcher    # Batcher for last spend operations
-│   │       ├── New                 # Initializes a new Aerospike UTXO Store
-│   │       ├── sendStoreBatch      # Processes and stores a batch of transactions
-│   │       ├── sendGetBatch        # Retrieves a batch of UTXO data
-│   │       ├── sendSpendBatchLua   # Processes a batch of UTXO spend operations using Lua script
-│   │       ├── SetBlockHeight      # Sets the current block height
-│   │       ├── GetBlockHeight      # Retrieves the current block height
-│   │       ├── Health              # Checks the health of the Aerospike UTXO store service
-│   │       ├── GetSpend            # Retrieves the spend status of a UTXO
-│   │       ├── GetMeta             # Retrieves metadata for a specific UTXO
-│   │       ├── Get                 # Retrieves specific UTXO data
-│   │       ├── Create              # Adds new UTXOs to the store
-│   │       ├── Spend               # Marks UTXOs as spent
-│   │       ├── Unspend             # Reverses the spent status of UTXOs
-│   │       ├── SetMinedMulti       # Sets multiple transactions as mined
-│   │       ├── SetMined            # Sets a transaction as mined
-│   │       └── Delete              # Removes UTXOs from the store
-│   ├── aerospike_server_test.go    # Tests for the Aerospike UTXO store
-│   ├── alert_system.go             # Aerospike alert system implementation
-│   ├── alert_system_test.go        # Tests for the Aerospike alert system
-│   ├── metrics.go                  # Metrics collection for Aerospike operations
-│   └── spend.lua                   # Lua script for batch spend operations
-├── memory                          # In-memory UTXO Store implementation
-│   └── memory.go                   # Main in-memory UTXO store implementation
-├── meta                            # Metadata handling for UTXOs
-│   ├── data.go                     # Defines metadata structures for UTXOs
-│   └── data_test.go                # Tests for UTXO metadata
-├── nullstore                       # Null UTXO Store implementation for testing
-│   └── nullstore.go                # Main nullstore implementation
-├── sql                             # SQL UTXO Store implementation
-│   └── sql.go                      # Main sql implementation (provides support for SqlLite and Postgres)
-├── status.pb.go                    # Generated protocol buffer code for UTXO status
-├── status.proto                    # Protocol buffer definition for UTXO status
-├── utils.go                        # Utility functions for the UTXO Store
-└── utils_test.go                   # Tests for utility functions
-</code></pre></div>
-<h2 id="8-running-the-store-locally">8. Running the Store Locally</h2>
+<h2 id="7-directory-structure-and-main-files">7. Directory Structure and Main Files<a class="headerlink" href="#7-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>UTXO Store Package Structure (stores/utxo)
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>├── Interface.go                    # Defines the interface for the UTXO Store
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>├── _factory                        # Contains different store implementations
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>│   ├── aerospike.go                # Factory setup for Aerospike UTXO Store
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>│   ├── memory.go                   # Factory setup for in-memory UTXO Store
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>│   └── utxo.go                     # Common UTXO store setup
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>├── aerospike                       # Aerospike-specific UTXO Store implementation
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── aerospike.go                # Main Aerospike UTXO store implementation
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   │   └── Store                   # Struct representing the Aerospike UTXO store
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>│   │       ├── url                 # The Aerospike URL
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>│   │       ├── client              # The Aerospike client instance
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>│   │       ├── namespace           # The Aerospike namespace used
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>│   │       ├── setName             # The set name for storing UTXOs
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>│   │       ├── expiration          # The expiration time for UTXO records
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   │       ├── blockHeight         # The current blockchain height
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   │       ├── logger              # The logger instance
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   │       ├── storeBatcher        # Batcher for store operations
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   │       ├── getBatcher          # Batcher for get operations
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   │       ├── spendBatcher        # Batcher for spend operations
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   │       ├── lastSpendBatcher    # Batcher for last spend operations
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   │       ├── New                 # Initializes a new Aerospike UTXO Store
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   │       ├── sendStoreBatch      # Processes and stores a batch of transactions
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   │       ├── sendGetBatch        # Retrieves a batch of UTXO data
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   │       ├── sendSpendBatchLua   # Processes a batch of UTXO spend operations using Lua script
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>│   │       ├── SetBlockHeight      # Sets the current block height
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   │       ├── GetBlockHeight      # Retrieves the current block height
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>│   │       ├── Health              # Checks the health of the Aerospike UTXO store service
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>│   │       ├── GetSpend            # Retrieves the spend status of a UTXO
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   │       ├── GetMeta             # Retrieves metadata for a specific UTXO
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>│   │       ├── Get                 # Retrieves specific UTXO data
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>│   │       ├── Create              # Adds new UTXOs to the store
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>│   │       ├── Spend               # Marks UTXOs as spent
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>│   │       ├── Unspend             # Reverses the spent status of UTXOs
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>│   │       ├── SetMinedMulti       # Sets multiple transactions as mined
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>│   │       ├── SetMined            # Sets a transaction as mined
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>│   │       └── Delete              # Removes UTXOs from the store
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>│   ├── aerospike_server_test.go    # Tests for the Aerospike UTXO store
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>│   ├── alert_system.go             # Aerospike alert system implementation
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>│   ├── alert_system_test.go        # Tests for the Aerospike alert system
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>│   ├── metrics.go                  # Metrics collection for Aerospike operations
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>│   └── spend.lua                   # Lua script for batch spend operations
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>├── memory                          # In-memory UTXO Store implementation
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>│   └── memory.go                   # Main in-memory UTXO store implementation
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a>├── meta                            # Metadata handling for UTXOs
+</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a>│   ├── data.go                     # Defines metadata structures for UTXOs
+</span><span id="__span-5-46"><a id="__codelineno-5-46" name="__codelineno-5-46" href="#__codelineno-5-46"></a>│   └── data_test.go                # Tests for UTXO metadata
+</span><span id="__span-5-47"><a id="__codelineno-5-47" name="__codelineno-5-47" href="#__codelineno-5-47"></a>├── nullstore                       # Null UTXO Store implementation for testing
+</span><span id="__span-5-48"><a id="__codelineno-5-48" name="__codelineno-5-48" href="#__codelineno-5-48"></a>│   └── nullstore.go                # Main nullstore implementation
+</span><span id="__span-5-49"><a id="__codelineno-5-49" name="__codelineno-5-49" href="#__codelineno-5-49"></a>├── sql                             # SQL UTXO Store implementation
+</span><span id="__span-5-50"><a id="__codelineno-5-50" name="__codelineno-5-50" href="#__codelineno-5-50"></a>│   └── sql.go                      # Main sql implementation (provides support for SqlLite and Postgres)
+</span><span id="__span-5-51"><a id="__codelineno-5-51" name="__codelineno-5-51" href="#__codelineno-5-51"></a>├── status.pb.go                    # Generated protocol buffer code for UTXO status
+</span><span id="__span-5-52"><a id="__codelineno-5-52" name="__codelineno-5-52" href="#__codelineno-5-52"></a>├── status.proto                    # Protocol buffer definition for UTXO status
+</span><span id="__span-5-53"><a id="__codelineno-5-53" name="__codelineno-5-53" href="#__codelineno-5-53"></a>├── utils.go                        # Utility functions for the UTXO Store
+</span><span id="__span-5-54"><a id="__codelineno-5-54" name="__codelineno-5-54" href="#__codelineno-5-54"></a>└── utils_test.go                   # Tests for utility functions
+</span></code></pre></div>
+<h2 id="8-running-the-store-locally">8. Running the Store Locally<a class="headerlink" href="#8-running-the-store-locally" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Validator</strong>: For validating transactions and managing UTXO state</li>
 <li><strong>Block Assembly</strong>: For creating new blocks and managing coinbase UTXOs</li>
@@ -7695,12 +8183,12 @@ The primary language used for implementing the service's logic.</p>
 <li><strong>Block Persister</strong>: For retrieving UTXO metadata when persisting blocks</li>
 </ul>
 <p>The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>
-</code></pre></div>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>
+</span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running services locally.</p>
-<h2 id="9-configuration-and-settings">9. Configuration and Settings</h2>
+<h2 id="9-configuration-and-settings">9. Configuration and Settings<a class="headerlink" href="#9-configuration-and-settings" title="Permanent link">&para;</a></h2>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/stores/utxo_settings/">UTXO Store Settings Reference</a>.</p>
-<h2 id="10-other-resources">10. Other Resources</h2>
+<h2 id="10-other-resources">10. Other Resources<a class="headerlink" href="#10-other-resources" title="Permanent link">&para;</a></h2>
 <p><a href="../../../references/stores/utxo_reference/">UTXO Store Reference</a></p>
 
 
@@ -7719,37 +8207,65 @@ The primary language used for implementing the service's logic.</p>
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../blob/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Blob Store">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Blob Store
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../datamodel/block_data_model/" class="md-footer__link md-footer__link--next" aria-label="Next: Block Data Model">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Block Data Model
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -7766,12 +8282,10 @@ The primary language used for implementing the service's logic.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

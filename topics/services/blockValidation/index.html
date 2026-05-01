@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/services/blockValidation/">
       
       
         <link rel="prev" href="../blockAssembly/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -214,6 +273,8 @@
         <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2229,6 +2408,48 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2593,6 +2814,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2608,9 +2837,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
@@ -2799,6 +3026,24 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -3927,6 +4172,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3942,9 +4203,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
@@ -4188,6 +4447,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4203,9 +4468,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="">
@@ -4309,6 +4572,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4324,9 +4599,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="">
@@ -4514,6 +4787,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4529,9 +4806,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
@@ -4607,6 +4882,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4622,9 +4901,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
@@ -4707,6 +4984,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4719,9 +5012,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4789,6 +5080,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4801,9 +5106,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4983,6 +5286,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4995,9 +5322,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -5361,6 +5686,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5373,9 +5716,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5647,6 +5988,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5659,9 +6014,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5877,6 +6230,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5889,9 +6248,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5995,6 +6352,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6007,9 +6380,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -6189,6 +6560,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6201,9 +6602,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6643,6 +7042,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6655,9 +7062,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6797,6 +7202,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6809,9 +7230,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7884,14 +8303,83 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../alert/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Core Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="block-validation-service">🔍 Block Validation Service</h1>
-<h2 id="index">Index</h2>
+
+<h1 id="block-validation-service">🔍 Block Validation Service<a class="headerlink" href="#block-validation-service" title="Permanent link">&para;</a></h1>
+<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
 <ol>
 <li><a href="#1-description">Description</a></li>
 <li><a href="#2-functionality">Functionality</a><ul>
@@ -7914,7 +8402,7 @@
 <li><a href="#8-configuration-options-settings-flags">Configuration options (settings flags)</a></li>
 <li><a href="#9-other-resources">Other Resources</a></li>
 </ol>
-<h2 id="1-description">1. Description</h2>
+<h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
 <p>The Block Validator is responsible for ensuring the integrity and consistency of each block before it is added to the blockchain. It performs several key functions:</p>
 <ol>
 <li>
@@ -7936,7 +8424,7 @@
 </ul>
 <p>The Legacy Service communicates with the Block Validation over the gRPC protocol.</p>
 <p><img alt="Block_Validation_Service_Component_Diagram.png" src="../img/Block_Validation_Service_Component_Diagram.png" /></p>
-<h3 id="detailed-component-diagram">Detailed Component Diagram</h3>
+<h3 id="detailed-component-diagram">Detailed Component Diagram<a class="headerlink" href="#detailed-component-diagram" title="Permanent link">&para;</a></h3>
 <p>The detailed component diagram below shows the internal architecture of the Block Validation Service:</p>
 <p><img alt="Block_Validation_Component" src="../img/plantuml/blockvalidation/Block_Validation_Component.svg" /></p>
 <blockquote>
@@ -7946,9 +8434,9 @@
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:</p>
 <p><img alt="lustre_fs.svg" src="../img/plantuml/lustre_fs.svg" /></p>
-<h2 id="2-functionality">2. Functionality</h2>
+<h2 id="2-functionality">2. Functionality<a class="headerlink" href="#2-functionality" title="Permanent link">&para;</a></h2>
 <p>The block validator is a service that validates blocks. After validating them, it will update the relevant stores and blockchain accordingly.</p>
-<h3 id="21-receiving-blocks-for-validation">2.1. Receiving blocks for validation</h3>
+<h3 id="21-receiving-blocks-for-validation">2.1. Receiving blocks for validation<a class="headerlink" href="#21-receiving-blocks-for-validation" title="Permanent link">&para;</a></h3>
 <p><img alt="block_validation_p2p_block_found.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_found.svg" /></p>
 <p>Block validation receives new blocks through two distinct paths:</p>
 <ol>
@@ -7961,8 +8449,8 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 <li>The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.</li>
 </ol>
-<h3 id="22-validating-blocks">2.2. Validating blocks</h3>
-<h4 id="221-overview">2.2.1. Overview</h4>
+<h3 id="22-validating-blocks">2.2. Validating blocks<a class="headerlink" href="#22-validating-blocks" title="Permanent link">&para;</a></h3>
+<h4 id="221-overview">2.2.1. Overview<a class="headerlink" href="#221-overview" title="Permanent link">&para;</a></h4>
 <p><img alt="block_validation_p2p_block_validation.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg" /></p>
 <ul>
 <li>As seen in the section 2.1, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.</li>
@@ -7982,24 +8470,24 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ul>
-<h5 id="optimistic-mining-mode">Optimistic Mining Mode</h5>
+<h5 id="optimistic-mining-mode">Optimistic Mining Mode<a class="headerlink" href="#optimistic-mining-mode" title="Permanent link">&para;</a></h5>
 <p>The <code>optimisticMining</code> setting provides an alternative validation strategy that prioritizes block propagation speed over immediate validation completion. This experimental feature reverses the normal validate-then-add sequence.</p>
 <p><strong>Normal Mode (Default):</strong></p>
-<div class="highlight"><pre><span></span><code>1. Validate block (subtrees, transactions, proof of work)
-2. If valid → Add to blockchain
-3. Update stores and caches
-4. Notify other services
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>1. Validate block (subtrees, transactions, proof of work)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>2. If valid → Add to blockchain
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>3. Update stores and caches
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>4. Notify other services
+</span></code></pre></div>
 <p><strong>Optimistic Mining Mode:</strong></p>
-<div class="highlight"><pre><span></span><code>1. Add block to blockchain immediately (before full validation)
-2. Mark block as existing in cache
-3. Validate in background goroutine:
-   a. Fetch block headers for validation context
-   b. Validate subtrees and transactions
-   c. Update stores (subtree DAH, tx metadata)
-   d. Mark transactions as mined
-4. If validation fails → Queue for revalidation
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>1. Add block to blockchain immediately (before full validation)
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>2. Mark block as existing in cache
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>3. Validate in background goroutine:
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>   a. Fetch block headers for validation context
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>   b. Validate subtrees and transactions
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>   c. Update stores (subtree DAH, tx metadata)
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>   d. Mark transactions as mined
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>4. If validation fails → Queue for revalidation
+</span></code></pre></div>
 <p><strong>Technical Implementation:</strong></p>
 <p>The optimistic path is implemented in <code>ValidateBlock()</code> (services/blockvalidation/BlockValidation.go:1187-1220):</p>
 <ol>
@@ -8076,10 +8564,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Configurable risk levels (optimistic vs pessimistic thresholds)</li>
 </ul>
 <p>For implementation details, see <code>BlockValidation.go:ValidateBlock()</code> (lines 1146-1220).</p>
-<h4 id="222-catching-up-after-a-parent-block-is-not-found">2.2.2. Catching up after a parent block is not found</h4>
+<h4 id="222-catching-up-after-a-parent-block-is-not-found">2.2.2. Catching up after a parent block is not found<a class="headerlink" href="#222-catching-up-after-a-parent-block-is-not-found" title="Permanent link">&para;</a></h4>
 <p><img alt="block_validation_p2p_block_catchup.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_catchup.svg" /></p>
 <p>When a block parent is not found in the local blockchain, the node initiates a comprehensive catchup process to synchronize with the peer's chain. This process is orchestrated through 11 distinct steps to ensure safe and validated synchronization while protecting against malicious peers.</p>
-<h5 id="catchup-process-overview">Catchup Process Overview</h5>
+<h5 id="catchup-process-overview">Catchup Process Overview<a class="headerlink" href="#catchup-process-overview" title="Permanent link">&para;</a></h5>
 <p>The catchup orchestration follows this step-by-step sequence (implemented in <code>catchup()</code> in <code>services/blockvalidation/catchup.go</code>):</p>
 <ol>
 <li><strong>Acquire catchup lock</strong> - Prevents concurrent catchups using atomic <code>isCatchingUp</code> flag</li>
@@ -8094,11 +8582,11 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Fetch and validate blocks</strong> - Coordinates concurrent fetching with sequential validation</li>
 <li><strong>Clean up resources</strong> - Clears header chain cache and releases locks</li>
 </ol>
-<h5 id="fsm-state-transitions-during-catchup">FSM State Transitions During Catchup</h5>
+<h5 id="fsm-state-transitions-during-catchup">FSM State Transitions During Catchup<a class="headerlink" href="#fsm-state-transitions-during-catchup" title="Permanent link">&para;</a></h5>
 <p>The Block Validation service manages FSM (Finite State Machine) state transitions during catchup to coordinate with other services:</p>
 <p><strong>State Transition Flow:</strong></p>
-<div class="highlight"><pre><span></span><code>RUNNING → CATCHINGBLOCKS → RUNNING
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>RUNNING → CATCHINGBLOCKS → RUNNING
+</span></code></pre></div>
 <p><strong>When State Changes:</strong></p>
 <ul>
 <li><strong>Transition to CATCHINGBLOCKS</strong>: Triggered when new blocks extend the current main chain<ul>
@@ -8114,7 +8602,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ul>
 <p>For more information on FSM states and their effects on services, see the <a href="../../architecture/stateManagement/">State Management</a> documentation.</p>
-<h5 id="header-chain-cache">Header Chain Cache</h5>
+<h5 id="header-chain-cache">Header Chain Cache<a class="headerlink" href="#header-chain-cache" title="Permanent link">&para;</a></h5>
 <p>To optimize block validation performance during catchup, the service builds a header chain cache before fetching full blocks:</p>
 <p><strong>Cache Building Process:</strong></p>
 <ol>
@@ -8129,7 +8617,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Reduces validation latency during catchup</li>
 <li>Particularly effective when catching up on hundreds or thousands of blocks</li>
 </ul>
-<h5 id="checkpoint-verification">Checkpoint Verification</h5>
+<h5 id="checkpoint-verification">Checkpoint Verification<a class="headerlink" href="#checkpoint-verification" title="Permanent link">&para;</a></h5>
 <p>Before fetching full block data, the catchup process verifies checkpoints to ensure the peer is on the correct chain:</p>
 <p><strong>Verification Steps:</strong></p>
 <ol>
@@ -8159,7 +8647,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Detects chain forks before downloading gigabytes of block data</li>
 <li>Provides early exit for catchup from malicious peers</li>
 </ul>
-<h5 id="peer-quality-tracking">Peer Quality Tracking</h5>
+<h5 id="peer-quality-tracking">Peer Quality Tracking<a class="headerlink" href="#peer-quality-tracking" title="Permanent link">&para;</a></h5>
 <p>The catchup process maintains detailed metrics on peer behavior to detect and mitigate malicious activity:</p>
 <p><strong>Metrics Tracked Per Peer:</strong></p>
 <ul>
@@ -8177,11 +8665,11 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Checkpoint Mismatch</strong>: Peer provides chain with incorrect checkpoint hashes</li>
 </ol>
 <p><strong>Metrics Recording:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="nx">peerMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">u</span><span class="p">.</span><span class="nx">peerMetrics</span><span class="p">.</span><span class="nx">GetOrCreatePeerMetrics</span><span class="p">(</span><span class="nx">peerID</span><span class="p">)</span>
-<span class="nx">peerMetric</span><span class="p">.</span><span class="nx">RecordMaliciousAttempt</span><span class="p">()</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">peerMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">u</span><span class="p">.</span><span class="nx">peerMetrics</span><span class="p">.</span><span class="nx">GetOrCreatePeerMetrics</span><span class="p">(</span><span class="nx">peerID</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nx">peerMetric</span><span class="p">.</span><span class="nx">RecordMaliciousAttempt</span><span class="p">()</span>
+</span></code></pre></div>
 <p>These metrics feed into the circuit breaker pattern (see Section 2.2.9) to temporarily or permanently avoid problematic peers.</p>
-<h5 id="error-handling-and-peer-quality">Error Handling and Peer Quality</h5>
+<h5 id="error-handling-and-peer-quality">Error Handling and Peer Quality<a class="headerlink" href="#error-handling-and-peer-quality" title="Permanent link">&para;</a></h5>
 <p><strong>Invalid Block Classification:</strong></p>
 <p>During catchup, blocks are only marked as invalid (<code>invalid=true</code>) for consensus violations:</p>
 <ul>
@@ -8199,10 +8687,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 <p><strong>Peer Banning (Logged, Not Implemented):</strong></p>
 <p>When malicious behavior is detected, the system logs:</p>
-<div class="highlight"><pre><span></span><code>SECURITY: Peer &lt;peerID&gt; attempted secret mining - should be banned (banning not yet implemented)
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>SECURITY: Peer &lt;peerID&gt; attempted secret mining - should be banned (banning not yet implemented)
+</span></code></pre></div>
 <p>This provides an audit trail for operators and prepares for future automatic banning.</p>
-<h5 id="concurrent-fetch-sequential-validation">Concurrent Fetch + Sequential Validation</h5>
+<h5 id="concurrent-fetch-sequential-validation">Concurrent Fetch + Sequential Validation<a class="headerlink" href="#concurrent-fetch-sequential-validation" title="Permanent link">&para;</a></h5>
 <p>The catchup process optimizes performance by fetching blocks concurrently while validating them sequentially:</p>
 <p><strong>Coordination Pattern:</strong></p>
 <ol>
@@ -8230,9 +8718,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 <p><strong>Progress Tracking:</strong></p>
 <p>The system logs progress every 100 blocks:</p>
-<div class="highlight"><pre><span></span><code>[catchup] validating block &lt;hash&gt; 100/1000
-[catchup] 900 blocks remaining
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>[catchup] validating block &lt;hash&gt; 100/1000
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>[catchup] 900 blocks remaining
+</span></code></pre></div>
 <p>For implementation details, see <code>catchup.go:fetchAndValidateBlocks()</code> (lines 554-612).</p>
 <p><strong>Sync Coordination and Peer Selection:</strong></p>
 <p>The catchup process integrates with the P2P service's peer registry and reputation system to select optimal peers for block retrieval:</p>
@@ -8274,10 +8762,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 <p>For configuration of catchup performance settings, see the <a href="../../../references/settings/services/blockvalidation_settings/">Block Validation Settings Reference</a>.</p>
 <p>For details on the peer reputation system, see <a href="../../features/peer_registry_reputation/">Peer Registry and Reputation System</a>.</p>
-<h4 id="223-quick-validation-for-checkpointed-blocks">2.2.3. Quick Validation for Checkpointed Blocks</h4>
+<h4 id="223-quick-validation-for-checkpointed-blocks">2.2.3. Quick Validation for Checkpointed Blocks<a class="headerlink" href="#223-quick-validation-for-checkpointed-blocks" title="Permanent link">&para;</a></h4>
 <p>For blocks that are below known checkpoints in the blockchain, the Block Validation service employs an optimized quick validation path that significantly improves synchronization performance. This mechanism is particularly effective during initial blockchain synchronization.</p>
 <p><img alt="quick_validation.svg" src="../img/plantuml/blockvalidation/quick_validation.svg" /></p>
-<h5 id="quick-validation-process">Quick Validation Process</h5>
+<h5 id="quick-validation-process">Quick Validation Process<a class="headerlink" href="#quick-validation-process" title="Permanent link">&para;</a></h5>
 <p>The quick validation system operates in two distinct phases implemented in <code>quickValidateBlock()</code> in <code>services/blockvalidation/quick_validate.go</code>:</p>
 <p><strong>Phase 1: UTXO Creation (<code>createAllUTXOs()</code>)</strong></p>
 <p>All UTXOs for the block's transactions are created in parallel before validation:</p>
@@ -8320,7 +8808,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Unlock UTXOs</strong>: Calls <code>SetLocked(txHashes, false)</code> to complete two-phase commit</li>
 <li><strong>Mark Block Exists</strong>: Updates local cache to prevent reprocessing</li>
 </ol>
-<h5 id="checkpoint-based-optimization">Checkpoint-Based Optimization</h5>
+<h5 id="checkpoint-based-optimization">Checkpoint-Based Optimization<a class="headerlink" href="#checkpoint-based-optimization" title="Permanent link">&para;</a></h5>
 <p>The quick validation path is only applied to blocks below verified checkpoints:</p>
 <ul>
 <li><strong>Checkpoint Verification</strong>: During catchup, checkpoints are verified in header chain (see Section 2.2.2)</li>
@@ -8328,7 +8816,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Trust Assumption</strong>: Blocks below checkpoints are known to be valid, allowing optimized processing</li>
 <li><strong>Current Status</strong>: Quick validation currently disabled (<code>useQuickValidation = false</code>) pending additional testing</li>
 </ul>
-<h5 id="performance-benefits">Performance Benefits</h5>
+<h5 id="performance-benefits">Performance Benefits<a class="headerlink" href="#performance-benefits" title="Permanent link">&para;</a></h5>
 <p>Quick validation provides substantial performance improvements:</p>
 <ul>
 <li><strong>10x Faster</strong>: Approximately 10x faster processing for historical blocks below checkpoints</li>
@@ -8336,7 +8824,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Skip Script Validation</strong>: Eliminates most expensive validation step for known-valid blocks</li>
 <li><strong>Reduced Memory</strong>: On-demand transaction extension minimizes memory footprint</li>
 </ul>
-<h5 id="subtree-and-transaction-processing">Subtree and Transaction Processing</h5>
+<h5 id="subtree-and-transaction-processing">Subtree and Transaction Processing<a class="headerlink" href="#subtree-and-transaction-processing" title="Permanent link">&para;</a></h5>
 <p>During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in <code>getBlockTransactions()</code>):</p>
 <p><strong>Subtree File Generation:</strong></p>
 <p>For each subtree in the block, the system:</p>
@@ -8374,10 +8862,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ol>
 <p><strong>Merkle Root Verification:</strong></p>
 <p>After processing all transactions, the system verifies:</p>
-<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">CheckMerkleRoot</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;merkle root mismatch&quot;</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">CheckMerkleRoot</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;merkle root mismatch&quot;</span><span class="p">)</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>This ensures the transactions match the block header before proceeding.</p>
 <p><strong>Error Handling:</strong></p>
 <p>If quick validation encounters any errors:</p>
@@ -8387,11 +8875,11 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Normal validation re-creates UTXOs and validates with full script execution</li>
 </ul>
 <p>For implementation details, see <code>quick_validate.go</code> in <code>services/blockvalidation/</code>.</p>
-<h4 id="224-validating-the-subtrees">2.2.4. Validating the Subtrees</h4>
+<h4 id="224-validating-the-subtrees">2.2.4. Validating the Subtrees<a class="headerlink" href="#224-validating-the-subtrees" title="Permanent link">&para;</a></h4>
 <p>Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.</p>
 <p><img alt="block_validation_subtree_validation_request.svg" src="../img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg" /></p>
 <p>If any transaction under the subtree is also missing, the subtree validation process will kick off a recovery process for those transactions.</p>
-<h4 id="225-block-data-validation">2.2.5. Block Data Validation</h4>
+<h4 id="225-block-data-validation">2.2.5. Block Data Validation<a class="headerlink" href="#225-block-data-validation" title="Permanent link">&para;</a></h4>
 <p>As part of the overall block validation, the service will validate the block data, ensuring the format and integrity of the data, as well as confirming that coinbase tx, subtrees and transactions are valid. This is done in the <code>Valid()</code> method under the <code>Block</code> struct.</p>
 <p><img alt="block_data_validation.svg" src="../img/plantuml/blockvalidation/block_data_validation.svg" /></p>
 <p>Effectively, the following validations are performed:</p>
@@ -8427,10 +8915,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p>The Coinbase transaction amount may not exceed block subsidy and all transaction fees (block reward).</p>
 </li>
 </ul>
-<h4 id="226-transaction-re-presentation-detection">2.2.6. Transaction Re-presentation Detection</h4>
+<h4 id="226-transaction-re-presentation-detection">2.2.6. Transaction Re-presentation Detection<a class="headerlink" href="#226-transaction-re-presentation-detection" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service implements a robust mechanism for detecting re-presented transactions using bloom filters. This mechanism, implemented in the <code>validOrderAndBlessed</code> function, is critical for preventing double-spending and ensuring transaction integrity in the blockchain.</p>
 <p><img alt="bloom_filter_validation.svg" src="../img/plantuml/blockvalidation/bloom_filter_validation.svg" /></p>
-<h5 id="bloom-filter-implementation">Bloom Filter Implementation</h5>
+<h5 id="bloom-filter-implementation">Bloom Filter Implementation<a class="headerlink" href="#bloom-filter-implementation" title="Permanent link">&para;</a></h5>
 <p>Teranode maintains bloom filters for recent blocks to efficiently detect re-presented transactions:</p>
 <ul>
 <li><strong>Creation</strong>: Each validated block generates a bloom filter containing all of its transaction hashes</li>
@@ -8442,7 +8930,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ul>
-<h5 id="the-validorderandblessed-mechanism">The validOrderAndBlessed Mechanism</h5>
+<h5 id="the-validorderandblessed-mechanism">The validOrderAndBlessed Mechanism<a class="headerlink" href="#the-validorderandblessed-mechanism" title="Permanent link">&para;</a></h5>
 <p>The <code>validOrderAndBlessed</code> function performs several critical validations during block processing:</p>
 <ol>
 <li>
@@ -8477,9 +8965,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ol>
 <p>This comprehensive validation mechanism operates with high concurrency (configurable via <code>block_validOrderAndBlessedConcurrency</code>) to maintain performance while ensuring the integrity of the blockchain by preventing double-spends and transaction re-presentations.</p>
-<h4 id="227-fork-management-and-chain-reorganization">2.2.7. Fork Management and Chain Reorganization</h4>
+<h4 id="227-fork-management-and-chain-reorganization">2.2.7. Fork Management and Chain Reorganization<a class="headerlink" href="#227-fork-management-and-chain-reorganization" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service implements a sophisticated fork manager to track and manage parallel chain branches that may occur during blockchain operation. This system is critical for handling chain reorganizations and ensuring the node selects and maintains the correct chain.</p>
-<h5 id="fork-states-and-lifecycle">Fork States and Lifecycle</h5>
+<h5 id="fork-states-and-lifecycle">Fork States and Lifecycle<a class="headerlink" href="#fork-states-and-lifecycle" title="Permanent link">&para;</a></h5>
 <p>The fork manager tracks forks through four distinct states:</p>
 <ul>
 <li><strong>Active</strong>: Fork is currently being processed and built upon</li>
@@ -8487,7 +8975,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Resolved</strong>: Fork has been resolved to the main chain or abandoned</li>
 <li><strong>Orphaned</strong>: Fork is too far behind the main chain (beyond coinbase maturity)</li>
 </ul>
-<h5 id="fork-registration-and-tracking">Fork Registration and Tracking</h5>
+<h5 id="fork-registration-and-tracking">Fork Registration and Tracking<a class="headerlink" href="#fork-registration-and-tracking" title="Permanent link">&para;</a></h5>
 <p>When a block arrives whose parent is not on the current chain tip, the fork manager:</p>
 <ol>
 <li><strong>Determines Fork ID</strong>: Uses <code>DetermineForkID()</code> to check if the block belongs to an existing fork or creates a new one</li>
@@ -8495,7 +8983,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Adds Blocks</strong>: Tracks all blocks belonging to each fork in sequential order</li>
 <li><strong>Updates Metrics</strong>: Records fork creation, depth, and lifetime metrics</li>
 </ol>
-<h5 id="parallel-fork-processing">Parallel Fork Processing</h5>
+<h5 id="parallel-fork-processing">Parallel Fork Processing<a class="headerlink" href="#parallel-fork-processing" title="Permanent link">&para;</a></h5>
 <p>The fork manager enforces limits on concurrent fork processing to prevent resource exhaustion:</p>
 <ul>
 <li><strong>maxParallelForks</strong>: Maximum number of forks that can be processed simultaneously (default: 4, configurable via <code>blockvalidation_maxParallelForks</code>)</li>
@@ -8503,14 +8991,14 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>BlockProcessingGuard</strong>: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released</li>
 </ul>
 <p>The guard pattern ensures that even if a panic occurs, the processing lock is released:</p>
-<div class="highlight"><pre><span></span><code><span class="nx">guard</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forkManager</span><span class="p">.</span><span class="nx">MarkBlockProcessing</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Handle error</span>
-<span class="p">}</span>
-<span class="k">defer</span><span class="w"> </span><span class="nx">guard</span><span class="p">.</span><span class="nx">Release</span><span class="p">()</span>
-<span class="c1">// Process block</span>
-</code></pre></div>
-<h5 id="fork-resolution">Fork Resolution</h5>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nx">guard</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forkManager</span><span class="p">.</span><span class="nx">MarkBlockProcessing</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="c1">// Handle error</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">defer</span><span class="w"> </span><span class="nx">guard</span><span class="p">.</span><span class="nx">Release</span><span class="p">()</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1">// Process block</span>
+</span></code></pre></div>
+<h5 id="fork-resolution">Fork Resolution<a class="headerlink" href="#fork-resolution" title="Permanent link">&para;</a></h5>
 <p>Forks are resolved when:</p>
 <ol>
 <li><strong>Main Chain Updated</strong>: A fork block becomes the new main chain tip</li>
@@ -8524,7 +9012,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Records resolution metrics (depth, lifetime, outcome)</li>
 <li>Schedules cleanup after grace period (5 minutes)</li>
 </ul>
-<h5 id="fork-cleanup">Fork Cleanup</h5>
+<h5 id="fork-cleanup">Fork Cleanup<a class="headerlink" href="#fork-cleanup" title="Permanent link">&para;</a></h5>
 <p>The fork manager runs an automatic cleanup routine (configurable interval, default: 5 minutes) that:</p>
 <ul>
 <li>Removes resolved forks after grace period</li>
@@ -8533,7 +9021,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Applies retention policy to limit memory usage</li>
 <li>Updates aggregate metrics (average depth, longest fork, etc.)</li>
 </ul>
-<h5 id="integration-with-block-priority-queue">Integration with Block Priority Queue</h5>
+<h5 id="integration-with-block-priority-queue">Integration with Block Priority Queue<a class="headerlink" href="#integration-with-block-priority-queue" title="Permanent link">&para;</a></h5>
 <p>The fork manager coordinates with the block priority queue to:</p>
 <ul>
 <li>Signal when processing slots become available (<code>priorityQueue.Signal()</code>)</li>
@@ -8542,9 +9030,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Requeue blocks from abandoned forks for retry with alternative sources</li>
 </ul>
 <p>For implementation details, see <code>fork_manager.go</code> in <code>services/blockvalidation/</code>.</p>
-<h4 id="228-block-processing-queue-and-priority-system">2.2.8. Block Processing Queue and Priority System</h4>
+<h4 id="228-block-processing-queue-and-priority-system">2.2.8. Block Processing Queue and Priority System<a class="headerlink" href="#228-block-processing-queue-and-priority-system" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service uses a sophisticated priority queue system to manage the order in which blocks are validated. This ensures that blocks are processed efficiently while handling retries and alternative sources when validation fails.</p>
-<h5 id="priority-levels">Priority Levels</h5>
+<h5 id="priority-levels">Priority Levels<a class="headerlink" href="#priority-levels" title="Permanent link">&para;</a></h5>
 <p>Blocks are assigned one of three priority levels:</p>
 <ul>
 <li><strong>PriorityHigh</strong>: Blocks on the current main chain or from trusted sources</li>
@@ -8552,7 +9040,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>PriorityLow</strong>: Blocks further ahead or on side chains</li>
 </ul>
 <p>The priority determines the order in which blocks are selected for validation when multiple blocks are waiting.</p>
-<h5 id="queue-operations">Queue Operations</h5>
+<h5 id="queue-operations">Queue Operations<a class="headerlink" href="#queue-operations" title="Permanent link">&para;</a></h5>
 <p><strong>Adding Blocks:</strong></p>
 <p>When a new block is discovered via <code>BlockFound()</code>:</p>
 <ol>
@@ -8568,7 +9056,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Returns block to worker for validation</li>
 <li>Blocks waiting if no blocks available (with timeout)</li>
 </ol>
-<h5 id="retry-mechanism">Retry Mechanism</h5>
+<h5 id="retry-mechanism">Retry Mechanism<a class="headerlink" href="#retry-mechanism" title="Permanent link">&para;</a></h5>
 <p>When block validation fails due to transient errors:</p>
 <ol>
 <li><strong>RequeueForRetry()</strong>: Adds block back to queue with incremented retry count</li>
@@ -8576,7 +9064,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Retry Limits</strong>: Maximum retries configurable (default: 3)</li>
 <li><strong>Alternative Sources</strong>: After failures, attempts to fetch from different peers</li>
 </ol>
-<h5 id="alternative-source-handling">Alternative Source Handling</h5>
+<h5 id="alternative-source-handling">Alternative Source Handling<a class="headerlink" href="#alternative-source-handling" title="Permanent link">&para;</a></h5>
 <p>The <code>GetAlternativeSource()</code> method:</p>
 <ul>
 <li>Tracks which peer provided the block</li>
@@ -8585,7 +9073,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Fetches block data from alternative source if available</li>
 <li>Updates peer quality metrics via circuit breaker</li>
 </ul>
-<h5 id="coordination-with-fork-manager">Coordination with Fork Manager</h5>
+<h5 id="coordination-with-fork-manager">Coordination with Fork Manager<a class="headerlink" href="#coordination-with-fork-manager" title="Permanent link">&para;</a></h5>
 <p>The priority queue integrates tightly with the fork manager:</p>
 <ul>
 <li>Checks <code>CanProcessBlock()</code> before returning blocks to workers</li>
@@ -8594,9 +9082,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Maintains block-to-fork mappings for efficient lookups</li>
 </ul>
 <p>For implementation details, see <code>block_priority.go</code> in <code>services/blockvalidation/</code>.</p>
-<h4 id="229-malicious-peer-detection-and-tracking">2.2.9. Malicious Peer Detection and Tracking</h4>
+<h4 id="229-malicious-peer-detection-and-tracking">2.2.9. Malicious Peer Detection and Tracking<a class="headerlink" href="#229-malicious-peer-detection-and-tracking" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service implements comprehensive peer quality tracking to detect and mitigate malicious behavior during block synchronization and catchup operations.</p>
-<h5 id="detection-mechanisms">Detection Mechanisms</h5>
+<h5 id="detection-mechanisms">Detection Mechanisms<a class="headerlink" href="#detection-mechanisms" title="Permanent link">&para;</a></h5>
 <p><strong>Secret Mining Detection:</strong></p>
 <p>The service detects potential secret mining attacks during catchup by checking if:</p>
 <ul>
@@ -8605,12 +9093,12 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Fork depth exceeds expected values for honest mining</li>
 </ul>
 <p>When detected:</p>
-<div class="highlight"><pre><span></span><code>1. Log security warning with peer ID and reason
-2. Record malicious attempt in peer metrics
-3. Update circuit breaker for that peer
-4. Reject the catchup operation
-5. Ban peer (when banning implemented)
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>1. Log security warning with peer ID and reason
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>2. Record malicious attempt in peer metrics
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>3. Update circuit breaker for that peer
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>4. Reject the catchup operation
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>5. Ban peer (when banning implemented)
+</span></code></pre></div>
 <p><strong>Coinbase Maturity Violation:</strong></p>
 <p>During catchup, the service validates that:</p>
 <ul>
@@ -8626,7 +9114,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Blocks that violate checkpoint hashes</li>
 <li>Blocks that fail merkle root verification</li>
 </ul>
-<h5 id="peer-quality-metrics">Peer Quality Metrics</h5>
+<h5 id="peer-quality-metrics">Peer Quality Metrics<a class="headerlink" href="#peer-quality-metrics" title="Permanent link">&para;</a></h5>
 <p>The <code>PeerCircuitBreakers</code> and <code>CatchupMetrics</code> systems track:</p>
 <ul>
 <li><strong>Malicious Attempts</strong>: Count of detected malicious behaviors</li>
@@ -8635,7 +9123,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Response Times</strong>: How quickly peer responds to requests</li>
 <li><strong>Success Rate</strong>: Percentage of successful validations from this peer</li>
 </ul>
-<h5 id="circuit-breaker-pattern">Circuit Breaker Pattern</h5>
+<h5 id="circuit-breaker-pattern">Circuit Breaker Pattern<a class="headerlink" href="#circuit-breaker-pattern" title="Permanent link">&para;</a></h5>
 <p>When a peer's quality score falls below threshold:</p>
 <ol>
 <li><strong>Circuit Opens</strong>: Requests to this peer are temporarily blocked</li>
@@ -8644,15 +9132,15 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Circuit Half-Open</strong>: After delay, allows limited test requests</li>
 <li><strong>Circuit Closes</strong>: If peer recovers, full access restored</li>
 </ol>
-<h5 id="peer-banning-future-feature">Peer Banning (Future Feature)</h5>
+<h5 id="peer-banning-future-feature">Peer Banning (Future Feature)<a class="headerlink" href="#peer-banning-future-feature" title="Permanent link">&para;</a></h5>
 <p>The system logs when peers should be banned but doesn't yet implement automatic banning:</p>
-<div class="highlight"><pre><span></span><code>SECURITY: Peer &lt;ID&gt; attempted secret mining - should be banned (banning not yet implemented)
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>SECURITY: Peer &lt;ID&gt; attempted secret mining - should be banned (banning not yet implemented)
+</span></code></pre></div>
 <p>This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.</p>
 <p>For implementation details, see <code>malicious_peer_handling_test.go</code> and peer tracking code in <code>catchup.go</code>.</p>
-<h4 id="2210-invalid-block-tracking-and-notifications">2.2.10. Invalid Block Tracking and Notifications</h4>
+<h4 id="2210-invalid-block-tracking-and-notifications">2.2.10. Invalid Block Tracking and Notifications<a class="headerlink" href="#2210-invalid-block-tracking-and-notifications" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service provides comprehensive tracking and notification when blocks fail validation, distinguishing between consensus violations and recoverable errors.</p>
-<h5 id="invalid-block-classification">Invalid Block Classification</h5>
+<h5 id="invalid-block-classification">Invalid Block Classification<a class="headerlink" href="#invalid-block-classification" title="Permanent link">&para;</a></h5>
 <p><strong>Consensus Violations (Marked Invalid):</strong></p>
 <p>Blocks are marked as invalid and stored in the blockchain with <code>invalid=true</code> when they violate:</p>
 <ul>
@@ -8673,7 +9161,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Processing errors that may succeed on retry</li>
 <li>Missing parent blocks (catchup can resolve)</li>
 </ul>
-<h5 id="kafka-notification-system">Kafka Notification System</h5>
+<h5 id="kafka-notification-system">Kafka Notification System<a class="headerlink" href="#kafka-notification-system" title="Permanent link">&para;</a></h5>
 <p>When a block is marked invalid due to consensus violation:</p>
 <ol>
 <li><strong>Create Message</strong>: <code>KafkaInvalidBlockTopicMessage</code> with block hash and reason</li>
@@ -8681,11 +9169,11 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Topic Configuration</strong>: Controlled by <code>kafka_InvalidBlocks</code> setting</li>
 <li>
 <p><strong>Message Format</strong>:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">block_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-protobuf highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">block_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
+</span></code></pre></div>
 </li>
 <li>
 <p><strong>Subscribers</strong>: Other services or monitoring systems can subscribe to track invalid blocks</p>
@@ -8697,12 +9185,12 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Producer has message buffer (default: 100 messages)</li>
 <li>Failed publishes are logged but don't block validation</li>
 </ul>
-<h5 id="block-revalidation-process">Block Revalidation Process</h5>
+<h5 id="block-revalidation-process">Block Revalidation Process<a class="headerlink" href="#block-revalidation-process" title="Permanent link">&para;</a></h5>
 <p>For blocks that fail validation due to recoverable errors, the service queues them for revalidation:</p>
 <p><strong>Revalidation Trigger:</strong></p>
 <p>When <code>ValidateBlock()</code> encounters non-consensus errors:</p>
-<div class="highlight"><pre><span></span><code><span class="nx">u</span><span class="p">.</span><span class="nx">ReValidateBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nx">u</span><span class="p">.</span><span class="nx">ReValidateBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">)</span>
+</span></code></pre></div>
 <p>This queues the block to the <code>revalidateBlockChan</code> channel.</p>
 <p><strong>Revalidation Worker:</strong></p>
 <p>A background goroutine processes the revalidation queue:</p>
@@ -8725,7 +9213,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Delay between retries: Managed by revalidation channel</li>
 <li>After exhausting retries: Block marked invalid to prevent infinite retry loops</li>
 </ul>
-<h5 id="integration-with-block-invalidation">Integration with Block Invalidation</h5>
+<h5 id="integration-with-block-invalidation">Integration with Block Invalidation<a class="headerlink" href="#integration-with-block-invalidation" title="Permanent link">&para;</a></h5>
 <p>The <code>markBlockAsInvalid()</code> function:</p>
 <ol>
 <li>Logs invalidation event with block hash and reason</li>
@@ -8734,9 +9222,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Updates metrics for tracking</li>
 </ol>
 <p>For implementation details, see <code>InvalidBlocksKafkaProducer_test.go</code> and <code>BlockValidation.go</code> (<code>markBlockAsInvalid()</code>, <code>kafkaNotifyBlockInvalid()</code>, <code>reValidateBlock()</code>).</p>
-<h4 id="2211-subtree-deduplication">2.2.11. Subtree Deduplication</h4>
+<h4 id="2211-subtree-deduplication">2.2.11. Subtree Deduplication<a class="headerlink" href="#2211-subtree-deduplication" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service implements a deduplication system to prevent redundant processing of subtrees that may arrive from multiple sources simultaneously.</p>
-<h5 id="purpose">Purpose</h5>
+<h5 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h5>
 <p>During block propagation and validation:</p>
 <ul>
 <li>Multiple peers may send the same subtree</li>
@@ -8745,7 +9233,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Network retries may resend subtree data</li>
 </ul>
 <p>The <code>DeDuplicator</code> prevents wasted processing by ensuring each subtree is validated only once.</p>
-<h5 id="implementation">Implementation</h5>
+<h5 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h5>
 <p><strong>TTL-Based Tracking:</strong></p>
 <p>The deduplicator maintains a time-based cache of recently processed subtrees:</p>
 <ul>
@@ -8760,7 +9248,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Lock-free reads for checking if subtree is being processed</li>
 <li>Atomic operations for adding new subtree entries</li>
 </ul>
-<h5 id="integration-with-subtree-validation">Integration with Subtree Validation</h5>
+<h5 id="integration-with-subtree-validation">Integration with Subtree Validation<a class="headerlink" href="#integration-with-subtree-validation" title="Permanent link">&para;</a></h5>
 <p>When the Block Validation service needs to validate a subtree:</p>
 <ol>
 <li><strong>Check Deduplicator</strong>: Query if subtree is already being processed</li>
@@ -8775,9 +9263,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Lower memory and CPU usage during high block arrival rates</li>
 </ul>
 <p>For implementation details, see <code>deduplicator.go</code> in <code>services/blockvalidation/</code>.</p>
-<h3 id="23-marking-txs-as-mined">2.3. Marking Txs as mined</h3>
+<h3 id="23-marking-txs-as-mined">2.3. Marking Txs as mined<a class="headerlink" href="#23-marking-txs-as-mined" title="Permanent link">&para;</a></h3>
 <p>When a block is validated and added to the blockchain, the transactions within that block must be marked as mined in the UTXO store. This process is the second phase of the two-phase transaction commit system and is triggered through an event-driven notification mechanism.</p>
-<h4 id="trigger-points-and-sequence">Trigger Points and Sequence</h4>
+<h4 id="trigger-points-and-sequence">Trigger Points and Sequence<a class="headerlink" href="#trigger-points-and-sequence" title="Permanent link">&para;</a></h4>
 <p>The process to mark transactions as mined follows a two-step sequence with specific trigger points:</p>
 <p><strong>Step 1: Setting Block Subtrees as Ready (<code>SetBlockSubtreesSet</code>)</strong></p>
 <p>This step is triggered at different points depending on who mined the block:</p>
@@ -8822,7 +9310,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ol>
 <p><img alt="block_validation_set_tx_mined.svg" src="../img/plantuml/blockvalidation/block_validation_set_tx_mined.svg" /></p>
-<h4 id="integration-with-two-phase-commit">Integration with Two-Phase Commit</h4>
+<h4 id="integration-with-two-phase-commit">Integration with Two-Phase Commit<a class="headerlink" href="#integration-with-two-phase-commit" title="Permanent link">&para;</a></h4>
 <p>The marking of transactions as mined serves as the <strong>second phase</strong> of the two-phase commit process:</p>
 <p><strong>Phase 1 (Transaction Validation):</strong></p>
 <ul>
@@ -8837,7 +9325,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Transactions now permanently associated with their mined block</li>
 <li>UTXOs become fully spendable in subsequent transactions</li>
 </ul>
-<h4 id="responsibility-and-exclusivity">Responsibility and Exclusivity</h4>
+<h4 id="responsibility-and-exclusivity">Responsibility and Exclusivity<a class="headerlink" href="#responsibility-and-exclusivity" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service has <strong>exclusive responsibility</strong> for marking transactions as mined, regardless of block source:</p>
 <ul>
 <li><strong>Remotely Mined Blocks</strong>: Block Validation validates and marks transactions as mined</li>
@@ -8845,7 +9333,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Quick Validated Blocks</strong>: During catchup, quick validation calls <code>SetLocked(txHashes, false)</code> directly as a batch operation (see Section 2.2.3)</li>
 </ul>
 <p>This centralized responsibility ensures consistency in how transactions are marked across all scenarios.</p>
-<h4 id="performance-optimization">Performance Optimization</h4>
+<h4 id="performance-optimization">Performance Optimization<a class="headerlink" href="#performance-optimization" title="Permanent link">&para;</a></h4>
 <p>The <code>SetMinedMulti</code> operation is highly optimized for batch processing:</p>
 <ul>
 <li><strong>Batch Updates</strong>: All transactions in a block updated in single database operation</li>
@@ -8857,16 +9345,16 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p><strong>For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the <a href="../../features/two_phase_commit/">Two-Phase Transaction Commit Process</a> documentation.</strong>
 </p>
 </blockquote>
-<h2 id="3-grpc-protobuf-definitions">3. gRPC Protobuf Definitions</h2>
+<h2 id="3-grpc-protobuf-definitions">3. gRPC Protobuf Definitions<a class="headerlink" href="#3-grpc-protobuf-definitions" title="Permanent link">&para;</a></h2>
 <p>The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the <a href="../../../references/protobuf_docs/blockvalidationProto/">Block Validation protobuf documentation</a>.</p>
-<h2 id="4-data-model">4. Data Model</h2>
+<h2 id="4-data-model">4. Data Model<a class="headerlink" href="#4-data-model" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../datamodel/block_data_model/">Block Data Model</a>: Contain lists of subtree identifiers.</li>
 <li><a href="../../datamodel/subtree_data_model/">Subtree Data Model</a>: Contain lists of transaction IDs and their Merkle root.</li>
 <li><a href="../../datamodel/transaction_data_model/">Transaction Data Model</a>: Comprehensive documentation covering both standard Bitcoin format and Extended Format (BIP-239), including automatic format conversion during block validation.</li>
 <li><a href="../../datamodel/utxo_data_model/">UTXO Data Model</a>: UTXO and UTXO Metadata data models for managing unspent transaction outputs.</li>
 </ul>
-<h2 id="5-technology">5. Technology</h2>
+<h2 id="5-technology">5. Technology<a class="headerlink" href="#5-technology" title="Permanent link">&para;</a></h2>
 <ol>
 <li>
 <p><strong>Go Programming Language (Golang)</strong>.</p>
@@ -8908,71 +9396,71 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ol>
-<h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files</h2>
-<div class="highlight"><pre><span></span><code>./services/blockvalidation
-│
-├── BlockValidation.go                      - Core block validation logic and state management.
-├── BlockValidation_test.go                 - Unit tests for BlockValidation core logic.
-├── BlockValidation_difficulty_test.go      - Difficulty validation tests.
-├── BlockValidation_error_test.go           - Error handling tests for block validation.
-├── block_priority.go                       - Block priority queue management with retry logic.
-├── block_priority_test.go                  - Tests for priority queue functionality.
-├── block_priority_get_test.go              - Tests for priority queue retrieval operations.
-├── block_priority_coverage_test.go         - Coverage tests for priority queue.
-├── block_processing_retry_test.go          - Tests for block processing retry mechanisms.
-├── catchup.go                              - Main catchup orchestration with 11-step process.
-├── catchup_test.go                         - Comprehensive catchup tests.
-├── catchup_consolidated_test.go            - Consolidated catchup scenario tests.
-├── catchup_fork_handling_test.go           - Fork handling during catchup tests.
-├── catchup_get_block_headers.go            - Block header fetching for catchup.
-├── catchup_helpers_test.go                 - Helper functions for catchup tests.
-├── catchup_malicious_peer_test.go          - Malicious peer detection tests.
-├── catchup_network_resilience_test.go      - Network resilience during catchup tests.
-├── catchup_quickvalidation_test.go         - Quick validation during catchup tests.
-├── catchup_resource_exhaustion_test.go     - Resource exhaustion scenario tests.
-├── catchup_test_suite.go                   - Catchup test suite infrastructure.
-├── catchup.md                              - Catchup process documentation.
-├── catchup/                                - Catchup implementation package.
-│   └── (catchup helper functions)
-├── Client.go                               - Client-side API for block validation service.
-├── Client_test.go                          - Client tests.
-├── deduplicator.go                         - Subtree deduplication to prevent redundant processing.
-├── deduplicator_test.go                    - Deduplication tests.
-├── fork_manager.go                         - Fork tracking and chain reorganization management.
-├── fork_manager_test.go                    - Fork manager tests.
-├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
-├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
-├── fork_manager_metrics_test.go            - Fork manager metrics tests.
-├── get_blocks.go                           - Block retrieval and fetching logic.
-├── get_blocks_test.go                      - Block retrieval tests.
-├── integration_retry_test.go               - Integration tests for retry logic.
-├── Interface.go                            - Block validation service interface definition.
-├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
-├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
-├── metrics.go                              - Prometheus metrics for monitoring.
-├── mock.go                                 - Mock implementations for testing.
-├── quick_validate.go                       - Optimized validation for checkpointed blocks.
-├── quick_validate_test.go                  - Quick validation tests.
-├── Server.go                               - Server-side implementation of block validation.
-├── Server_test.go                          - Server tests.
-├── blockvalidation_api/
-│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
-│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
-│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
-├── testdata/                               - Test fixtures and data.
-├── testhelpers/                            - Test helper utilities.
-├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
-├── txmetacache.go                          - Transaction metadata cache for performance.
-└── txmetacache_test.go                     - Transaction metadata cache tests.
-</code></pre></div>
-<h2 id="7-how-to-run">7. How to run</h2>
+<h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files<a class="headerlink" href="#6-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./services/blockvalidation
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>│
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>├── BlockValidation.go                      - Core block validation logic and state management.
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>├── BlockValidation_test.go                 - Unit tests for BlockValidation core logic.
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>├── BlockValidation_difficulty_test.go      - Difficulty validation tests.
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>├── BlockValidation_error_test.go           - Error handling tests for block validation.
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>├── block_priority.go                       - Block priority queue management with retry logic.
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>├── block_priority_test.go                  - Tests for priority queue functionality.
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>├── block_priority_get_test.go              - Tests for priority queue retrieval operations.
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>├── block_priority_coverage_test.go         - Coverage tests for priority queue.
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>├── block_processing_retry_test.go          - Tests for block processing retry mechanisms.
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>├── catchup.go                              - Main catchup orchestration with 11-step process.
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>├── catchup_test.go                         - Comprehensive catchup tests.
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>├── catchup_consolidated_test.go            - Consolidated catchup scenario tests.
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>├── catchup_fork_handling_test.go           - Fork handling during catchup tests.
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>├── catchup_get_block_headers.go            - Block header fetching for catchup.
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>├── catchup_helpers_test.go                 - Helper functions for catchup tests.
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>├── catchup_malicious_peer_test.go          - Malicious peer detection tests.
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>├── catchup_network_resilience_test.go      - Network resilience during catchup tests.
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>├── catchup_quickvalidation_test.go         - Quick validation during catchup tests.
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>├── catchup_resource_exhaustion_test.go     - Resource exhaustion scenario tests.
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>├── catchup_test_suite.go                   - Catchup test suite infrastructure.
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>├── catchup.md                              - Catchup process documentation.
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>├── catchup/                                - Catchup implementation package.
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>│   └── (catchup helper functions)
+</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>├── Client.go                               - Client-side API for block validation service.
+</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>├── Client_test.go                          - Client tests.
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>├── deduplicator.go                         - Subtree deduplication to prevent redundant processing.
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>├── deduplicator_test.go                    - Deduplication tests.
+</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>├── fork_manager.go                         - Fork tracking and chain reorganization management.
+</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>├── fork_manager_test.go                    - Fork manager tests.
+</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
+</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
+</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>├── fork_manager_metrics_test.go            - Fork manager metrics tests.
+</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>├── get_blocks.go                           - Block retrieval and fetching logic.
+</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>├── get_blocks_test.go                      - Block retrieval tests.
+</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>├── integration_retry_test.go               - Integration tests for retry logic.
+</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>├── Interface.go                            - Block validation service interface definition.
+</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
+</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
+</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>├── metrics.go                              - Prometheus metrics for monitoring.
+</span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>├── mock.go                                 - Mock implementations for testing.
+</span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>├── quick_validate.go                       - Optimized validation for checkpointed blocks.
+</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>├── quick_validate_test.go                  - Quick validation tests.
+</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>├── Server.go                               - Server-side implementation of block validation.
+</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>├── Server_test.go                          - Server tests.
+</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>├── blockvalidation_api/
+</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48" href="#__codelineno-12-48"></a>│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
+</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49" href="#__codelineno-12-49"></a>│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
+</span><span id="__span-12-50"><a id="__codelineno-12-50" name="__codelineno-12-50" href="#__codelineno-12-50"></a>│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
+</span><span id="__span-12-51"><a id="__codelineno-12-51" name="__codelineno-12-51" href="#__codelineno-12-51"></a>├── testdata/                               - Test fixtures and data.
+</span><span id="__span-12-52"><a id="__codelineno-12-52" name="__codelineno-12-52" href="#__codelineno-12-52"></a>├── testhelpers/                            - Test helper utilities.
+</span><span id="__span-12-53"><a id="__codelineno-12-53" name="__codelineno-12-53" href="#__codelineno-12-53"></a>├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
+</span><span id="__span-12-54"><a id="__codelineno-12-54" name="__codelineno-12-54" href="#__codelineno-12-54"></a>├── txmetacache.go                          - Transaction metadata cache for performance.
+</span><span id="__span-12-55"><a id="__codelineno-12-55" name="__codelineno-12-55" href="#__codelineno-12-55"></a>└── txmetacache_test.go                     - Transaction metadata cache tests.
+</span></code></pre></div>
+<h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Block Validation Service locally, you can execute the following command:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-blockvalidation<span class="o">=</span><span class="m">1</span>
-</code></pre></div>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-blockvalidation<span class="o">=</span><span class="m">1</span>
+</span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running the Block Validation Service locally.</p>
-<h2 id="8-configuration-options-settings-flags">8. Configuration options (settings flags)</h2>
+<h2 id="8-configuration-options-settings-flags">8. Configuration options (settings flags)<a class="headerlink" href="#8-configuration-options-settings-flags" title="Permanent link">&para;</a></h2>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/services/blockvalidation_settings/">block Validation Settings Reference</a>.</p>
-<h2 id="9-other-resources">9. Other Resources</h2>
+<h2 id="9-other-resources">9. Other Resources<a class="headerlink" href="#9-other-resources" title="Permanent link">&para;</a></h2>
 <p><a href="../../../references/services/blockvalidation_reference/">Block Validation Reference</a></p>
 
 
@@ -8991,37 +9479,65 @@ Teranode microservices make use of the Lustre file system in order to share subt
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../blockAssembly/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Block Assembly">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Block Assembly
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../blockchain/" class="md-footer__link md-footer__link--next" aria-label="Next: Blockchain">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Blockchain
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -9038,12 +9554,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

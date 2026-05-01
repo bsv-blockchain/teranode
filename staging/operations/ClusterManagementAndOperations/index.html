@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/staging/operations/ClusterManagementAndOperations/">
       
       
       
@@ -14,7 +18,7 @@
         
       
       
-      <link rel="icon" href="../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -25,6 +29,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -37,8 +44,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -53,7 +60,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -80,7 +94,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -103,6 +117,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -128,6 +168,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -151,6 +196,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -191,6 +248,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -210,6 +269,8 @@
         <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -231,6 +292,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -250,6 +313,8 @@
         <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -289,11 +354,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -332,6 +409,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -344,9 +429,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -477,6 +560,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -489,9 +598,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -839,6 +946,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -851,9 +978,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -893,6 +1018,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -905,9 +1040,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1067,6 +1200,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1079,9 +1226,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1297,6 +1442,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1309,9 +1460,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1415,6 +1564,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1427,9 +1582,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1533,6 +1686,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1545,9 +1704,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1651,6 +1808,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1663,9 +1826,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1769,6 +1930,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1781,9 +1948,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1887,6 +2052,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1899,9 +2070,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2005,6 +2174,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2017,9 +2198,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2222,6 +2401,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2234,9 +2455,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2584,6 +2803,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2596,9 +2823,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2786,6 +3011,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2798,9 +3041,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3072,6 +3313,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3084,9 +3341,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3330,6 +3585,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3342,9 +3603,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3448,6 +3707,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3460,9 +3731,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3650,6 +3919,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3662,9 +3935,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3740,6 +4011,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3752,9 +4027,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3837,6 +4110,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3849,9 +4138,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -3919,6 +4206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3931,9 +4232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4113,6 +4412,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4125,9 +4448,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4491,6 +4812,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4503,9 +4842,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -4777,6 +5114,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4789,9 +5140,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5007,6 +5356,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5019,9 +5374,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5125,6 +5478,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5137,9 +5506,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -5319,6 +5686,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5331,9 +5728,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -5773,6 +6168,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5785,9 +6188,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -5927,6 +6328,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5939,9 +6356,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -6526,17 +6941,28 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="cloud-services-operation-runbook">Cloud Services Operation Runbook</h1>
-<h2 id="introduction">Introduction</h2>
+
+<h1 id="cloud-services-operation-runbook">Cloud Services Operation Runbook<a class="headerlink" href="#cloud-services-operation-runbook" title="Permanent link">&para;</a></h1>
+<h2 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">&para;</a></h2>
 <p>This document describes the processes involved in configuring, deploying, and managing the Teranode BSV services using Docker, Kubernetes (k8s), and AWS. It covers the initial setup, common commands, and troubleshooting steps necessary for efficient microservice operation.</p>
 <p><strong>Note:</strong> This document has been created and tested using macOS. Some of the commands will differ for other operating systems.</p>
-<h2 id="docker-and-kubernetes-setup">Docker and Kubernetes Setup</h2>
+<h2 id="docker-and-kubernetes-setup">Docker and Kubernetes Setup<a class="headerlink" href="#docker-and-kubernetes-setup" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Dockerfile Location</strong>: Within the GitHub project repository, the Dockerfile is located at <code>./Dockerfile</code>. This file specifies all requirements for the core set of Teranode microservices, including necessary software packages and environment variables.</li>
 <li><strong>Compilation Process</strong>: The Dockerfile builds a single executable binary named <code>teranode.run</code> to be included in the image.</li>
@@ -6544,18 +6970,18 @@
 <li><strong>Execution by Kubernetes</strong>: Kubernetes executes a specific command for each microservice application, as defined in their respective Kubernetes manifest files (e.g., Deployment or Pod specifications). This flexibility allows a single binary to be used in multiple contexts by leveraging symbolic links (symlinks) to point to <code>teranode.run</code>.</li>
 <li>
 <p><strong>Filesystem Configuration Example</strong>:</p>
-<div class="highlight"><pre><span></span><code>root@blockassembly1-7874b7bf7c-668bk:/app#<span class="w"> </span>ls<span class="w"> </span>-ltr
-total<span class="w"> </span><span class="m">141072</span>
-...
--rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">125468128</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:37<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>utxostoreblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-...
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>root@blockassembly1-7874b7bf7c-668bk:/app#<span class="w"> </span>ls<span class="w"> </span>-ltr
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>total<span class="w"> </span><span class="m">141072</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>...
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>-rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">125468128</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:37<span class="w"> </span>teranode.run
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>utxostoreblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>...
+</span></code></pre></div>
 </li>
 </ul>
 <p>In the above filesystem snapshot from a Kubernetes pod, notice how all applications refer to the same <code>teranode.run</code> binary via symlinks. This setup enhances maintainability and efficiency by centralizing the application logic in a single binary, while symlinks provide the flexibility to execute different aspects of the binary as needed for each microservice.</p>
 <p><strong>Technical Detailing</strong>: Kubernetes interprets these commands and symlinks through the <code>command</code> and <code>args</code> fields in the container spec within a Pod's manifest.</p>
-<h3 id="service-yaml-files">Service YAML Files</h3>
+<h3 id="service-yaml-files">Service YAML Files<a class="headerlink" href="#service-yaml-files" title="Permanent link">&para;</a></h3>
 <p>For each microservice, we maintain several YAML files that define its behavior within a Kubernetes cluster. These files include:</p>
 <ul>
 <li>
@@ -6570,12 +6996,12 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <li><code>replicas</code>: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.</li>
 <li>
 <p><code>volumeMounts</code> (optional): Specifies volume configurations, such as for <code>lustre</code> volumes, enabling detailed storage setup. For example, in <code>blockassembly.yaml</code>, a volume mount might be defined as follows:</p>
-<div class="highlight"><pre><span></span><code><span class="nt">volumes</span><span class="p">:</span>
-
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lustre-storage</span>
-<span class="w">    </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">claimName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">subtree-pvc</span>
-</code></pre></div>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">volumes</span><span class="p">:</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lustre-storage</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">claimName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">subtree-pvc</span>
+</span></code></pre></div>
 <p>Here, <code>lustre-pvc</code> references a specific PersistentVolumeClaim defined in <code>lustre-pvc.yaml</code>, indicating a Lustre filesystem storage configuration.</p>
 </li>
 <li>
@@ -6594,25 +7020,25 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <p><strong>Deployment Scripts</strong>: Central to the deployment process is the <code>deploy-to-region.yaml</code> script, which uses Kustomize to generate the final set of Kubernetes configuration files tailored for specific deployment environments.</p>
 </li>
 </ul>
-<h3 id="settings">Settings</h3>
+<h3 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h3>
 <p>Microservice configurations can be influenced by settings. There are 2 ways to provide settings:</p>
 <ul>
 <li>Via settings in the <code>settings.conf</code> and <code>settings_local.conf</code> files, embedded within the Docker image.</li>
 <li>By Kubernetes pod-specific settings. These settings can override configurations defined in the <code>.conf</code> files, allowing for dynamic adjustment based on the deployment environment or specific operational requirements.</li>
 </ul>
-<h3 id="kubernetes-resolver-for-grpc">Kubernetes Resolver for gRPC</h3>
+<h3 id="kubernetes-resolver-for-grpc">Kubernetes Resolver for gRPC<a class="headerlink" href="#kubernetes-resolver-for-grpc" title="Permanent link">&para;</a></h3>
 <ul>
 <li><a href="https://github.com/bsv-blockchain/teranode/blob/main/pkg/k8sresolver/README.md">Kubernetes Resolver for gRPC</a></li>
 </ul>
-<h2 id="how-to">How to</h2>
-<h3 id="aws-cli-configuration">AWS CLI Configuration</h3>
+<h2 id="how-to">How to<a class="headerlink" href="#how-to" title="Permanent link">&para;</a></h2>
+<h3 id="aws-cli-configuration">AWS CLI Configuration<a class="headerlink" href="#aws-cli-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Install the AWS Command Line Interface (CLI) via Homebrew: <code>brew install awscli</code>. Check the <a href="https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html">AWS CLI Installation Guide</a> for other installation methods.</li>
 <li>Run <code>aws configure</code> to set up the AWS Command Line Interface (CLI).</li>
 <li>Enter the <code>AWS Access Key ID</code>, <code>AWS Secret Access Key</code>, <code>Default region name</code> (e.g., <code>eu-north-1</code>), and <code>Default output format</code> as required.</li>
 <li>Please check with your DevOPS team for the specific credentials available to you.</li>
 </ul>
-<h3 id="kubernetes-k8s-cluster-access">Kubernetes (k8s) Cluster Access</h3>
+<h3 id="kubernetes-k8s-cluster-access">Kubernetes (k8s) Cluster Access<a class="headerlink" href="#kubernetes-k8s-cluster-access" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
 <p><strong>Kubectl Installation</strong>:</p>
@@ -6636,26 +7062,26 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <ul>
 <li>Download the <code>k8s_shortcuts.sh</code> shortcuts file from the shared repository and place it in the home directory.</li>
 </ul>
-<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>docs/staging/operations/.k8s_shortcuts.sh<span class="w"> </span>~/.k8s_shortcuts.sh
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cp<span class="w"> </span>docs/staging/operations/.k8s_shortcuts.sh<span class="w"> </span>~/.k8s_shortcuts.sh
+</span></code></pre></div>
 <ul>
 <li>Add Kubernetes shortcuts to <code>.zprofile</code> for ease of use.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="o">{</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;# Load k8s shortcuts&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;autoload -Uz compinit&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;compinit&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;source ~/.k8s_shortcuts.sh&quot;</span>
-<span class="o">}</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.zprofile
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;# Load k8s shortcuts&quot;</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;autoload -Uz compinit&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;compinit&quot;</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;source ~/.k8s_shortcuts.sh&quot;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="o">}</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.zprofile
+</span></code></pre></div>
 <ul>
 <li>Please read more about the shortcuts in <a href="../k8Shortcuts/">k8Shortcuts.md</a>.</li>
 </ul>
 </li>
 </ol>
-<h3 id="deployment-and-scaling">Deployment and Scaling</h3>
-<h4 id="service-start-order"><strong>Service Start Order</strong></h4>
+<h3 id="deployment-and-scaling">Deployment and Scaling<a class="headerlink" href="#deployment-and-scaling" title="Permanent link">&para;</a></h3>
+<h4 id="service-start-order"><strong>Service Start Order</strong><a class="headerlink" href="#service-start-order" title="Permanent link">&para;</a></h4>
 <p>The Teranode services must be started in a specific order, as follows:</p>
 <ol>
 <li>Blockchain Server.</li>
@@ -6668,13 +7094,13 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 </ol>
 <p>Failing to start services in the right order will lead to errors and incorrect behaviour.</p>
 <p>Service restarts or downtime can cause the node to be left in an inconsistent state. For example, the Block Assembly will miss any transaction received during a downtime, being unable to promptly recover.</p>
-<h4 id="lustre">Lustre</h4>
+<h4 id="lustre">Lustre<a class="headerlink" href="#lustre" title="Permanent link">&para;</a></h4>
 <p>Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. The system is designed to support high-performance, large-scale data storage and workloads, widely used in environments that require fast and efficient access to large volumes of data across many nodes.</p>
 <p>Teranode microservices make use of the Lustre file system in order to share information related to subtrees, eliminating the need for redundant propagation of subtrees over grpc or message queues.</p>
 <p><img alt="lustre_fs.svg" src="../../../topics/services/img/plantuml/lustre_fs.svg" /></p>
 <p>As seen in the diagram above, the Block Validation, Block Assembly and Asset Services share a lustre file system storage. The data is ultimately persisted in AWS S3.</p>
-<h2 id="key-kubernetes-commands-documentation">Key Kubernetes Commands Documentation</h2>
-<h3 id="environment-switching-and-namespace-management">Environment Switching and Namespace Management</h3>
+<h2 id="key-kubernetes-commands-documentation">Key Kubernetes Commands Documentation<a class="headerlink" href="#key-kubernetes-commands-documentation" title="Permanent link">&para;</a></h2>
+<h3 id="environment-switching-and-namespace-management">Environment Switching and Namespace Management<a class="headerlink" href="#environment-switching-and-namespace-management" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
 <p><strong>Environment Shortcuts</strong>:</p>
@@ -6691,20 +7117,20 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <li>Use <code>kcn</code> command to switch Kubernetes namespaces easily.</li>
 <li>Example:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>kcn<span class="w"> </span>m1
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kcn<span class="w"> </span>m1
+</span></code></pre></div>
 </li>
 </ol>
 <hr />
-<h4 id="viewing-pods-in-a-specific-cluster">Viewing Pods in a Specific Cluster</h4>
+<h4 id="viewing-pods-in-a-specific-cluster">Viewing Pods in a Specific Cluster<a class="headerlink" href="#viewing-pods-in-a-specific-cluster" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>kgp</code></strong>: Displays all current services running in a cluster.</li>
 </ul>
-<h4 id="listing-all-services">Listing All Services</h4>
+<h4 id="listing-all-services">Listing All Services<a class="headerlink" href="#listing-all-services" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>kgpa</code></strong>: Lists all services across all namespaces.</li>
 </ul>
-<h4 id="monitoring-pod-resource-usage">Monitoring Pod Resource Usage</h4>
+<h4 id="monitoring-pod-resource-usage">Monitoring Pod Resource Usage<a class="headerlink" href="#monitoring-pod-resource-usage" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong><code>kubectl top pods</code></strong>: Shows the resource usage for pods.</p>
@@ -6713,7 +7139,7 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <p><strong><code>watch -n 3 kubectl top pods</code></strong>: Runs <code>kubectl top pods</code> every 3 seconds, providing a real-time view of pod resource usage.</p>
 </li>
 </ul>
-<h4 id="starting-services">Starting Services</h4>
+<h4 id="starting-services">Starting Services<a class="headerlink" href="#starting-services" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>ksd {service} --replicas=n</code></strong>: Starts a service.</li>
 </ul>
@@ -6729,11 +7155,11 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <p><code>ksd tx-blaster1 --replicas=11</code></p>
 </li>
 </ul>
-<h4 id="checking-the-number-of-service-instances">Checking the Number of Service Instances</h4>
+<h4 id="checking-the-number-of-service-instances">Checking the Number of Service Instances<a class="headerlink" href="#checking-the-number-of-service-instances" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>k get node -L role | grep prop | wc -l</code></strong>: Counts the number of nodes labeled with the role <code>prop</code>, useful for assessing the scale of the propagation service within the cluster.</li>
 </ul>
-<h4 id="viewing-logs">Viewing Logs</h4>
+<h4 id="viewing-logs">Viewing Logs<a class="headerlink" href="#viewing-logs" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>kl {pod}</code></strong>:</li>
 </ul>
@@ -6741,15 +7167,15 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 <ul>
 <li><code>kl tx-blaster1-234234</code>: Views the logs for a specific <code>tx-blaster1</code> pod.</li>
 </ul>
-<h4 id="resetting-a-service">Resetting a Service</h4>
+<h4 id="resetting-a-service">Resetting a Service<a class="headerlink" href="#resetting-a-service" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong>To reset a Service</strong>:</p>
 </li>
 <li>
 <p>If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example can be seen here:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span><span class="o">[</span>namespace<span class="o">]</span><span class="w"> </span>--all
-</code></pre></div>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span><span class="o">[</span>namespace<span class="o">]</span><span class="w"> </span>--all
+</span></code></pre></div>
 </li>
 <li>
 <p>This command deletes all pods in the specified namespace, which should cause them to be recreated based on their deployment or stateful set configurations.</p>
@@ -6759,45 +7185,45 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 </li>
 <li>
 <p>Example to reset the p2p service can be seen here:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>p2p1
-</code></pre></div>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>p2p1
+</span></code></pre></div>
 </li>
 </ul>
-<h4 id="viewing-traefik-namespaces">Viewing Traefik Namespaces</h4>
+<h4 id="viewing-traefik-namespaces">Viewing Traefik Namespaces<a class="headerlink" href="#viewing-traefik-namespaces" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>kpg -n traefik</code></strong>: To view pods within the Traefik namespace, ensuring traffic management components are running as expected.</li>
 </ul>
-<h4 id="accessing-the-shell-for-any-service">Accessing the Shell for any Service</h4>
+<h4 id="accessing-the-shell-for-any-service">Accessing the Shell for any Service<a class="headerlink" href="#accessing-the-shell-for-any-service" title="Permanent link">&para;</a></h4>
 <ul>
 <li>You can open an interactive terminal (<code>bash</code>) in a specified pod with the <code>keti {pod} -- bash</code> command. For example:</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="c1"># Get the list of pods for the AWS node you are connected to</span>
-$<span class="w">  </span>kubectl<span class="w"> </span>get<span class="w"> </span>pod
-
-<span class="c1"># Access one specific microservices, out of the list of pods obtained in the previous step</span>
-$<span class="w">   </span>keti<span class="w"> </span>blockassembly1-7874b7bf7c-668bk<span class="w"> </span>--bash
-
-$<span class="w">   </span>ls<span class="w"> </span>-ltr
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Get the list of pods for the AWS node you are connected to</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>$<span class="w">  </span>kubectl<span class="w"> </span>get<span class="w"> </span>pod
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Access one specific microservices, out of the list of pods obtained in the previous step</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>$<span class="w">   </span>keti<span class="w"> </span>blockassembly1-7874b7bf7c-668bk<span class="w"> </span>--bash
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>$<span class="w">   </span>ls<span class="w"> </span>-ltr
+</span></code></pre></div>
 <p>The results will look similar to the below:</p>
-<div class="highlight"><pre><span></span><code>root@blockassembly1-7874b7bf7c-668bk:/app#<span class="w"> </span>ls<span class="w"> </span>-ltr
-total<span class="w"> </span><span class="m">141072</span>
-
--rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">  </span><span class="m">18768613</span><span class="w"> </span>Dec<span class="w">  </span><span class="m">7</span><span class="w"> </span><span class="m">23</span>:59<span class="w"> </span>dlv
--rw-rw-r--<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">0</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">00</span>:12<span class="w"> </span>settings.conf
-drwxr-xr-x<span class="w"> </span><span class="m">2</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">       </span><span class="m">116</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">00</span>:12<span class="w"> </span>certs
--rw-rw-r--<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">     </span><span class="m">49314</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">14</span>:30<span class="w"> </span>settings_local.conf
--rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">125468128</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:37<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>utxostoreblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>propagationblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>blockassemblyblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>blaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>s3blaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-
-
-lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>aerospiketest.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
-</code></pre></div>
-<h4 id="managing-persistent-storage">Managing Persistent Storage</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>root@blockassembly1-7874b7bf7c-668bk:/app#<span class="w"> </span>ls<span class="w"> </span>-ltr
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>total<span class="w"> </span><span class="m">141072</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>-rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">  </span><span class="m">18768613</span><span class="w"> </span>Dec<span class="w">  </span><span class="m">7</span><span class="w"> </span><span class="m">23</span>:59<span class="w"> </span>dlv
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>-rw-rw-r--<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">0</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">00</span>:12<span class="w"> </span>settings.conf
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>drwxr-xr-x<span class="w"> </span><span class="m">2</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">       </span><span class="m">116</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">00</span>:12<span class="w"> </span>certs
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>-rw-rw-r--<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">     </span><span class="m">49314</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">14</span>:30<span class="w"> </span>settings_local.conf
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>-rwxr-xr-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">125468128</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:37<span class="w"> </span>teranode.run
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>utxostoreblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>propagationblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>blockassemblyblaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>blaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>s3blaster.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w">         </span><span class="m">8</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">29</span><span class="w"> </span><span class="m">23</span>:38<span class="w"> </span>aerospiketest.run<span class="w"> </span>-&gt;<span class="w"> </span>teranode.run
+</span></code></pre></div>
+<h4 id="managing-persistent-storage">Managing Persistent Storage<a class="headerlink" href="#managing-persistent-storage" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong><code>k get pv</code></strong>: Lists all Persistent Volumes (PVs) in the cluster, essential for managing storage resources.</p>
@@ -6807,32 +7233,32 @@ lrwxrwxrwx<span class="w"> </span><span class="m">1</span><span class="w"> </spa
 </li>
 </ul>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Provides detailed information about the Persistent Volume Claim (PVC) named `subtree-lustre-pv`</span>
-k<span class="w"> </span>describe<span class="w"> </span>pvc<span class="w"> </span>subtree-lustre-pv
-</code></pre></div>
-<h4 id="forwarding-ports">Forwarding Ports</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Provides detailed information about the Persistent Volume Claim (PVC) named `subtree-lustre-pv`</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>k<span class="w"> </span>describe<span class="w"> </span>pvc<span class="w"> </span>subtree-lustre-pv
+</span></code></pre></div>
+<h4 id="forwarding-ports">Forwarding Ports<a class="headerlink" href="#forwarding-ports" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
 <p><strong>To forward a pod port to localhost</strong>:</p>
 </li>
 <li>
 <p>Set the Kubernetes configuration file:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">KUBECONFIG</span><span class="o">=</span>~/.kube/config
-</code></pre></div>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">KUBECONFIG</span><span class="o">=</span>~/.kube/config
+</span></code></pre></div>
 </li>
 <li>
 <p>Forward the port:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>port-forward<span class="w"> </span>asset1-63453452352-23452<span class="w"> </span><span class="m">8090</span>:8090
-</code></pre></div>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>asset1-63453452352-23452<span class="w"> </span><span class="m">8090</span>:8090
+</span></code></pre></div>
 <p>This command forwards the port <code>8090</code> from the specified <code>asset1</code> pod to the local port <code>8090</code>.</p>
 </li>
 </ul>
-<h4 id="overriding-pod-settings">Overriding pod settings</h4>
+<h4 id="overriding-pod-settings">Overriding pod settings<a class="headerlink" href="#overriding-pod-settings" title="Permanent link">&para;</a></h4>
 <p>While the different application settings are provided in the <code>settings.conf</code> and <code>settings_local.conf</code>, users can modify them directly in Kubernetes.</p>
 <p>To do so, you have to edit the {application}.run file for a given pod. The example below shows how to access the settings in a Block Assembly application pod.</p>
-<div class="highlight"><pre><span></span><code>ked<span class="w"> </span>block-assembly-213131<span class="w"> </span>--<span class="w"> </span>vi<span class="w"> </span>block-assembly.run
-<span class="c1"># Modify the specific config setting, and save</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ked<span class="w"> </span>block-assembly-213131<span class="w"> </span>--<span class="w"> </span>vi<span class="w"> </span>block-assembly.run
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="c1"># Modify the specific config setting, and save</span>
+</span></code></pre></div>
 <p>After a change, the service will automatically restart.</p>
 
 
@@ -6851,37 +7277,27 @@ k<span class="w"> </span>describe<span class="w"> </span>pvc<span class="w"> </s
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -6898,12 +7314,10 @@ k<span class="w"> </span>describe<span class="w"> </span>pvc<span class="w"> </s
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

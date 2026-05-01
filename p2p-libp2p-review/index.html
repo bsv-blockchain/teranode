@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/p2p-libp2p-review/">
       
       
       
@@ -14,7 +18,7 @@
         
       
       
-      <link rel="icon" href="../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -25,6 +29,9 @@
     
       <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -37,8 +44,8 @@
         
         
         
-        <link rel="stylesheet" href="../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -53,7 +60,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -80,7 +94,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href=".." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -103,6 +117,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -128,6 +168,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -151,6 +196,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -191,6 +248,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -210,6 +269,8 @@
         <a href="../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -231,6 +292,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -250,6 +313,8 @@
         <a href="../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -289,11 +354,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href=".." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -332,6 +409,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -344,9 +429,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -477,6 +560,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -489,9 +598,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -839,6 +946,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -851,9 +978,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -893,6 +1018,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -905,9 +1040,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1067,6 +1200,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1079,9 +1226,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1297,6 +1442,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1309,9 +1460,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1415,6 +1564,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1427,9 +1582,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1533,6 +1686,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1545,9 +1704,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1651,6 +1808,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1663,9 +1826,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1769,6 +1930,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1781,9 +1948,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1887,6 +2052,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1899,9 +2070,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2005,6 +2174,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2017,9 +2198,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2222,6 +2401,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2234,9 +2455,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2584,6 +2803,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2596,9 +2823,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2786,6 +3011,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2798,9 +3041,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3072,6 +3313,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3084,9 +3341,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3330,6 +3585,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3342,9 +3603,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3448,6 +3707,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3460,9 +3731,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3650,6 +3919,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3662,9 +3935,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3740,6 +4011,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3752,9 +4027,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3837,6 +4110,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3849,9 +4138,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -3919,6 +4206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3931,9 +4232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4113,6 +4412,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4125,9 +4448,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4491,6 +4812,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4503,9 +4842,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -4777,6 +5114,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4789,9 +5140,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5007,6 +5356,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5019,9 +5374,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5125,6 +5478,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5137,9 +5506,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -5319,6 +5686,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5331,9 +5728,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -5773,6 +6168,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5785,9 +6188,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -5927,6 +6328,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5939,9 +6356,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -6531,44 +6946,55 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="p2p-libp2p-code-review">P2P / libp2p code review</h1>
+
+<h1 id="p2p-libp2p-code-review">P2P / libp2p code review<a class="headerlink" href="#p2p-libp2p-code-review" title="Permanent link">&para;</a></h1>
 <p>Library version pinned in <code>go.mod</code>: <code>github.com/bsv-blockchain/go-p2p-message-bus v0.1.15</code>. Vendor source at <code>$GOMODCACHE/github.com/bsv-blockchain/go-p2p-message-bus@v0.1.15</code>.</p>
 <p>This review covers the six areas in the brief, plus one additional finding (Static peers) that touches several of them. Each section ends with concrete <code>file:line</code> references.</p>
-<h2 id="1-peer-discovery">1. Peer discovery</h2>
-<h3 id="dht">DHT</h3>
+<h2 id="1-peer-discovery">1. Peer discovery<a class="headerlink" href="#1-peer-discovery" title="Permanent link">&para;</a></h2>
+<h3 id="dht">DHT<a class="headerlink" href="#dht" title="Permanent link">&para;</a></h3>
 <ul>
 <li>DHT mode is wired correctly: <code>services/p2p/Server.go:332-335</code> passes <code>BootstrapPeers</code>, <code>DHTMode</code>, <code>DHTCleanupInterval</code> and <code>EnableNAT</code> straight through to the library config.</li>
 <li>"Silent" listen mode forces <code>dhtMode = "off"</code> (<code>services/p2p/Server.go:322-324</code>) and disables address advertisement (<code>Server.go:288-291</code>). A silent node stops participating in the DHT entirely; it can still receive over already-established subscriptions but cannot be discovered. This matches the documented intent.</li>
 <li>DHT "client" mode is <strong>not</strong> lightweight despite the name. Per the library docs (<code>go-p2p-message-bus/config.go:94-97</code>), client mode still crawls the DHT and sustains 100+ peer connections — it just doesn't write provider records. If anyone selects "client" expecting a privacy-friendly low-resource node, they will be surprised.</li>
 </ul>
-<h3 id="bootstrap-vs-static-peers">Bootstrap vs. static peers</h3>
+<h3 id="bootstrap-vs-static-peers">Bootstrap vs. static peers<a class="headerlink" href="#bootstrap-vs-static-peers" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Static peers are silently discarded.</strong> <code>settings.P2P.StaticPeers</code> is defined in <code>settings/p2p_settings.go:27</code>, persisted from <code>p2p_static_peers</code> in config, and is consumed only by <code>cmd/diagnose/config_checks.go:446</code> and <code>cmd/monitor/monitor.go:1046</code> — both for <em>display</em>. There is no consumer in <code>services/p2p/</code>. The library exposes <code>Client.Connect(ctx, addr)</code> (go-p2p-message-bus types) but auto-reconnect is only wired for <code>BootstrapPeers</code> (library <code>client.go:860-894</code> <code>maintainBootstrapConnections</code>). Operators who configure <code>p2p_static_peers</code> get no behaviour from it, which is what bit our multinode docker-compose tests for the past several days.</li>
 <li>Bootstrap peers themselves are correctly maintained — the library reconnects every 30s if they drop.</li>
 </ul>
-<h3 id="mdns">mDNS</h3>
+<h3 id="mdns">mDNS<a class="headerlink" href="#mdns" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>EnableMDNS</code> defaults to false and is correctly passed through (<code>Server.go:337</code> → library <code>client.go:136-145</code>). The library prints a "production safe default" log line if disabled.</li>
 <li><code>settings/p2p_settings.go:62-65</code> warns about shared-hosting risks (mDNS multicasts on <code>224.0.0.251/5353</code> and is visible to every tenant in the same broadcast domain). There is no runtime guard — if <code>EnableMDNS=true</code> is set on a Hetzner/AWS deployment, it'll happily broadcast.</li>
 </ul>
-<h3 id="peer-churn">Peer churn</h3>
+<h3 id="peer-churn">Peer churn<a class="headerlink" href="#peer-churn" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>services/p2p/peer_registry.go</code> has no eviction policy. <code>Put()</code> (line 67) only removes via explicit <code>Remove()</code> (line 111) or via the disconnect handler in <code>sync_coordinator.go:218</code>. A peer that reconnects with a fresh peer ID adds an entry; one that goes offline forever leaves its entry behind. There is no TTL, LRU, or background sweep over the registry.</li>
 <li><code>BanManager</code> does have a background cleanup ticker (<code>BanManager.go:156</code>, runs every <code>decayInterval</code> defaulting to 1 minute) that decays scores by 1/min and removes entries with score 0 and no active ban.</li>
 <li><code>peer_registry.go:600</code> defines <code>ReconsiderBadPeers()</code> with exponential cooldown logic — but it's never called from anywhere in the codebase. Peers stuck at low reputation never recover.</li>
 </ul>
-<h2 id="2-pubsub-topology-and-relay">2. Pub/sub topology and relay</h2>
-<h3 id="implementation">Implementation</h3>
+<h2 id="2-pubsub-topology-and-relay">2. Pub/sub topology and relay<a class="headerlink" href="#2-pubsub-topology-and-relay" title="Permanent link">&para;</a></h2>
+<h3 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h3>
 <ul>
 <li>The library uses <strong>gossipsub</strong> (<code>pubsub.NewGossipSub(ctx, h, pubsub.WithPeerExchange(true))</code> at <code>go-p2p-message-bus/client.go:127</code>). Only <code>WithPeerExchange(true)</code> is set; every other parameter is libp2p's default. Underlying lib is <code>go-libp2p-pubsub v0.15.0</code>.</li>
 </ul>
-<h3 id="mesh-parameters-libp2p-defaults">Mesh parameters (libp2p defaults)</h3>
+<h3 id="mesh-parameters-libp2p-defaults">Mesh parameters (libp2p defaults)<a class="headerlink" href="#mesh-parameters-libp2p-defaults" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -6611,21 +7037,21 @@
 </tbody>
 </table>
 <p>These defaults are sensible for networks up to ~10K nodes. Latency is <code>O(log N)</code> because each node forwards to D=6 peers. Beyond ~100K nodes the constant-degree mesh is no longer adequate; that's a future-tuning concern, not a current issue.</p>
-<h3 id="are-messages-relayed-via-gossip-or-fanned-out-via-direct-connections">Are messages relayed via gossip, or fanned out via direct connections?</h3>
+<h3 id="are-messages-relayed-via-gossip-or-fanned-out-via-direct-connections">Are messages relayed via gossip, or fanned out via direct connections?<a class="headerlink" href="#are-messages-relayed-via-gossip-or-fanned-out-via-direct-connections" title="Permanent link">&para;</a></h3>
 <p><strong>Gossip, confirmed.</strong> Every publish path (<code>Server.go:820, 1067, 1393, 1428</code>) calls <code>s.P2PClient.Publish(ctx, topic, bytes)</code>, which delegates to <code>topic.Publish</code> on the gossipsub topic handle. There is exactly one place in <code>services/p2p/</code> that iterates over all known peers (<code>Server.go:1191</code>) and that's a <em>read</em> — looking up sync peer heights, not a publish loop. The reviewer's specific worry — that we hold a direct connection to every known peer — is not happening today.</p>
-<h3 id="seen-message-dedup">Seen-message dedup</h3>
+<h3 id="seen-message-dedup">Seen-message dedup<a class="headerlink" href="#seen-message-dedup" title="Permanent link">&para;</a></h3>
 <ul>
 <li>libp2p's pubsub maintains a <code>seenMessages</code> time-cache keyed by message ID (<code>go-libp2p-pubsub/pubsub.go:536, 1399, 1416</code>). Duplicate messages by ID are dropped before being forwarded. Default TTL is 2 minutes.</li>
 <li>Teranode adds an application-layer 10MB size guard (<code>Server.go:66, 913-914</code>) before JSON unmarshal.</li>
 <li>A peer publishing many <em>different</em> malformed messages would still propagate them, since the dedup is by message ID, not by content. See "Validators" below.</li>
 </ul>
-<h3 id="validators-rate-limiting">Validators / rate limiting</h3>
+<h3 id="validators-rate-limiting">Validators / rate limiting<a class="headerlink" href="#validators-rate-limiting" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>No <code>RegisterTopicValidator</code> calls anywhere.</strong> No <code>pubsub.WithValidator</code>. No per-topic schema check before forwarding. A malformed-but-parseable JSON payload will be relayed by the whole mesh before any node catches the schema violation. The library does not currently expose a hook for this — addressing it requires extending <code>go-p2p-message-bus</code> to surface <code>pubsub.RegisterTopicValidator</code> from libp2p.</li>
 <li>Per-topic size limits are now enforced application-side (see <code>services/p2p/Server.go</code> constants <code>maxBlockMessageSize</code>, <code>maxSubtreeMessageSize</code>, <code>maxNodeStatusMessageSize</code>, <code>maxRejectedTxMessageSize</code>). A 5MB blob on <code>node_status</code> is now rejected at the topic handler instead of being parsed. This is defence in depth; gossipsub still forwards the message before the handler runs.</li>
 <li>No per-peer rate limiting on inbound topic messages. A peer publishing 100 fake <code>node_status</code> messages per second produces 100 distinct message IDs and gossipsub will fan all of them out.</li>
 </ul>
-<h3 id="nodestatus-heartbeat-scaling">NodeStatus heartbeat scaling</h3>
+<h3 id="nodestatus-heartbeat-scaling">NodeStatus heartbeat scaling<a class="headerlink" href="#nodestatus-heartbeat-scaling" title="Permanent link">&para;</a></h3>
 <p><code>NodeStatusMessage</code> ≈ 846 bytes JSON-serialised (per <code>Server.go:1219-1345</code>). Published every 10 s on <code>p2p_node_status_topic</code> (<code>Server.go:1081</code>). Every node receives every other node's heartbeat once via gossip. So per-node ingress from the node-status topic alone is roughly:</p>
 <table>
 <thead>
@@ -6654,40 +7080,40 @@
 </tbody>
 </table>
 <p>(Connection count stays constant at D=6 — that's not the issue. The issue is that each node still sees every heartbeat at least once.) At 10K nodes the heartbeat alone is ~7 Mbps, before any block or subtree traffic, before any retransmits. That's not a hard wall but it's a real cost at scale that nobody seems to have modelled. Easy mitigations exist (back off the interval as cluster size grows; piggyback heartbeat on existing block/subtree messages; use a slower secondary topic for heartbeats).</p>
-<h3 id="topic-granularity">Topic granularity</h3>
+<h3 id="topic-granularity">Topic granularity<a class="headerlink" href="#topic-granularity" title="Permanent link">&para;</a></h3>
 <p>Four topics — block, subtree, node_status, rejected_tx (<code>Server.go:608-611</code>). Boundaries look reasonable. Block and subtree carry payloads, node_status is steady-state, rejected_tx is event-driven and sparse. No obvious wins from merging or splitting today.</p>
-<h2 id="3-message-handling">3. Message handling</h2>
+<h2 id="3-message-handling">3. Message handling<a class="headerlink" href="#3-message-handling" title="Permanent link">&para;</a></h2>
 <p>Already covered above:</p>
 <ul>
 <li><strong>No validators at gossipsub layer</strong> — schema and rate are not enforced before relay. <strong>Application-layer parsing happens after the message has been forwarded to the mesh</strong>, so garbage propagates one hop further than it needs to. Closing this gap requires the library to expose <code>RegisterTopicValidator</code>; teranode can't reach the underlying <code>pubsub.PubSub</code> directly today.</li>
 <li>Per-topic size limits are now enforced (see "Validators / rate limiting" above). The global 10 MB safety net remains, with tighter caps per topic so a 5 MB blob on <code>node_status</code> is rejected before JSON parsing.</li>
 <li>No message signing / origin authentication. Today the network trusts <code>peer.FromID</code>. Acceptable while bootstrap peers are curated; risky once the network is open.</li>
 </ul>
-<h2 id="4-reputation-ban-management-peer-map">4. Reputation, ban management, peer-map</h2>
-<h3 id="reputation-peer_registrygo">Reputation (<code>peer_registry.go</code>)</h3>
+<h2 id="4-reputation-ban-management-peer-map">4. Reputation, ban management, peer-map<a class="headerlink" href="#4-reputation-ban-management-peer-map" title="Permanent link">&para;</a></h2>
+<h3 id="reputation-peer_registrygo">Reputation (<code>peer_registry.go</code>)<a class="headerlink" href="#reputation-peer_registrygo" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Hybrid model: event-driven recompute (<code>calculateAndUpdateReputation</code> at <code>peer_registry.go:381</code>) on every interaction, no time-based decay loop. Score range 0–100, starting at 50. Inputs: success rate (60% weight), recency penalties / bonuses, latency factor (0.6×–1.2×).</li>
 <li>Consumed by <code>GetPeersByReputation()</code> (line 538), <code>GetPeersForCatchup()</code> (line 712), <code>PeerSelector.isEligible()</code> (peer_selector.go:202), and <code>isViableSyncCandidate()</code> (sync_coordinator.go:104) — all gate on reputation ≥ 20.</li>
 <li>Score is <strong>not persisted</strong>. Restart resets every peer to neutral (50). Hard-won deprioritisation of misbehaving peers is lost across restarts.</li>
 </ul>
-<h3 id="banmanager-banmanagergo">BanManager (<code>BanManager.go</code>)</h3>
+<h3 id="banmanager-banmanagergo">BanManager (<code>BanManager.go</code>)<a class="headerlink" href="#banmanager-banmanagergo" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Triggers add weighted scores (invalid-block/subtree +10, protocol-violation +20, spam +50). Threshold default 100 → 24-hour ban.</li>
 <li>Decay –1/minute via background ticker (<code>BanManager.go:156</code>). Bans expire lazily on <code>IsBanned()</code> check (line 279) — fine.</li>
 <li><strong>Ban state is not persisted either.</strong> A restart wipes the ban list. Coordinated peers can time their reconnection around restarts. Bans are 24h by default so persistence is meaningful.</li>
 <li>Reputation and ban score are decoupled. A peer can have reputation 5 and ban score 0, and still be selectable until reputation drops it below the eligibility threshold. Tighter coupling (e.g. very-low rep auto-applies a soft ban) would be a defensible product choice but that's tuning, not correctness.</li>
 </ul>
-<h3 id="peermap-settings">PeerMap settings</h3>
+<h3 id="peermap-settings">PeerMap settings<a class="headerlink" href="#peermap-settings" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>PeerMapMaxSize</code> (100 000), <code>PeerMapTTL</code> (30 m), <code>PeerMapCleanupInterval</code> (5 m) all do what their names imply. <code>startPeerMapCleanup</code> (<code>server_helpers.go:949</code>) starts a goroutine that runs <code>cleanupPeerMaps</code> (line 733) on a ticker: TTL pass first, then LRU eviction if still over the limit.</li>
 <li>5-minute cleanup tick on a 30-min TTL is generous, but in a high-throughput period the maps can spike past <code>MaxSize</code> between ticks before LRU catches up. Spike memory pressure, not unbounded growth.</li>
 </ul>
-<h3 id="stale-entry-growth">Stale-entry growth</h3>
+<h3 id="stale-entry-growth">Stale-entry growth<a class="headerlink" href="#stale-entry-growth" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>PeerRegistry</code> itself is the unbounded one. Peers are added on first contact and never aged out. Given the registry is used in O(n) iteration paths (<code>GetAll</code>, <code>GetPeersForCatchup</code>), this becomes both a memory and a latency problem under sustained churn. This is the most operationally serious of all the findings.</li>
 <li><code>LastSyncAttempt</code> is cleared only by <code>ClearAllSyncAttempts()</code> on backoff recovery. Functionally harmless but adds to the registry-bloat picture.</li>
 </ul>
-<h2 id="5-sync-peer-selection">5. Sync peer selection</h2>
+<h2 id="5-sync-peer-selection">5. Sync peer selection<a class="headerlink" href="#5-sync-peer-selection" title="Permanent link">&para;</a></h2>
 <p><code>services/p2p/sync_coordinator.go</code> and <code>peer_selector.go</code>.</p>
 <ul>
 <li><strong>Single peer at a time</strong> — deliberate, locked behind <code>mu sync.RWMutex</code> (line 32). <code>TriggerSync</code> clears, selects, sends via Kafka. No concurrent peer changes.</li>
@@ -6699,21 +7125,21 @@
 <li>Repeated failures degrade reputation; they don't auto-ban. There's commented-out malicious-detection logic at <code>sync_coordinator.go:390-405</code> that would close the loop, currently disabled.</li>
 <li><strong>No parallel fan-out.</strong> This is a deliberate "cooperative" choice — a single-peer model is simpler to reason about and avoids redundant block downloads — but it also means a slow but-not-failing peer can throttle the whole node's catch-up. Worth reconsidering once we're past the initial network growth phase.</li>
 </ul>
-<h2 id="6-idiomatic-libp2p">6. Idiomatic libp2p</h2>
+<h2 id="6-idiomatic-libp2p">6. Idiomatic libp2p<a class="headerlink" href="#6-idiomatic-libp2p" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Teranode does not call <code>host.Connect</code>, <code>Peerstore.Add</code>, or <code>Routing</code> queries directly anywhere in <code>services/</code>. Everything goes through go-p2p-message-bus. That's a clean abstraction line.</li>
 <li>The library does not currently expose: peerstore queries, custom multistream handlers, hole-punching control, or static-peer maintenance with auto-reconnect. The main one we <em>would</em> want is the static-peer primitive (see #1) — the library's <code>Connect</code> is a one-shot and we'd have to build the supervisor ourselves on top.</li>
 <li>Connection manager defaults to min=25 / max=35 / grace=20s (<code>go-p2p-message-bus/client.go:276-286</code>). Teranode does not override. For a private network of say 10 nodes that's fine. For a node sitting in a 1K-peer mesh, hitting max=35 means the connection manager is constantly pruning, which is precisely the regime where peer churn matters and where lost connections cost the most. Worth exposing as a setting and tuning.</li>
 </ul>
 <hr />
-<h2 id="concerns-ranked">Concerns ranked</h2>
-<h3 id="blocker">Blocker</h3>
+<h2 id="concerns-ranked">Concerns ranked<a class="headerlink" href="#concerns-ranked" title="Permanent link">&para;</a></h2>
+<h3 id="blocker">Blocker<a class="headerlink" href="#blocker" title="Permanent link">&para;</a></h3>
 <ol>
-<li>~~<strong><code>StaticPeers</code> is dead code in <code>services/p2p/</code>.</strong>~~ <strong>Resolved.</strong> Wired through <code>go-p2p-message-bus</code> v0.1.17 (<code>services/p2p/Server.go:334</code>).</li>
-<li>~~<strong><code>PeerRegistry</code> has no eviction policy.</strong>~~ <strong>Resolved.</strong> TTL + LRU eviction added (<code>services/p2p/peer_registry.go</code> <code>Cleanup</code>, with <code>p2p_peer_registry_max_size</code>/<code>_ttl</code>/<code>_cleanup_interval</code> settings). Connected and banned peers are exempt.</li>
+<li><del><strong><code>StaticPeers</code> is dead code in <code>services/p2p/</code>.</strong></del> <strong>Resolved.</strong> Wired through <code>go-p2p-message-bus</code> v0.1.17 (<code>services/p2p/Server.go:334</code>).</li>
+<li><del><strong><code>PeerRegistry</code> has no eviction policy.</strong></del> <strong>Resolved.</strong> TTL + LRU eviction added (<code>services/p2p/peer_registry.go</code> <code>Cleanup</code>, with <code>p2p_peer_registry_max_size</code>/<code>_ttl</code>/<code>_cleanup_interval</code> settings). Connected and banned peers are exempt.</li>
 <li><strong>Pre-relay topic validators (<code>pubsub.RegisterTopicValidator</code>).</strong> Per-topic size caps now run in handlers (mitigates the worst payloads), but schema and rate are still enforced <em>after</em> gossipsub fan-out. Closing this gap is a library change: extend <code>go-p2p-message-bus</code> so callers can register a validator function, then teranode supplies one per topic. Highest-leverage hardening change still outstanding.</li>
 </ol>
-<h3 id="should-fix">Should-fix</h3>
+<h3 id="should-fix">Should-fix<a class="headerlink" href="#should-fix" title="Permanent link">&para;</a></h3>
 <ol>
 <li><strong>Reputation scores and ban state are not persisted.</strong> Restart wipes the lot. A coordinated misbehaving peer can survive any 24h ban by waiting for a restart. Persist to local storage (sqlite or a simple file) and rehydrate on boot.</li>
 <li><strong><code>ReconsiderBadPeers()</code> is dead code</strong> (<code>peer_registry.go:600</code>). Wire it into a periodic tick — or delete it. Currently a peer at rep 15 stays at 15 forever even if everything else has changed.</li>
@@ -6722,18 +7148,18 @@
 <li><strong>DHT "client" mode is misnamed.</strong> It's not a lightweight mode. Settings docs at <code>settings/p2p_settings.go:50</code> should call this out, or we should ask the library to rename it.</li>
 <li><strong>mDNS has no runtime guard.</strong> Docs warn but the code happily multicasts on shared infrastructure. Either gate on a private-network probe at startup or make it a build-tag.</li>
 </ol>
-<h3 id="nice-to-have">Nice-to-have</h3>
+<h3 id="nice-to-have">Nice-to-have<a class="headerlink" href="#nice-to-have" title="Permanent link">&para;</a></h3>
 <ol>
-<li>~~Tighter per-topic size limits (<code>node_status</code> does not need 10MB).~~ Done (<code>services/p2p/Server.go</code> constants).</li>
+<li><del>Tighter per-topic size limits (<code>node_status</code> does not need 10MB).</del> Done (<code>services/p2p/Server.go</code> constants).</li>
 <li>Per-message origin signature so we can stop trusting <code>peer.FromID</code> once the network is open.</li>
 <li>Re-enable the disabled malicious-peer detection in <code>sync_coordinator.go:390-405</code>.</li>
 <li>Optional parallel sync from multiple peers, with the existing single-peer mode kept as the default.</li>
 <li>A <code>connection-churn</code> rate metric would make peer-stability problems easier to spot.</li>
 </ol>
-<h2 id="suggested-follow-up-tickets">Suggested follow-up tickets</h2>
+<h2 id="suggested-follow-up-tickets">Suggested follow-up tickets<a class="headerlink" href="#suggested-follow-up-tickets" title="Permanent link">&para;</a></h2>
 <ol>
-<li>~~<strong>Wire StaticPeers through to libp2p connect-and-supervise.</strong>~~ Done in <code>go-p2p-message-bus</code> v0.1.17.</li>
-<li>~~<strong>PeerRegistry eviction.</strong>~~ Done.</li>
+<li><del><strong>Wire StaticPeers through to libp2p connect-and-supervise.</strong></del> Done in <code>go-p2p-message-bus</code> v0.1.17.</li>
+<li><del><strong>PeerRegistry eviction.</strong></del> Done.</li>
 <li><strong>Persist reputation and bans.</strong> Spec the storage format, decide on a file vs. SQLite.</li>
 <li><strong>Pre-relay gossipsub validators.</strong> Two-step: (a) extend <code>go-p2p-message-bus</code> to expose <code>RegisterTopicValidator</code> (or accept a <code>MessageValidator</code> in <code>Config</code>), then (b) wire per-topic schema + rate-limit validators from <code>services/p2p/</code>. Per-topic size caps already landed application-side as a partial mitigation.</li>
 <li><strong>Heartbeat bandwidth at scale.</strong> Either rate-adapt with cluster size or merge into block topic.</li>
@@ -6758,37 +7184,27 @@
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -6805,12 +7221,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

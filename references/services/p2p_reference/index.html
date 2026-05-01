@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/services/p2p_reference/">
       
       
         <link rel="prev" href="../blockpersister_reference/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -215,6 +274,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -234,6 +295,8 @@
         <a href="../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
+  
+    
   
   Key Topics
 
@@ -256,6 +319,8 @@
         <a href="../../projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2228,6 +2407,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2240,9 +2461,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2590,6 +2809,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2602,9 +2829,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2792,6 +3017,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2804,9 +3047,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3078,6 +3319,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3090,9 +3347,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3336,6 +3591,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3348,9 +3609,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3454,6 +3713,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3466,9 +3737,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3656,6 +3925,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3668,9 +3941,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3746,6 +4017,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3758,9 +4033,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3845,6 +4118,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3928,6 +4217,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3943,9 +4246,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
@@ -4125,6 +4426,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4137,9 +4462,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4503,6 +4826,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4518,9 +4859,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="">
@@ -4793,6 +5132,20 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -5482,6 +5835,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5497,9 +5856,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="">
@@ -5603,6 +5960,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5618,9 +5991,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="">
@@ -5800,6 +6171,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5812,9 +6213,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6254,6 +6653,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6266,9 +6673,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6408,6 +6813,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6423,9 +6844,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="">
@@ -7115,61 +7534,130 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../projectStructure/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../blockpersister_reference/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Overlay Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="p2p-server-reference-documentation">P2P Server Reference Documentation</h1>
-<h2 id="overview">Overview</h2>
+
+<h1 id="p2p-server-reference-documentation">P2P Server Reference Documentation<a class="headerlink" href="#p2p-server-reference-documentation" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>The P2P Server facilitates peer-to-peer communication within the BSV Blockchain network, managing the distribution of blocks, transactions, and network-related data. The server integrates with blockchain services, validation systems, and Kafka messaging to ensure efficient data propagation across the network. It implements both WebSocket and HTTP interfaces for peer communication while maintaining secure, scalable connections.</p>
-<h2 id="core-components">Core Components</h2>
-<h3 id="server-structure">Server Structure</h3>
+<h2 id="core-components">Core Components<a class="headerlink" href="#core-components" title="Permanent link">&para;</a></h2>
+<h3 id="server-structure">Server Structure<a class="headerlink" href="#server-structure" title="Permanent link">&para;</a></h3>
 <p>The P2P Server is implemented through the Server struct, which coordinates all peer-to-peer communication:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnimplementedPeerServiceServer</span>
-<span class="w">    </span><span class="nx">P2PClient</span><span class="w">                         </span><span class="nx">p2pMessageBus</span><span class="p">.</span><span class="nx">P2PClient</span><span class="w">   </span><span class="c1">// The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w">                            </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="w">            </span><span class="c1">// Logger instance for the server</span>
-<span class="w">    </span><span class="nx">settings</span><span class="w">                          </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="w">       </span><span class="c1">// Configuration settings</span>
-<span class="w">    </span><span class="nx">bitcoinProtocolVersion</span><span class="w">            </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// Bitcoin protocol version identifier</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">        </span><span class="c1">// Client for blockchain interactions</span>
-<span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">               </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">     </span><span class="c1">// Client for block assembly operations</span>
-<span class="w">    </span><span class="nx">AssetHTTPAddressURL</span><span class="w">               </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// HTTP address URL for assets</span>
-<span class="w">    </span><span class="nx">PropagationURL</span><span class="w">                    </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)</span>
-<span class="w">    </span><span class="nx">e</span><span class="w">                                 </span><span class="o">*</span><span class="nx">echo</span><span class="p">.</span><span class="nx">Echo</span><span class="w">                </span><span class="c1">// Echo server instance</span>
-<span class="w">    </span><span class="nx">notificationCh</span><span class="w">                    </span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">notificationMsg</span><span class="w">     </span><span class="c1">// Channel for notifications</span>
-<span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w">     </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for rejected transactions</span>
-<span class="w">    </span><span class="nx">invalidBlocksKafkaConsumerClient</span><span class="w">  </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for invalid blocks</span>
-<span class="w">    </span><span class="nx">invalidSubtreeKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for invalid subtrees</span>
-<span class="w">    </span><span class="nx">subtreeKafkaProducerClient</span><span class="w">        </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="w"> </span><span class="c1">// Kafka producer for subtrees</span>
-<span class="w">    </span><span class="nx">blocksKafkaProducerClient</span><span class="w">         </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="w"> </span><span class="c1">// Kafka producer for blocks</span>
-<span class="w">    </span><span class="nx">banList</span><span class="w">                           </span><span class="nx">BanListI</span><span class="w">                  </span><span class="c1">// List of banned peers</span>
-<span class="w">    </span><span class="nx">banChan</span><span class="w">                           </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span><span class="w">             </span><span class="c1">// Channel for ban events</span>
-<span class="w">    </span><span class="nx">banManager</span><span class="w">                        </span><span class="nx">PeerBanManagerI</span><span class="w">           </span><span class="c1">// Manager for peer banning</span>
-<span class="w">    </span><span class="nx">gCtx</span><span class="w">                              </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
-<span class="w">    </span><span class="nx">blockTopicName</span><span class="w">                    </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">subtreeTopicName</span><span class="w">                  </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">rejectedTxTopicName</span><span class="w">               </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">invalidBlocksTopicName</span><span class="w">            </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid blocks</span>
-<span class="w">    </span><span class="nx">invalidSubtreeTopicName</span><span class="w">           </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid subtrees</span>
-<span class="w">    </span><span class="nx">nodeStatusTopicName</span><span class="w">               </span><span class="kt">string</span><span class="w">             </span><span class="c1">// pubsub topic for node status messages</span>
-<span class="w">    </span><span class="nx">topicPrefix</span><span class="w">                       </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Chain identifier prefix for topic validation</span>
-<span class="w">    </span><span class="nx">blockPeerMap</span><span class="w">                      </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each block (hash -&gt; peerMapEntry)</span>
-<span class="w">    </span><span class="nx">subtreePeerMap</span><span class="w">                    </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each subtree (hash -&gt; peerMapEntry)</span>
-<span class="w">    </span><span class="nx">startTime</span><span class="w">                         </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">          </span><span class="c1">// Server start time for uptime calculation</span>
-<span class="w">    </span><span class="nx">peerRegistry</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">      </span><span class="c1">// Central registry for all peer information</span>
-<span class="w">    </span><span class="nx">peerSelector</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerSelector</span><span class="w">      </span><span class="c1">// Stateless peer selection logic</span>
-<span class="w">    </span><span class="nx">syncCoordinator</span><span class="w">                   </span><span class="o">*</span><span class="nx">SyncCoordinator</span><span class="w">   </span><span class="c1">// Orchestrates sync operations</span>
-<span class="w">    </span><span class="nx">syncConnectionTimes</span><span class="w">               </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track when we first connected to each sync peer (peerID -&gt; timestamp)</span>
-
-<span class="w">    </span><span class="c1">// Cleanup configuration</span>
-<span class="w">    </span><span class="nx">peerMapCleanupTicker</span><span class="w">              </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic cleanup of peer maps</span>
-<span class="w">    </span><span class="nx">peerMapMaxSize</span><span class="w">                    </span><span class="kt">int</span><span class="w">                </span><span class="c1">// Maximum number of entries in peer maps</span>
-<span class="w">    </span><span class="nx">peerMapTTL</span><span class="w">                        </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w">      </span><span class="c1">// Time-to-live for peer map entries</span>
-<span class="w">    </span><span class="nx">registryCacheSaveTicker</span><span class="w">           </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic saving of peer registry cache</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnimplementedPeerServiceServer</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nx">P2PClient</span><span class="w">                         </span><span class="nx">p2pMessageBus</span><span class="p">.</span><span class="nx">P2PClient</span><span class="w">   </span><span class="c1">// The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nx">logger</span><span class="w">                            </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="w">            </span><span class="c1">// Logger instance for the server</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nx">settings</span><span class="w">                          </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="w">       </span><span class="c1">// Configuration settings</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nx">bitcoinProtocolVersion</span><span class="w">            </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// Bitcoin protocol version identifier</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">        </span><span class="c1">// Client for blockchain interactions</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">               </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">     </span><span class="c1">// Client for block assembly operations</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nx">AssetHTTPAddressURL</span><span class="w">               </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// HTTP address URL for assets</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nx">PropagationURL</span><span class="w">                    </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nx">e</span><span class="w">                                 </span><span class="o">*</span><span class="nx">echo</span><span class="p">.</span><span class="nx">Echo</span><span class="w">                </span><span class="c1">// Echo server instance</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nx">notificationCh</span><span class="w">                    </span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">notificationMsg</span><span class="w">     </span><span class="c1">// Channel for notifications</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w">     </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for rejected transactions</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nx">invalidBlocksKafkaConsumerClient</span><span class="w">  </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for invalid blocks</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nx">invalidSubtreeKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for invalid subtrees</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nx">subtreeKafkaProducerClient</span><span class="w">        </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="w"> </span><span class="c1">// Kafka producer for subtrees</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nx">blocksKafkaProducerClient</span><span class="w">         </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="w"> </span><span class="c1">// Kafka producer for blocks</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nx">banList</span><span class="w">                           </span><span class="nx">BanListI</span><span class="w">                  </span><span class="c1">// List of banned peers</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="nx">banChan</span><span class="w">                           </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span><span class="w">             </span><span class="c1">// Channel for ban events</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="nx">banManager</span><span class="w">                        </span><span class="nx">PeerBanManagerI</span><span class="w">           </span><span class="c1">// Manager for peer banning</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="nx">gCtx</span><span class="w">                              </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="nx">blockTopicName</span><span class="w">                    </span><span class="kt">string</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span><span class="nx">subtreeTopicName</span><span class="w">                  </span><span class="kt">string</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="nx">rejectedTxTopicName</span><span class="w">               </span><span class="kt">string</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span><span class="nx">invalidBlocksTopicName</span><span class="w">            </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid blocks</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">    </span><span class="nx">invalidSubtreeTopicName</span><span class="w">           </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid subtrees</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">    </span><span class="nx">nodeStatusTopicName</span><span class="w">               </span><span class="kt">string</span><span class="w">             </span><span class="c1">// pubsub topic for node status messages</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span><span class="nx">topicPrefix</span><span class="w">                       </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Chain identifier prefix for topic validation</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span><span class="nx">blockPeerMap</span><span class="w">                      </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each block (hash -&gt; peerMapEntry)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">    </span><span class="nx">subtreePeerMap</span><span class="w">                    </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each subtree (hash -&gt; peerMapEntry)</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">    </span><span class="nx">startTime</span><span class="w">                         </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">          </span><span class="c1">// Server start time for uptime calculation</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="w">    </span><span class="nx">peerRegistry</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">      </span><span class="c1">// Central registry for all peer information</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w">    </span><span class="nx">peerSelector</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerSelector</span><span class="w">      </span><span class="c1">// Stateless peer selection logic</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w">    </span><span class="nx">syncCoordinator</span><span class="w">                   </span><span class="o">*</span><span class="nx">SyncCoordinator</span><span class="w">   </span><span class="c1">// Orchestrates sync operations</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="w">    </span><span class="nx">syncConnectionTimes</span><span class="w">               </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track when we first connected to each sync peer (peerID -&gt; timestamp)</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w">    </span><span class="c1">// Cleanup configuration</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="w">    </span><span class="nx">peerMapCleanupTicker</span><span class="w">              </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic cleanup of peer maps</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">    </span><span class="nx">peerMapMaxSize</span><span class="w">                    </span><span class="kt">int</span><span class="w">                </span><span class="c1">// Maximum number of entries in peer maps</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">    </span><span class="nx">peerMapTTL</span><span class="w">                        </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w">      </span><span class="c1">// Time-to-live for peer map entries</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w">    </span><span class="nx">registryCacheSaveTicker</span><span class="w">           </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic saving of peer registry cache</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The server manages several key components, each serving a specific purpose in the P2P network:</p>
 <ul>
 <li>The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package</li>
@@ -7179,24 +7667,24 @@
 <li>The notification channel handles real-time event propagation</li>
 <li>The peerRegistry, peerSelector, and syncCoordinator provide comprehensive peer management and synchronization capabilities</li>
 </ul>
-<h3 id="p2p-client-interface">P2P Client Interface</h3>
+<h3 id="p2p-client-interface">P2P Client Interface<a class="headerlink" href="#p2p-client-interface" title="Permanent link">&para;</a></h3>
 <p>The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.</p>
-<h2 id="server-operations">Server Operations</h2>
-<h3 id="server-initialization">Server Initialization</h3>
+<h2 id="server-operations">Server Operations<a class="headerlink" href="#server-operations" title="Permanent link">&para;</a></h2>
+<h3 id="server-initialization">Server Initialization<a class="headerlink" href="#server-initialization" title="Permanent link">&para;</a></h3>
 <p>The server initializes through the NewServer function:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span>
-<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">invalidBlocksKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">invalidSubtreeKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">subtreeKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blocksKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
-<span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nx">invalidBlocksKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nx">invalidSubtreeKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nx">subtreeKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nx">blocksKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>This function establishes the server with required settings and dependencies, including:</p>
 <ul>
 <li>P2P network configuration (IP, port, topics)</li>
@@ -7205,10 +7693,10 @@
 <li>Connection to blockchain services</li>
 <li>Kafka producer and consumer setup</li>
 </ul>
-<h3 id="health-management">Health Management</h3>
+<h3 id="health-management">Health Management<a class="headerlink" href="#health-management" title="Permanent link">&para;</a></h3>
 <p>The server implements comprehensive health checking through:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>This method performs two types of health verification:</p>
 <p>For liveness checks, it verifies basic server operation without dependency checks.</p>
 <p>For readiness checks, it verifies:</p>
@@ -7217,15 +7705,15 @@
 <li>Blockchain client functionality</li>
 <li>FSM state verification</li>
 </ul>
-<h3 id="server-lifecycle-management">Server Lifecycle Management</h3>
+<h3 id="server-lifecycle-management">Server Lifecycle Management<a class="headerlink" href="#server-lifecycle-management" title="Permanent link">&para;</a></h3>
 <p>The server manages its lifecycle through several key methods:</p>
 <p>The Init method prepares the server for operation:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>It verifies and adjusts HTTP/HTTPS settings based on security requirements and establishes necessary connection URLs.</p>
 <p>The Start method initiates server operations:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>It begins:</p>
 <ul>
 <li>Kafka message processing</li>
@@ -7237,56 +7725,56 @@
 <li>Once initialization is complete, it signals readiness by closing the readyCh channel</li>
 </ul>
 <p>The Stop method ensures graceful shutdown:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>It manages the orderly shutdown of all server components and connections.</p>
-<h3 id="ban-management">Ban Management</h3>
+<h3 id="ban-management">Ban Management<a class="headerlink" href="#ban-management" title="Permanent link">&para;</a></h3>
 <p>The P2P Server implements a sophisticated peer banning system through several components:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">BanEventHandler</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">OnPeerBanned</span><span class="p">(</span><span class="nx">peerID</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">until</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BanEventHandler</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nx">OnPeerBanned</span><span class="p">(</span><span class="nx">peerID</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">until</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>BanEventHandler</code> interface allows the system to react to ban events, which is implemented by the P2P Server.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">BanListI</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// IsBanned checks if a peer is banned by its IP address</span>
-<span class="w">    </span><span class="nx">IsBanned</span><span class="p">(</span><span class="nx">ipStr</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span>
-
-<span class="w">    </span><span class="c1">// Add adds an IP or subnet to the ban list with an expiration time</span>
-<span class="w">    </span><span class="nx">Add</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ipOrSubnet</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">expirationTime</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-
-<span class="w">    </span><span class="c1">// Remove removes an IP or subnet from the ban list</span>
-<span class="w">    </span><span class="nx">Remove</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ipOrSubnet</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-
-<span class="w">    </span><span class="c1">// ListBanned returns a list of all currently banned IP addresses and subnets</span>
-<span class="w">    </span><span class="nx">ListBanned</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
-
-<span class="w">    </span><span class="c1">// Subscribe returns a channel to receive ban events</span>
-<span class="w">    </span><span class="nx">Subscribe</span><span class="p">()</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span>
-
-<span class="w">    </span><span class="c1">// Unsubscribe removes a subscription to ban events</span>
-<span class="w">    </span><span class="nx">Unsubscribe</span><span class="p">(</span><span class="nx">ch</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span><span class="p">)</span>
-
-<span class="w">    </span><span class="c1">// Init initializes the ban list and starts any background processes</span>
-<span class="w">    </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-
-<span class="w">    </span><span class="c1">// Clear removes all entries from the ban list and cleans up resources</span>
-<span class="w">    </span><span class="nx">Clear</span><span class="p">()</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BanListI</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="c1">// IsBanned checks if a peer is banned by its IP address</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nx">IsBanned</span><span class="p">(</span><span class="nx">ipStr</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="c1">// Add adds an IP or subnet to the ban list with an expiration time</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nx">Add</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ipOrSubnet</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">expirationTime</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="c1">// Remove removes an IP or subnet from the ban list</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nx">Remove</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ipOrSubnet</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="c1">// ListBanned returns a list of all currently banned IP addresses and subnets</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nx">ListBanned</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">    </span><span class="c1">// Subscribe returns a channel to receive ban events</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">    </span><span class="nx">Subscribe</span><span class="p">()</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="c1">// Unsubscribe removes a subscription to ban events</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">    </span><span class="nx">Unsubscribe</span><span class="p">(</span><span class="nx">ch</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BanEvent</span><span class="p">)</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">    </span><span class="c1">// Init initializes the ban list and starts any background processes</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">    </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">    </span><span class="c1">// Clear removes all entries from the ban list and cleans up resources</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">    </span><span class="nx">Clear</span><span class="p">()</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>BanListI</code> interface defines the contract for managing banned peers by IP address or subnet, with methods for adding, removing, listing, and checking ban status. The system uses an SQL-backed implementation that persists ban information.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">PeerBanManager</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">ctx</span><span class="w">           </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
-<span class="w">    </span><span class="nx">mu</span><span class="w">            </span><span class="nx">sync</span><span class="p">.</span><span class="nx">RWMutex</span>
-<span class="w">    </span><span class="nx">peerBanScores</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="o">*</span><span class="nx">BanScore</span>
-<span class="w">    </span><span class="nx">reasonPoints</span><span class="w">  </span><span class="kd">map</span><span class="p">[</span><span class="nx">BanReason</span><span class="p">]</span><span class="kt">int</span>
-<span class="w">    </span><span class="nx">banThreshold</span><span class="w">  </span><span class="kt">int</span>
-<span class="w">    </span><span class="nx">banDuration</span><span class="w">   </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>
-<span class="w">    </span><span class="nx">decayInterval</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>
-<span class="w">    </span><span class="nx">decayAmount</span><span class="w">   </span><span class="kt">int</span>
-<span class="w">    </span><span class="nx">handler</span><span class="w">       </span><span class="nx">BanEventHandler</span>
-<span class="w">    </span><span class="nx">peerRegistry</span><span class="w">  </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">        </span><span class="c1">// Peer registry to sync ban status with</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PeerBanManager</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="w">           </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nx">mu</span><span class="w">            </span><span class="nx">sync</span><span class="p">.</span><span class="nx">RWMutex</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nx">peerBanScores</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="o">*</span><span class="nx">BanScore</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nx">reasonPoints</span><span class="w">  </span><span class="kd">map</span><span class="p">[</span><span class="nx">BanReason</span><span class="p">]</span><span class="kt">int</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nx">banThreshold</span><span class="w">  </span><span class="kt">int</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nx">banDuration</span><span class="w">   </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nx">decayInterval</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nx">decayAmount</span><span class="w">   </span><span class="kt">int</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nx">handler</span><span class="w">       </span><span class="nx">BanEventHandler</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nx">peerRegistry</span><span class="w">  </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">        </span><span class="c1">// Peer registry to sync ban status with</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>PeerBanManager</code> implements the <code>PeerBanManagerI</code> interface and maintains scores for peers, automatically banning them when they exceed a threshold. It provides methods like:</p>
 <ul>
 <li><code>AddScore</code>: Increments a peer's score for specific violations</li>
@@ -7298,108 +7786,108 @@
 <li><code>GetBanReasons(peerID string) []string</code>: Returns the list of ban reasons recorded for a peer</li>
 </ul>
 <p>The system defines standard ban reasons with associated scoring:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">BanReason</span><span class="w"> </span><span class="kt">int</span>
-
-<span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-<span class="w">    </span><span class="nx">ReasonUnknown</span><span class="w"> </span><span class="nx">BanReason</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">iota</span>
-<span class="w">    </span><span class="nx">ReasonInvalidSubtree</span><span class="w">     </span><span class="c1">// 10 points</span>
-<span class="w">    </span><span class="nx">ReasonProtocolViolation</span><span class="w">  </span><span class="c1">// 20 points</span>
-<span class="w">    </span><span class="nx">ReasonSpam</span><span class="w">               </span><span class="c1">// 50 points</span>
-<span class="w">    </span><span class="nx">ReasonInvalidBlock</span><span class="w">       </span><span class="c1">// 10 points</span>
-<span class="w">    </span><span class="nx">ReasonCatchupFailure</span><span class="w">     </span><span class="c1">// 30 points</span>
-<span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BanReason</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nx">ReasonUnknown</span><span class="w"> </span><span class="nx">BanReason</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">iota</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nx">ReasonInvalidSubtree</span><span class="w">     </span><span class="c1">// 10 points</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nx">ReasonProtocolViolation</span><span class="w">  </span><span class="c1">// 20 points</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nx">ReasonSpam</span><span class="w">               </span><span class="c1">// 50 points</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nx">ReasonInvalidBlock</span><span class="w">       </span><span class="c1">// 10 points</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">    </span><span class="nx">ReasonCatchupFailure</span><span class="w">     </span><span class="c1">// 30 points</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="p">)</span>
+</span></code></pre></div>
 <p>Peer scores automatically decay over time to allow for recovery from temporary issues.</p>
-<h3 id="public-api-methods">Public API Methods</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeers</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="public-api-methods">Public API Methods<a class="headerlink" href="#public-api-methods" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeers</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Returns a list of connected peers with their connection information and status.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">BanPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">BanPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">BanPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">BanPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">BanPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">BanPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Bans a peer by their peer ID, preventing future connections from that peer.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UnbanPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnbanPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnbanPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UnbanPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnbanPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnbanPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Removes a ban on a specific peer, allowing them to reconnect.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Checks if a specific peer ID is currently banned.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ListBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ListBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ListBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ListBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Returns a list of all currently banned peer IDs and IP addresses.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ClearBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ClearBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ClearBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ClearBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Clears all bans from the ban list, allowing all previously banned peers to reconnect.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">AddBanScore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">AddBanScore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Client</span><span class="p">)</span><span class="w"> </span><span class="nx">ConnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peerAddr</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Client</span><span class="p">)</span><span class="w"> </span><span class="nx">ConnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peerAddr</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Initiates a connection to a peer using multiaddr format. <strong>Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.</strong></p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Client</span><span class="p">)</span><span class="w"> </span><span class="nx">DisconnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Client</span><span class="p">)</span><span class="w"> </span><span class="nx">DisconnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Disconnects from a currently connected peer. <strong>Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.</strong></p>
-<h4 id="catchup-metrics-and-reputation-endpoints">Catchup Metrics and Reputation Endpoints</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupAttempt</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="catchup-metrics-and-reputation-endpoints">Catchup Metrics and Reputation Endpoints<a class="headerlink" href="#catchup-metrics-and-reputation-endpoints" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupAttempt</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Records that a catchup attempt was initiated with a peer. This increments the interaction attempt counter.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupSuccess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupSuccess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Records a successful catchup operation with a peer. This increments success counters and updates the peer's reputation score positively.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 <li><code>duration_ms</code> (int64): Duration of the catchup operation in milliseconds</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupFailure</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupFailure</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Records a failed catchup attempt with a peer. This increments failure counters and reduces reputation.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 </ul>
 <p><strong>Impact</strong>: Decreases peer reputation score and applies recent failure penalty.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 <li><code>score</code> (double): Reputation score value (0-100 range)</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupError</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupError</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Records the last error message from a catchup attempt with a peer.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 <li><code>error_msg</code> (string): Error message describing the failure</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ResetReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ResetReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Resets reputation for one or all peers back to neutral (50.0). This implements the reputation recovery mechanism.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string, optional): If provided, resets reputation for specific peer. If omitted, resets all peers</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeersForCatchup</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeersForCatchup</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Returns a list of peers suitable for catchup operations, ranked by reputation and filtered by selection criteria.</p>
 <p><strong>Parameters</strong>: None (can optionally filter in the future)</p>
 <p><strong>Returns</strong>: Array of <code>PeerInfoForCatchup</code> containing peer ID, height, block hash, data hub URL, catchup metrics</p>
-<h4 id="validation-reporting-endpoints">Validation Reporting Endpoints</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="validation-reporting-endpoints">Validation Reporting Endpoints<a class="headerlink" href="#validation-reporting-endpoints" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Reports that a peer provided a valid subtree. This increments the peer's positive interaction counters.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
@@ -7407,8 +7895,8 @@
 <li><code>subtree_hash</code> (string): Hash of the validated subtree</li>
 </ul>
 <p><strong>Returns</strong>: <code>success</code> (bool) and <code>message</code> (string) indicating validation result</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Reports that a peer provided a valid block. This increments the peer's positive interaction counters.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
@@ -7416,25 +7904,25 @@
 <li><code>block_hash</code> (string): Hash of the validated block</li>
 </ul>
 <p><strong>Returns</strong>: <code>success</code> (bool) and <code>message</code> (string) indicating validation result</p>
-<h4 id="peer-status-and-query-endpoints">Peer Status and Query Endpoints</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="peer-status-and-query-endpoints">Peer Status and Query Endpoints<a class="headerlink" href="#peer-status-and-query-endpoints" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Checks if a peer has been marked as malicious.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 </ul>
 <p><strong>Returns</strong>: <code>is_malicious</code> (bool) and optional <code>reason</code> (string) explaining why peer is malicious</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerUnhealthy</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerUnhealthy</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Checks if a peer is considered unhealthy based on reputation score and recent failures.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier</li>
 </ul>
 <p><strong>Returns</strong>: <code>is_unhealthy</code> (bool), optional <code>reason</code> (string), and <code>reputation_score</code> (float)</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeerRegistry</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRegistryResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeerRegistry</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRegistryResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Returns comprehensive information about all peers in the registry, including full reputation metrics and interaction history.</p>
 <p><strong>Returns</strong>: Array of <code>PeerRegistryInfo</code> containing:</p>
 <ul>
@@ -7447,24 +7935,24 @@
 <li><strong>Reputation</strong>: Reputation score (0-100)</li>
 <li><strong>Errors</strong>: Last catchup error message and timestamp</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Returns detailed information for a single peer by peer ID.</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier to query</li>
 </ul>
 <p><strong>Returns</strong>: <code>PeerRegistryInfo</code> object with full peer details, and <code>found</code> (bool) indicating if peer exists</p>
-<h4 id="metrics-tracking-endpoints">Metrics Tracking Endpoints</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordBytesDownloaded</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="metrics-tracking-endpoints">Metrics Tracking Endpoints<a class="headerlink" href="#metrics-tracking-endpoints" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordBytesDownloaded</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Records bytes downloaded from a peer via HTTP (typically from their DataHub).</p>
 <p><strong>Parameters</strong>:</p>
 <ul>
 <li><code>peer_id</code> (string): The peer identifier that provided the data</li>
 <li><code>bytes_downloaded</code> (uint64): Number of bytes downloaded from the peer</li>
 </ul>
-<h3 id="message-handlers">Message Handlers</h3>
+<h3 id="message-handlers">Message Handlers<a class="headerlink" href="#message-handlers" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>handleBlockTopic</code>: Handles incoming block messages and validates block announcements.</li>
 <li><code>handleSubtreeTopic</code>: Handles incoming subtree messages and processes subtree data.</li>
@@ -7474,56 +7962,56 @@
 <li><code>invalidSubtreeHandler</code>: Processes notifications about invalid subtrees from Kafka.</li>
 <li><code>rejectedTxHandler</code>: Processes rejected transaction notifications from Kafka.</li>
 </ul>
-<h3 id="message-structures">Message Structures</h3>
+<h3 id="message-structures">Message Structures<a class="headerlink" href="#message-structures" title="Permanent link">&para;</a></h3>
 <p>The P2P service uses JSON-encoded messages for network communication:</p>
-<h4 id="blockmessage">BlockMessage</h4>
+<h4 id="blockmessage">BlockMessage<a class="headerlink" href="#blockmessage" title="Permanent link">&para;</a></h4>
 <p>Announces the availability of a new block to the network:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block_hash_hex&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;DataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;PeerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;Header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block_header_hex&quot;</span><span class="w">  </span><span class="c1">// NEW: Raw block header in hexadecimal format</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="p">{</span>
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block_hash_hex&quot;</span><span class="p">,</span>
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a><span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="w">  </span><span class="nt">&quot;DataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a><span class="w">  </span><span class="nt">&quot;PeerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span><span class="p">,</span>
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6" href="#__codelineno-34-6"></a><span class="w">  </span><span class="nt">&quot;Header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block_header_hex&quot;</span><span class="w">  </span><span class="c1">// NEW: Raw block header in hexadecimal format</span>
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7" href="#__codelineno-34-7"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>Header</code> field was added to enable peers to quickly validate block properties without fetching the full block data. This reduces network latency and allows for faster block propagation decisions.</p>
-<h4 id="subtreemessage">SubtreeMessage</h4>
+<h4 id="subtreemessage">SubtreeMessage<a class="headerlink" href="#subtreemessage" title="Permanent link">&para;</a></h4>
 <p>Announces the availability of a subtree (transaction batch):</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subtree_hash_hex&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;DataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;PeerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<h4 id="bestblockmessage">BestBlockMessage</h4>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="p">{</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subtree_hash_hex&quot;</span><span class="p">,</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="w">  </span><span class="nt">&quot;DataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="w">  </span><span class="nt">&quot;PeerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<h4 id="bestblockmessage">BestBlockMessage<a class="headerlink" href="#bestblockmessage" title="Permanent link">&para;</a></h4>
 <p>Requests or announces the current best block:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;best_block_hash_hex&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<h4 id="miningonmessage">MiningOnMessage</h4>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="p">{</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="w">  </span><span class="nt">&quot;Hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;best_block_hash_hex&quot;</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<h4 id="miningonmessage">MiningOnMessage<a class="headerlink" href="#miningonmessage" title="Permanent link">&para;</a></h4>
 <p>Notifies that mining has started on a new block:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123457</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;PreviousHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;previous_block_hash_hex&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<h4 id="handshakemessage">HandshakeMessage</h4>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="p">{</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="w">  </span><span class="nt">&quot;Height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123457</span><span class="p">,</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="w">  </span><span class="nt">&quot;PreviousHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;previous_block_hash_hex&quot;</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<h4 id="handshakemessage">HandshakeMessage<a class="headerlink" href="#handshakemessage" title="Permanent link">&para;</a></h4>
 <p>Used for version/verack exchanges during peer connection:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;version&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// or &quot;verack&quot;</span>
-<span class="w">  </span><span class="nt">&quot;peerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;bestHeight&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;bestHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;best_block_hash_hex&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;dataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;userAgent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;teranode/bitcoin/v1.0.0&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;services&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;topicPrefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mainnet&quot;</span><span class="w">  </span><span class="c1">// Chain identifier for network isolation</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="p">{</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;version&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// or &quot;verack&quot;</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="w">  </span><span class="nt">&quot;peerID&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_identifier&quot;</span><span class="p">,</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="w">  </span><span class="nt">&quot;bestHeight&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a><span class="w">  </span><span class="nt">&quot;bestHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;best_block_hash_hex&quot;</span><span class="p">,</span>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6" href="#__codelineno-38-6"></a><span class="w">  </span><span class="nt">&quot;dataHubURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://node-address:port&quot;</span><span class="p">,</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7" href="#__codelineno-38-7"></a><span class="w">  </span><span class="nt">&quot;userAgent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;teranode/bitcoin/v1.0.0&quot;</span><span class="p">,</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8" href="#__codelineno-38-8"></a><span class="w">  </span><span class="nt">&quot;services&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9" href="#__codelineno-38-9"></a><span class="w">  </span><span class="nt">&quot;topicPrefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mainnet&quot;</span><span class="w">  </span><span class="c1">// Chain identifier for network isolation</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10" href="#__codelineno-38-10"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>topicPrefix</code> field ensures that nodes only connect to peers on the same chain (e.g., mainnet, testnet). This prevents accidental cross-chain connections and maintains network integrity.</p>
-<h3 id="handshake-protocol">Handshake Protocol</h3>
+<h3 id="handshake-protocol">Handshake Protocol<a class="headerlink" href="#handshake-protocol" title="Permanent link">&para;</a></h3>
 <p>The P2P handshake protocol establishes connections between peers and exchanges version information:</p>
 <ol>
 <li>
@@ -7557,16 +8045,16 @@
 </ul>
 </li>
 </ol>
-<h2 id="key-processes">Key Processes</h2>
-<h3 id="p2p-communication">P2P Communication</h3>
+<h2 id="key-processes">Key Processes<a class="headerlink" href="#key-processes" title="Permanent link">&para;</a></h2>
+<h3 id="p2p-communication">P2P Communication<a class="headerlink" href="#p2p-communication" title="Permanent link">&para;</a></h3>
 <p>The server uses a P2P node for communication with other peers in the network. It publishes and subscribes to various topics such as best blocks, blocks, subtrees, and mining-on notifications.</p>
-<h3 id="blockchain-interaction">Blockchain Interaction</h3>
+<h3 id="blockchain-interaction">Blockchain Interaction<a class="headerlink" href="#blockchain-interaction" title="Permanent link">&para;</a></h3>
 <p>The server interacts with the blockchain client to retrieve and validate block information. It also subscribes to blockchain notifications to propagate relevant information to peers.</p>
-<h3 id="kafka-integration">Kafka Integration</h3>
+<h3 id="kafka-integration">Kafka Integration<a class="headerlink" href="#kafka-integration" title="Permanent link">&para;</a></h3>
 <p>The server uses Kafka producers and consumers for efficient distribution of block and subtree data across the network. Kafka connections support TLS/SSL encryption for secure communication in production environments (see Kafka TLS Configuration section for details).</p>
-<h2 id="configuration">Configuration</h2>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>The following settings can be configured for the p2p service:</p>
-<h3 id="chain-configuration">Chain Configuration</h3>
+<h3 id="chain-configuration">Chain Configuration<a class="headerlink" href="#chain-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>ChainCfgParams.TopicPrefix</code>: <strong>REQUIRED</strong> - Chain identifier prefix (e.g., "mainnet", "testnet", "stn")<ul>
 <li>Used during P2P handshake to ensure network isolation</li>
@@ -7576,7 +8064,7 @@
 </ul>
 </li>
 </ul>
-<h3 id="network-configuration">Network Configuration</h3>
+<h3 id="network-configuration">Network Configuration<a class="headerlink" href="#network-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>p2p_listen_addresses</code>: Specifies the IP addresses for the P2P service to bind to.</li>
 <li><code>p2p_advertise_addresses</code>: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., <code>192.168.1.1</code> or <code>example.com:9906</code>). When a port is not specified, the system will use the value from <code>p2p_port</code> as the default. Both IP addresses and domain names are supported. Format examples: <code>192.168.1.1</code>, <code>example.com:9906</code>, <code>node.local:8001</code>.</li>
@@ -7596,7 +8084,7 @@
 <li><code>securityLevelHTTP</code>: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.</li>
 <li><code>server_certFile</code> and <code>server_keyFile</code>: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.</li>
 </ul>
-<h2 id="dependencies">Dependencies</h2>
+<h2 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h2>
 <p>The P2P Server depends on several components:</p>
 <ul>
 <li><code>blockchain.ClientI</code>: Interface for blockchain operations</li>
@@ -7611,13 +8099,13 @@
 <li>Build applications that can directly integrate with Teranode's P2P messaging system</li>
 <li>Extend P2P functionality while maintaining compatibility with the standard interface</li>
 </ul>
-<h2 id="error-handling">Error Handling</h2>
+<h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <p>Errors are logged using the provided logger. Critical errors may result in the server shutting down or specific components failing to start.</p>
-<h2 id="concurrency">Concurrency</h2>
+<h2 id="concurrency">Concurrency<a class="headerlink" href="#concurrency" title="Permanent link">&para;</a></h2>
 <p>The server uses goroutines for handling concurrent operations, such as message processing, HTTP server, and blockchain subscription listening. It also uses contexts for cancellation and timeout management.</p>
-<h2 id="security">Security</h2>
+<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
 <p>The server supports both HTTP and HTTPS configurations based on the <code>securityLevelHTTP</code> setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.</p>
-<h2 id="related-documents">Related Documents</h2>
+<h2 id="related-documents">Related Documents<a class="headerlink" href="#related-documents" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../../topics/services/p2p/">P2P Topic Guide</a></li>
 <li><a href="../../settings/services/p2p_settings/">P2P Settings</a></li>
@@ -7641,37 +8129,65 @@
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../blockpersister_reference/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Block Persister">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Block Persister
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../legacy_reference/" class="md-footer__link md-footer__link--next" aria-label="Next: P2P Legacy Service">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                P2P Legacy Service
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -7688,12 +8204,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/settings/services/pruner_settings/">
       
       
         <link rel="prev" href="../propagation_settings/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -215,6 +274,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -234,6 +295,8 @@
         <a href="../../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
+  
+    
   
   Key Topics
 
@@ -256,6 +319,8 @@
         <a href="../../../projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2228,6 +2407,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2240,9 +2461,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2590,6 +2809,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2602,9 +2829,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2792,6 +3017,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2804,9 +3047,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3078,6 +3319,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3090,9 +3347,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3336,6 +3591,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3348,9 +3609,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3454,6 +3713,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3466,9 +3737,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3656,6 +3925,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3668,9 +3941,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3746,6 +4017,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3758,9 +4033,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3845,6 +4118,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3928,6 +4217,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3943,9 +4246,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
@@ -4125,6 +4426,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4137,9 +4462,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4503,6 +4826,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4518,9 +4859,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="">
@@ -4792,6 +5131,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4807,9 +5160,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
@@ -5025,6 +5376,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5040,9 +5397,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="">
@@ -5147,6 +5502,22 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -5344,6 +5715,36 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -6548,6 +6949,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6560,9 +6969,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6702,6 +7109,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6717,9 +7140,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="">
@@ -7703,35 +8124,122 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../../projectStructure/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../alert_settings/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Service Settings
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="pruner-service-settings-reference">Pruner Service Settings Reference</h1>
-<h2 id="overview">Overview</h2>
+
+<h1 id="pruner-service-settings-reference">Pruner Service Settings Reference<a class="headerlink" href="#pruner-service-settings-reference" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>This document provides comprehensive reference for all Pruner service configuration settings in Teranode.</p>
-<h2 id="service-control-settings">Service Control Settings</h2>
-<h3 id="startpruner">startPruner</h3>
+<h2 id="service-control-settings">Service Control Settings<a class="headerlink" href="#service-control-settings" title="Permanent link">&para;</a></h2>
+<h3 id="startpruner">startPruner<a class="headerlink" href="#startpruner" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>true</code></p>
 <p><strong>Description</strong>: Enable or disable the Pruner service</p>
 <p><strong>Context-Specific Values:</strong></p>
-<div class="highlight"><pre><span></span><code># Global default
-startPruner = true
-
-# Disable for specific nodes in multi-node docker setup
-startPruner.docker.host.teranode1.coinbase = false
-startPruner.docker.host.teranode2.coinbase = false
-startPruner.docker.host.teranode3.coinbase = false
-
-# Development
-startPruner.dev = true
-
-# Operator/Kubernetes
-startPruner.operator = true
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a># Global default
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>startPruner = true
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a># Disable for specific nodes in multi-node docker setup
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>startPruner.docker.host.teranode1.coinbase = false
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>startPruner.docker.host.teranode2.coinbase = false
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>startPruner.docker.host.teranode3.coinbase = false
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a># Development
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>startPruner.dev = true
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a># Operator/Kubernetes
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>startPruner.operator = true
+</span></code></pre></div>
 <p><strong>Impact:</strong></p>
 <ul>
 <li><code>true</code>: Pruner service starts and performs UTXO pruning</li>
@@ -7744,63 +8252,63 @@ startPruner.operator = true
 <li>Temporary workaround for pruning errors</li>
 </ul>
 <p><strong>Warning</strong>: Disabling pruning will cause the UTXO database to grow continuously. Only disable temporarily.</p>
-<h2 id="network-settings">Network Settings</h2>
-<h3 id="pruner_grpcport">pruner_grpcPort</h3>
+<h2 id="network-settings">Network Settings<a class="headerlink" href="#network-settings" title="Permanent link">&para;</a></h2>
+<h3 id="pruner_grpcport">pruner_grpcPort<a class="headerlink" href="#pruner_grpcport" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>8096</code></p>
 <p><strong>Description</strong>: gRPC server port for Pruner service</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>PRUNER_GRPC_PORT = 8096
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>PRUNER_GRPC_PORT = 8096
+</span></code></pre></div>
 <p><strong>Port Conflicts:</strong></p>
 <p>If port 8096 is already in use, change to an available port:</p>
-<div class="highlight"><pre><span></span><code>PRUNER_GRPC_PORT = 8097
-pruner_grpcAddress = localhost:8097
-pruner_grpcListenAddress = :8097
-</code></pre></div>
-<h3 id="pruner_grpcaddress">pruner_grpcAddress</h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>PRUNER_GRPC_PORT = 8097
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>pruner_grpcAddress = localhost:8097
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>pruner_grpcListenAddress = :8097
+</span></code></pre></div>
+<h3 id="pruner_grpcaddress">pruner_grpcAddress<a class="headerlink" href="#pruner_grpcaddress" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: String</p>
 <p><strong>Default</strong>: <code>localhost:8096</code></p>
 <p><strong>Description</strong>: gRPC client address for connecting to Pruner service</p>
 <p><strong>Context-Specific Values:</strong></p>
-<div class="highlight"><pre><span></span><code># Development (default)
-pruner_grpcAddress = localhost:${PRUNER_GRPC_PORT}
-
-# Docker multi-node (single machine)
-pruner_grpcAddress.docker.m = pruner:${PRUNER_GRPC_PORT}
-
-# Docker (per-service containers)
-pruner_grpcAddress.docker = ${clientName}:${PRUNER_GRPC_PORT}
-
-# Docker host access
-pruner_grpcAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-
-# Kubernetes/Operator
-pruner_grpcAddress.operator = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># Development (default)
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pruner_grpcAddress = localhost:${PRUNER_GRPC_PORT}
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a># Docker multi-node (single machine)
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>pruner_grpcAddress.docker.m = pruner:${PRUNER_GRPC_PORT}
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a># Docker (per-service containers)
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>pruner_grpcAddress.docker = ${clientName}:${PRUNER_GRPC_PORT}
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a># Docker host access
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>pruner_grpcAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a># Kubernetes/Operator
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>pruner_grpcAddress.operator = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
+</span></code></pre></div>
 <p><strong>Usage</strong>: Other services use this address to connect to Pruner's gRPC API</p>
-<h3 id="pruner_grpclistenaddress">pruner_grpcListenAddress</h3>
+<h3 id="pruner_grpclistenaddress">pruner_grpcListenAddress<a class="headerlink" href="#pruner_grpclistenaddress" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: String</p>
 <p><strong>Default</strong>: <code>:8096</code></p>
 <p><strong>Description</strong>: gRPC server listen address (bind address)</p>
 <p><strong>Context-Specific Values:</strong></p>
-<div class="highlight"><pre><span></span><code># Default (all interfaces)
-pruner_grpcListenAddress = :${PRUNER_GRPC_PORT}
-
-# Development (localhost only)
-pruner_grpcListenAddress.dev = localhost:${PRUNER_GRPC_PORT}
-
-# Docker host (localhost with port prefix)
-pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># Default (all interfaces)
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pruner_grpcListenAddress = :${PRUNER_GRPC_PORT}
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a># Development (localhost only)
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>pruner_grpcListenAddress.dev = localhost:${PRUNER_GRPC_PORT}
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a># Docker host (localhost with port prefix)
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
+</span></code></pre></div>
 <p><strong>Bind Addresses:</strong></p>
 <ul>
 <li><code>:8096</code> - Listen on all interfaces</li>
 <li><code>localhost:8096</code> - Listen only on localhost (more secure)</li>
 <li><code>0.0.0.0:8096</code> - Explicitly listen on all IPv4 interfaces</li>
 </ul>
-<h2 id="behavior-control-settings">Behavior Control Settings</h2>
-<h3 id="pruner_skipduringcatchup">pruner_skipDuringCatchup</h3>
+<h2 id="behavior-control-settings">Behavior Control Settings<a class="headerlink" href="#behavior-control-settings" title="Permanent link">&para;</a></h2>
+<h3 id="pruner_skipduringcatchup">pruner_skipDuringCatchup<a class="headerlink" href="#pruner_skipduringcatchup" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_skipDuringCatchup</code></p>
@@ -7811,19 +8319,19 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 <li><code>false</code> (default): Normal pruning during catchup (safe with retention &gt;= 288 blocks)</li>
 <li><code>true</code>: Skip all pruning during catchup state</li>
 </ul>
-<h3 id="pruner_blockassemblywaittimeout">pruner_blockAssemblyWaitTimeout</h3>
+<h3 id="pruner_blockassemblywaittimeout">pruner_blockAssemblyWaitTimeout<a class="headerlink" href="#pruner_blockassemblywaittimeout" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Duration</p>
 <p><strong>Default</strong>: <code>10m</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blockAssemblyWaitTimeout</code></p>
 <p><strong>Description</strong>: Maximum wait for Block Assembly service to be ready before pruning</p>
 <p>Sets the maximum time to wait for Block Assembly to be ready before proceeding with pruning operations. Prevents pruning data that could be needed for block construction.</p>
-<h3 id="pruner_connectionpoolwarningthreshold">pruner_connectionPoolWarningThreshold</h3>
+<h3 id="pruner_connectionpoolwarningthreshold">pruner_connectionPoolWarningThreshold<a class="headerlink" href="#pruner_connectionpoolwarningthreshold" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Float64</p>
 <p><strong>Default</strong>: <code>0.7</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_connectionPoolWarningThreshold</code></p>
 <p><strong>Description</strong>: Connection pool utilization warning threshold (0.0-1.0)</p>
 <p>When Aerospike connection pool utilization exceeds this threshold, the pruner auto-reduces chunk group limit to prevent pool exhaustion.</p>
-<h3 id="pruner_block_trigger">pruner_block_trigger</h3>
+<h3 id="pruner_block_trigger">pruner_block_trigger<a class="headerlink" href="#pruner_block_trigger" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: String</p>
 <p><strong>Default</strong>: <code>OnBlockPersisted</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_block_trigger</code></p>
@@ -7833,61 +8341,61 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 <li><code>OnBlockPersisted</code> (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)</li>
 <li><code>OnBlockMined</code>: Triggers on Block notifications with mined_set=true</li>
 </ul>
-<h3 id="pruner_force_ignore_block_persister_height">pruner_force_ignore_block_persister_height</h3>
+<h3 id="pruner_force_ignore_block_persister_height">pruner_force_ignore_block_persister_height<a class="headerlink" href="#pruner_force_ignore_block_persister_height" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_force_ignore_block_persister_height</code></p>
 <p><strong>Description</strong>: Force ignore block persister height tracking</p>
 <p>When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.</p>
-<h3 id="pruner_utxosetttl">pruner_utxoSetTTL</h3>
+<h3 id="pruner_utxosetttl">pruner_utxoSetTTL<a class="headerlink" href="#pruner_utxosetttl" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_utxoSetTTL</code></p>
 <p><strong>Description</strong>: Use TTL expiration instead of hard delete for UTXO records</p>
 <p>When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.</p>
-<h3 id="pruner_skipblobdeletion">pruner_skipBlobDeletion</h3>
+<h3 id="pruner_skipblobdeletion">pruner_skipBlobDeletion<a class="headerlink" href="#pruner_skipblobdeletion" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_skipBlobDeletion</code></p>
 <p><strong>Description</strong>: Skip blob deletion scheduling</p>
 <p>When enabled, skips scheduled deletion of blob store data (transactions and subtrees) based on Delete-At-Height values.</p>
-<h3 id="pruner_blobdeletionsafetywindow">pruner_blobDeletionSafetyWindow</h3>
+<h3 id="pruner_blobdeletionsafetywindow">pruner_blobDeletionSafetyWindow<a class="headerlink" href="#pruner_blobdeletionsafetywindow" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: uint32</p>
 <p><strong>Default</strong>: <code>10</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blobDeletionSafetyWindow</code></p>
 <p><strong>Description</strong>: Number of blocks behind the triggering block height (mined or persisted, depending on <code>pruner_block_trigger</code>) before deleting blobs</p>
 <p>Provides a safety margin by only deleting blobs whose delete-at-height is at least this many blocks behind the triggering block height. When the triggering height has not yet exceeded the safety window, all blob deletions are skipped. Prevents deletion of data that might be needed during reorg scenarios.</p>
-<h3 id="pruner_blobdeletionbatchsize">pruner_blobDeletionBatchSize</h3>
+<h3 id="pruner_blobdeletionbatchsize">pruner_blobDeletionBatchSize<a class="headerlink" href="#pruner_blobdeletionbatchsize" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>1000</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blobDeletionBatchSize</code></p>
 <p><strong>Description</strong>: Maximum number of blob deletions to process per pruning trigger</p>
 <p>Limits deletions per cycle to prevent overwhelming the blob store. Remaining deletions are processed in subsequent triggers.</p>
-<h3 id="pruner_blobdeletionmaxretries">pruner_blobDeletionMaxRetries</h3>
+<h3 id="pruner_blobdeletionmaxretries">pruner_blobDeletionMaxRetries<a class="headerlink" href="#pruner_blobdeletionmaxretries" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>3</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blobDeletionMaxRetries</code></p>
 <p><strong>Description</strong>: Maximum retry attempts for failed blob deletions</p>
-<h3 id="pruner_skippreserveparents">pruner_skipPreserveParents</h3>
+<h3 id="pruner_skippreserveparents">pruner_skipPreserveParents<a class="headerlink" href="#pruner_skippreserveparents" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_skipPreserveParents</code></p>
 <p><strong>Description</strong>: Skip Phase 1 - preserve parents of unmined transactions</p>
 <p>When enabled, parent transactions will not be protected from deletion even if they have unmined children.</p>
-<h3 id="pruner_skipdeletions">pruner_skipDeletions</h3>
+<h3 id="pruner_skipdeletions">pruner_skipDeletions<a class="headerlink" href="#pruner_skipdeletions" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_skipDeletions</code></p>
 <p><strong>Description</strong>: Skip deletion operations during pruning</p>
-<h2 id="operation-timeout-settings">Operation Timeout Settings</h2>
-<h3 id="pruner_jobtimeout">pruner_jobTimeout</h3>
+<h2 id="operation-timeout-settings">Operation Timeout Settings<a class="headerlink" href="#operation-timeout-settings" title="Permanent link">&para;</a></h2>
+<h3 id="pruner_jobtimeout">pruner_jobTimeout<a class="headerlink" href="#pruner_jobtimeout" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Duration</p>
 <p><strong>Default</strong>: <code>10m</code> (10 minutes)</p>
 <p><strong>Description</strong>: Timeout for overall pruning operation completion</p>
 <p><strong>Format</strong>: Duration string (e.g., <code>5m</code>, <code>30s</code>, <code>1h</code>)</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_jobTimeout = 10m
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pruner_jobTimeout = 10m
+</span></code></pre></div>
 <p><strong>Behavior:</strong></p>
 <ul>
 <li>Pruning operation runs synchronously up to this timeout</li>
@@ -7906,17 +8414,17 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 <li>Too long: Blocks other operations unnecessarily</li>
 </ul>
 <p><strong>Metrics</strong>: Monitor <code>pruner_duration_seconds</code> to determine appropriate timeout</p>
-<h2 id="utxo-store-settings">UTXO Store Settings</h2>
+<h2 id="utxo-store-settings">UTXO Store Settings<a class="headerlink" href="#utxo-store-settings" title="Permanent link">&para;</a></h2>
 <p>These settings control the pruning behavior at the UTXO store level.</p>
-<h3 id="utxostore_unminedtxretention">utxostore_unminedTxRetention</h3>
+<h3 id="utxostore_unminedtxretention">utxostore_unminedTxRetention<a class="headerlink" href="#utxostore_unminedtxretention" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: <code>uint32</code> (block height)</p>
 <p><strong>Default</strong>: <code>globalBlockHeightRetention / 2</code></p>
 <p><strong>Typical Value</strong>: ~7200 blocks (≈50 days)</p>
 <p><strong>Description</strong>: Number of blocks to retain unmined transactions before considering them for parent preservation</p>
 <p><strong>Calculation:</strong></p>
-<div class="highlight"><pre><span></span><code>globalBlockHeightRetention = 14400  # ~100 days
-utxostore_unminedTxRetention = 7200  # 50 days
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>globalBlockHeightRetention = 14400  # ~100 days
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>utxostore_unminedTxRetention = 7200  # 50 days
+</span></code></pre></div>
 <p><strong>Purpose:</strong></p>
 <p>Unmined transactions older than this are considered "old" and their parent transactions are marked for preservation during Phase 1 pruning.</p>
 <p><strong>Tuning:</strong></p>
@@ -7925,19 +8433,19 @@ utxostore_unminedTxRetention = 7200  # 50 days
 <li><strong>Decrease</strong>: Prune unmined transactions sooner, faster pruning, higher risk</li>
 </ul>
 <p><strong>Warning</strong>: Setting too low may cause valid resubmitted transactions to fail if their parent UTXOs were already pruned.</p>
-<h3 id="utxostore_parentpreservationblocks">utxostore_parentPreservationBlocks</h3>
+<h3 id="utxostore_parentpreservationblocks">utxostore_parentPreservationBlocks<a class="headerlink" href="#utxostore_parentpreservationblocks" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: <code>uint32</code> (block height)</p>
 <p><strong>Default</strong>: <code>blocksInADayOnAverage * 10</code></p>
 <p><strong>Typical Value</strong>: ~14400 blocks (≈100 days, assuming 144 blocks/day)</p>
 <p><strong>Description</strong>: Number of blocks to preserve parent transactions of old unmined transactions</p>
 <p><strong>Calculation:</strong></p>
-<div class="highlight"><pre><span></span><code>blocksInADayOnAverage = 144  # Typical Bitcoin block time
-utxostore_parentPreservationBlocks = 1440  # 10 days
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>blocksInADayOnAverage = 144  # Typical Bitcoin block time
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>utxostore_parentPreservationBlocks = 1440  # 10 days
+</span></code></pre></div>
 <p><strong>Purpose:</strong></p>
 <p>When Phase 1 preservation runs, parent transactions get their <code>PreserveUntil</code> flag set to:</p>
-<div class="highlight"><pre><span></span><code><span class="nx">PreserveUntil</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">currentHeight</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">parentPreservationBlocks</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nx">PreserveUntil</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">currentHeight</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">parentPreservationBlocks</span>
+</span></code></pre></div>
 <p>This prevents parent UTXOs from being deleted for the specified number of blocks, ensuring resubmitted transactions can validate.</p>
 <p><strong>Tuning:</strong></p>
 <ul>
@@ -7945,14 +8453,14 @@ utxostore_parentPreservationBlocks = 1440  # 10 days
 <li><strong>Decrease</strong>: Prune parents sooner, faster pruning, higher risk for resubmissions</li>
 </ul>
 <p><strong>Recommendation</strong>: Keep default value unless specific use case requires change.</p>
-<h3 id="utxostore_prunermaxconcurrentoperations">utxostore_prunerMaxConcurrentOperations</h3>
+<h3 id="utxostore_prunermaxconcurrentoperations">utxostore_prunerMaxConcurrentOperations<a class="headerlink" href="#utxostore_prunermaxconcurrentoperations" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: UTXO store connection pool size</p>
 <p><strong>Description</strong>: Maximum number of concurrent pruning operations for Aerospike</p>
 <p><strong>Applies To</strong>: Aerospike store only (SQL uses fixed worker count)</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>utxostore_prunerMaxConcurrentOperations = 8
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>utxostore_prunerMaxConcurrentOperations = 8
+</span></code></pre></div>
 <p><strong>Impact:</strong></p>
 <ul>
 <li><strong>Higher values</strong>: Faster pruning, higher load on database</li>
@@ -7969,16 +8477,16 @@ utxostore_parentPreservationBlocks = 1440  # 10 days
 <p><strong>Aerospike Worker Count:</strong></p>
 <p>Default: 4 workers (hardcoded in <code>/stores/utxo/aerospike/pruner/pruner_service.go</code>)</p>
 <p>To change, modify code:</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// In pruner_service.go</span>
-<span class="nx">workerCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">4</span><span class="w">  </span><span class="c1">// Change this value</span>
-</code></pre></div>
-<h3 id="utxostore_disabledahcleaner">utxostore_disableDAHCleaner</h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// In pruner_service.go</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nx">workerCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">4</span><span class="w">  </span><span class="c1">// Change this value</span>
+</span></code></pre></div>
+<h3 id="utxostore_disabledahcleaner">utxostore_disableDAHCleaner<a class="headerlink" href="#utxostore_disabledahcleaner" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Description</strong>: Disable Delete-At-Height (DAH) pruning (Phase 2)</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>utxostore_disableDAHCleaner = true
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>utxostore_disableDAHCleaner = true
+</span></code></pre></div>
 <p><strong>Impact:</strong></p>
 <ul>
 <li><code>false</code>: Normal operation, Phase 2 pruning runs</li>
@@ -7991,71 +8499,71 @@ utxostore_parentPreservationBlocks = 1440  # 10 days
 <li><strong>Temporary workaround</strong>: If Phase 2 causing issues</li>
 </ul>
 <p><strong>Warning</strong>: Enabling this setting prevents UTXO record deletion, causing database growth. Only for testing/debugging.</p>
-<h2 id="aerospike-specific-settings">Aerospike-Specific Settings</h2>
-<h3 id="pruner_indexname">pruner_IndexName</h3>
+<h2 id="aerospike-specific-settings">Aerospike-Specific Settings<a class="headerlink" href="#aerospike-specific-settings" title="Permanent link">&para;</a></h2>
+<h3 id="pruner_indexname">pruner_IndexName<a class="headerlink" href="#pruner_indexname" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: String</p>
 <p><strong>Default</strong>: <code>pruner_dah_index</code></p>
 <p><strong>Description</strong>: Name of the Aerospike secondary index on <code>DeleteAtHeight</code> field</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_IndexName = pruner_dah_index
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pruner_IndexName = pruner_dah_index
+</span></code></pre></div>
 <p><strong>Purpose:</strong></p>
 <p>DAH pruning (Phase 2) queries Aerospike using this secondary index for efficient record filtering:</p>
-<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">utxos</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleteAtHeight</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">safeHeight</span>
-</code></pre></div>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">utxos</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleteAtHeight</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">safeHeight</span>
+</span></code></pre></div>
 <p><strong>Index Creation:</strong></p>
 <ul>
 <li><strong>Automatic</strong>: Created on service start via index waiter</li>
 <li><strong>Wait Time</strong>: Service waits for index to be ready before starting pruning</li>
 </ul>
 <p><strong>Manual Index Creation (if needed):</strong></p>
-<div class="highlight"><pre><span></span><code>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;asinfo -v &#39;sindex-create:ns=teranode;set=utxos;indexname=pruner_dah_index;indextype=NUMERIC;binname=deleteAtHeight&#39;&quot;</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;asinfo -v &#39;sindex-create:ns=teranode;set=utxos;indexname=pruner_dah_index;indextype=NUMERIC;binname=deleteAtHeight&#39;&quot;</span>
+</span></code></pre></div>
 <p><strong>Index Verification:</strong></p>
-<div class="highlight"><pre><span></span><code>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;show indexes&quot;</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;show indexes&quot;</span>
+</span></code></pre></div>
 <p>Expected output:</p>
-<div class="highlight"><pre><span></span><code>Namespace   Set     Index Name        Bin Name          Type
-teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
-</code></pre></div>
-<h2 id="chunk-processing-settings">Chunk Processing Settings</h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Namespace   Set     Index Name        Bin Name          Type
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
+</span></code></pre></div>
+<h2 id="chunk-processing-settings">Chunk Processing Settings<a class="headerlink" href="#chunk-processing-settings" title="Permanent link">&para;</a></h2>
 <p>These settings control parallel processing during UTXO pruning operations.</p>
-<h3 id="pruner_utxochunksize">pruner_utxoChunkSize</h3>
+<h3 id="pruner_utxochunksize">pruner_utxoChunkSize<a class="headerlink" href="#pruner_utxochunksize" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>1000</code></p>
 <p><strong>Description</strong>: Number of records to process in each parallel chunk during pruning</p>
 <p>Controls the granularity of parallel processing. Records are accumulated into chunks of this size, then processed in parallel.</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_utxoChunkSize = 1000
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>pruner_utxoChunkSize = 1000
+</span></code></pre></div>
 <p><strong>Tuning:</strong></p>
 <ul>
 <li><strong>Higher values</strong>: Fewer chunks, less parallelism overhead, more memory per chunk</li>
 <li><strong>Lower values</strong>: More chunks, better parallelism, more overhead</li>
 </ul>
 <p><strong>Recommendation</strong>: Default value works well for most deployments.</p>
-<h3 id="pruner_utxochunkgrouplimit">pruner_utxoChunkGroupLimit</h3>
+<h3 id="pruner_utxochunkgrouplimit">pruner_utxoChunkGroupLimit<a class="headerlink" href="#pruner_utxochunkgrouplimit" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>10</code></p>
 <p><strong>Description</strong>: Maximum number of chunks to process in parallel</p>
 <p>Limits concurrent chunk processing to prevent overwhelming Aerospike or exhausting system resources.</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_utxoChunkGroupLimit = 10
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>pruner_utxoChunkGroupLimit = 10
+</span></code></pre></div>
 <p><strong>Tuning:</strong></p>
 <ul>
 <li><strong>Higher values</strong>: More parallelism, faster pruning, higher resource usage</li>
 <li><strong>Lower values</strong>: Less parallelism, slower pruning, lower resource usage</li>
 </ul>
 <p><strong>Constraint</strong>: Limited by Aerospike connection pool size. Setting too high causes connection contention.</p>
-<h3 id="pruner_utxoprogressloginterval">pruner_utxoProgressLogInterval</h3>
+<h3 id="pruner_utxoprogressloginterval">pruner_utxoProgressLogInterval<a class="headerlink" href="#pruner_utxoprogressloginterval" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Duration</p>
 <p><strong>Default</strong>: <code>30s</code></p>
 <p><strong>Description</strong>: Interval for logging progress during long-running pruning operations</p>
 <p>When set, the pruner logs periodic progress updates showing records pruned and elapsed time.</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_utxoProgressLogInterval = 30s
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pruner_utxoProgressLogInterval = 30s
+</span></code></pre></div>
 <p><strong>Values:</strong></p>
 <ul>
 <li><code>0</code>: Disable progress logging</li>
@@ -8063,7 +8571,7 @@ teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 <li><code>1m</code>: Log every minute</li>
 </ul>
 <p><strong>Use Case</strong>: Monitor progress during large pruning operations or troubleshoot slow pruning.</p>
-<h3 id="pruner_utxopartitionqueries">pruner_utxoPartitionQueries</h3>
+<h3 id="pruner_utxopartitionqueries">pruner_utxoPartitionQueries<a class="headerlink" href="#pruner_utxopartitionqueries" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>0</code> (auto-detect based on CPU cores)</p>
 <p><strong>Environment Variable</strong>: <code>pruner_utxoPartitionQueries</code></p>
@@ -8080,16 +8588,16 @@ teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 <li><strong>Lower values</strong>: Reduced cluster pressure, slower pruning</li>
 </ul>
 <p><strong>Recommendation</strong>: Use default (<code>0</code>) for automatic scaling. Set explicitly to match your Aerospike cluster's capacity.</p>
-<h2 id="defensive-mode-settings">Defensive Mode Settings</h2>
+<h2 id="defensive-mode-settings">Defensive Mode Settings<a class="headerlink" href="#defensive-mode-settings" title="Permanent link">&para;</a></h2>
 <p>These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.</p>
-<h3 id="pruner_utxodefensiveenabled">pruner_utxoDefensiveEnabled</h3>
+<h3 id="pruner_utxodefensiveenabled">pruner_utxoDefensiveEnabled<a class="headerlink" href="#pruner_utxodefensiveenabled" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Description</strong>: Enable defensive child verification before parent deletion</p>
 <p>When enabled, the pruner verifies that ALL spending children of a parent transaction are mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent. This prevents orphaning children during chain reorganizations.</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveEnabled = true
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pruner_utxoDefensiveEnabled = true
+</span></code></pre></div>
 <p><strong>Impact:</strong></p>
 <ul>
 <li><code>true</code>: Safer pruning with child verification, slightly slower due to batch verification</li>
@@ -8102,119 +8610,119 @@ teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 <li>When data integrity is critical</li>
 </ul>
 <p><strong>Trade-off</strong>: Enabling adds Aerospike batch read operations to verify children, which increases pruning time but provides stronger safety guarantees.</p>
-<h3 id="pruner_utxodefensivebatchreadsize">pruner_utxoDefensiveBatchReadSize</h3>
+<h3 id="pruner_utxodefensivebatchreadsize">pruner_utxoDefensiveBatchReadSize<a class="headerlink" href="#pruner_utxodefensivebatchreadsize" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>10000</code></p>
 <p><strong>Description</strong>: Batch size for defensive child verification queries</p>
 <p>Controls how many child transactions are verified in a single Aerospike BatchGet call when defensive mode is enabled.</p>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveBatchReadSize = 10000
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>pruner_utxoDefensiveBatchReadSize = 10000
+</span></code></pre></div>
 <p><strong>Tuning:</strong></p>
 <ul>
 <li><strong>Higher values</strong>: Fewer Aerospike round trips, more memory per batch</li>
 <li><strong>Lower values</strong>: More round trips, less memory per batch</li>
 </ul>
 <p><strong>Applies To</strong>: Only used when <code>pruner_utxoDefensiveEnabled = true</code></p>
-<h2 id="context-specific-configuration">Context-Specific Configuration</h2>
-<h3 id="development-context">Development Context</h3>
-<div class="highlight"><pre><span></span><code>[dev]
-startPruner = true
-pruner_grpcAddress = localhost:8096
-pruner_grpcListenAddress = localhost:8096
-pruner_jobTimeout = 10m
-</code></pre></div>
-<h3 id="docker-context-single-machine-multi-node">Docker Context (Single Machine, Multi-Node)</h3>
-<div class="highlight"><pre><span></span><code>[docker.m]
-startPruner = true
-pruner_grpcAddress = pruner:8096
-pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 10m
-</code></pre></div>
-<h3 id="docker-context-per-service-containers">Docker Context (Per-Service Containers)</h3>
-<div class="highlight"><pre><span></span><code>[docker]
-startPruner = true
-pruner_grpcAddress = ${clientName}:8096
-pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 10m
-</code></pre></div>
-<h3 id="docker-host-context-access-from-host">Docker Host Context (Access from Host)</h3>
-<div class="highlight"><pre><span></span><code>[docker.host]
-startPruner = true
-pruner_grpcAddress = localhost:${PORT_PREFIX}8096
-pruner_grpcListenAddress = localhost:${PORT_PREFIX}8096
-pruner_jobTimeout = 10m
-
-# Disable pruner for specific nodes
-startPruner.teranode1.coinbase = false
-startPruner.teranode2.coinbase = false
-</code></pre></div>
-<h3 id="kubernetesoperator-context">Kubernetes/Operator Context</h3>
-<div class="highlight"><pre><span></span><code>[operator]
-startPruner = true
-pruner_grpcAddress = k8s:///pruner.${clientName}.svc.cluster.local:8096
-pruner_grpcListenAddress = :8096
-pruner_jobTimeout = 15m  # Increase for distributed environments
-</code></pre></div>
-<h2 id="configuration-examples">Configuration Examples</h2>
-<h3 id="minimal-configuration-defaults">Minimal Configuration (Defaults)</h3>
-<div class="highlight"><pre><span></span><code># settings.conf
-startPruner = true
-</code></pre></div>
+<h2 id="context-specific-configuration">Context-Specific Configuration<a class="headerlink" href="#context-specific-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="development-context">Development Context<a class="headerlink" href="#development-context" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>[dev]
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>startPruner = true
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>pruner_grpcAddress = localhost:8096
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>pruner_grpcListenAddress = localhost:8096
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>pruner_jobTimeout = 10m
+</span></code></pre></div>
+<h3 id="docker-context-single-machine-multi-node">Docker Context (Single Machine, Multi-Node)<a class="headerlink" href="#docker-context-single-machine-multi-node" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>[docker.m]
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>startPruner = true
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>pruner_grpcAddress = pruner:8096
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>pruner_grpcListenAddress = :8096
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>pruner_jobTimeout = 10m
+</span></code></pre></div>
+<h3 id="docker-context-per-service-containers">Docker Context (Per-Service Containers)<a class="headerlink" href="#docker-context-per-service-containers" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>[docker]
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>startPruner = true
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>pruner_grpcAddress = ${clientName}:8096
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>pruner_grpcListenAddress = :8096
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>pruner_jobTimeout = 10m
+</span></code></pre></div>
+<h3 id="docker-host-context-access-from-host">Docker Host Context (Access from Host)<a class="headerlink" href="#docker-host-context-access-from-host" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>[docker.host]
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>startPruner = true
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>pruner_grpcAddress = localhost:${PORT_PREFIX}8096
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>pruner_grpcListenAddress = localhost:${PORT_PREFIX}8096
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>pruner_jobTimeout = 10m
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a># Disable pruner for specific nodes
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>startPruner.teranode1.coinbase = false
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>startPruner.teranode2.coinbase = false
+</span></code></pre></div>
+<h3 id="kubernetesoperator-context">Kubernetes/Operator Context<a class="headerlink" href="#kubernetesoperator-context" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>[operator]
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>startPruner = true
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>pruner_grpcAddress = k8s:///pruner.${clientName}.svc.cluster.local:8096
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>pruner_grpcListenAddress = :8096
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>pruner_jobTimeout = 15m  # Increase for distributed environments
+</span></code></pre></div>
+<h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
+<h3 id="minimal-configuration-defaults">Minimal Configuration (Defaults)<a class="headerlink" href="#minimal-configuration-defaults" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a># settings.conf
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>startPruner = true
+</span></code></pre></div>
 <p>All other settings use defaults.</p>
-<h3 id="high-performance-configuration">High-Performance Configuration</h3>
-<div class="highlight"><pre><span></span><code># settings.conf
-startPruner = true
-pruner_jobTimeout = 5m  # Shorter timeout
-pruner_utxoChunkSize = 2000  # Larger chunks
-pruner_utxoChunkGroupLimit = 20  # More parallel chunks
-utxostore_unminedTxRetention = 5000  # Prune sooner
-utxostore_parentPreservationBlocks = 10000  # Shorter preservation
-</code></pre></div>
+<h3 id="high-performance-configuration">High-Performance Configuration<a class="headerlink" href="#high-performance-configuration" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a># settings.conf
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>startPruner = true
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>pruner_jobTimeout = 5m  # Shorter timeout
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>pruner_utxoChunkSize = 2000  # Larger chunks
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>pruner_utxoChunkGroupLimit = 20  # More parallel chunks
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>utxostore_unminedTxRetention = 5000  # Prune sooner
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>utxostore_parentPreservationBlocks = 10000  # Shorter preservation
+</span></code></pre></div>
 <p><strong>Use Case</strong>: High-throughput nodes with fast storage</p>
-<h3 id="conservative-configuration">Conservative Configuration</h3>
-<div class="highlight"><pre><span></span><code># settings.conf
-startPruner = true
-pruner_jobTimeout = 20m  # Longer timeout
-pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
-pruner_utxoDefensiveEnabled = true  # Enable safety checks
-utxostore_unminedTxRetention = 10000  # Retain longer
-utxostore_parentPreservationBlocks = 20000  # Longer preservation
-</code></pre></div>
+<h3 id="conservative-configuration">Conservative Configuration<a class="headerlink" href="#conservative-configuration" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a># settings.conf
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>startPruner = true
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>pruner_jobTimeout = 20m  # Longer timeout
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>pruner_utxoDefensiveEnabled = true  # Enable safety checks
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>utxostore_unminedTxRetention = 10000  # Retain longer
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>utxostore_parentPreservationBlocks = 20000  # Longer preservation
+</span></code></pre></div>
 <p><strong>Use Case</strong>: Production nodes prioritizing data safety over performance</p>
-<h3 id="testing-configuration">Testing Configuration</h3>
-<div class="highlight"><pre><span></span><code># settings_local.conf
-startPruner = false  # Disable pruning for testing
-</code></pre></div>
+<h3 id="testing-configuration">Testing Configuration<a class="headerlink" href="#testing-configuration" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a># settings_local.conf
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>startPruner = false  # Disable pruning for testing
+</span></code></pre></div>
 <p><strong>Use Case</strong>: Local testing requiring full UTXO history</p>
-<h3 id="multi-node-setup-some-nodes-pruning">Multi-Node Setup (Some Nodes Pruning)</h3>
-<div class="highlight"><pre><span></span><code># settings.conf
-startPruner = true
-
-# Disable for coinbase nodes (they don&#39;t need pruning)
-startPruner.docker.host.teranode1.coinbase = false
-startPruner.docker.host.teranode2.coinbase = false
-
-# Enable for main processing node
-startPruner.docker.host.teranode3 = true
-</code></pre></div>
+<h3 id="multi-node-setup-some-nodes-pruning">Multi-Node Setup (Some Nodes Pruning)<a class="headerlink" href="#multi-node-setup-some-nodes-pruning" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a># settings.conf
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>startPruner = true
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a># Disable for coinbase nodes (they don&#39;t need pruning)
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>startPruner.docker.host.teranode1.coinbase = false
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>startPruner.docker.host.teranode2.coinbase = false
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a># Enable for main processing node
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9" href="#__codelineno-31-9"></a>startPruner.docker.host.teranode3 = true
+</span></code></pre></div>
 <p><strong>Use Case</strong>: Multi-node setup where only certain nodes perform pruning</p>
-<h2 id="environment-variable-overrides">Environment Variable Overrides</h2>
+<h2 id="environment-variable-overrides">Environment Variable Overrides<a class="headerlink" href="#environment-variable-overrides" title="Permanent link">&para;</a></h2>
 <p>Settings can be overridden via environment variables using uppercase names with underscores:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Override pruner enable/disable</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">STARTPRUNER</span><span class="o">=</span><span class="nb">false</span>
-
-<span class="c1"># Override gRPC port</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_GRPCPORT</span><span class="o">=</span><span class="m">8097</span>
-
-<span class="c1"># Override job timeout</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_JOBTIMEOUT</span><span class="o">=</span>15m
-
-<span class="c1"># Override UTXO settings</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_UNMINEDTXRETENTION</span><span class="o">=</span><span class="m">10000</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_PARENTPRESERVATIONBLOCKS</span><span class="o">=</span><span class="m">20000</span>
-</code></pre></div>
-<h2 id="monitoring-settings">Monitoring Settings</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1"># Override pruner enable/disable</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">STARTPRUNER</span><span class="o">=</span><span class="nb">false</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="c1"># Override gRPC port</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_GRPCPORT</span><span class="o">=</span><span class="m">8097</span>
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>
+</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a><span class="c1"># Override job timeout</span>
+</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_JOBTIMEOUT</span><span class="o">=</span>15m
+</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9" href="#__codelineno-32-9"></a>
+</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10" href="#__codelineno-32-10"></a><span class="c1"># Override UTXO settings</span>
+</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11" href="#__codelineno-32-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_UNMINEDTXRETENTION</span><span class="o">=</span><span class="m">10000</span>
+</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12" href="#__codelineno-32-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_PARENTPRESERVATIONBLOCKS</span><span class="o">=</span><span class="m">20000</span>
+</span></code></pre></div>
+<h2 id="monitoring-settings">Monitoring Settings<a class="headerlink" href="#monitoring-settings" title="Permanent link">&para;</a></h2>
 <p>While not configuration settings, these Prometheus metrics should be monitored:</p>
 <ul>
 <li><code>pruner_duration_seconds</code>: Adjust <code>jobTimeout</code> if consistently near timeout</li>
@@ -8222,68 +8730,68 @@ startPruner.docker.host.teranode3 = true
 <li><code>pruner_errors_total</code>: Indicates database or connectivity issues</li>
 <li><code>utxo_cleanup_batch_duration_seconds</code>: Indicates Aerospike performance</li>
 </ul>
-<h2 id="troubleshooting-configuration-issues">Troubleshooting Configuration Issues</h2>
-<h3 id="pruner-not-starting">Pruner Not Starting</h3>
+<h2 id="troubleshooting-configuration-issues">Troubleshooting Configuration Issues<a class="headerlink" href="#troubleshooting-configuration-issues" title="Permanent link">&para;</a></h2>
+<h3 id="pruner-not-starting">Pruner Not Starting<a class="headerlink" href="#pruner-not-starting" title="Permanent link">&para;</a></h3>
 <p><strong>Check:</strong></p>
 <ol>
 <li>Verify <code>startPruner = true</code></li>
 <li>Check port 8096 availability: <code>lsof -i :8096</code></li>
 <li>Review logs: <code>grep "\[Pruner\]" teranode.log</code></li>
 </ol>
-<h3 id="port-conflicts">Port Conflicts</h3>
+<h3 id="port-conflicts">Port Conflicts<a class="headerlink" href="#port-conflicts" title="Permanent link">&para;</a></h3>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code>PRUNER_GRPC_PORT = 8097
-pruner_grpcAddress = localhost:8097
-pruner_grpcListenAddress = :8097
-</code></pre></div>
-<h3 id="frequent-timeouts">Frequent Timeouts</h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>PRUNER_GRPC_PORT = 8097
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>pruner_grpcAddress = localhost:8097
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>pruner_grpcListenAddress = :8097
+</span></code></pre></div>
+<h3 id="frequent-timeouts">Frequent Timeouts<a class="headerlink" href="#frequent-timeouts" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: <code>WARN [Pruner] Job timeout reached</code></p>
 <p><strong>Solution</strong>: Increase <code>pruner_jobTimeout</code>:</p>
-<div class="highlight"><pre><span></span><code>pruner_jobTimeout = 20m  # or higher
-</code></pre></div>
-<h3 id="slow-pruning">Slow Pruning</h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>pruner_jobTimeout = 20m  # or higher
+</span></code></pre></div>
+<h3 id="slow-pruning">Slow Pruning<a class="headerlink" href="#slow-pruning" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: High <code>pruner_duration_seconds</code> values</p>
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
 <p>Increase parallel chunk processing:</p>
-<div class="highlight"><pre><span></span><code>pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
-pruner_utxoChunkSize = 2000  # Larger chunks
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a>pruner_utxoChunkSize = 2000  # Larger chunks
+</span></code></pre></div>
 </li>
 <li>
 <p>Verify Aerospike index exists:</p>
-<div class="highlight"><pre><span></span><code>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;show indexes&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_dah_index
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;show indexes&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_dah_index
+</span></code></pre></div>
 </li>
 <li>
 <p>Check database performance</p>
 </li>
 <li>
 <p>If defensive mode is enabled and slowing pruning:</p>
-<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
+</span></code></pre></div>
 </li>
 </ol>
-<h3 id="database-growth">Database Growth</h3>
+<h3 id="database-growth">Database Growth<a class="headerlink" href="#database-growth" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: UTXO database growing despite pruning enabled</p>
 <p><strong>Check:</strong></p>
 <ol>
 <li>
 <p>Verify pruner running:</p>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_processed_total
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_processed_total
+</span></code></pre></div>
 </li>
 <li>
 <p>Check <code>pruner_skipped_total</code> reasons:</p>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_skipped_total
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_skipped_total
+</span></code></pre></div>
 </li>
 <li>
 <p>Verify Block Assembly in RUNNING state</p>
 </li>
 </ol>
-<h2 id="related-documentation">Related Documentation</h2>
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../../../topics/services/pruner/">Pruner Service Topic Documentation</a></li>
 <li><a href="../../../services/pruner_reference/">Pruner API Reference</a></li>
@@ -8307,37 +8815,65 @@ pruner_utxoChunkSize = 2000  # Larger chunks
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../propagation_settings/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Propagation">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Propagation
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../rpc_settings/" class="md-footer__link md-footer__link--next" aria-label="Next: RPC">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                RPC
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -8354,12 +8890,10 @@ pruner_utxoChunkSize = 2000  # Larger chunks
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

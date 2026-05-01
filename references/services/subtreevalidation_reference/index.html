@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/services/subtreevalidation_reference/">
       
       
         <link rel="prev" href="../propagation_reference/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -215,6 +274,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -234,6 +295,8 @@
         <a href="../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
+  
+    
   
   Key Topics
 
@@ -256,6 +319,8 @@
         <a href="../../projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2228,6 +2407,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2240,9 +2461,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2590,6 +2809,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2602,9 +2829,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2792,6 +3017,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2804,9 +3047,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3078,6 +3319,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3090,9 +3347,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3336,6 +3591,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3348,9 +3609,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3454,6 +3713,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3466,9 +3737,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3656,6 +3925,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3668,9 +3941,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3746,6 +4017,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3758,9 +4033,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3845,6 +4118,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3928,6 +4217,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3943,9 +4246,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
@@ -4125,6 +4426,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4137,9 +4462,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4504,6 +4827,24 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -5393,6 +5734,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5408,9 +5763,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
@@ -5626,6 +5979,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5641,9 +6000,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="">
@@ -5747,6 +6104,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5762,9 +6135,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="">
@@ -5944,6 +6315,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5956,9 +6357,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6398,6 +6797,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6410,9 +6817,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6552,6 +6957,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6567,9 +6988,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="">
@@ -7403,141 +7822,210 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../projectStructure/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../alert_reference/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Core Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="subtree-validation-reference-documentation">Subtree Validation Reference Documentation</h1>
-<h2 id="overview">Overview</h2>
+
+<h1 id="subtree-validation-reference-documentation">Subtree Validation Reference Documentation<a class="headerlink" href="#subtree-validation-reference-documentation" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>The <code>Server</code> type implements the core functionality for subtree validation in a blockchain system. It handles subtree and transaction metadata processing, interacts with various data stores, and manages Kafka consumers for distributed processing. The service is a critical component in validating transaction subtrees for inclusion in the blockchain.</p>
-<h2 id="types">Types</h2>
-<h3 id="server">Server</h3>
+<h2 id="types">Types<a class="headerlink" href="#types" title="Permanent link">&para;</a></h2>
+<h3 id="server">Server<a class="headerlink" href="#server" title="Permanent link">&para;</a></h3>
 <p>The <code>Server</code> is the central component of the subtreevalidation package, managing the complete lifecycle of subtree validation including transaction validation, storage, and integration with other Teranode services.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// UnimplementedSubtreeValidationAPIServer embeds the auto-generated gRPC server base</span>
-<span class="w">    </span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">UnimplementedSubtreeValidationAPIServer</span>
-
-<span class="w">    </span><span class="c1">// logger handles all logging operations for the service</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
-
-<span class="w">    </span><span class="c1">// settings contains the configuration parameters for the service</span>
-<span class="w">    </span><span class="c1">// including connection details, timeouts, and operational modes</span>
-<span class="w">    </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
-
-<span class="w">    </span><span class="c1">// subtreeStore manages persistent storage of subtrees</span>
-<span class="w">    </span><span class="c1">// This blob store is used to save and retrieve complete subtree structures</span>
-<span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// txStore manages transaction storage</span>
-<span class="w">    </span><span class="c1">// This blob store is used to save and retrieve individual transactions</span>
-<span class="w">    </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// utxoStore manages the Unspent Transaction Output (UTXO) state</span>
-<span class="w">    </span><span class="c1">// It&#39;s used during transaction validation to verify input spending</span>
-<span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// validatorClient provides transaction validation services</span>
-<span class="w">    </span><span class="c1">// It&#39;s used to validate transactions against consensus rules</span>
-<span class="w">    </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span>
-
-<span class="w">    </span><span class="c1">// subtreeCount tracks the number of subtrees processed</span>
-<span class="w">    </span><span class="c1">// Uses atomic operations for thread-safe access</span>
-<span class="w">    </span><span class="nx">subtreeCount</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Int32</span>
-
-<span class="w">    </span><span class="c1">// stats tracks operational statistics for monitoring and diagnostics</span>
-<span class="w">    </span><span class="nx">stats</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span>
-
-<span class="w">    </span><span class="c1">// prioritySubtreeCheckActiveMap tracks active priority subtree checks</span>
-<span class="w">    </span><span class="c1">// Maps subtree hash strings to boolean values indicating check status</span>
-<span class="w">    </span><span class="nx">prioritySubtreeCheckActiveMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">bool</span>
-
-<span class="w">    </span><span class="c1">// prioritySubtreeCheckActiveMapLock protects concurrent access to the priority map</span>
-<span class="w">    </span><span class="nx">prioritySubtreeCheckActiveMapLock</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
-
-<span class="w">    </span><span class="c1">// blockchainClient interfaces with the blockchain service</span>
-<span class="w">    </span><span class="c1">// Used to retrieve block information and validate chain state</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span>
-
-<span class="w">    </span><span class="c1">// subtreeConsumerClient consumes subtree-related Kafka messages</span>
-<span class="w">    </span><span class="c1">// Handles incoming subtree validation requests from other services</span>
-<span class="w">    </span><span class="nx">subtreeConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span>
-
-<span class="w">    </span><span class="c1">// txmetaConsumerClient consumes transaction metadata Kafka messages</span>
-<span class="w">    </span><span class="c1">// Processes transaction metadata updates from other services</span>
-<span class="w">    </span><span class="nx">txmetaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span>
-
-<span class="w">    </span><span class="c1">// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka</span>
-<span class="w">    </span><span class="nx">invalidSubtreeKafkaProducer</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span>
-
-<span class="w">    </span><span class="c1">// invalidSubtreeLock is used to synchronize access to the invalid subtree producer</span>
-<span class="w">    </span><span class="nx">invalidSubtreeLock</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
-
-<span class="w">    </span><span class="c1">// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages</span>
-<span class="w">    </span><span class="nx">invalidSubtreeDeDuplicateMap</span><span class="w"> </span><span class="o">*</span><span class="nx">expiringmap</span><span class="p">.</span><span class="nx">ExpiringMap</span><span class="p">[</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}]</span>
-
-<span class="w">    </span><span class="c1">// orphanage manages orphaned transactions that are missing their parent transactions</span>
-<span class="w">    </span><span class="nx">orphanage</span><span class="w"> </span><span class="o">*</span><span class="nx">Orphanage</span>
-
-<span class="w">    </span><span class="c1">// bestBlockHeader is used to store the current best block header</span>
-<span class="w">    </span><span class="nx">bestBlockHeader</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeader</span><span class="p">]</span>
-
-<span class="w">    </span><span class="c1">// bestBlockHeaderMeta is used to store the current best block header metadata</span>
-<span class="w">    </span><span class="nx">bestBlockHeaderMeta</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeaderMeta</span><span class="p">]</span>
-
-<span class="w">    </span><span class="c1">// currentBlockIDsMap is used to store the current block IDs for the current best block height</span>
-<span class="w">    </span><span class="nx">currentBlockIDsMap</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">]</span>
-
-<span class="w">    </span><span class="c1">// p2pClient interfaces with the P2P service</span>
-<span class="w">    </span><span class="c1">// Used to report successful subtree fetches to improve peer reputation</span>
-<span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span>
-<span class="p">}</span>
-</code></pre></div>
-<h3 id="validatesubtree">ValidateSubtree</h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="c1">// UnimplementedSubtreeValidationAPIServer embeds the auto-generated gRPC server base</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">UnimplementedSubtreeValidationAPIServer</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="c1">// logger handles all logging operations for the service</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="c1">// settings contains the configuration parameters for the service</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="c1">// including connection details, timeouts, and operational modes</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="c1">// subtreeStore manages persistent storage of subtrees</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="c1">// This blob store is used to save and retrieve complete subtree structures</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="c1">// txStore manages transaction storage</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="c1">// This blob store is used to save and retrieve individual transactions</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="c1">// utxoStore manages the Unspent Transaction Output (UTXO) state</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="c1">// It&#39;s used during transaction validation to verify input spending</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="c1">// validatorClient provides transaction validation services</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span><span class="c1">// It&#39;s used to validate transactions against consensus rules</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">    </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span><span class="c1">// subtreeCount tracks the number of subtrees processed</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span><span class="c1">// Uses atomic operations for thread-safe access</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">    </span><span class="nx">subtreeCount</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Int32</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="w">    </span><span class="c1">// stats tracks operational statistics for monitoring and diagnostics</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w">    </span><span class="nx">stats</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="w">    </span><span class="c1">// prioritySubtreeCheckActiveMap tracks active priority subtree checks</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="w">    </span><span class="c1">// Maps subtree hash strings to boolean values indicating check status</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w">    </span><span class="nx">prioritySubtreeCheckActiveMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">bool</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">    </span><span class="c1">// prioritySubtreeCheckActiveMapLock protects concurrent access to the priority map</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">    </span><span class="nx">prioritySubtreeCheckActiveMapLock</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="w">    </span><span class="c1">// blockchainClient interfaces with the blockchain service</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="w">    </span><span class="c1">// Used to retrieve block information and validate chain state</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="w">    </span><span class="c1">// subtreeConsumerClient consumes subtree-related Kafka messages</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="w">    </span><span class="c1">// Handles incoming subtree validation requests from other services</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="w">    </span><span class="nx">subtreeConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="w">    </span><span class="c1">// txmetaConsumerClient consumes transaction metadata Kafka messages</span>
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="w">    </span><span class="c1">// Processes transaction metadata updates from other services</span>
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="w">    </span><span class="nx">txmetaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span>
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="w">    </span><span class="c1">// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka</span>
+</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a><span class="w">    </span><span class="nx">invalidSubtreeKafkaProducer</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span>
+</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a><span class="w">    </span><span class="c1">// invalidSubtreeLock is used to synchronize access to the invalid subtree producer</span>
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a><span class="w">    </span><span class="nx">invalidSubtreeLock</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+</span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>
+</span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a><span class="w">    </span><span class="c1">// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages</span>
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a><span class="w">    </span><span class="nx">invalidSubtreeDeDuplicateMap</span><span class="w"> </span><span class="o">*</span><span class="nx">expiringmap</span><span class="p">.</span><span class="nx">ExpiringMap</span><span class="p">[</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}]</span>
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a><span class="w">    </span><span class="c1">// orphanage manages orphaned transactions that are missing their parent transactions</span>
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a><span class="w">    </span><span class="nx">orphanage</span><span class="w"> </span><span class="o">*</span><span class="nx">Orphanage</span>
+</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="w">    </span><span class="c1">// bestBlockHeader is used to store the current best block header</span>
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="w">    </span><span class="nx">bestBlockHeader</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeader</span><span class="p">]</span>
+</span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a>
+</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="w">    </span><span class="c1">// bestBlockHeaderMeta is used to store the current best block header metadata</span>
+</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="w">    </span><span class="nx">bestBlockHeaderMeta</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeaderMeta</span><span class="p">]</span>
+</span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a>
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a><span class="w">    </span><span class="c1">// currentBlockIDsMap is used to store the current block IDs for the current best block height</span>
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">    </span><span class="nx">currentBlockIDsMap</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">]</span>
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a>
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="w">    </span><span class="c1">// p2pClient interfaces with the P2P service</span>
+</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a><span class="w">    </span><span class="c1">// Used to report successful subtree fetches to improve peer reputation</span>
+</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a><span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span>
+</span><span id="__span-0-78"><a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="validatesubtree">ValidateSubtree<a class="headerlink" href="#validatesubtree" title="Permanent link">&para;</a></h3>
 <p>The <code>ValidateSubtree</code> structure encapsulates all the necessary information required to validate a transaction subtree, providing a clean interface for the validation methods.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">ValidateSubtree</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// SubtreeHash is the hash identifier of the subtree to validate</span>
-<span class="w">    </span><span class="nx">SubtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
-
-<span class="w">    </span><span class="c1">// BaseURL is the source location for retrieving missing transactions</span>
-<span class="w">    </span><span class="nx">BaseURL</span><span class="w"> </span><span class="kt">string</span>
-
-<span class="w">    </span><span class="c1">// TxHashes contains the hashes of all transactions in the subtree</span>
-<span class="w">    </span><span class="nx">TxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
-
-<span class="w">    </span><span class="c1">// AllowFailFast determines whether validation should stop on first error</span>
-<span class="w">    </span><span class="c1">// When true, validation will terminate immediately upon encountering an invalid transaction</span>
-<span class="w">    </span><span class="c1">// When false, validation will attempt to validate all transactions before returning</span>
-<span class="w">    </span><span class="nx">AllowFailFast</span><span class="w"> </span><span class="kt">bool</span>
-<span class="p">}</span>
-</code></pre></div>
-<h3 id="missingtx">missingTx</h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ValidateSubtree</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="c1">// SubtreeHash is the hash identifier of the subtree to validate</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nx">SubtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="c1">// BaseURL is the source location for retrieving missing transactions</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nx">BaseURL</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="c1">// TxHashes contains the hashes of all transactions in the subtree</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nx">TxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="c1">// AllowFailFast determines whether validation should stop on first error</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="c1">// When true, validation will terminate immediately upon encountering an invalid transaction</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="c1">// When false, validation will attempt to validate all transactions before returning</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nx">AllowFailFast</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="missingtx">missingTx<a class="headerlink" href="#missingtx" title="Permanent link">&para;</a></h3>
 <p>This structure pairs a transaction with its index in the original subtree transaction list, allowing the validation process to maintain the correct ordering and relationship of transactions.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">missingTx</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// tx is the actual transaction data that was retrieved</span>
-<span class="w">    </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span>
-
-<span class="w">    </span><span class="c1">// idx is the original position of this transaction in the subtree&#39;s transaction list</span>
-<span class="w">    </span><span class="nx">idx</span><span class="w"> </span><span class="kt">int</span>
-<span class="p">}</span>
-</code></pre></div>
-<h2 id="constructor">Constructor</h2>
-<h3 id="new">New</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
-<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">subtreeConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">txmetaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span><span class="p">,</span>
-<span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">missingTx</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="c1">// tx is the actual transaction data that was retrieved</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="c1">// idx is the original position of this transaction in the subtree&#39;s transaction list</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nx">idx</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="constructor">Constructor<a class="headerlink" href="#constructor" title="Permanent link">&para;</a></h2>
+<h3 id="new">New<a class="headerlink" href="#new" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nx">subtreeConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="nx">txmetaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span><span class="p">,</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Creates a new <code>Server</code> instance with the provided dependencies. This factory function constructs and initializes a fully configured subtree validation service, injecting all required dependencies. It follows the dependency injection pattern to ensure testability and proper separation of concerns.</p>
 <p><strong>Initialization Features:</strong></p>
 <ul>
@@ -7552,10 +8040,10 @@
 <p class="admonition-title">Initialization Process</p>
 <p>The method ensures that the service is configured with proper stores, clients, and settings before it's made available for use. It also initializes internal tracking structures and statistics for monitoring.</p>
 </div>
-<h2 id="core-methods">Core Methods</h2>
-<h3 id="health">Health</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h2 id="core-methods">Core Methods<a class="headerlink" href="#core-methods" title="Permanent link">&para;</a></h2>
+<h3 id="health">Health<a class="headerlink" href="#health" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Checks the health status of the service and its dependencies. This method implements the standard Teranode health check interface used across all services for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness checking capabilities to support different operational scenarios.</p>
 <div class="admonition success">
 <p class="admonition-title">Health Check Components</p>
@@ -7567,18 +8055,18 @@
 <li><strong>Internal state consistency</strong>: Service operational status</li>
 </ul>
 </div>
-<h3 id="healthgrpc">HealthGRPC</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">HealthGRPC</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">EmptyMessage</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">HealthResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="healthgrpc">HealthGRPC<a class="headerlink" href="#healthgrpc" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">HealthGRPC</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">EmptyMessage</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">HealthResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Implements the gRPC health check endpoint, translating the core health check results to the gRPC protocol format.</p>
-<h3 id="init">Init</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="init">Init<a class="headerlink" href="#init" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Initializes the server metrics and performs any necessary setup. This method completes the initialization process by setting up components that require runtime initialization rather than construction-time setup. It's called after New() but before Start() to ensure all systems are properly initialized.</p>
 <p>The initialization is designed to be idempotent and can be safely called multiple times, though typically it's only called once after construction and before starting the service.</p>
-<h3 id="start">Start</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="start">Start<a class="headerlink" href="#start" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Initializes and starts the server components including Kafka consumers and gRPC server. This method launches all the operational components of the subtree validation service.</p>
 <p><strong>Components Started:</strong></p>
 <ul>
@@ -7598,9 +8086,9 @@
 <p>The method implements a safe startup sequence to ensure all components are properly initialized before the service is marked as ready. It also handles proper error propagation if any component fails to start.</p>
 <p>Once all components are successfully started, the method signals readiness through the provided channel and then blocks until the context is canceled or an error occurs. This design allows the caller to coordinate the startup of multiple services.</p>
 </div>
-<h3 id="stop">Stop</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="stop">Stop<a class="headerlink" href="#stop" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Gracefully shuts down the server components including Kafka consumers. This method ensures a clean and orderly shutdown of all service components, allowing in-progress operations to complete when possible and releasing all resources properly.</p>
 <div class="admonition warning">
 <p class="admonition-title">Shutdown Sequence</p>
@@ -7613,9 +8101,9 @@
 </ol>
 </div>
 <p>The method is designed to be called when the service needs to be terminated, either for normal shutdown or in response to system signals.</p>
-<h3 id="checksubtreefromblock">CheckSubtreeFromBlock</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CheckSubtreeFromBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="checksubtreefromblock">CheckSubtreeFromBlock<a class="headerlink" href="#checksubtreefromblock" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CheckSubtreeFromBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Validates a subtree and its transactions based on the provided request. This method is the primary gRPC API endpoint for subtree validation, responsible for coordinating the validation process for an entire subtree of interdependent transactions. It ensures that all transactions in the subtree adhere to consensus rules and can be added to the blockchain.</p>
 <p><strong>Key Features:</strong></p>
 <ul>
@@ -7640,9 +8128,9 @@
 <p class="admonition-title">Resilience</p>
 <p>The method will retry lock acquisition for up to 20 seconds with exponential backoff, making it resilient to temporary contention when multiple services attempt to validate the same subtree simultaneously.</p>
 </div>
-<h3 id="checkblocksubtrees">CheckBlockSubtrees</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CheckBlockSubtrees</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckBlockSubtreesRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckBlockSubtreesResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="checkblocksubtrees">CheckBlockSubtrees<a class="headerlink" href="#checkblocksubtrees" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CheckBlockSubtrees</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckBlockSubtreesRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckBlockSubtreesResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Validates all subtrees referenced in a block to ensure they exist in storage and are properly validated. This method is used during block validation to verify that all subtrees in a block are available and valid before the block can be accepted.</p>
 <p><strong>Key Features:</strong></p>
 <ul>
@@ -7666,39 +8154,39 @@
 <p class="admonition-title">Performance Optimization</p>
 <p>The method uses several optimization techniques including stream processing for direct HTTP data handling, block-wide validation for better dependency resolution, parallel subtree processing, and efficient memory management during large block processing.</p>
 </div>
-<h2 id="transaction-metadata-management">Transaction Metadata Management</h2>
-<h3 id="getuutxostore">GetUutxoStore</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetUutxoStore</span><span class="p">()</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
-</code></pre></div>
+<h2 id="transaction-metadata-management">Transaction Metadata Management<a class="headerlink" href="#transaction-metadata-management" title="Permanent link">&para;</a></h2>
+<h3 id="getuutxostore">GetUutxoStore<a class="headerlink" href="#getuutxostore" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetUutxoStore</span><span class="p">()</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
+</span></code></pre></div>
 <p>Returns the UTXO store instance used by the server. This method provides access to the store that manages unspent transaction outputs.</p>
-<h3 id="setuutxostore">SetUutxoStore</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetUutxoStore</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="setuutxostore">SetUutxoStore<a class="headerlink" href="#setuutxostore" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetUutxoStore</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Sets the UTXO store instance for the server. This method allows runtime replacement of the UTXO store, which can be useful for testing or for implementing different storage strategies.</p>
-<h3 id="settxmetacache">SetTxMetaCache</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetTxMetaCache</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">txMeta</span><span class="w"> </span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="settxmetacache">SetTxMetaCache<a class="headerlink" href="#settxmetacache" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetTxMetaCache</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">txMeta</span><span class="w"> </span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Stores transaction metadata in the cache if caching is enabled. This method optimizes validation performance by caching frequently accessed transaction metadata.</p>
 <div class="admonition note">
 <p class="admonition-title">Implementation Note</p>
 <p>This method signature is documented but the actual implementation may delegate to the underlying UTXO store's caching mechanism.</p>
 </div>
-<h3 id="settxmetacachefrombytes">SetTxMetaCacheFromBytes</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetTxMetaCacheFromBytes</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">txMetaBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="settxmetacachefrombytes">SetTxMetaCacheFromBytes<a class="headerlink" href="#settxmetacachefrombytes" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetTxMetaCacheFromBytes</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">txMetaBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Stores raw transaction metadata bytes in the cache. This is a lower-level method that can be more efficient when the raw bytes are already available.</p>
-<h3 id="deltxmetacache">DelTxMetaCache</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DelTxMetaCache</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="deltxmetacache">DelTxMetaCache<a class="headerlink" href="#deltxmetacache" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DelTxMetaCache</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Removes transaction metadata from the cache if caching is enabled. This ensures cache consistency when transactions are modified or invalidated.</p>
-<h3 id="deltxmetacachemulti">DelTxMetaCacheMulti</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DelTxMetaCacheMulti</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="deltxmetacachemulti">DelTxMetaCacheMulti<a class="headerlink" href="#deltxmetacachemulti" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DelTxMetaCacheMulti</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Removes multiple transaction metadata entries from the cache. This method is optimized for batch operations when multiple related entries need to be invalidated.</p>
-<h2 id="internal-validation-methods">Internal Validation Methods</h2>
-<h3 id="checksubtreefromblock_1">checkSubtreeFromBlock</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">checkSubtreeFromBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">ok</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h2 id="internal-validation-methods">Internal Validation Methods<a class="headerlink" href="#internal-validation-methods" title="Permanent link">&para;</a></h2>
+<h3 id="checksubtreefromblock_1">checkSubtreeFromBlock<a class="headerlink" href="#checksubtreefromblock_1" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">checkSubtreeFromBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreevalidation_api</span><span class="p">.</span><span class="nx">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">ok</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Internal implementation of subtree validation logic. This method contains the core business logic for validating a subtree, separated from the API-level concerns handled by the public CheckSubtreeFromBlock method. The separation allows for cleaner testing and better separation of concerns.</p>
 <div class="admonition info">
 <p class="admonition-title">Subtree Storage Convention</p>
@@ -7713,10 +8201,10 @@
 <li><strong>Verifying transaction dependencies and ordering</strong> within the subtree</li>
 <li><strong>Confirming all transactions meet consensus rules</strong> for blockchain inclusion</li>
 </ol>
-<h3 id="validatesubtreeinternal">ValidateSubtreeInternal</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateSubtreeInternal</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="nx">ValidateSubtree</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">...</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="validatesubtreeinternal">ValidateSubtreeInternal<a class="headerlink" href="#validatesubtreeinternal" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateSubtreeInternal</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="nx">ValidateSubtree</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">...</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Performs the actual validation of a subtree. This is the core method of the subtree validation service, responsible for the complete validation process of a transaction subtree. It handles the complex task of verifying that all transactions in a subtree are valid both individually and collectively, ensuring they can be safely added to the blockchain.</p>
 <div class="admonition note">
 <p class="admonition-title">Validation Process Steps</p>
@@ -7739,10 +8227,10 @@
 <li><strong>Efficient retrieval</strong> of missing transactions in batches</li>
 </ul>
 </div>
-<h3 id="blessmissingtransaction">blessMissingTransaction</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blessMissingTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">txMeta</span><span class="w"> </span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="blessmissingtransaction">blessMissingTransaction<a class="headerlink" href="#blessmissingtransaction" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blessMissingTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">txMeta</span><span class="w"> </span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Validates a transaction and retrieves its metadata, performing the core consensus validation operations required for blockchain inclusion. This method applies full validation to a transaction, ensuring it adheres to all Bitcoin consensus rules and can be properly included in the blockchain.</p>
 <div class="admonition abstract">
 <p class="admonition-title">Validation Components</p>
@@ -7757,14 +8245,14 @@
 </ul>
 </div>
 <p>Upon successful validation, the transaction's metadata is calculated and stored, making it available for future reference and for validation of dependent transactions.</p>
-<h3 id="checkcounterconflictingoncurrentchain">checkCounterConflictingOnCurrentChain</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">checkCounterConflictingOnCurrentChain</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="checkcounterconflictingoncurrentchain">checkCounterConflictingOnCurrentChain<a class="headerlink" href="#checkcounterconflictingoncurrentchain" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">checkCounterConflictingOnCurrentChain</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Checks if the counter-conflicting transactions of a given transaction have already been mined on the current chain. If they have, it returns an error indicating that the transaction is invalid.</p>
-<h2 id="transaction-retrieval-methods">Transaction Retrieval Methods</h2>
-<h3 id="getsubtreetxhashes">getSubtreeTxHashes</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getSubtreeTxHashes</span><span class="p">(</span><span class="nx">spanCtx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">stat</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h2 id="transaction-retrieval-methods">Transaction Retrieval Methods<a class="headerlink" href="#transaction-retrieval-methods" title="Permanent link">&para;</a></h2>
+<h3 id="getsubtreetxhashes">getSubtreeTxHashes<a class="headerlink" href="#getsubtreetxhashes" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getSubtreeTxHashes</span><span class="p">(</span><span class="nx">spanCtx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">stat</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves transaction hashes for a subtree from a remote source. This method fetches the list of transactions that are part of a given subtree from a network peer or another service.</p>
 <p><strong>Retrieval Strategy:</strong></p>
 <ul>
@@ -7772,11 +8260,11 @@
 <li><strong>Network fallback</strong>: Fetches subtree hash list from remote URL if not available locally</li>
 <li><strong>Buffered processing</strong>: Uses buffered I/O for efficient hash list processing</li>
 </ul>
-<h3 id="processmissingtransactions">processMissingTransactions</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processMissingTransactions</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">util</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">txMetaSlice</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">...</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="processmissingtransactions">processMissingTransactions<a class="headerlink" href="#processmissingtransactions" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processMissingTransactions</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">util</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">    </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">txMetaSlice</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">...</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process.</p>
 <div class="admonition warning">
 <p class="admonition-title">Key Responsibilities</p>
@@ -7795,9 +8283,9 @@
 <li><strong>Level-based processing</strong>: Transactions are grouped by dependency level and processed in order</li>
 <li><strong>Dependency ordering</strong>: Parent transactions are validated before their children</li>
 </ul>
-<h3 id="preparetxsperlevel">prepareTxsPerLevel</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">prepareTxsPerLevel</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">transactions</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="p">[][]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="preparetxsperlevel">prepareTxsPerLevel<a class="headerlink" href="#preparetxsperlevel" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">prepareTxsPerLevel</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">transactions</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="p">[][]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Organizes transactions by their dependency level for ordered processing. This method implements a topological sorting algorithm to organize transactions based on their dependency relationships. Transactions are grouped into levels, where each level contains transactions that can be processed independently of each other, but depend on transactions from previous levels.</p>
 <p><strong>Algorithm Details:</strong></p>
 <ul>
@@ -7806,10 +8294,10 @@
 <li><strong>Memory optimization</strong>: Pre-allocates slices based on calculated level sizes</li>
 <li><strong>Coinbase handling</strong>: Properly handles coinbase transactions in dependency analysis</li>
 </ul>
-<h3 id="getsubtreemissingtxs">getSubtreeMissingTxs</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getSubtreeMissingTxs</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">util</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="getsubtreemissingtxs">getSubtreeMissingTxs<a class="headerlink" href="#getsubtreemissingtxs" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getSubtreeMissingTxs</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">util</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">    </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves transactions that are referenced in a subtree but not available locally. This method implements an intelligent retrieval strategy for missing transactions with optimizations for different scenarios.</p>
 <div class="admonition tip">
 <p class="admonition-title">Intelligent Retrieval Strategy</p>
@@ -7826,10 +8314,10 @@
 <li><strong>Network optimization</strong>: Minimizes bandwidth usage through intelligent batching decisions</li>
 </ul>
 </div>
-<h3 id="getmissingtransactionsfromfile">getMissingTransactionsFromFile</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsFromFile</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">missingTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="getmissingtransactionsfromfile">getMissingTransactionsFromFile<a class="headerlink" href="#getmissingtransactionsfromfile" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsFromFile</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">    </span><span class="nx">allTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">missingTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves missing transactions from a locally stored subtree data file. This method attempts to read transaction data from a locally stored subtree file, which can be more efficient than retrieving individual transactions from the network.</p>
 <p><strong>File Processing:</strong></p>
 <ul>
@@ -7838,22 +8326,22 @@
 <li><strong>Transaction mapping</strong>: Maps requested transaction hashes to their positions in the subtree</li>
 <li><strong>Efficient lookup</strong>: Uses subtree lookup maps for fast transaction retrieval</li>
 </ul>
-<h3 id="getmissingtransactionsfrompeer">getMissingTransactionsFromPeer</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsFromPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">missingTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="getmissingtransactionsfrompeer">getMissingTransactionsFromPeer<a class="headerlink" href="#getmissingtransactionsfrompeer" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsFromPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">missingTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">    </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">missingTxs</span><span class="w"> </span><span class="p">[]</span><span class="nx">missingTx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves missing transactions from a peer node. This method handles the network communication required to fetch transactions that are not available locally, organizing the retrieval into batches for efficiency.</p>
-<h3 id="getmissingtransactionsbatch">getMissingTransactionsBatch</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsBatch</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">txHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="getmissingtransactionsbatch">getMissingTransactionsBatch<a class="headerlink" href="#getmissingtransactionsbatch" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getMissingTransactionsBatch</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">txHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">utxo</span><span class="p">.</span><span class="nx">UnresolvedMetaData</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves a batch of transactions from the network. This method optimizes network utilization by fetching multiple transactions in a single request, reducing the overhead of multiple separate requests.</p>
-<h3 id="isprioritysubtreecheckactive">isPrioritySubtreeCheckActive</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">isPrioritySubtreeCheckActive</span><span class="p">(</span><span class="nx">subtreeHash</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span>
-</code></pre></div>
+<h3 id="isprioritysubtreecheckactive">isPrioritySubtreeCheckActive<a class="headerlink" href="#isprioritysubtreecheckactive" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">isPrioritySubtreeCheckActive</span><span class="p">(</span><span class="nx">subtreeHash</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span>
+</span></code></pre></div>
 <p>Checks if a priority subtree check is active for the given subtree hash. Priority checks get special handling and resource allocation to ensure critical subtrees are validated promptly.</p>
-<h3 id="processorphans">processOrphans</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processOrphans</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="processorphans">processOrphans<a class="headerlink" href="#processorphans" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processOrphans</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Processes orphaned transactions that were discovered during subtree validation. This method attempts to validate transactions that were previously missing parents, organizing them by dependency level and processing them in parallel where possible.</p>
 <p><strong>Orphan Processing:</strong></p>
 <ul>
@@ -7862,9 +8350,9 @@
 <li><strong>Automatic cleanup</strong>: Removes successfully validated transactions from the orphanage</li>
 <li><strong>Metrics tracking</strong>: Tracks the number of orphans processed for monitoring</li>
 </ul>
-<h3 id="publishinvalidsubtree">publishInvalidSubtree</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">publishInvalidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerURL</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="publishinvalidsubtree">publishInvalidSubtree<a class="headerlink" href="#publishinvalidsubtree" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">publishInvalidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerURL</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Publishes invalid subtree events to Kafka for system-wide notification. This method helps coordinate the handling of invalid subtrees across the network by notifying other services.</p>
 <p><strong>Features:</strong></p>
 <ul>
@@ -7872,10 +8360,10 @@
 <li><strong>State awareness</strong>: Only publishes during normal operation (not during sync)</li>
 <li><strong>Structured messaging</strong>: Uses protobuf messages for reliable communication</li>
 </ul>
-<h2 id="kafka-handlers">Kafka Handlers</h2>
-<h3 id="consumermessagehandler">consumerMessageHandler</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">consumerMessageHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h2 id="kafka-handlers">Kafka Handlers<a class="headerlink" href="#kafka-handlers" title="Permanent link">&para;</a></h2>
+<h3 id="consumermessagehandler">consumerMessageHandler<a class="headerlink" href="#consumermessagehandler" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">consumerMessageHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.</p>
 <div class="admonition info">
 <p class="admonition-title">Handler Features</p>
@@ -7887,18 +8375,18 @@
 <li><strong>Idempotent processing</strong>: Prevents duplicate validation</li>
 </ul>
 </div>
-<h3 id="subtreeshandler">subtreesHandler</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">subtreesHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="subtreeshandler">subtreesHandler<a class="headerlink" href="#subtreeshandler" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">subtreesHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Handles incoming subtree messages from Kafka. This method unmarshals the message, extracts the subtree hash and base URL, acquires the appropriate lock, and triggers the validation process. It includes comprehensive error handling and logging for operational visibility.</p>
-<h3 id="txmetahandler">txmetaHandler</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">txmetaHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="txmetahandler">txmetaHandler<a class="headerlink" href="#txmetahandler" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">txmetaHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Handles incoming transaction metadata messages from Kafka. This method processes updates to transaction metadata that might be required for proper subtree validation, ensuring the metadata store remains consistent with the latest transaction state.</p>
-<h2 id="additional-internal-methods">Additional Internal Methods</h2>
-<h3 id="updatebestblock">updateBestBlock</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">updateBestBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h2 id="additional-internal-methods">Additional Internal Methods<a class="headerlink" href="#additional-internal-methods" title="Permanent link">&para;</a></h2>
+<h3 id="updatebestblock">updateBestBlock<a class="headerlink" href="#updatebestblock" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">updateBestBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Updates the service's cached best block information by querying the blockchain client. This method maintains current blockchain state for validation operations.</p>
 <p><strong>State Updates:</strong></p>
 <ul>
@@ -7907,9 +8395,9 @@
 <li><strong>Block ID mapping</strong>: Updates current block IDs map for chain validation</li>
 <li><strong>Store synchronization</strong>: Updates subtree store's current block height</li>
 </ul>
-<h3 id="blockchainsubscriptionlistener">blockchainSubscriptionListener</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blockchainSubscriptionListener</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
-</code></pre></div>
+<h3 id="blockchainsubscriptionlistener">blockchainSubscriptionListener<a class="headerlink" href="#blockchainsubscriptionlistener" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blockchainSubscriptionListener</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Background goroutine that listens for blockchain events and updates the service's cached blockchain state. This method ensures the service maintains current blockchain information for validation operations.</p>
 <p><strong>Subscription Features:</strong></p>
 <ul>
@@ -7918,7 +8406,7 @@
 <li><strong>State synchronization</strong>: Updates best block information on block events</li>
 <li><strong>Graceful shutdown</strong>: Properly handles context cancellation</li>
 </ul>
-<h2 id="related-documents">Related Documents</h2>
+<h2 id="related-documents">Related Documents<a class="headerlink" href="#related-documents" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../../topics/services/subtreeValidation/">Subtree Validation Topic Guide</a></li>
 <li><a href="../../settings/services/subtreevalidation_settings/">Subtree Validation Settings</a></li>
@@ -7942,37 +8430,65 @@
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../propagation_reference/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Propagation">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Propagation
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../validator_reference/" class="md-footer__link md-footer__link--next" aria-label="Next: Validator">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Validator
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -7989,12 +8505,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

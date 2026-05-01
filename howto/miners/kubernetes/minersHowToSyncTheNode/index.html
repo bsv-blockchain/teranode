@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToSyncTheNode/">
       
       
         <link rel="prev" href="../../docker/minersHowToSyncTheNode/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -217,6 +276,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -484,6 +567,32 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -850,6 +959,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -905,6 +1034,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -917,9 +1056,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1079,6 +1216,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1091,9 +1242,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1309,6 +1458,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1321,9 +1476,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1427,6 +1580,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1439,9 +1598,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1545,6 +1702,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1557,9 +1720,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1663,6 +1824,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1675,9 +1842,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1781,6 +1946,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1793,9 +1964,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1900,6 +2069,12 @@
   
   
     
+    
+      
+        
+      
+        
+      
     
     
     
@@ -2919,6 +3094,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2931,9 +3118,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -3136,6 +3321,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3148,9 +3375,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -3498,6 +3723,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3510,9 +3743,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -3700,6 +3931,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3712,9 +3961,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3986,6 +4233,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3998,9 +4261,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -4244,6 +4505,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4256,9 +4523,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -4362,6 +4627,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4374,9 +4651,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -4564,6 +4839,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4576,9 +4855,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -4654,6 +4931,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4666,9 +4947,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -4751,6 +5030,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4763,9 +5058,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4833,6 +5126,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4845,9 +5152,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -5027,6 +5332,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5039,9 +5368,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -5405,6 +5732,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5417,9 +5762,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5691,6 +6034,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5703,9 +6060,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5921,6 +6276,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5933,9 +6294,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -6039,6 +6398,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6051,9 +6426,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -6233,6 +6606,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6245,9 +6648,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6687,6 +7088,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6699,9 +7108,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6841,6 +7248,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6853,9 +7276,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7990,17 +8411,112 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../../locallyRunningServices/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    How-To Guides
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../docker/minersHowToInstallation/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Miners
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../docker/minersHowToSyncTheNode/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Sync the Node
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="syncing-the-blockchain-kubernetes">Syncing the Blockchain (Kubernetes)</h1>
+
+<h1 id="syncing-the-blockchain-kubernetes">Syncing the Blockchain (Kubernetes)<a class="headerlink" href="#syncing-the-blockchain-kubernetes" title="Permanent link">&para;</a></h1>
 <!-- markdownlint-disable MD046 -->
 
 <p>Last modified: 29-October-2025</p>
-<h2 id="table-of-contents">Table of Contents</h2>
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="#overview">Overview</a></li>
 <li><a href="#synchronization-methods-comparison">Synchronization Methods Comparison</a></li>
@@ -8011,10 +8527,10 @@
 <li><a href="#monitoring-and-verification">Monitoring and Verification</a></li>
 <li><a href="#additional-resources">Additional Resources</a></li>
 </ul>
-<h2 id="overview">Overview</h2>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>This guide covers the different methods available for synchronizing a Teranode instance with the BSV Blockchain using Kubernetes. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
 <hr />
-<h2 id="synchronization-methods-comparison">Synchronization Methods Comparison</h2>
+<h2 id="synchronization-methods-comparison">Synchronization Methods Comparison<a class="headerlink" href="#synchronization-methods-comparison" title="Permanent link">&para;</a></h2>
 <p>Choose the synchronization method that best fits your situation:</p>
 <table>
 <thead>
@@ -8055,9 +8571,9 @@
 <p><strong>💡 Recommendation:</strong> For production deployments, we recommend using the Legacy SV Node seeding method when possible, as it provides the best balance of speed and data integrity verification.</p>
 </blockquote>
 <hr />
-<h2 id="method-1-default-network-sync-p2p">Method 1: Default Network Sync (P2P)</h2>
+<h2 id="method-1-default-network-sync-p2p">Method 1: Default Network Sync (P2P)<a class="headerlink" href="#method-1-default-network-sync-p2p" title="Permanent link">&para;</a></h2>
 <p>This is the standard synchronization method where Teranode downloads the complete blockchain from other nodes in the network via peer-to-peer connections.</p>
-<h3 id="prerequisites">Prerequisites</h3>
+<h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h3>
 <ul>
 <li>✅ Teranode instance deployed and running</li>
 <li>✅ Network connectivity to BSV peers</li>
@@ -8067,20 +8583,20 @@
 <blockquote>
 <p><strong>⚠️ Important:</strong> This method can take around 14 days depending on your network connection and hardware specifications.</p>
 </blockquote>
-<h3 id="process-overview">Process Overview</h3>
+<h3 id="process-overview">Process Overview<a class="headerlink" href="#process-overview" title="Permanent link">&para;</a></h3>
 <p><img alt="syncStateFlow.svg" src="../../img/mermaid/syncStateFlow.svg" /></p>
-<h3 id="step-1-initialize-sync-process">Step 1: Initialize Sync Process</h3>
+<h3 id="step-1-initialize-sync-process">Step 1: Initialize Sync Process<a class="headerlink" href="#step-1-initialize-sync-process" title="Permanent link">&para;</a></h3>
 <p>Upon startup, Teranode begins in IDLE state. You must explicitly set the state to <code>legacysyncing</code> to begin synchronization.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Set FSM state to begin legacy syncing</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
-</code></pre></div>
-<h3 id="step-2-peer-discovery-and-block-download">Step 2: Peer Discovery and Block Download</h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Set FSM state to begin legacy syncing</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+</span></code></pre></div>
+<h3 id="step-2-peer-discovery-and-block-download">Step 2: Peer Discovery and Block Download<a class="headerlink" href="#step-2-peer-discovery-and-block-download" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Peer Connection</strong>: Teranode automatically discovers and connects to BSV network peers</li>
 <li><strong>Block Requests</strong>: Downloads blocks sequentially from genesis, starting with the first available peer</li>
 <li><strong>Legacy Mode</strong>: In <code>legacysyncing</code> state, connects to traditional BSV nodes for compatibility</li>
 </ul>
-<h3 id="step-3-validation-and-storage">Step 3: Validation and Storage</h3>
+<h3 id="step-3-validation-and-storage">Step 3: Validation and Storage<a class="headerlink" href="#step-3-validation-and-storage" title="Permanent link">&para;</a></h3>
 <p>As blocks are received, multiple Teranode services work in parallel:</p>
 <ul>
 <li><strong>Block Validation</strong>: <code>block-validator</code> service validates block headers and structure</li>
@@ -8088,21 +8604,21 @@ kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </sp
 <li><strong>Storage</strong>: <code>blockchain</code> service stores validated blocks in the database</li>
 <li><strong>UTXO Updates</strong>: <code>asset</code> service maintains the UTXO set</li>
 </ul>
-<h3 id="step-4-monitor-progress">Step 4: Monitor Progress</h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># View real-time sync logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
-
-<span class="c1"># Check service health</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;aerospike|postgres|kafka|teranode-operator&#39;</span>
-
-<span class="c1"># Wait for services to be ready</span>
-kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
-
-<span class="c1"># View blockchain info in the blockchain viewer (port forward if needed)</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
-<span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
-</code></pre></div>
-<h3 id="expected-timeline">Expected Timeline</h3>
+<h3 id="step-4-monitor-progress">Step 4: Monitor Progress<a class="headerlink" href="#step-4-monitor-progress" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># View real-time sync logs</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Check service health</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;aerospike|postgres|kafka|teranode-operator&#39;</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Wait for services to be ready</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># View blockchain info in the blockchain viewer (port forward if needed)</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
+</span></code></pre></div>
+<h3 id="expected-timeline">Expected Timeline<a class="headerlink" href="#expected-timeline" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -8138,9 +8654,9 @@ kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class
 <p><strong>📊 Performance Tip:</strong> Monitor your system resources during sync. CPU and I/O intensive operations are normal during this process.</p>
 </blockquote>
 <hr />
-<h2 id="method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node</h2>
+<h2 id="method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node<a class="headerlink" href="#method-2-seeding-from-legacy-sv-node" title="Permanent link">&para;</a></h2>
 <p>This method allows you to bootstrap a Teranode instance using data exported from an existing SV Node (bitcoind). This significantly reduces synchronization time compared to P2P sync.</p>
-<h3 id="prerequisites_1">Prerequisites</h3>
+<h3 id="prerequisites_1">Prerequisites<a class="headerlink" href="#prerequisites_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li>✅ Access to a fully synchronized SV Node (bitcoind)</li>
 <li>✅ SV Node gracefully shut down (using <code>bitcoin-cli stop</code>)</li>
@@ -8152,7 +8668,7 @@ kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class
 <blockquote>
 <p><strong>⚠️ Critical:</strong> Only perform this operation on a gracefully shut down SV Node to ensure data consistency.</p>
 </blockquote>
-<h3 id="overview_1">Overview</h3>
+<h3 id="overview_1">Overview<a class="headerlink" href="#overview_1" title="Permanent link">&para;</a></h3>
 <p>This process involves two main phases:</p>
 <ol>
 <li><strong>Export Phase</strong>: Convert SV Node database data (UTXO set and headers) into a Teranode-compatible format</li>
@@ -8162,8 +8678,8 @@ kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class
 <p><strong>💡 What's happening:</strong> The <code>bitcointoutxoset</code> tool reads the SV Node's LevelDB database files (<code>chainstate</code> and <code>blocks</code>) and converts them into Teranode's native format for fast import.</p>
 </blockquote>
 <hr />
-<h3 id="phase-1-convert-sv-node-data-to-teranode-format">Phase 1: Convert SV Node Data to Teranode Format</h3>
-<h4 id="step-1-verify-sv-node-requirements">Step 1: Verify SV Node Requirements</h4>
+<h3 id="phase-1-convert-sv-node-data-to-teranode-format">Phase 1: Convert SV Node Data to Teranode Format<a class="headerlink" href="#phase-1-convert-sv-node-data-to-teranode-format" title="Permanent link">&para;</a></h3>
+<h4 id="step-1-verify-sv-node-requirements">Step 1: Verify SV Node Requirements<a class="headerlink" href="#step-1-verify-sv-node-requirements" title="Permanent link">&para;</a></h4>
 <p>Before proceeding with the export, ensure your SV Node meets these critical requirements:</p>
 <div class="admonition info">
 <p class="admonition-title">Data Location Requirements</p>
@@ -8181,60 +8697,60 @@ kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class
 <li><strong>❌ Node cannot have active network connections</strong> during export</li>
 </ul>
 </div>
-<h4 id="optional-ensure-data-consistency">Optional: Ensure Data Consistency</h4>
+<h4 id="optional-ensure-data-consistency">Optional: Ensure Data Consistency<a class="headerlink" href="#optional-ensure-data-consistency" title="Permanent link">&para;</a></h4>
 <p>If you failed to stop gracefully, and you want to guarantee data consistency before export, you can start the SV node one final time in isolated mode:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start SV node in isolated mode (no network activity)</span>
-bitcoind<span class="w"> </span>-listen<span class="o">=</span><span class="m">0</span><span class="w"> </span>-connect<span class="o">=</span><span class="m">0</span><span class="w"> </span>-daemon
-
-<span class="c1"># Wait for any pending operations to complete (check logs)</span>
-tail<span class="w"> </span>-f<span class="w"> </span>~/.bitcoin/debug.log
-
-<span class="c1"># Once stable, stop gracefully</span>
-bitcoin-cli<span class="w"> </span>stop
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Start SV node in isolated mode (no network activity)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>bitcoind<span class="w"> </span>-listen<span class="o">=</span><span class="m">0</span><span class="w"> </span>-connect<span class="o">=</span><span class="m">0</span><span class="w"> </span>-daemon
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Wait for any pending operations to complete (check logs)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>tail<span class="w"> </span>-f<span class="w"> </span>~/.bitcoin/debug.log
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Once stable, stop gracefully</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>bitcoin-cli<span class="w"> </span>stop
+</span></code></pre></div>
 <div class="admonition danger">
 <p class="admonition-title">Critical Warning</p>
 <p>The SV node must be completely stopped before proceeding. Active syncing or network activity during export will cause data corruption or export failure.</p>
 </div>
-<h4 id="step-2-prepare-export-directory">Step 2: Prepare Export Directory</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Create export directory</span>
-sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/teranode/seed/export
-sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="k">$(</span>id<span class="w"> </span>-gn<span class="w"> </span><span class="nv">$USER</span><span class="k">)</span><span class="w"> </span>/mnt/teranode/seed/export
-</code></pre></div>
-<h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from SV Node</span>
-<span class="c1"># Replace /mnt/bitcoin-sv-data with your actual SV node data directory</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
-<span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
-docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>/mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>/app/teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-bitcoinDir<span class="o">=</span>/home/ubuntu/bitcoin-data<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-outputDir<span class="o">=</span>/mnt/teranode/seed/export
-</code></pre></div>
+<h4 id="step-2-prepare-export-directory">Step 2: Prepare Export Directory<a class="headerlink" href="#step-2-prepare-export-directory" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Create export directory</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/teranode/seed/export
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="k">$(</span>id<span class="w"> </span>-gn<span class="w"> </span><span class="nv">$USER</span><span class="k">)</span><span class="w"> </span>/mnt/teranode/seed/export
+</span></code></pre></div>
+<h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data<a class="headerlink" href="#step-3-export-utxo-data" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Export UTXO set from SV Node</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># Replace /mnt/bitcoin-sv-data with your actual SV node data directory</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>-v<span class="w"> </span>/mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span>/app/teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">        </span>-bitcoinDir<span class="o">=</span>/home/ubuntu/bitcoin-data<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">        </span>-outputDir<span class="o">=</span>/mnt/teranode/seed/export
+</span></code></pre></div>
 <p><strong>Expected Output Files:</strong></p>
 <ul>
 <li><code>{blockhash}.utxo-headers</code> - Block headers data</li>
 <li><code>{blockhash}.utxo-set</code> - UTXO set data</li>
 </ul>
-<h4 id="step-4-verify-export">Step 4: Verify Export</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check exported files</span>
-ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
-<span class="c1"># You should see .utxo-headers and .utxo-set files</span>
-</code></pre></div>
+<h4 id="step-4-verify-export">Step 4: Verify Export<a class="headerlink" href="#step-4-verify-export" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Check exported files</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># You should see .utxo-headers and .utxo-set files</span>
+</span></code></pre></div>
 <blockquote>
 <p><strong>🔧 Troubleshooting:</strong> If you encounter a <code>Block hash mismatch between last block and chainstate</code> error, restart your SV Node once more with <code>bitcoin-cli stop</code> followed by a clean restart.</p>
 </blockquote>
-<h4 id="important-cleanup-for-retries">⚠️ Important: Cleanup for Retries</h4>
+<h4 id="important-cleanup-for-retries">⚠️ Important: Cleanup for Retries<a class="headerlink" href="#important-cleanup-for-retries" title="Permanent link">&para;</a></h4>
 <p>If you encounter issues during export or need to retry the process:</p>
 <ol>
 <li><strong>Clear the export directory completely:</strong></li>
 </ol>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/mnt/teranode/seed/export/*
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/mnt/teranode/seed/export/*
+</span></code></pre></div>
 <ol>
 <li>
 <p><strong>Reset the target Teranode instance</strong> (see <a href="../minersHowToResetTeranode/">reset guide</a>)</p>
@@ -8248,7 +8764,7 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 <p>Partial or corrupted export files can cause seeding failures. Always start with a clean export directory and fresh Teranode instance when retrying.</p>
 </div>
 <hr />
-<h3 id="phase-2-seed-teranode-with-exported-data">Phase 2: Seed Teranode with Exported Data</h3>
+<h3 id="phase-2-seed-teranode-with-exported-data">Phase 2: Seed Teranode with Exported Data<a class="headerlink" href="#phase-2-seed-teranode-with-exported-data" title="Permanent link">&para;</a></h3>
 <div class="admonition warning">
 <p class="admonition-title">Critical Service Requirements</p>
 <p>During the seeding process, only the following services should be running for Teranode:</p>
@@ -8270,32 +8786,32 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 </ul>
 <p><strong>Mismatched networks will cause seeding failure or data corruption.</strong></p>
 </div>
-<h4 id="step-1-prepare-teranode-environment">Step 1: Prepare Teranode Environment</h4>
+<h4 id="step-1-prepare-teranode-environment">Step 1: Prepare Teranode Environment<a class="headerlink" href="#step-1-prepare-teranode-environment" title="Permanent link">&para;</a></h4>
 <p>You can scale down the Teranode services using the <code>spec.enabled</code> option in the CR:</p>
-<div class="highlight"><pre><span></span><code><span class="nn">---</span>
-<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode.bsvblockchain.org/v1alpha1</span>
-<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Cluster</span>
-<span class="nt">metadata</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode-cluster</span>
-<span class="nt">spec</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-<span class="w">  </span><span class="nt">alertSystem</span><span class="p">:</span>
-<span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">...</span>
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>&lt;path-to-your-cr-file&gt;.yaml
-
-<span class="c1"># Verify pods are terminated</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h4 id="step-2-identify-the-block-hash">Step 2: Identify the Block Hash</h4>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nn">---</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode.bsvblockchain.org/v1alpha1</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Cluster</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nt">metadata</span><span class="p">:</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode-cluster</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nt">spec</span><span class="p">:</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">alertSystem</span><span class="p">:</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>&lt;path-to-your-cr-file&gt;.yaml
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Verify pods are terminated</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span></code></pre></div>
+<h4 id="step-2-identify-the-block-hash">Step 2: Identify the Block Hash<a class="headerlink" href="#step-2-identify-the-block-hash" title="Permanent link">&para;</a></h4>
 <p>Before running the seeder, you need to identify the correct block hash from your exported files:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># List the exported files to see the block hash</span>
-ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
-
-<span class="c1"># You should see files like:</span>
-<span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-headers</span>
-<span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-set</span>
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># List the exported files to see the block hash</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># You should see files like:</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-headers</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-set</span>
+</span></code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Understanding the Hash Parameter</p>
 <p>The <code>-hash</code> parameter specifies the <strong>block hash of the last block</strong> in the exported UTXO set. This hash:</p>
@@ -8306,63 +8822,63 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 </ul>
 <p><strong>How to find it:</strong> Extract the hash from your exported filenames (the part before <code>.utxo-headers</code> or <code>.utxo-set</code>)</p>
 </div>
-<h4 id="step-3-run-seeder">Step 3: Run Seeder</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Create a temporary seeder pod with proper configmap and volume mounts</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
-<span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
-kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
-<span class="s1">{</span>
-<span class="s1">  &quot;spec&quot;: {</span>
-<span class="s1">    &quot;containers&quot;: [</span>
-<span class="s1">      {</span>
-<span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
-<span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
-<span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
-<span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af&quot;],</span>
-<span class="s1">        &quot;envFrom&quot;: [{</span>
-<span class="s1">          &quot;configMapRef&quot;: {</span>
-<span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
-<span class="s1">          }</span>
-<span class="s1">        }],</span>
-<span class="s1">        &quot;volumeMounts&quot;: [{</span>
-<span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
-<span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
-<span class="s1">        }]</span>
-<span class="s1">      }</span>
-<span class="s1">    ],</span>
-<span class="s1">    &quot;volumes&quot;: [{</span>
-<span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
-<span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
-<span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
-<span class="s1">      }</span>
-<span class="s1">    }]</span>
-<span class="s1">  }</span>
-<span class="s1">}&#39;</span>
-</code></pre></div>
+<h4 id="step-3-run-seeder">Step 3: Run Seeder<a class="headerlink" href="#step-3-run-seeder" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Create a temporary seeder pod with proper configmap and volume mounts</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="s1">{</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="s1">  &quot;spec&quot;: {</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="s1">    &quot;containers&quot;: [</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="s1">      {</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af&quot;],</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="s1">        &quot;envFrom&quot;: [{</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="s1">          &quot;configMapRef&quot;: {</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="s1">          }</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="s1">        }],</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="s1">        &quot;volumeMounts&quot;: [{</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a><span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a><span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a><span class="s1">        }]</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a><span class="s1">      }</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a><span class="s1">    ],</span>
+</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29" href="#__codelineno-10-29"></a><span class="s1">    &quot;volumes&quot;: [{</span>
+</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30" href="#__codelineno-10-30"></a><span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
+</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31" href="#__codelineno-10-31"></a><span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
+</span><span id="__span-10-32"><a id="__codelineno-10-32" name="__codelineno-10-32" href="#__codelineno-10-32"></a><span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
+</span><span id="__span-10-33"><a id="__codelineno-10-33" name="__codelineno-10-33" href="#__codelineno-10-33"></a><span class="s1">      }</span>
+</span><span id="__span-10-34"><a id="__codelineno-10-34" name="__codelineno-10-34" href="#__codelineno-10-34"></a><span class="s1">    }]</span>
+</span><span id="__span-10-35"><a id="__codelineno-10-35" name="__codelineno-10-35" href="#__codelineno-10-35"></a><span class="s1">  }</span>
+</span><span id="__span-10-36"><a id="__codelineno-10-36" name="__codelineno-10-36" href="#__codelineno-10-36"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
 <blockquote>
 <p><strong>Important:</strong> The seeder pod must have the same configmap (teranode-operator-config) and volume mounts as the regular Teranode pods to access the correct database and storage configuration.</p>
 </blockquote>
-<h4 id="step-4-monitor-seeding-progress">Step 4: Monitor Seeding Progress</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Monitor seeder logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>teranode-seeder<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h4 id="step-5-start-teranode-services">Step 5: Start Teranode Services</h4>
+<h4 id="step-4-monitor-seeding-progress">Step 4: Monitor Seeding Progress<a class="headerlink" href="#step-4-monitor-seeding-progress" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Monitor seeder logs</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>teranode-seeder<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span></code></pre></div>
+<h4 id="step-5-start-teranode-services">Step 5: Start Teranode Services<a class="headerlink" href="#step-5-start-teranode-services" title="Permanent link">&para;</a></h4>
 <p>After successful seeding:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Re-enable the cluster in the CR</span>
-kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:true}}&#39;</span>
-
-<span class="c1"># Wait for pods to be ready</span>
-kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
-
-<span class="c1"># Verify all pods are running</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h3 id="expected-timeline_1">Expected Timeline</h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Re-enable the cluster in the CR</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:true}}&#39;</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Wait for pods to be ready</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># Verify all pods are running</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span></code></pre></div>
+<h3 id="expected-timeline_1">Expected Timeline<a class="headerlink" href="#expected-timeline_1" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -8398,9 +8914,9 @@ kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> <
 <p><strong>💾 Storage Note:</strong> The seeder writes directly to Aerospike, PostgreSQL, and the filesystem. Ensure your environment variables and volume mounts are correctly configured.</p>
 </blockquote>
 <hr />
-<h2 id="method-3-seeding-from-existing-teranode">Method 3: Seeding from Existing Teranode</h2>
+<h2 id="method-3-seeding-from-existing-teranode">Method 3: Seeding from Existing Teranode<a class="headerlink" href="#method-3-seeding-from-existing-teranode" title="Permanent link">&para;</a></h2>
 <p>This is the fastest synchronization method, using UTXO set and header files from an existing Teranode instance. This method is ideal when you have access to another synchronized Teranode node.</p>
-<h3 id="prerequisites_2">Prerequisites</h3>
+<h3 id="prerequisites_2">Prerequisites<a class="headerlink" href="#prerequisites_2" title="Permanent link">&para;</a></h3>
 <ul>
 <li>✅ Access to a synchronized Teranode instance</li>
 <li>✅ UTXO set files from Block/UTXO Persister</li>
@@ -8408,70 +8924,70 @@ kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> <
 <li>✅ Network access between source and target systems</li>
 <li>✅ Sufficient storage for data transfer</li>
 </ul>
-<h3 id="overview_2">Overview</h3>
+<h3 id="overview_2">Overview<a class="headerlink" href="#overview_2" title="Permanent link">&para;</a></h3>
 <p>This method uses the same seeder tool as Method 2, but with data files generated by Teranode's Block Persister and UTXO Persister services instead of exporting from a legacy SV node.</p>
-<h3 id="step-1-locate-source-data">Step 1: Locate Source Data</h3>
+<h3 id="step-1-locate-source-data">Step 1: Locate Source Data<a class="headerlink" href="#step-1-locate-source-data" title="Permanent link">&para;</a></h3>
 <p>On your source Teranode instance, locate the persisted data files:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Typical locations for persisted data in Kubernetes deployments</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>ls<span class="w"> </span>-la<span class="w"> </span>/app/data/blockstore/
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Typical locations for persisted data in Kubernetes deployments</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>ls<span class="w"> </span>-la<span class="w"> </span>/app/data/blockstore/
+</span></code></pre></div>
 <p><strong>Required Files:</strong></p>
 <ul>
 <li><code>{blockhash}.utxo-headers</code> - Block headers</li>
 <li><code>{blockhash}.utxo-set</code> - UTXO set data</li>
 </ul>
-<h3 id="step-2-make-data-available">Step 2: Make Data Available</h3>
+<h3 id="step-2-make-data-available">Step 2: Make Data Available<a class="headerlink" href="#step-2-make-data-available" title="Permanent link">&para;</a></h3>
 <p>Ensure the required UTXO files are available in your target Teranode's export directory:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Target location for the files</span>
-/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-headers
-/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-set
-</code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Target location for the files</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-headers
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-set
+</span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Data Transfer</p>
 <p>Use your preferred method to transfer the files from the source Teranode to the target location (scp, rsync, container volumes, shared storage, etc.).</p>
 </div>
-<h3 id="step-3-run-seeder_1">Step 3: Run Seeder</h3>
+<h3 id="step-3-run-seeder_1">Step 3: Run Seeder<a class="headerlink" href="#step-3-run-seeder_1" title="Permanent link">&para;</a></h3>
 <p>Use the same seeder process as described in Method 2:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Scale down services</span>
-kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:false}}&#39;</span>
-
-<span class="c1"># Run seeder with proper configmap and volume mounts</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
-<span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
-kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
-<span class="s1">{</span>
-<span class="s1">  &quot;spec&quot;: {</span>
-<span class="s1">    &quot;containers&quot;: [</span>
-<span class="s1">      {</span>
-<span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
-<span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
-<span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
-<span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;&lt;blockhash-from-filename&gt;&quot;],</span>
-<span class="s1">        &quot;envFrom&quot;: [{</span>
-<span class="s1">          &quot;configMapRef&quot;: {</span>
-<span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
-<span class="s1">          }</span>
-<span class="s1">        }],</span>
-<span class="s1">        &quot;volumeMounts&quot;: [{</span>
-<span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
-<span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
-<span class="s1">        }]</span>
-<span class="s1">      }</span>
-<span class="s1">    ],</span>
-<span class="s1">    &quot;volumes&quot;: [{</span>
-<span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
-<span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
-<span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
-<span class="s1">      }</span>
-<span class="s1">    }]</span>
-<span class="s1">  }</span>
-<span class="s1">}&#39;</span>
-</code></pre></div>
-<h3 id="expected-timeline_2">Expected Timeline</h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Scale down services</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:false}}&#39;</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Run seeder with proper configmap and volume mounts</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="s1">{</span>
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="s1">  &quot;spec&quot;: {</span>
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="s1">    &quot;containers&quot;: [</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="s1">      {</span>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;&lt;blockhash-from-filename&gt;&quot;],</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="s1">        &quot;envFrom&quot;: [{</span>
+</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a><span class="s1">          &quot;configMapRef&quot;: {</span>
+</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a><span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
+</span><span id="__span-15-23"><a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a><span class="s1">          }</span>
+</span><span id="__span-15-24"><a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="s1">        }],</span>
+</span><span id="__span-15-25"><a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="s1">        &quot;volumeMounts&quot;: [{</span>
+</span><span id="__span-15-26"><a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a><span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
+</span><span id="__span-15-27"><a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a><span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
+</span><span id="__span-15-28"><a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="s1">        }]</span>
+</span><span id="__span-15-29"><a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a><span class="s1">      }</span>
+</span><span id="__span-15-30"><a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="s1">    ],</span>
+</span><span id="__span-15-31"><a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="s1">    &quot;volumes&quot;: [{</span>
+</span><span id="__span-15-32"><a id="__codelineno-15-32" name="__codelineno-15-32" href="#__codelineno-15-32"></a><span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
+</span><span id="__span-15-33"><a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a><span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
+</span><span id="__span-15-34"><a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
+</span><span id="__span-15-35"><a id="__codelineno-15-35" name="__codelineno-15-35" href="#__codelineno-15-35"></a><span class="s1">      }</span>
+</span><span id="__span-15-36"><a id="__codelineno-15-36" name="__codelineno-15-36" href="#__codelineno-15-36"></a><span class="s1">    }]</span>
+</span><span id="__span-15-37"><a id="__codelineno-15-37" name="__codelineno-15-37" href="#__codelineno-15-37"></a><span class="s1">  }</span>
+</span><span id="__span-15-38"><a id="__codelineno-15-38" name="__codelineno-15-38" href="#__codelineno-15-38"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<h3 id="expected-timeline_2">Expected Timeline<a class="headerlink" href="#expected-timeline_2" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -8507,11 +9023,11 @@ kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span c
 <p><strong>⚡ Speed Advantage:</strong> This method is typically 2-3x faster than Method 2 since the data is already in Teranode's optimized format.</p>
 </blockquote>
 <hr />
-<h2 id="recovery-and-troubleshooting">Recovery and Troubleshooting</h2>
+<h2 id="recovery-and-troubleshooting">Recovery and Troubleshooting<a class="headerlink" href="#recovery-and-troubleshooting" title="Permanent link">&para;</a></h2>
 <p>Teranode is designed for resilience and can recover from various types of downtime or disconnections. This section covers different recovery scenarios and troubleshooting approaches.</p>
-<h3 id="normal-recovery-short-downtime">Normal Recovery (Short Downtime)</h3>
+<h3 id="normal-recovery-short-downtime">Normal Recovery (Short Downtime)<a class="headerlink" href="#normal-recovery-short-downtime" title="Permanent link">&para;</a></h3>
 <p>For brief interruptions (minutes to hours), Teranode typically recovers automatically.</p>
-<h4 id="automatic-recovery-process">Automatic Recovery Process</h4>
+<h4 id="automatic-recovery-process">Automatic Recovery Process<a class="headerlink" href="#automatic-recovery-process" title="Permanent link">&para;</a></h4>
 <ol>
 <li>
 <p><strong>Service Restart</strong></p>
@@ -8535,39 +9051,39 @@ kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span c
 </ul>
 </li>
 </ol>
-<h4 id="monitor-normal-recovery">Monitor Normal Recovery</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check pod status and restarts</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-o<span class="w"> </span>wide
-
-<span class="c1"># View recovery logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span>
-
-<span class="c1"># Check for pod events and issues</span>
-kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain
-
-<span class="c1"># View sync progress in blockchain viewer (port forward if needed)</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
-<span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
-</code></pre></div>
-<h3 id="extended-downtime-recovery">Extended Downtime Recovery</h3>
+<h4 id="monitor-normal-recovery">Monitor Normal Recovery<a class="headerlink" href="#monitor-normal-recovery" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Check pod status and restarts</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-o<span class="w"> </span>wide
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># View recovery logs</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="c1"># Check for pod events and issues</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="c1"># View sync progress in blockchain viewer (port forward if needed)</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
+</span></code></pre></div>
+<h3 id="extended-downtime-recovery">Extended Downtime Recovery<a class="headerlink" href="#extended-downtime-recovery" title="Permanent link">&para;</a></h3>
 <p>For longer outages (days to weeks), additional considerations apply.</p>
-<h4 id="assessment-phase">Assessment Phase</h4>
-<h5 id="step-1-check-data-integrity">Step 1: Check Data Integrity</h5>
-<div class="highlight"><pre><span></span><code><span class="c1"># Examine logs for corruption warnings</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--previous<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span><span class="s2">&quot;corrupt\|error\|fail&quot;</span>
-
-<span class="c1"># Check database connectivity</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>settings<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
-</code></pre></div>
-<h5 id="step-2-evaluate-catch-up-requirements">Step 2: Evaluate Catch-up Requirements</h5>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check current block height vs network tip using the blockchain viewer</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
-<span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
-<span class="c1"># Compare the displayed height with a block explorer</span>
-
-<span class="c1"># If &gt;10,000 blocks behind, consider reseeding</span>
-</code></pre></div>
-<h4 id="recovery-options">Recovery Options</h4>
+<h4 id="assessment-phase">Assessment Phase<a class="headerlink" href="#assessment-phase" title="Permanent link">&para;</a></h4>
+<h5 id="step-1-check-data-integrity">Step 1: Check Data Integrity<a class="headerlink" href="#step-1-check-data-integrity" title="Permanent link">&para;</a></h5>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Examine logs for corruption warnings</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--previous<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span><span class="s2">&quot;corrupt\|error\|fail&quot;</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Check database connectivity</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>settings<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
+</span></code></pre></div>
+<h5 id="step-2-evaluate-catch-up-requirements">Step 2: Evaluate Catch-up Requirements<a class="headerlink" href="#step-2-evaluate-catch-up-requirements" title="Permanent link">&para;</a></h5>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Check current block height vs network tip using the blockchain viewer</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Compare the displayed height with a block explorer</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="c1"># If &gt;10,000 blocks behind, consider reseeding</span>
+</span></code></pre></div>
+<h4 id="recovery-options">Recovery Options<a class="headerlink" href="#recovery-options" title="Permanent link">&para;</a></h4>
 <table>
 <thead>
 <tr>
@@ -8594,18 +9110,18 @@ kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class
 </tr>
 </tbody>
 </table>
-<h4 id="manual-intervention-steps">Manual Intervention Steps</h4>
-<h5 id="option-1-force-catch-up">Option 1: Force Catch-up</h5>
-<div class="highlight"><pre><span></span><code><span class="c1"># Reset FSM state and restart sync</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
-
-<span class="c1"># Monitor progress closely</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
-</code></pre></div>
-<h5 id="option-2-reseed-from-recent-data">Option 2: Reseed from Recent Data</h5>
+<h4 id="manual-intervention-steps">Manual Intervention Steps<a class="headerlink" href="#manual-intervention-steps" title="Permanent link">&para;</a></h4>
+<h5 id="option-1-force-catch-up">Option 1: Force Catch-up<a class="headerlink" href="#option-1-force-catch-up" title="Permanent link">&para;</a></h5>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Reset FSM state and restart sync</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># Monitor progress closely</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
+</span></code></pre></div>
+<h5 id="option-2-reseed-from-recent-data">Option 2: Reseed from Recent Data<a class="headerlink" href="#option-2-reseed-from-recent-data" title="Permanent link">&para;</a></h5>
 <p>If catch-up is too slow, use Method 2 or Method 3 from this guide with recent data.</p>
-<h3 id="troubleshooting-common-issues">Troubleshooting Common Issues</h3>
-<h4 id="issue-sync-stalled">Issue: Sync Stalled</h4>
+<h3 id="troubleshooting-common-issues">Troubleshooting Common Issues<a class="headerlink" href="#troubleshooting-common-issues" title="Permanent link">&para;</a></h3>
+<h4 id="issue-sync-stalled">Issue: Sync Stalled<a class="headerlink" href="#issue-sync-stalled" title="Permanent link">&para;</a></h4>
 <p><strong>Symptoms:</strong></p>
 <ul>
 <li>Block height not increasing</li>
@@ -8613,49 +9129,49 @@ kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </
 <li>Peer connections established but inactive</li>
 </ul>
 <p><strong>Solutions:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check peer connections</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo
-
-<span class="c1"># Restart peer service</span>
-kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>peer
-
-<span class="c1"># Reset FSM state</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
-</code></pre></div>
-<h4 id="issue-database-connection-errors">Issue: Database Connection Errors</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Check peer connections</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1"># Restart peer service</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>peer
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="c1"># Reset FSM state</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+</span></code></pre></div>
+<h4 id="issue-database-connection-errors">Issue: Database Connection Errors<a class="headerlink" href="#issue-database-connection-errors" title="Permanent link">&para;</a></h4>
 <p><strong>Symptoms:</strong></p>
 <ul>
 <li>Connection timeouts to PostgreSQL/Aerospike</li>
 <li>"Database unavailable" errors in logs</li>
 </ul>
 <p><strong>Solutions:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check database pod status</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
-
-<span class="c1"># Test database connectivity</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>postgres-pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>&lt;username&gt;<span class="w"> </span>-d<span class="w"> </span>&lt;database&gt;<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT 1;&quot;</span>
-
-<span class="c1"># Restart database pods if needed</span>
-kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>postgres
-</code></pre></div>
-<h4 id="issue-storage-space-exhausted">Issue: Storage Space Exhausted</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Check database pod status</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># Test database connectivity</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>postgres-pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>&lt;username&gt;<span class="w"> </span>-d<span class="w"> </span>&lt;database&gt;<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT 1;&quot;</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Restart database pods if needed</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>postgres
+</span></code></pre></div>
+<h4 id="issue-storage-space-exhausted">Issue: Storage Space Exhausted<a class="headerlink" href="#issue-storage-space-exhausted" title="Permanent link">&para;</a></h4>
 <p><strong>Symptoms:</strong></p>
 <ul>
 <li>"No space left on device" errors</li>
 <li>Pods in CrashLoopBackOff state</li>
 </ul>
 <p><strong>Solutions:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check storage usage</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>df<span class="w"> </span>-h
-
-<span class="c1"># Clean up old logs (if applicable)</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>find<span class="w"> </span>/app/logs<span class="w"> </span>-name<span class="w"> </span><span class="s2">&quot;*.log&quot;</span><span class="w"> </span>-mtime<span class="w"> </span>+7<span class="w"> </span>-delete
-
-<span class="c1"># Scale up storage (requires cluster admin)</span>
-<span class="c1"># Consider implementing log rotation</span>
-</code></pre></div>
-<h3 id="performance-monitoring-during-recovery">Performance Monitoring During Recovery</h3>
-<h4 id="key-metrics-to-watch">Key Metrics to Watch</h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Check storage usage</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>df<span class="w"> </span>-h
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Clean up old logs (if applicable)</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>find<span class="w"> </span>/app/logs<span class="w"> </span>-name<span class="w"> </span><span class="s2">&quot;*.log&quot;</span><span class="w"> </span>-mtime<span class="w"> </span>+7<span class="w"> </span>-delete
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Scale up storage (requires cluster admin)</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="c1"># Consider implementing log rotation</span>
+</span></code></pre></div>
+<h3 id="performance-monitoring-during-recovery">Performance Monitoring During Recovery<a class="headerlink" href="#performance-monitoring-during-recovery" title="Permanent link">&para;</a></h3>
+<h4 id="key-metrics-to-watch">Key Metrics to Watch<a class="headerlink" href="#key-metrics-to-watch" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Block Processing Rate</strong>: Blocks per minute</li>
 <li><strong>Peer Connection Count</strong>: Active peer connections</li>
@@ -8663,107 +9179,107 @@ kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </sp
 <li><strong>Storage I/O</strong>: Disk read/write rates</li>
 <li><strong>Memory Usage</strong>: RAM consumption patterns</li>
 </ul>
-<h4 id="monitoring-commands">Monitoring Commands</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Monitor block height progress via blockchain viewer</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
-<span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
-
-<span class="c1"># Monitor resource usage</span>
-kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-
-<span class="c1"># Check service health endpoints</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/health
-</code></pre></div>
+<h4 id="monitoring-commands">Monitoring Commands<a class="headerlink" href="#monitoring-commands" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Monitor block height progress via blockchain viewer</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="c1"># Monitor resource usage</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1"># Check service health endpoints</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/health
+</span></code></pre></div>
 <blockquote>
 <p><strong>📈 Tip:</strong> Use monitoring tools like Prometheus and Grafana to track recovery progress and estimate completion times. Set up alerts for stalled sync or resource exhaustion.</p>
 </blockquote>
 <hr />
-<h2 id="monitoring-and-verification">Monitoring and Verification</h2>
+<h2 id="monitoring-and-verification">Monitoring and Verification<a class="headerlink" href="#monitoring-and-verification" title="Permanent link">&para;</a></h2>
 <p>After completing synchronization using any method, it's important to verify that your Teranode instance is properly synchronized and functioning correctly.</p>
-<h3 id="verification-checklist">Verification Checklist</h3>
-<h4 id="basic-connectivity">✅ Basic Connectivity</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check if services are running</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-<span class="c1"># All pods should be in &quot;Running&quot; status</span>
-
-<span class="c1"># Test CLI connectivity</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
-</code></pre></div>
-<h4 id="synchronization-status">✅ Synchronization Status</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check current block height using blockchain viewer</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
-<span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
-
-<span class="c1"># Compare with network tip (use block explorer or other nodes)</span>
-<span class="c1"># Heights should match within 1-2 blocks</span>
-</code></pre></div>
-<h4 id="peer-connections">✅ Peer Connections</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Verify peer connections</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;addr|version&quot;</span>
-
-<span class="c1"># Should have 8+ active peer connections</span>
-</code></pre></div>
-<h4 id="database-health">✅ Database Health</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check PostgreSQL connectivity</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;postgres-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>&lt;username&gt;<span class="w"> </span>-d<span class="w"> </span>&lt;database&gt;<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT COUNT(*) FROM blocks;&quot;</span>
-
-<span class="c1"># Check Aerospike connectivity</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;aerospike-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;statistics&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;objects&quot;</span>
-</code></pre></div>
-<h4 id="fsm-state">✅ FSM State</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Verify FSM is in correct state</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
-
-<span class="c1"># Should show &quot;RUNNING&quot; for a fully synchronized node</span>
-</code></pre></div>
-<h3 id="ongoing-monitoring">Ongoing Monitoring</h3>
-<h4 id="daily-health-checks">Daily Health Checks</h4>
-<div class="highlight"><pre><span></span><code><span class="ch">#!/bin/bash</span>
-<span class="c1"># Save as teranode-health-check.sh</span>
-
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;=== Teranode Health Check ===&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Timestamp: </span><span class="k">$(</span>date<span class="k">)</span><span class="s2">&quot;</span>
-
-<span class="c1"># Check pod status</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Pod Status ---&quot;</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-
-<span class="c1"># Check block height via blockchain viewer</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Block Height ---&quot;</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;View at http://localhost:8090/viewer (port-forward if needed)&quot;</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
-
-<span class="c1"># Check peer count</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Peer Count ---&quot;</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l
-
-<span class="c1"># Check FSM state</span>
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- FSM State ---&quot;</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
-</code></pre></div>
-<h4 id="performance-metrics">Performance Metrics</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Monitor resource usage</span>
-kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-
-<span class="c1"># Check storage usage</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>df<span class="w"> </span>-h
-
-<span class="c1"># Monitor network traffic</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>netstat<span class="w"> </span>-i
-</code></pre></div>
-<h4 id="log-analysis">Log Analysis</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check for errors in recent logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>error
-
-<span class="c1"># Monitor sync progress</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;height|block|sync&quot;</span>
-
-<span class="c1"># Check for warnings</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>warn
-</code></pre></div>
+<h3 id="verification-checklist">Verification Checklist<a class="headerlink" href="#verification-checklist" title="Permanent link">&para;</a></h3>
+<h4 id="basic-connectivity">✅ Basic Connectivity<a class="headerlink" href="#basic-connectivity" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Check if services are running</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="c1"># All pods should be in &quot;Running&quot; status</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="c1"># Test CLI connectivity</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</span></code></pre></div>
+<h4 id="synchronization-status">✅ Synchronization Status<a class="headerlink" href="#synchronization-status" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># Check current block height using blockchain viewer</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="c1"># Then access http://localhost:8090/viewer in your browser</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="c1"># Compare with network tip (use block explorer or other nodes)</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="c1"># Heights should match within 1-2 blocks</span>
+</span></code></pre></div>
+<h4 id="peer-connections">✅ Peer Connections<a class="headerlink" href="#peer-connections" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Verify peer connections</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;addr|version&quot;</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="c1"># Should have 8+ active peer connections</span>
+</span></code></pre></div>
+<h4 id="database-health">✅ Database Health<a class="headerlink" href="#database-health" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Check PostgreSQL connectivity</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;postgres-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>&lt;username&gt;<span class="w"> </span>-d<span class="w"> </span>&lt;database&gt;<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT COUNT(*) FROM blocks;&quot;</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1"># Check Aerospike connectivity</span>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;aerospike-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;statistics&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;objects&quot;</span>
+</span></code></pre></div>
+<h4 id="fsm-state">✅ FSM State<a class="headerlink" href="#fsm-state" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Verify FSM is in correct state</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1"># Should show &quot;RUNNING&quot; for a fully synchronized node</span>
+</span></code></pre></div>
+<h3 id="ongoing-monitoring">Ongoing Monitoring<a class="headerlink" href="#ongoing-monitoring" title="Permanent link">&para;</a></h3>
+<h4 id="daily-health-checks">Daily Health Checks<a class="headerlink" href="#daily-health-checks" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="c1"># Save as teranode-health-check.sh</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;=== Teranode Health Check ===&quot;</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Timestamp: </span><span class="k">$(</span>date<span class="k">)</span><span class="s2">&quot;</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="c1"># Check pod status</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Pod Status ---&quot;</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="c1"># Check block height via blockchain viewer</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Block Height ---&quot;</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;View at http://localhost:8090/viewer (port-forward if needed)&quot;</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a><span class="c1"># Check peer count</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Peer Count ---&quot;</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a>
+</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20" href="#__codelineno-29-20"></a><span class="c1"># Check FSM state</span>
+</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21" href="#__codelineno-29-21"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- FSM State ---&quot;</span>
+</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22" href="#__codelineno-29-22"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</span></code></pre></div>
+<h4 id="performance-metrics">Performance Metrics<a class="headerlink" href="#performance-metrics" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Monitor resource usage</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1"># Check storage usage</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>df<span class="w"> </span>-h
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="c1"># Monitor network traffic</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;blockchain-pod&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>netstat<span class="w"> </span>-i
+</span></code></pre></div>
+<h4 id="log-analysis">Log Analysis<a class="headerlink" href="#log-analysis" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1"># Check for errors in recent logs</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>error
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="c1"># Monitor sync progress</span>
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;height|block|sync&quot;</span>
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a><span class="c1"># Check for warnings</span>
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>warn
+</span></code></pre></div>
 <hr />
-<h2 id="additional-resources">Additional Resources</h2>
-<h3 id="documentation">Documentation</h3>
+<h2 id="additional-resources">Additional Resources<a class="headerlink" href="#additional-resources" title="Permanent link">&para;</a></h2>
+<h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><a href="../../minersHowToTeranodeCLI/">Teranode CLI Reference</a></strong> - Complete CLI command reference</li>
 <li><strong><a href="../minersHowToResetTeranode/">Reset Teranode (Kubernetes)</a></strong> - How to reset Kubernetes deployments</li>
@@ -8771,13 +9287,13 @@ kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </
 <li><strong><a href="../../../../topics/services/utxoPersister/">UTXO Persister Service</a></strong> - UTXO persistence configuration</li>
 <li><strong><a href="../../../../topics/stores/utxo/">UTXO Store Documentation</a></strong> - UTXO storage mechanisms</li>
 </ul>
-<h3 id="installation-and-configuration">Installation and Configuration</h3>
+<h3 id="installation-and-configuration">Installation and Configuration<a class="headerlink" href="#installation-and-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><a href="../minersHowToInstallation/">Kubernetes Installation</a></strong> - Kubernetes deployment</li>
 <li><strong><a href="../minersHowToConfigureTheNode/">Kubernetes Configuration</a></strong> - Kubernetes configuration guide</li>
 <li><strong><a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Requirements</a></strong> - External dependencies</li>
 </ul>
-<h3 id="support-and-community">Support and Community</h3>
+<h3 id="support-and-community">Support and Community<a class="headerlink" href="#support-and-community" title="Permanent link">&para;</a></h3>
 <p>For additional support:</p>
 <ol>
 <li><strong>Check Logs</strong>: Always start with examining service logs</li>
@@ -8802,37 +9318,65 @@ kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../docker/minersHowToSyncTheNode/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Docker">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Docker
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../minersHowToBackup/" class="md-footer__link md-footer__link--next" aria-label="Next: Backup Teranode">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Backup Teranode
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -8849,12 +9393,10 @@ kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

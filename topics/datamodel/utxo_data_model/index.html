@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/datamodel/utxo_data_model/">
       
       
         <link rel="prev" href="../transaction_data_model/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -214,6 +273,8 @@
         <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
           
   
+  
+    
   
   How-To Guides
 
@@ -237,6 +298,8 @@
           
   
   
+    
+  
   Key Topics
 
         </a>
@@ -256,6 +319,8 @@
         <a href="../../../references/projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2229,6 +2408,48 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2593,6 +2814,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2608,9 +2837,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
@@ -2798,6 +3025,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2813,9 +3058,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="">
@@ -3087,6 +3330,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3102,9 +3361,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
@@ -3348,6 +3605,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3363,9 +3626,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="">
@@ -3470,6 +3731,18 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -4303,6 +4576,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4318,9 +4595,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
@@ -4396,6 +4671,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -4411,9 +4690,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
@@ -4496,6 +4773,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4508,9 +4801,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
@@ -4578,6 +4869,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4590,9 +4895,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
@@ -4772,6 +5075,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4784,9 +5111,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -5150,6 +5475,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5162,9 +5505,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
@@ -5436,6 +5777,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5448,9 +5803,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
         
           
           <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
@@ -5666,6 +6019,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5678,9 +6037,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
@@ -5784,6 +6141,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5796,9 +6169,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
@@ -5978,6 +6349,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5990,9 +6391,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6432,6 +6831,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6444,9 +6851,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6586,6 +6991,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6598,9 +7019,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
@@ -7462,14 +7881,83 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../block_data_model/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Data Model
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
 
-<h1 id="teranode-data-model-utxo">Teranode Data Model - UTXO</h1>
-<h2 id="utxo-data-model">UTXO Data Model</h2>
+
+<h1 id="teranode-data-model-utxo">Teranode Data Model - UTXO<a class="headerlink" href="#teranode-data-model-utxo" title="Permanent link">&para;</a></h1>
+<h2 id="utxo-data-model">UTXO Data Model<a class="headerlink" href="#utxo-data-model" title="Permanent link">&para;</a></h2>
 <p>For every transaction, a UTXO record is stored in the database. The record contains the following fields:</p>
 <table>
 <thead>
@@ -7602,9 +8090,9 @@
 </tr>
 </tbody>
 </table>
-<h2 id="individual-utxo-encoding">Individual UTXO Encoding</h2>
+<h2 id="individual-utxo-encoding">Individual UTXO Encoding<a class="headerlink" href="#individual-utxo-encoding" title="Permanent link">&para;</a></h2>
 <p>Each UTXO in the <code>utxos</code> array uses a variable-length binary encoding that indicates whether the output has been spent.</p>
-<h3 id="unspent-utxo-format-32-bytes">Unspent UTXO Format (32 bytes)</h3>
+<h3 id="unspent-utxo-format-32-bytes">Unspent UTXO Format (32 bytes)<a class="headerlink" href="#unspent-utxo-format-32-bytes" title="Permanent link">&para;</a></h3>
 <p>An unspent UTXO contains only the UTXO hash:</p>
 <table>
 <thead>
@@ -7625,7 +8113,7 @@
 </tbody>
 </table>
 <p><strong>Example</strong>: A transaction with 5 outputs creates 5 unspent UTXOs, each 32 bytes.</p>
-<h3 id="spent-utxo-format-68-bytes">Spent UTXO Format (68 bytes)</h3>
+<h3 id="spent-utxo-format-68-bytes">Spent UTXO Format (68 bytes)<a class="headerlink" href="#spent-utxo-format-68-bytes" title="Permanent link">&para;</a></h3>
 <p>When a UTXO is spent, spending data is appended:</p>
 <table>
 <thead>
@@ -7658,7 +8146,7 @@
 </tbody>
 </table>
 <p><strong>Example</strong>: When output 0 of transaction A is spent by input 2 of transaction B, the UTXO grows from 32 to 68 bytes, with bytes [32:64] containing transaction B's ID and bytes [64:68] containing <code>0x02000000</code> (little-endian 2).</p>
-<h3 id="frozen-utxo-encoding-68-bytes">Frozen UTXO Encoding (68 bytes)</h3>
+<h3 id="frozen-utxo-encoding-68-bytes">Frozen UTXO Encoding (68 bytes)<a class="headerlink" href="#frozen-utxo-encoding-68-bytes" title="Permanent link">&para;</a></h3>
 <p>Frozen UTXOs (managed by the alert system) use a special spending data pattern:</p>
 <table>
 <thead>
@@ -7685,39 +8173,39 @@
 </tbody>
 </table>
 <p><strong>Detection</strong> (from <code>stores/utxo/aerospike/teranode.lua</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="kd">local</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">255</span>
-<span class="kd">local</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">36</span>
-
-<span class="kr">function</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span>
-<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="kr">do</span>
-<span class="w">        </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="p">[</span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">~=</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="kc">true</span>
-<span class="kr">end</span>
-</code></pre></div>
-<h3 id="field-extraction">Field Extraction</h3>
+<div class="language-lua highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">local</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">255</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kd">local</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">36</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kr">function</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="p">[</span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">~=</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="kr">end</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="kr">end</span>
+</span></code></pre></div>
+<h3 id="field-extraction">Field Extraction<a class="headerlink" href="#field-extraction" title="Permanent link">&para;</a></h3>
 <p>The Lua implementation in <code>stores/utxo/aerospike/teranode.lua</code> extracts fields as follows:</p>
-<div class="highlight"><pre><span></span><code><span class="c1">-- Get UTXO from array (Lua arrays are 1-based)</span>
-<span class="kd">local</span><span class="w"> </span><span class="nv">utxo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">utxos</span><span class="p">[</span><span class="nv">offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span>
-
-<span class="c1">-- Extract UTXO hash (always present)</span>
-<span class="kd">local</span><span class="w"> </span><span class="nv">utxoHash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">)</span>
-
-<span class="c1">-- Check if spent</span>
-<span class="kr">if</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">size</span><span class="p">(</span><span class="nv">utxo</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">68</span><span class="w"> </span><span class="kr">then</span>
-<span class="w">    </span><span class="c1">-- Extract spending transaction ID</span>
-<span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">spendingTxID</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">33</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">)</span>
-
-<span class="w">    </span><span class="c1">-- Extract input index</span>
-<span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">inputIndex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">)</span>
-
-<span class="w">    </span><span class="c1">-- Check if frozen</span>
-<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span><span class="w"> </span><span class="kr">then</span>
-<span class="w">        </span><span class="c1">-- UTXO is frozen by alert system</span>
-<span class="w">    </span><span class="kr">end</span>
-<span class="kr">end</span>
-</code></pre></div>
+<div class="language-lua highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">-- Get UTXO from array (Lua arrays are 1-based)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kd">local</span><span class="w"> </span><span class="nv">utxo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">utxos</span><span class="p">[</span><span class="nv">offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1">-- Extract UTXO hash (always present)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kd">local</span><span class="w"> </span><span class="nv">utxoHash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">-- Check if spent</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="kr">if</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">size</span><span class="p">(</span><span class="nv">utxo</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">68</span><span class="w"> </span><span class="kr">then</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="c1">-- Extract spending transaction ID</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">spendingTxID</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">33</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">)</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="c1">-- Extract input index</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">inputIndex</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">bytes</span><span class="p">.</span><span class="nf">get_bytes</span><span class="p">(</span><span class="nv">utxo</span><span class="p">,</span><span class="w"> </span><span class="mi">65</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">)</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="c1">-- Check if frozen</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span><span class="w"> </span><span class="kr">then</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">        </span><span class="c1">-- UTXO is frozen by alert system</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="kr">end</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="kr">end</span>
+</span></code></pre></div>
 <p><strong>Size-Based State Detection</strong>:</p>
 <ul>
 <li><code>size == 32</code> → Unspent</li>
@@ -7731,7 +8219,7 @@
 <li><strong>Inputs</strong>: Array of inputs used in the transaction.</li>
 <li><strong>Outputs</strong>: Array of outputs (UTXOs) created by the transaction.</li>
 </ul>
-<h2 id="time-to-live-ttl-fields">Time to Live (TTL) Fields</h2>
+<h2 id="time-to-live-ttl-fields">Time to Live (TTL) Fields<a class="headerlink" href="#time-to-live-ttl-fields" title="Permanent link">&para;</a></h2>
 <p>Typically, UTXO records are kept with a time-to-live value that is set when all UTXOs in a record are spent or reassigned.</p>
 <table>
 <thead>
@@ -7749,11 +8237,11 @@
 </tr>
 </tbody>
 </table>
-<h2 id="aerospike-storage">Aerospike Storage</h2>
+<h2 id="aerospike-storage">Aerospike Storage<a class="headerlink" href="#aerospike-storage" title="Permanent link">&para;</a></h2>
 <p>If storing in Aerospike, the UTXO record is stored as a bin in the Aerospike database. The bin contains the UTXO data in a serialized format, containing up to 1024 bytes.</p>
 <p><img alt="AerospikeRecord.png" src="../../services/img/AerospikeRecord.png" /></p>
 <p>For more information, please refer to the official Aerospike documentation: <a href="https://aerospike.com">https://aerospike.com</a>.</p>
-<h2 id="utxo-metadata">UTXO MetaData</h2>
+<h2 id="utxo-metadata">UTXO MetaData<a class="headerlink" href="#utxo-metadata" title="Permanent link">&para;</a></h2>
 <p>For convenience, the UTXO can be decorated using the <code>UTXO MetaData</code> format, widely used in Teranode:</p>
 <table>
 <thead>
@@ -7831,19 +8319,19 @@
 </tr>
 </tbody>
 </table>
-<h2 id="txinpoints-structure">TxInpoints Structure</h2>
+<h2 id="txinpoints-structure">TxInpoints Structure<a class="headerlink" href="#txinpoints-structure" title="Permanent link">&para;</a></h2>
 <blockquote>
 <p><strong>External Package</strong>: The <code>TxInpoints</code> structure is defined in the external <code>github.com/bsv-blockchain/go-subtree</code> package. The implementation details below are provided for reference and developer convenience.</p>
 </blockquote>
 <p>The <code>TxInpoints</code> field contains complete outpoint information for all transaction inputs, providing precise identification of which UTXOs are being consumed by a transaction.</p>
-<h3 id="structure-definition">Structure Definition</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">TxInpoints</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">ParentTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w">  </span><span class="c1">// Array of parent transaction hashes</span>
-<span class="w">    </span><span class="nx">Idxs</span><span class="w">           </span><span class="p">[][]</span><span class="kt">uint32</span><span class="w">        </span><span class="c1">// Array of arrays containing output indices for each parent transaction</span>
-<span class="w">    </span><span class="nx">nrInpoints</span><span class="w">     </span><span class="kt">int</span><span class="w">               </span><span class="c1">// Internal variable tracking total number of inpoints</span>
-<span class="p">}</span>
-</code></pre></div>
-<h3 id="field-descriptions">Field Descriptions</h3>
+<h3 id="structure-definition">Structure Definition<a class="headerlink" href="#structure-definition" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TxInpoints</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">ParentTxHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="w">  </span><span class="c1">// Array of parent transaction hashes</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">Idxs</span><span class="w">           </span><span class="p">[][]</span><span class="kt">uint32</span><span class="w">        </span><span class="c1">// Array of arrays containing output indices for each parent transaction</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nx">nrInpoints</span><span class="w">     </span><span class="kt">int</span><span class="w">               </span><span class="c1">// Internal variable tracking total number of inpoints</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="field-descriptions">Field Descriptions<a class="headerlink" href="#field-descriptions" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -7870,7 +8358,7 @@
 </tr>
 </tbody>
 </table>
-<h3 id="key-features">Key Features</h3>
+<h3 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
 <p><strong>Complete Outpoint Information</strong>: Each input is precisely identified by both the parent transaction hash and the specific output index being consumed.</p>
@@ -7885,7 +8373,7 @@
 <p><strong>Chained Transaction Support</strong>: Facilitates handling of complex transaction chains where multiple outputs from the same parent transaction are consumed.</p>
 </li>
 </ol>
-<h3 id="example">Example</h3>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
 <p>For a transaction consuming:</p>
 <ul>
 <li>Output 0 of transaction A</li>
@@ -7893,9 +8381,9 @@
 <li>Output 1 of transaction B</li>
 </ul>
 <p>The TxInpoints structure would contain:</p>
-<div class="highlight"><pre><span></span><code>ParentTxHashes: [hashA, hashB]
-Idxs: [[0, 2], [1]]
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>ParentTxHashes: [hashA, hashB]
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Idxs: [[0, 2], [1]]
+</span></code></pre></div>
 <p>This structure efficiently represents that the transaction consumes three UTXOs total: two from transaction A (outputs 0 and 2) and one from transaction B (output 1).</p>
 <p>Note:</p>
 <ul>
@@ -7916,9 +8404,9 @@ Idxs: [[0, 2], [1]]
 </ul>
 </li>
 </ul>
-<h2 id="utxo-state-lifecycle">UTXO State Lifecycle</h2>
+<h2 id="utxo-state-lifecycle">UTXO State Lifecycle<a class="headerlink" href="#utxo-state-lifecycle" title="Permanent link">&para;</a></h2>
 <p>A UTXO progresses through multiple states during its lifecycle, from creation through spending to eventual cleanup. Understanding these states is critical for implementing consensus rules, validation logic, and cleanup operations.</p>
-<h3 id="state-overview">State Overview</h3>
+<h3 id="state-overview">State Overview<a class="headerlink" href="#state-overview" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -7970,7 +8458,7 @@ Idxs: [[0, 2], [1]]
 </tr>
 </tbody>
 </table>
-<h3 id="state-transitions">State Transitions</h3>
+<h3 id="state-transitions">State Transitions<a class="headerlink" href="#state-transitions" title="Permanent link">&para;</a></h3>
 <p>The following table shows valid state transitions and their triggers:</p>
 <table>
 <thead>
@@ -8038,8 +8526,8 @@ Idxs: [[0, 2], [1]]
 </tr>
 </tbody>
 </table>
-<h3 id="detailed-state-descriptions">Detailed State Descriptions</h3>
-<h4 id="created-locked-state">Created &amp; Locked State</h4>
+<h3 id="detailed-state-descriptions">Detailed State Descriptions<a class="headerlink" href="#detailed-state-descriptions" title="Permanent link">&para;</a></h3>
+<h4 id="created-locked-state">Created &amp; Locked State<a class="headerlink" href="#created-locked-state" title="Permanent link">&para;</a></h4>
 <p>When a transaction is first validated and stored:</p>
 <ul>
 <li><code>locked</code> field is set to <code>true</code> during <code>Create()</code> operation</li>
@@ -8054,7 +8542,7 @@ Idxs: [[0, 2], [1]]
 <li>Successful block assembly → <code>SetLocked(false)</code> → transitions to Unlocked &amp; Unmined</li>
 <li>Transaction mined via <code>SetMinedMulti()</code> → automatically unlocks and transitions to Mined</li>
 </ul>
-<h4 id="unlocked-unmined-state">Unlocked &amp; Unmined State</h4>
+<h4 id="unlocked-unmined-state">Unlocked &amp; Unmined State<a class="headerlink" href="#unlocked-unmined-state" title="Permanent link">&para;</a></h4>
 <p>After unlock but before mining:</p>
 <ul>
 <li><code>locked=false</code>, allowing outputs to be spent</li>
@@ -8068,7 +8556,7 @@ Idxs: [[0, 2], [1]]
 <li>Transaction mined → <code>SetMinedMulti()</code> sets <code>unminedSince=0</code>, populates <code>blockIDs</code></li>
 <li>Transaction becomes conflicting → marked as double-spend</li>
 </ul>
-<h4 id="mined-state">Mined State</h4>
+<h4 id="mined-state">Mined State<a class="headerlink" href="#mined-state" title="Permanent link">&para;</a></h4>
 <p>Transaction permanently recorded in blockchain:</p>
 <ul>
 <li><code>unminedSince=0</code> (zero indicates mined)</li>
@@ -8089,7 +8577,7 @@ Idxs: [[0, 2], [1]]
 <li>Block reorganization removes block from longest chain → <code>SetMinedMulti()</code> with <code>UnsetMined=true</code></li>
 <li>Sets <code>unminedSince</code> back to block height, clears block references</li>
 </ul>
-<h4 id="unspent-state-32-bytes">Unspent State (32 bytes)</h4>
+<h4 id="unspent-state-32-bytes">Unspent State (32 bytes)<a class="headerlink" href="#unspent-state-32-bytes" title="Permanent link">&para;</a></h4>
 <p>UTXO has not been consumed:</p>
 <ul>
 <li>UTXO entry in <code>utxos</code> array is exactly 32 bytes</li>
@@ -8102,7 +8590,7 @@ Idxs: [[0, 2], [1]]
 <li><code>Spend()</code> operation adds 36-byte spending data → transitions to Spent</li>
 <li>Alert system freeze → spending data set to 0xFF pattern → transitions to Frozen</li>
 </ul>
-<h4 id="spent-state-68-bytes">Spent State (68 bytes)</h4>
+<h4 id="spent-state-68-bytes">Spent State (68 bytes)<a class="headerlink" href="#spent-state-68-bytes" title="Permanent link">&para;</a></h4>
 <p>UTXO consumed by another transaction:</p>
 <ul>
 <li>UTXO entry grows to 68 bytes total</li>
@@ -8122,7 +8610,7 @@ Idxs: [[0, 2], [1]]
 <li>Block reorganization or validation rollback → <code>Unspend()</code> removes 36-byte spending data</li>
 <li>Alert system freeze → spending data changed to 0xFF pattern → transitions to Frozen</li>
 </ul>
-<h4 id="frozen-state-68-bytes">Frozen State (68 bytes)</h4>
+<h4 id="frozen-state-68-bytes">Frozen State (68 bytes)<a class="headerlink" href="#frozen-state-68-bytes" title="Permanent link">&para;</a></h4>
 <p>UTXO frozen by alert system:</p>
 <ul>
 <li>UTXO entry is 68 bytes with special pattern</li>
@@ -8132,17 +8620,17 @@ Idxs: [[0, 2], [1]]
 <li>Spending attempts return <code>LuaErrorCodeFrozen</code> error</li>
 <li>
 <p>Detection logic from <code>stores/utxo/aerospike/teranode.lua</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">local</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">255</span>
-<span class="kd">local</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">36</span>
-
-<span class="kr">function</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span>
-<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="kr">do</span>
-<span class="w">        </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="p">[</span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">~=</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">end</span>
-<span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="kc">true</span>
-<span class="kr">end</span>
-</code></pre></div>
+<div class="language-lua highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">local</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">255</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kd">local</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">36</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kr">function</span><span class="w"> </span><span class="nf">isFrozen</span><span class="p">(</span><span class="nv">spendingData</span><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">SPENDING_DATA_SIZE</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="kr">if</span><span class="w"> </span><span class="nv">spendingData</span><span class="p">[</span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">~=</span><span class="w"> </span><span class="nv">FROZEN_BYTE</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="kr">end</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="kr">end</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="kr">end</span>
+</span></code></pre></div>
 </li>
 </ul>
 <p><strong>Conditional freeze:</strong></p>
@@ -8155,7 +8643,7 @@ Idxs: [[0, 2], [1]]
 <ul>
 <li>Alert system unfreeze → removes 0xFF pattern, restores previous state</li>
 </ul>
-<h4 id="conflicting-state">Conflicting State</h4>
+<h4 id="conflicting-state">Conflicting State<a class="headerlink" href="#conflicting-state" title="Permanent link">&para;</a></h4>
 <p>Transaction marked as double-spend:</p>
 <ul>
 <li><code>conflicting=true</code> flag set</li>
@@ -8170,7 +8658,7 @@ Idxs: [[0, 2], [1]]
 <li>Entire transaction tree marked as conflicting</li>
 <li>Pruning occurs after TTL expiration</li>
 </ul>
-<h4 id="scheduled-for-deletion">Scheduled for Deletion</h4>
+<h4 id="scheduled-for-deletion">Scheduled for Deletion<a class="headerlink" href="#scheduled-for-deletion" title="Permanent link">&para;</a></h4>
 <p>Record marked for automatic pruning:</p>
 <ul>
 <li><code>deleteAtHeight</code> field set to specific block height</li>
@@ -8193,53 +8681,53 @@ Idxs: [[0, 2], [1]]
 <li>Pagination records: <code>SetDAHForChildRecords()</code> updates all child records</li>
 <li>External transactions: <code>setDAHExternalTransaction()</code> updates blob storage metadata</li>
 </ul>
-<h2 id="storage-implementation">Storage Implementation</h2>
+<h2 id="storage-implementation">Storage Implementation<a class="headerlink" href="#storage-implementation" title="Permanent link">&para;</a></h2>
 <p>UTXO records are stored using different strategies based on transaction size and output count. Teranode uses a hybrid storage approach combining Aerospike key-value store with external blob storage to handle transactions of any size efficiently.</p>
-<h3 id="storage-architecture-overview">Storage Architecture Overview</h3>
-<div class="highlight"><pre><span></span><code>Transaction Size Check
-         │
-         ├──&gt; Small (&lt;1MB, ≤20K outputs)
-         │    └──&gt; Single Aerospike Record
-         │         ├─ Transaction data (inputs/outputs)
-         │         ├─ UTXO array (32 or 68 bytes each)
-         │         └─ Metadata (fee, blockIDs, etc.)
-         │
-         ├──&gt; Medium (≤1MB, &gt;20K outputs)
-         │    └──&gt; Multiple Aerospike Records (Pagination)
-         │         ├─ Master Record (index 0)
-         │         │  ├─ Full transaction data
-         │         │  ├─ First 20K UTXOs
-         │         │  └─ Metadata + totalExtraRecs
-         │         └─ Child Records (index 1, 2, 3...)
-         │            ├─ Next 20K UTXOs per record
-         │            └─ Subset of metadata
-         │
-         └──&gt; Large (&gt;1MB or force external)
-              └──&gt; External Blob Storage + Aerospike
-                   ├─ Blob Storage
-                   │  ├─ FileTypeTx (.tx) - Full transaction
-                   │  └─ FileTypeOutputs (.outputs) - Outputs only
-                   └─ Aerospike Records
-                      ├─ external=true flag
-                      ├─ UTXO arrays (paginated if &gt;20K)
-                      └─ Metadata only (no tx data)
-</code></pre></div>
-<h3 id="record-pagination-20000-outputs">Record Pagination (&gt;20,000 Outputs)</h3>
+<h3 id="storage-architecture-overview">Storage Architecture Overview<a class="headerlink" href="#storage-architecture-overview" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Transaction Size Check
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>         │
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>         ├──&gt; Small (&lt;1MB, ≤20K outputs)
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>         │    └──&gt; Single Aerospike Record
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>         │         ├─ Transaction data (inputs/outputs)
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>         │         ├─ UTXO array (32 or 68 bytes each)
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>         │         └─ Metadata (fee, blockIDs, etc.)
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>         │
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>         ├──&gt; Medium (≤1MB, &gt;20K outputs)
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>         │    └──&gt; Multiple Aerospike Records (Pagination)
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>         │         ├─ Master Record (index 0)
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>         │         │  ├─ Full transaction data
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>         │         │  ├─ First 20K UTXOs
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>         │         │  └─ Metadata + totalExtraRecs
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>         │         └─ Child Records (index 1, 2, 3...)
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>         │            ├─ Next 20K UTXOs per record
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>         │            └─ Subset of metadata
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>         │
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>         └──&gt; Large (&gt;1MB or force external)
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>              └──&gt; External Blob Storage + Aerospike
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>                   ├─ Blob Storage
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>                   │  ├─ FileTypeTx (.tx) - Full transaction
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>                   │  └─ FileTypeOutputs (.outputs) - Outputs only
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>                   └─ Aerospike Records
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>                      ├─ external=true flag
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>                      ├─ UTXO arrays (paginated if &gt;20K)
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>                      └─ Metadata only (no tx data)
+</span></code></pre></div>
+<h3 id="record-pagination-20000-outputs">Record Pagination (&gt;20,000 Outputs)<a class="headerlink" href="#record-pagination-20000-outputs" title="Permanent link">&para;</a></h3>
 <p>Transactions with more than 20,000 outputs are automatically split across multiple Aerospike records to stay within database size constraints.</p>
-<h4 id="pagination-strategy">Pagination Strategy</h4>
+<h4 id="pagination-strategy">Pagination Strategy<a class="headerlink" href="#pagination-strategy" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Batch Size</strong>: 20,000 UTXOs per record (configurable via <code>utxoBatchSize</code> setting)</li>
 <li><strong>Master Record</strong> (index 0): Contains first batch of UTXOs plus complete metadata</li>
 <li><strong>Child Records</strong> (index 1+): Contain subsequent UTXO batches with limited metadata</li>
 </ul>
 <p><strong>Key Calculation</strong> (from <code>stores/utxo/aerospike/create.go</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// Master record key</span>
-<span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hash</span><span class="p">(</span><span class="nx">txID</span><span class="p">)</span>
-
-<span class="c1">// Child record keys</span>
-<span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hash</span><span class="p">(</span><span class="nx">txID</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">childIndex</span><span class="p">)</span><span class="w">  </span><span class="c1">// childIndex = 1, 2, 3...</span>
-</code></pre></div>
-<h4 id="master-record-index-0">Master Record (Index 0)</h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Master record key</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hash</span><span class="p">(</span><span class="nx">txID</span><span class="p">)</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">// Child record keys</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hash</span><span class="p">(</span><span class="nx">txID</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">childIndex</span><span class="p">)</span><span class="w">  </span><span class="c1">// childIndex = 1, 2, 3...</span>
+</span></code></pre></div>
+<h4 id="master-record-index-0">Master Record (Index 0)<a class="headerlink" href="#master-record-index-0" title="Permanent link">&para;</a></h4>
 <p>Contains complete transaction metadata and first UTXO batch:</p>
 <table>
 <thead>
@@ -8297,7 +8785,7 @@ Idxs: [[0, 2], [1]]
 </tr>
 </tbody>
 </table>
-<h4 id="child-records-index-1">Child Records (Index 1+)</h4>
+<h4 id="child-records-index-1">Child Records (Index 1+)<a class="headerlink" href="#child-records-index-1" title="Permanent link">&para;</a></h4>
 <p>Contain UTXO batches with minimal metadata:</p>
 <table>
 <thead>
@@ -8341,33 +8829,33 @@ Idxs: [[0, 2], [1]]
 <li>When master record unspentalready → <code>SetDAHForChildRecords()</code> with DAH=0 clears DAH on all children</li>
 <li>Enables coordinated cleanup of entire transaction across all pagination records</li>
 </ul>
-<h4 id="pagination-example">Pagination Example</h4>
+<h4 id="pagination-example">Pagination Example<a class="headerlink" href="#pagination-example" title="Permanent link">&para;</a></h4>
 <p>Transaction with 45,000 outputs splits into 3 records:</p>
-<div class="highlight"><pre><span></span><code>Master Record (key = hash(txID), index 0):
-
-  - utxos[0:20000]        // First 20K UTXOs
-  - totalUtxos = 45000
-  - totalExtraRecs = 2
-  - recordUtxos = 20000   // Non-nil in this record
-  - spentUtxos = 0
-  - spentExtraRecs = 0
-  - Full tx data or external=true
-  - All metadata fields
-
-Child Record 1 (key = hash(txID+1), index 1):
-
-  - utxos[20000:40000]    // Second 20K UTXOs
-  - recordUtxos = 20000
-  - spentUtxos = 0
-  - Common metadata only
-
-Child Record 2 (key = hash(txID+2), index 2):
-
-  - utxos[40000:45000]    // Final 5K UTXOs
-  - recordUtxos = 5000
-  - spentUtxos = 0
-  - Common metadata only
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Master Record (key = hash(txID), index 0):
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  - utxos[0:20000]        // First 20K UTXOs
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  - totalUtxos = 45000
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>  - totalExtraRecs = 2
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>  - recordUtxos = 20000   // Non-nil in this record
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>  - spentUtxos = 0
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>  - spentExtraRecs = 0
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>  - Full tx data or external=true
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>  - All metadata fields
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>Child Record 1 (key = hash(txID+1), index 1):
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>  - utxos[20000:40000]    // Second 20K UTXOs
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>  - recordUtxos = 20000
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>  - spentUtxos = 0
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>  - Common metadata only
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>Child Record 2 (key = hash(txID+2), index 2):
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>  - utxos[40000:45000]    // Final 5K UTXOs
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>  - recordUtxos = 5000
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>  - spentUtxos = 0
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>  - Common metadata only
+</span></code></pre></div>
 <p><strong>Retrieval Process</strong> (from <code>stores/utxo/aerospike/get.go</code>):</p>
 <ol>
 <li>Fetch master record by transaction ID</li>
@@ -8376,16 +8864,16 @@ Child Record 2 (key = hash(txID+2), index 2):
 <li>Combine UTXOs from all records into single <code>spendingDatas</code> array</li>
 <li>Calculate correct offset: <code>baseOffset = recordNum * utxoBatchSize</code></li>
 </ol>
-<h3 id="external-blob-storage">External Blob Storage</h3>
+<h3 id="external-blob-storage">External Blob Storage<a class="headerlink" href="#external-blob-storage" title="Permanent link">&para;</a></h3>
 <p>Large transactions exceeding Aerospike size limits are stored in external blob storage (S3, filesystem, or HTTP-accessible storage).</p>
-<h4 id="trigger-conditions">Trigger Conditions</h4>
+<h4 id="trigger-conditions">Trigger Conditions<a class="headerlink" href="#trigger-conditions" title="Permanent link">&para;</a></h4>
 <p>External storage used when:</p>
 <ul>
 <li>Transaction size &gt; <code>MaxTxSizeInStoreInBytes</code> (typically 1MB)</li>
 <li>Transaction has &gt;20,000 outputs (automatic with pagination)</li>
 <li>Configuration forces externalization: <code>ExternalizeAllTransactions=true</code></li>
 </ul>
-<h4 id="file-types">File Types</h4>
+<h4 id="file-types">File Types<a class="headerlink" href="#file-types" title="Permanent link">&para;</a></h4>
 <p>Two file type options for external storage:</p>
 <table>
 <thead>
@@ -8412,20 +8900,20 @@ Child Record 2 (key = hash(txID+2), index 2):
 </tbody>
 </table>
 <p><strong>UTXOWrapper Format</strong> (FileTypeOutputs):</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">UTXOWrapper</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">TxID</span><span class="w">     </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
-<span class="w">    </span><span class="nx">Height</span><span class="w">   </span><span class="kt">uint32</span>
-<span class="w">    </span><span class="nx">Coinbase</span><span class="w"> </span><span class="kt">bool</span>
-<span class="w">    </span><span class="nx">UTXOs</span><span class="w">    </span><span class="p">[]</span><span class="o">*</span><span class="nx">UTXO</span>
-<span class="p">}</span>
-
-<span class="kd">type</span><span class="w"> </span><span class="nx">UTXO</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">Index</span><span class="w">  </span><span class="kt">uint32</span><span class="w">      </span><span class="c1">// Output index</span>
-<span class="w">    </span><span class="nx">Value</span><span class="w">  </span><span class="kt">uint64</span><span class="w">      </span><span class="c1">// Satoshis</span>
-<span class="w">    </span><span class="nx">Script</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="w">      </span><span class="c1">// Locking script</span>
-<span class="p">}</span>
-</code></pre></div>
-<h4 id="storage-flow">Storage Flow</h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">UTXOWrapper</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="nx">TxID</span><span class="w">     </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nx">Height</span><span class="w">   </span><span class="kt">uint32</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nx">Coinbase</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nx">UTXOs</span><span class="w">    </span><span class="p">[]</span><span class="o">*</span><span class="nx">UTXO</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">UTXO</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nx">Index</span><span class="w">  </span><span class="kt">uint32</span><span class="w">      </span><span class="c1">// Output index</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nx">Value</span><span class="w">  </span><span class="kt">uint64</span><span class="w">      </span><span class="c1">// Satoshis</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nx">Script</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="w">      </span><span class="c1">// Locking script</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
+</span></code></pre></div>
+<h4 id="storage-flow">Storage Flow<a class="headerlink" href="#storage-flow" title="Permanent link">&para;</a></h4>
 <p><strong>Normal Transactions</strong> (from <code>stores/utxo/aerospike/create.go:sendStoreBatch()</code>):</p>
 <ol>
 <li>Calculate transaction extended size</li>
@@ -8454,7 +8942,7 @@ Child Record 2 (key = hash(txID+2), index 2):
 <li>Store metadata and UTXO hashes in Aerospike</li>
 <li>Set <code>external=true</code> flag</li>
 </ol>
-<h4 id="retrieval-from-external-storage">Retrieval from External Storage</h4>
+<h4 id="retrieval-from-external-storage">Retrieval from External Storage<a class="headerlink" href="#retrieval-from-external-storage" title="Permanent link">&para;</a></h4>
 <p><strong>Full Transaction Retrieval</strong> (from <code>stores/utxo/aerospike/get.go:GetTxFromExternalStore()</code>):</p>
 <ol>
 <li>Check <code>external</code> flag in Aerospike record</li>
@@ -8481,83 +8969,83 @@ Child Record 2 (key = hash(txID+2), index 2):
 </ul>
 </li>
 </ul>
-<h4 id="external-dah-management">External DAH Management</h4>
+<h4 id="external-dah-management">External DAH Management<a class="headerlink" href="#external-dah-management" title="Permanent link">&para;</a></h4>
 <p>When transactions stored externally require cleanup:</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// Set DAH in blob storage metadata</span>
-<span class="nx">setDAHExternalTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">deleteAtHeight</span><span class="p">)</span>
-
-<span class="c1">// Process:</span>
-<span class="c1">// 1. Try to set DAH on .tx file</span>
-<span class="c1">// 2. If not found, try .outputs file</span>
-<span class="c1">// 3. Update blob storage metadata with DAH value</span>
-<span class="c1">// 4. Blob storage system handles deletion at specified height</span>
-</code></pre></div>
-<h3 id="binary-encoding-in-aerospike">Binary Encoding in Aerospike</h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1">// Set DAH in blob storage metadata</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nx">setDAHExternalTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">deleteAtHeight</span><span class="p">)</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1">// Process:</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1">// 1. Try to set DAH on .tx file</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1">// 2. If not found, try .outputs file</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1">// 3. Update blob storage metadata with DAH value</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="c1">// 4. Blob storage system handles deletion at specified height</span>
+</span></code></pre></div>
+<h3 id="binary-encoding-in-aerospike">Binary Encoding in Aerospike<a class="headerlink" href="#binary-encoding-in-aerospike" title="Permanent link">&para;</a></h3>
 <p>Transaction components are stored as binary-encoded Aerospike bins for space efficiency.</p>
-<h4 id="input-encoding-extended-format">Input Encoding (Extended Format)</h4>
+<h4 id="input-encoding-extended-format">Input Encoding (Extended Format)<a class="headerlink" href="#input-encoding-extended-format" title="Permanent link">&para;</a></h4>
 <p>Each input stored with extended data for previous output information:</p>
-<div class="highlight"><pre><span></span><code>[Standard Input Data]
-  ├─ PreviousTxID (32 bytes)
-  ├─ PreviousTxOutIndex (4 bytes, little-endian uint32)
-  ├─ ScriptSig (variable length with VarInt prefix)
-  └─ Sequence (4 bytes, little-endian uint32)
-
-[Extended Data] (appended to standard input)
-  ├─ PreviousTxSatoshis (8 bytes, little-endian uint64)
-  └─ PreviousTxScript (variable length with VarInt prefix)
-     ├─ If nil: Single 0x00 byte
-     └─ If present: VarInt(length) + script bytes
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>[Standard Input Data]
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  ├─ PreviousTxID (32 bytes)
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  ├─ PreviousTxOutIndex (4 bytes, little-endian uint32)
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>  ├─ ScriptSig (variable length with VarInt prefix)
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>  └─ Sequence (4 bytes, little-endian uint32)
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>[Extended Data] (appended to standard input)
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>  ├─ PreviousTxSatoshis (8 bytes, little-endian uint64)
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>  └─ PreviousTxScript (variable length with VarInt prefix)
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>     ├─ If nil: Single 0x00 byte
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>     └─ If present: VarInt(length) + script bytes
+</span></code></pre></div>
 <p><strong>Purpose</strong>: Extended format enables validation without additional database lookups for previous output data.</p>
-<h4 id="output-encoding">Output Encoding</h4>
+<h4 id="output-encoding">Output Encoding<a class="headerlink" href="#output-encoding" title="Permanent link">&para;</a></h4>
 <p>Standard Bitcoin output serialization:</p>
-<div class="highlight"><pre><span></span><code>├─ Satoshis (8 bytes, little-endian uint64)
-└─ LockingScript (variable length with VarInt prefix)
-   ├─ VarInt(scriptLength)
-   └─ Script bytes
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>├─ Satoshis (8 bytes, little-endian uint64)
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>└─ LockingScript (variable length with VarInt prefix)
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>   ├─ VarInt(scriptLength)
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>   └─ Script bytes
+</span></code></pre></div>
 <p><strong>Storage Optimization</strong>:</p>
 <ul>
 <li>Nil outputs stored as <code>nil</code> in arrays (not serialized)</li>
 <li>OP_RETURN outputs with 0 satoshis may be excluded from external storage</li>
 <li><code>ShouldStoreOutputAsUTXO()</code> determines which outputs get UTXO entries</li>
 </ul>
-<h4 id="utxo-array-encoding">UTXO Array Encoding</h4>
+<h4 id="utxo-array-encoding">UTXO Array Encoding<a class="headerlink" href="#utxo-array-encoding" title="Permanent link">&para;</a></h4>
 <p>The <code>utxos</code> bin contains an array of variable-length byte arrays:</p>
-<div class="highlight"><pre><span></span><code>utxos = [utxo0, utxo1, utxo2, ...]
-
-Each utxo entry:
-  ├─ 32 bytes → Unspent UTXO (hash only)
-  └─ 68 bytes → Spent UTXO (hash + spending data)
-                or Frozen UTXO (hash + 0xFF pattern)
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>utxos = [utxo0, utxo1, utxo2, ...]
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>Each utxo entry:
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>  ├─ 32 bytes → Unspent UTXO (hash only)
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>  └─ 68 bytes → Spent UTXO (hash + spending data)
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>                or Frozen UTXO (hash + 0xFF pattern)
+</span></code></pre></div>
 <p><strong>Array Indexing</strong>:</p>
 <ul>
 <li>Direct correspondence to transaction output indices</li>
 <li><code>utxos[i]</code> corresponds to transaction output <code>i</code></li>
 <li>Spending lookup: <code>spend.Vout % utxoBatchSize</code> for offset within record</li>
 </ul>
-<h3 id="key-source-calculation">Key Source Calculation</h3>
+<h3 id="key-source-calculation">Key Source Calculation<a class="headerlink" href="#key-source-calculation" title="Permanent link">&para;</a></h3>
 <p>Aerospike keys are calculated to enable efficient lookups and pagination:</p>
-<h4 id="master-record-key">Master Record Key</h4>
-<div class="highlight"><pre><span></span><code><span class="c1">// Direct transaction ID used as key</span>
-<span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">txID</span><span class="p">[:])</span>
-</code></pre></div>
-<h4 id="child-record-keys">Child Record Keys</h4>
-<div class="highlight"><pre><span></span><code><span class="c1">// Calculated using utility function</span>
-<span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">uaerospike</span><span class="p">.</span><span class="nx">CalculateKeySourceInternal</span><span class="p">(</span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">childIndex</span><span class="p">)</span>
-<span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">keySource</span><span class="p">)</span>
-
-<span class="c1">// Where childIndex = 1, 2, 3... for pagination records</span>
-</code></pre></div>
-<h4 id="spend-lookup-keys">Spend Lookup Keys</h4>
-<div class="highlight"><pre><span></span><code><span class="c1">// Includes output index for efficient spend checks</span>
-<span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">uaerospike</span><span class="p">.</span><span class="nx">CalculateKeySource</span><span class="p">(</span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">vout</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoBatchSize</span><span class="p">)</span>
-<span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">keySource</span><span class="p">)</span>
-
-<span class="c1">// Maps vout to correct pagination record automatically</span>
-</code></pre></div>
-<h3 id="storage-size-limits">Storage Size Limits</h3>
+<h4 id="master-record-key">Master Record Key<a class="headerlink" href="#master-record-key" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1">// Direct transaction ID used as key</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">txID</span><span class="p">[:])</span>
+</span></code></pre></div>
+<h4 id="child-record-keys">Child Record Keys<a class="headerlink" href="#child-record-keys" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1">// Calculated using utility function</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">uaerospike</span><span class="p">.</span><span class="nx">CalculateKeySourceInternal</span><span class="p">(</span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">childIndex</span><span class="p">)</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">keySource</span><span class="p">)</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="c1">// Where childIndex = 1, 2, 3... for pagination records</span>
+</span></code></pre></div>
+<h4 id="spend-lookup-keys">Spend Lookup Keys<a class="headerlink" href="#spend-lookup-keys" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1">// Includes output index for efficient spend checks</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nx">keySource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">uaerospike</span><span class="p">.</span><span class="nx">CalculateKeySource</span><span class="p">(</span><span class="nx">txID</span><span class="p">,</span><span class="w"> </span><span class="nx">vout</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoBatchSize</span><span class="p">)</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nx">key</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">aerospike</span><span class="p">.</span><span class="nx">NewKey</span><span class="p">(</span><span class="nx">namespace</span><span class="p">,</span><span class="w"> </span><span class="nx">setName</span><span class="p">,</span><span class="w"> </span><span class="nx">keySource</span><span class="p">)</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="c1">// Maps vout to correct pagination record automatically</span>
+</span></code></pre></div>
+<h3 id="storage-size-limits">Storage Size Limits<a class="headerlink" href="#storage-size-limits" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -8605,27 +9093,27 @@ Each utxo entry:
 <li><strong>Auto-Recovery</strong>: If creation fails partially, the system automatically recovers on next encounter</li>
 </ol>
 <p><strong>Record Layout for Large Transactions</strong>:</p>
-<div class="highlight"><pre><span></span><code>Transaction with N batches (&gt;20K outputs):
-
-Master Record (index 0):
-
-  - Transaction metadata (TxID, version, fees, etc.)
-  - First 20,000 UTXOs
-  - TotalExtraRecs field indicating additional records
-  - Creating flag (cleared when complete)
-
-Child Records (indices 1 to N-1):
-
-  - Additional UTXOs in batches of 20,000
-  - Common metadata fields
-  - Creating flag (cleared when complete)
-
-Lock Record (index 0xFFFFFFFF):
-
-  - Temporary, TTL-based (30-300 seconds)
-  - Prevents concurrent creation
-  - Released after all records created
-</code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Transaction with N batches (&gt;20K outputs):
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>Master Record (index 0):
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  - Transaction metadata (TxID, version, fees, etc.)
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  - First 20,000 UTXOs
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  - TotalExtraRecs field indicating additional records
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>  - Creating flag (cleared when complete)
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>Child Records (indices 1 to N-1):
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>  - Additional UTXOs in batches of 20,000
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a>  - Common metadata fields
+</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>  - Creating flag (cleared when complete)
+</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a>
+</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a>Lock Record (index 0xFFFFFFFF):
+</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a>
+</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a>  - Temporary, TTL-based (30-300 seconds)
+</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a>  - Prevents concurrent creation
+</span><span id="__span-16-20"><a id="__codelineno-16-20" name="__codelineno-16-20" href="#__codelineno-16-20"></a>  - Released after all records created
+</span></code></pre></div>
 <p>For detailed documentation on the lock record pattern, see <a href="../../features/utxo_lock_records/">UTXO Lock Record Pattern</a>.</p>
 
 
@@ -8644,37 +9132,65 @@ Lock Record (index 0xFFFFFFFF):
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../transaction_data_model/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Transaction Data Model">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Transaction Data Model
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../kafka/kafka/" class="md-footer__link md-footer__link--next" aria-label="Next: Kafka Overview">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Kafka Overview
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -8691,12 +9207,10 @@ Lock Record (index 0xFFFFFFFF):
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>

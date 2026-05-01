@@ -6,7 +6,11 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
       
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/references/services/blockpersister_reference/">
       
       
         <link rel="prev" href="../validator_reference/">
@@ -18,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -29,6 +33,9 @@
     
       <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
       
 
 
@@ -41,8 +48,8 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
@@ -57,7 +64,14 @@
   </head>
   
   
-    <body dir="ltr">
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
   
     
     <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -84,7 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,6 +121,32 @@
         </div>
       </div>
     </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
     
     
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
@@ -132,6 +172,11 @@
       </label>
       <nav class="md-search__options" aria-label="Search">
         
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
         <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -155,6 +200,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -195,6 +252,8 @@
           
   
   
+    
+  
   Tutorials
 
         </a>
@@ -215,6 +274,8 @@
           
   
   
+    
+  
   How-To Guides
 
         </a>
@@ -234,6 +295,8 @@
         <a href="../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
+  
+    
   
   Key Topics
 
@@ -256,6 +319,8 @@
         <a href="../../projectStructure/" class="md-tabs__link">
           
   
+  
+    
   
   Reference
 
@@ -295,11 +360,23 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -338,6 +415,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -350,9 +435,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
@@ -483,6 +566,32 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -495,9 +604,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
@@ -845,6 +952,26 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -857,9 +984,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
           <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
@@ -899,6 +1024,16 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -911,9 +1046,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -1073,6 +1206,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1085,9 +1232,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
         
           
           <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
@@ -1303,6 +1448,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1315,9 +1466,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
         
           
           <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
@@ -1421,6 +1570,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1433,9 +1588,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
         
           
           <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
@@ -1539,6 +1692,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1551,9 +1710,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
         
           
           <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
@@ -1657,6 +1814,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1669,9 +1832,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
         
           
           <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
@@ -1775,6 +1936,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1787,9 +1954,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
         
           
           <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
@@ -1893,6 +2058,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -1905,9 +2076,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -2011,6 +2180,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2023,9 +2204,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
         
           
           <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
@@ -2228,6 +2407,48 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2240,9 +2461,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
@@ -2590,6 +2809,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2602,9 +2829,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
         
           
           <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
@@ -2792,6 +3017,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -2804,9 +3047,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
         
           
           <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
@@ -3078,6 +3319,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3090,9 +3347,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
         
           
           <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
@@ -3336,6 +3591,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3348,9 +3609,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
         
           
           <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
@@ -3454,6 +3713,18 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3466,9 +3737,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
         
           
           <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
@@ -3656,6 +3925,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3668,9 +3941,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
         
           
           <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
@@ -3746,6 +4017,10 @@
   
     
     
+      
+        
+      
+    
     
     
       
@@ -3758,9 +4033,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
         
           
           <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
@@ -3845,6 +4118,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3928,6 +4217,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -3943,9 +4246,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
         
           
           <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
@@ -4125,6 +4426,30 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4137,9 +4462,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
         
           
           <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
@@ -4503,6 +4826,24 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -4518,9 +4859,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
         
           
           <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="">
@@ -4793,6 +5132,20 @@
   
   
     
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -5589,6 +5942,12 @@
   
     
     
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5604,9 +5963,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
         
           
           <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="">
@@ -5710,6 +6067,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5725,9 +6098,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="">
@@ -5907,6 +6278,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -5919,9 +6320,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
         
           
           <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
@@ -6361,6 +6760,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6373,9 +6780,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
         
           
           <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
@@ -6515,6 +6920,22 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
     
     
       
@@ -6530,9 +6951,7 @@
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
         
           
           <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="">
@@ -7329,15 +7748,84 @@
           
             <div class="md-content" data-md-component="content">
               
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../projectStructure/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="./" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Overlay Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
               <article class="md-content__inner md-typeset">
                 
                   
 
 
+  
+  
+
 
 <!-- markdownlint-disable MD046 -->
-<h1 id="block-persister-service-reference-documentation">Block Persister Service Reference Documentation</h1>
-<h2 id="overview">Overview</h2>
+<h1 id="block-persister-service-reference-documentation">Block Persister Service Reference Documentation<a class="headerlink" href="#block-persister-service-reference-documentation" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>The Block Persister Service is responsible for taking blocks from the blockchain service and ensuring they are properly stored in persistent storage along with all related data (transactions, UTXOs, etc.). It plays a critical role in the overall blockchain data persistence strategy by:</p>
 <ul>
 <li>Processing and storing complete blocks in the blob store</li>
@@ -7347,54 +7835,54 @@
 <li>Providing resilient error handling and recovery mechanisms</li>
 </ul>
 <p>The service integrates with multiple stores (block store, subtree store, UTXO store) and coordinates between them to ensure consistent and reliable block data persistence. It employs concurrency and batching techniques to optimize performance for high transaction volumes.</p>
-<h2 id="types">Types</h2>
-<h3 id="server">Server</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// ctx is the context for controlling server lifecycle and handling cancellation signals</span>
-<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
-
-<span class="w">    </span><span class="c1">// logger provides structured logging functionality for operational monitoring and debugging</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
-
-<span class="w">    </span><span class="c1">// settings contains configuration settings for the server, controlling behavior such as</span>
-<span class="w">    </span><span class="c1">// concurrency levels, batch sizes, and persistence strategies</span>
-<span class="w">    </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
-
-<span class="w">    </span><span class="c1">// blockStore provides persistent storage for complete blocks</span>
-<span class="w">    </span><span class="c1">// This is typically implemented as a blob store capable of handling large block data</span>
-<span class="w">    </span><span class="nx">blockStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// subtreeStore provides storage for block subtrees, which are hierarchical structures</span>
-<span class="w">    </span><span class="c1">// containing transaction references that make up parts of a block</span>
-<span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// utxoStore provides storage for UTXO (Unspent Transaction Output) data</span>
-<span class="w">    </span><span class="c1">// Used to track the current state of the UTXO set and process changes</span>
-<span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
-
-<span class="w">    </span><span class="c1">// stats tracks operational statistics for monitoring and performance analysis</span>
-<span class="w">    </span><span class="nx">stats</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span>
-
-<span class="w">    </span><span class="c1">// blockchainClient interfaces with the blockchain service to retrieve block data</span>
-<span class="w">    </span><span class="c1">// and coordinate persistence operations with blockchain state</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span>
-<span class="p">}</span>
-</code></pre></div>
+<h2 id="types">Types<a class="headerlink" href="#types" title="Permanent link">&para;</a></h2>
+<h3 id="server">Server<a class="headerlink" href="#server" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="c1">// ctx is the context for controlling server lifecycle and handling cancellation signals</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="c1">// logger provides structured logging functionality for operational monitoring and debugging</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="c1">// settings contains configuration settings for the server, controlling behavior such as</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="c1">// concurrency levels, batch sizes, and persistence strategies</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="c1">// blockStore provides persistent storage for complete blocks</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="c1">// This is typically implemented as a blob store capable of handling large block data</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nx">blockStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="c1">// subtreeStore provides storage for block subtrees, which are hierarchical structures</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="c1">// containing transaction references that make up parts of a block</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="c1">// utxoStore provides storage for UTXO (Unspent Transaction Output) data</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="c1">// Used to track the current state of the UTXO set and process changes</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="c1">// stats tracks operational statistics for monitoring and performance analysis</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span><span class="nx">stats</span><span class="w"> </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">    </span><span class="c1">// blockchainClient interfaces with the blockchain service to retrieve block data</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span><span class="c1">// and coordinate persistence operations with blockchain state</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>Server</code> type is the main structure for the Block Persister Service. It contains components for managing stores and blockchain interactions.</p>
-<h2 id="functions">Functions</h2>
-<h3 id="server-management">Server Management</h3>
-<h4 id="new">New</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
-<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
-<span class="w">    </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="kd">func</span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">),</span>
-<span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
-</code></pre></div>
+<h2 id="functions">Functions<a class="headerlink" href="#functions" title="Permanent link">&para;</a></h2>
+<h3 id="server-management">Server Management<a class="headerlink" href="#server-management" title="Permanent link">&para;</a></h3>
+<h4 id="new">New<a class="headerlink" href="#new" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nx">blockStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="kd">func</span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">),</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
+</span></code></pre></div>
 <p>Creates a new instance of the <code>Server</code> with the provided dependencies.</p>
 <p>This constructor initializes all components required for block persistence operations, including stores and client connections. It accepts optional configuration functions to customize the server instance after construction.</p>
 <p>Parameters:</p>
@@ -7409,9 +7897,9 @@
 <li>opts: Optional configuration functions to apply after construction</li>
 </ul>
 <p>Returns a fully constructed and configured Server instance ready for initialization.</p>
-<h4 id="health">Health</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="health">Health<a class="headerlink" href="#health" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">checkLiveness</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Performs health checks on the server and its dependencies. This method implements the health.Check interface and is used by monitoring systems to determine the operational status of the service.</p>
 <p>The health check distinguishes between liveness (is the service running?) and readiness (is the service able to handle requests?) checks:</p>
 <ul>
@@ -7436,9 +7924,9 @@
 <li>Subtree store status</li>
 <li>UTXO store health</li>
 </ul>
-<h4 id="init">Init</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="init">Init<a class="headerlink" href="#init" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Initializes the server, setting up any required resources.</p>
 <p>This method is called after construction but before the server starts processing blocks. It performs one-time initialization tasks such as setting up Prometheus metrics.</p>
 <p>Parameters:</p>
@@ -7446,9 +7934,9 @@
 <li>ctx: Context for coordinating initialization operations</li>
 </ul>
 <p>Returns an error if initialization fails, nil otherwise.</p>
-<h4 id="start">Start</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h4 id="start">Start<a class="headerlink" href="#start" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Initializes and begins the block persister service operations.</p>
 <p>This method starts the main processing loop and sets up HTTP services if configured. It waits for the blockchain FSM to transition from IDLE state before beginning block persistence operations to ensure the blockchain is ready.</p>
 <p>The method implements the following key operations:</p>
@@ -7464,9 +7952,9 @@
 <li>readyCh: Channel used to signal when the service is ready to accept requests</li>
 </ul>
 <p>Returns an error if the service fails to start properly, nil otherwise.</p>
-<h4 id="stop">Stop</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h4 id="stop">Stop<a class="headerlink" href="#stop" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Gracefully shuts down the server.</p>
 <p>This method is called when the service is being stopped and provides an opportunity to perform any necessary cleanup operations, such as closing connections, flushing buffers, or persisting state.</p>
 <p>Currently, the Server doesn't need to perform any specific cleanup actions during shutdown as resource cleanup is handled by the context cancellation mechanism in the Start method.</p>
@@ -7475,10 +7963,10 @@
 <li>ctx: Context for controlling the shutdown operation (currently unused)</li>
 </ul>
 <p>Returns an error if shutdown fails, or nil on successful shutdown.</p>
-<h3 id="internal-methods">Internal Methods</h3>
-<h4 id="persistblock">persistBlock</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">persistBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h3 id="internal-methods">Internal Methods<a class="headerlink" href="#internal-methods" title="Permanent link">&para;</a></h3>
+<h4 id="persistblock">persistBlock<a class="headerlink" href="#persistblock" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">persistBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Stores a block and its associated data to persistent storage.</p>
 <p>This is a core function of the blockpersister service that handles the complete persistence workflow for a single block. It ensures all components of a block (header, transactions, and UTXO changes) are properly stored in a consistent and recoverable manner.</p>
 <div class="admonition abstract">
@@ -7508,9 +7996,9 @@
 <p class="admonition-title">Atomicity</p>
 <p>Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.</p>
 </div>
-<h4 id="getnextblocktoprocess-blob-persistence">getNextBlockToProcess (blob persistence)</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getNextBlockToProcess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="getnextblocktoprocess-blob-persistence">getNextBlockToProcess (blob persistence)<a class="headerlink" href="#getnextblocktoprocess-blob-persistence" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getNextBlockToProcess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves the next block that needs to be persisted to blob storage.</p>
 <p>This method queries the database for blocks that haven't been persisted yet (persisted_at IS NULL) and aren't marked as invalid. The database stores block metadata and tracks persistence status, eliminating the need for external state files.</p>
 <div class="admonition info">
@@ -7531,9 +8019,9 @@
 <li><code>*model.Block</code>: The next block to process, or nil if no block needs processing yet</li>
 <li><code>error</code>: Any error encountered during the operation</li>
 </ul>
-<h4 id="readsubtree">readSubtree</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="readsubtree">readSubtree<a class="headerlink" href="#readsubtree" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves a subtree from the subtree store and deserializes it.</p>
 <p>This function is responsible for loading a subtree structure from persistent storage, which contains the hierarchical organization of transactions within a block. It retrieves the subtree file using the provided hash and deserializes it into a usable subtree object.</p>
 <div class="admonition abstract">
@@ -7555,9 +8043,9 @@
 <li><code>*subtreepkg.Subtree</code>: The deserialized subtree object ready for further processing</li>
 <li><code>error</code>: Any error encountered during retrieval or deserialization</li>
 </ul>
-<h4 id="readsubtreedata">readSubtreeData</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtreeData</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">SubtreeData</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="readsubtreedata">readSubtreeData<a class="headerlink" href="#readsubtreedata" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtreeData</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">SubtreeData</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Retrieves and deserializes subtree data from the subtree store.</p>
 <p>This internal method handles the two-stage process of loading subtree information: first retrieving the subtree structure itself, then loading the associated subtree data that contains the actual transaction references and metadata.</p>
 <div class="admonition abstract">
@@ -7580,11 +8068,11 @@
 <li><code>*subtreepkg.SubtreeData</code>: The deserialized subtree data ready for transaction processing</li>
 <li><code>error</code>: Any error encountered during retrieval or deserialization</li>
 </ul>
-<h3 id="subtree-processing">Subtree Processing</h3>
+<h3 id="subtree-processing">Subtree Processing<a class="headerlink" href="#subtree-processing" title="Permanent link">&para;</a></h3>
 <p>Block persistence uses a <strong>two-phase approach</strong> to process subtrees efficiently while maintaining data integrity:</p>
-<h4 id="phase-1-createsubtreedatafilestreaming">Phase 1: CreateSubtreeDataFileStreaming</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CreateSubtreeDataFileStreaming</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeIndex</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h4 id="phase-1-createsubtreedatafilestreaming">Phase 1: CreateSubtreeDataFileStreaming<a class="headerlink" href="#phase-1-createsubtreedatafilestreaming" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">CreateSubtreeDataFileStreaming</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeIndex</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Creates subtree data files using streaming writes. This phase runs <strong>in parallel</strong> across all subtrees with configurable concurrency.</p>
 <div class="admonition note">
 <p class="admonition-title">Processing Steps</p>
@@ -7597,9 +8085,9 @@
 <li><strong>Abort on error</strong> - incomplete files are automatically cleaned up</li>
 </ol>
 </div>
-<h4 id="phase-2-processsubtreeutxostreaming">Phase 2: ProcessSubtreeUTXOStreaming</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessSubtreeUTXOStreaming</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="w"> </span><span class="o">*</span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">UTXOSet</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h4 id="phase-2-processsubtreeutxostreaming">Phase 2: ProcessSubtreeUTXOStreaming<a class="headerlink" href="#phase-2-processsubtreeutxostreaming" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessSubtreeUTXOStreaming</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="w"> </span><span class="o">*</span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">UTXOSet</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Processes UTXO changes by reading from the subtree data files. This phase runs <strong>sequentially</strong> to maintain UTXO ordering.</p>
 <div class="admonition note">
 <p class="admonition-title">Processing Steps</p>
@@ -7609,13 +8097,13 @@
 <li><strong>Record additions and deletions</strong> to the UTXO set</li>
 </ol>
 </div>
-<h4 id="subtreedatawriter">SubtreeDataWriter</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeDataWriter</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">storer</span><span class="w">      </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span>
-<span class="w">    </span><span class="nx">nextBatchID</span><span class="w"> </span><span class="kt">int</span>
-<span class="w">    </span><span class="c1">// ... additional fields</span>
-<span class="p">}</span>
-</code></pre></div>
+<h4 id="subtreedatawriter">SubtreeDataWriter<a class="headerlink" href="#subtreedatawriter" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeDataWriter</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nx">storer</span><span class="w">      </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nx">nextBatchID</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="c1">// ... additional fields</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="p">}</span>
+</span></code></pre></div>
 <p>The <code>SubtreeDataWriter</code> provides <strong>ordered batch writes</strong> for subtree data. It ensures batches are written in the correct order even when produced concurrently.</p>
 <p><strong>Key Methods:</strong></p>
 <ul>
@@ -7627,18 +8115,18 @@
 <p class="admonition-title">Error Safety</p>
 <p>If <code>Close()</code> is called while batches are still pending (gaps in batch sequence), the writer automatically aborts instead of finalizing an incomplete file.</p>
 </div>
-<h4 id="helper-functions">Helper Functions</h4>
-<h5 id="readsubtree_1">readSubtree</h5>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
+<h4 id="helper-functions">Helper Functions<a class="headerlink" href="#helper-functions" title="Permanent link">&para;</a></h4>
+<h5 id="readsubtree_1">readSubtree<a class="headerlink" href="#readsubtree_1" title="Permanent link">&para;</a></h5>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">readSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span></code></pre></div>
 <p>Reads a subtree from the subtree store by its hash. This method attempts to retrieve the subtree from storage, trying both regular subtree files and subtrees marked for checking if the primary lookup fails.</p>
-<h5 id="processtxmetausingstore">processTxMetaUsingStore</h5>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processTxMetaUsingStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeData</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">SubtreeData</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h5 id="processtxmetausingstore">processTxMetaUsingStore<a class="headerlink" href="#processtxmetausingstore" title="Permanent link">&para;</a></h5>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processTxMetaUsingStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtree</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">Subtree</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeData</span><span class="w"> </span><span class="o">*</span><span class="nx">subtreepkg</span><span class="p">.</span><span class="nx">SubtreeData</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Processes transaction metadata using the UTXO store. This method handles the retrieval and processing of transaction metadata for all transactions in a subtree, with support for both batched and individual transaction processing modes.</p>
-<h4 id="legacy-writetxs">Legacy: WriteTxs</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">WriteTxs</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">writer</span><span class="w"> </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span><span class="p">,</span><span class="w"> </span><span class="nx">txs</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="w"> </span><span class="o">*</span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">UTXOSet</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</code></pre></div>
+<h4 id="legacy-writetxs">Legacy: WriteTxs<a class="headerlink" href="#legacy-writetxs" title="Permanent link">&para;</a></h4>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WriteTxs</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">writer</span><span class="w"> </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span><span class="p">,</span><span class="w"> </span><span class="nx">txs</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="w"> </span><span class="o">*</span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">UTXOSet</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span></code></pre></div>
 <p>Writes a series of transactions to storage and processes their UTXO changes.</p>
 <p>This function handles the final persistence of transaction data to storage and optionally processes UTXO set changes. It's a critical component in the block persistence pipeline that ensures transactions are properly serialized and stored.</p>
 <div class="admonition abstract">
@@ -7676,19 +8164,19 @@
 <p class="admonition-title">Atomicity Consideration</p>
 <p>The operation is not fully atomic - some transactions may be written successfully even if others fail. The caller should handle partial success scenarios appropriately.</p>
 </div>
-<h2 id="configuration">Configuration</h2>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>The service uses settings from the <code>settings.Settings</code> structure, primarily focused on the Block section. These settings control various aspects of block persistence behavior, from storage locations to processing strategies.</p>
-<h3 id="blockpersister-settings">BlockPersister Settings</h3>
+<h3 id="blockpersister-settings">BlockPersister Settings<a class="headerlink" href="#blockpersister-settings" title="Permanent link">&para;</a></h3>
 <p>All settings use the <code>BlockPersister</code> section (setting keys prefixed with <code>blockpersister_</code>).</p>
-<h4 id="storage-configuration">Storage Configuration</h4>
+<h4 id="storage-configuration">Storage Configuration<a class="headerlink" href="#storage-configuration" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>BlockPersister.Store</code></strong>: Block persister storage URL (default: <code>file://./data/blockstore</code>). Defines the location of the blob store used for persisted block data.</li>
 </ul>
-<h4 id="network-configuration">Network Configuration</h4>
+<h4 id="network-configuration">Network Configuration<a class="headerlink" href="#network-configuration" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>BlockPersister.HTTPListenAddress</code></strong>: HTTP listener address for the blob server (default: <code>:8083</code>).</li>
 </ul>
-<h4 id="processing-configuration">Processing Configuration</h4>
+<h4 id="processing-configuration">Processing Configuration<a class="headerlink" href="#processing-configuration" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong><code>BlockPersister.PersistSleep</code></strong>: Sleep duration between processing attempts when no blocks are available (default: <code>10s</code>).</li>
 <li><strong><code>BlockPersister.Concurrency</code></strong>: Number of parallel persistence workers (default: <code>8</code>).</li>
@@ -7696,7 +8184,7 @@
 <li><strong><code>BlockPersister.ProcessUTXOFiles</code></strong>: When true, processes UTXO files during block persistence (default: <code>true</code>).</li>
 <li><strong><code>BlockPersister.SkipUTXODelete</code></strong>: Debug setting to skip UTXO deletion during persistence (default: <code>false</code>).</li>
 </ul>
-<h3 id="interaction-with-other-components">Interaction with Other Components</h3>
+<h3 id="interaction-with-other-components">Interaction with Other Components<a class="headerlink" href="#interaction-with-other-components" title="Permanent link">&para;</a></h3>
 <div class="admonition info">
 <p class="admonition-title">Component Dependencies</p>
 <p>The BlockPersister service relies on interactions with several other components:</p>
@@ -7707,7 +8195,7 @@
 <li><strong>UTXO Store</strong>: Storage for the current UTXO set and processing changes</li>
 </ul>
 </div>
-<h2 id="error-handling">Error Handling</h2>
+<h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <div class="admonition warning">
 <p class="admonition-title">Error Handling Strategy</p>
 <p>The service implements comprehensive error handling:</p>
@@ -7718,7 +8206,7 @@
 <li><strong>Database errors</strong>: Logged and service retries after delay</li>
 </ul>
 </div>
-<h3 id="streaming-write-error-recovery">Streaming Write Error Recovery</h3>
+<h3 id="streaming-write-error-recovery">Streaming Write Error Recovery<a class="headerlink" href="#streaming-write-error-recovery" title="Permanent link">&para;</a></h3>
 <p>The Block Persister uses streaming writes via <code>FileStorer</code> and <code>SubtreeDataWriter</code> to efficiently handle large files without loading them entirely into memory. These streaming writers implement a <strong>success-flag pattern</strong> to ensure incomplete files are never finalized:</p>
 <div class="admonition abstract">
 <p class="admonition-title">Abort Mechanism</p>
@@ -7731,30 +8219,30 @@
 </ol>
 </div>
 <p><strong>Pattern used in Block Persister:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="nx">storer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">NewFileStorer</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">settings</span><span class="p">,</span><span class="w"> </span><span class="nx">store</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-<span class="p">}</span>
-
-<span class="kd">var</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="kt">bool</span>
-<span class="k">defer</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">storer</span><span class="p">.</span><span class="nx">Close</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w">  </span><span class="c1">// Finalizes the file</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">storer</span><span class="p">.</span><span class="nx">Abort</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// Removes temp file, no incomplete data saved</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}()</span>
-
-<span class="c1">// ... streaming write operations ...</span>
-
-<span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
-<span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</code></pre></div>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nx">storer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">NewFileStorer</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">settings</span><span class="p">,</span><span class="w"> </span><span class="nx">store</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="p">)</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="p">}</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="kd">var</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="k">defer</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">        </span><span class="nx">storer</span><span class="p">.</span><span class="nx">Close</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w">  </span><span class="c1">// Finalizes the file</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">        </span><span class="nx">storer</span><span class="p">.</span><span class="nx">Abort</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// Removes temp file, no incomplete data saved</span>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="p">}()</span>
+</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>
+</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="c1">// ... streaming write operations ...</span>
+</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a>
+</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span></code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">SubtreeDataWriter</p>
 <p>The <code>SubtreeDataWriter</code> wraps <code>FileStorer</code> and provides an <code>Abort()</code> method that propagates to the underlying storer. If <code>Close()</code> is called while batches are still pending (indicating incomplete processing), it automatically aborts instead of finalizing.</p>
 </div>
-<h3 id="temporary-file-cleanup">Temporary File Cleanup</h3>
+<h3 id="temporary-file-cleanup">Temporary File Cleanup<a class="headerlink" href="#temporary-file-cleanup" title="Permanent link">&para;</a></h3>
 <p>The file-based blob store implements automatic cleanup of stale temporary files:</p>
 <ul>
 <li>Temporary files use <code>.tmp</code> extension during writes</li>
@@ -7762,7 +8250,7 @@
 <li>On error/abort, temp files are immediately deleted</li>
 <li>During store initialization, stale <code>.tmp</code> files older than 10 minutes are automatically cleaned up</li>
 </ul>
-<h2 id="metrics">Metrics</h2>
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
 <p>The service provides Prometheus metrics for monitoring:</p>
 <ul>
 <li>Block persistence timing</li>
@@ -7770,7 +8258,7 @@
 <li>Transaction processing stats</li>
 <li>Store health indicators</li>
 </ul>
-<h2 id="dependencies">Dependencies</h2>
+<h2 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h2>
 <p>Required components:</p>
 <ul>
 <li>Block Store (blob.Store)</li>
@@ -7780,8 +8268,8 @@
 <li>Logger (ulogger.Logger)</li>
 <li>Settings (settings.Settings)</li>
 </ul>
-<h2 id="processing-flow">Processing Flow</h2>
-<h3 id="block-processing-loop">Block Processing Loop</h3>
+<h2 id="processing-flow">Processing Flow<a class="headerlink" href="#processing-flow" title="Permanent link">&para;</a></h2>
+<h3 id="block-processing-loop">Block Processing Loop<a class="headerlink" href="#block-processing-loop" title="Permanent link">&para;</a></h3>
 <div class="admonition abstract">
 <p class="admonition-title">Block Processing Steps</p>
 <ol>
@@ -7792,7 +8280,7 @@
 <li><strong>Sleep</strong> if no blocks available or on error</li>
 </ol>
 </div>
-<h3 id="subtree-processing-flow-two-phase">Subtree Processing Flow (Two-Phase)</h3>
+<h3 id="subtree-processing-flow-two-phase">Subtree Processing Flow (Two-Phase)<a class="headerlink" href="#subtree-processing-flow-two-phase" title="Permanent link">&para;</a></h3>
 <div class="admonition abstract">
 <p class="admonition-title">Phase 1: Create Subtree Data Files (Parallel)</p>
 <ol>
@@ -7815,24 +8303,24 @@
 <p class="admonition-title">Performance Benefit</p>
 <p>Phase 1 runs in parallel across all subtrees with configurable concurrency, while Phase 2 runs sequentially to maintain UTXO ordering. This separation allows maximum parallelism for I/O-bound file creation while ensuring correct UTXO state.</p>
 </div>
-<h2 id="health-checks">Health Checks</h2>
+<h2 id="health-checks">Health Checks<a class="headerlink" href="#health-checks" title="Permanent link">&para;</a></h2>
 <div class="admonition success">
 <p class="admonition-title">Health Check Types</p>
 <p>The service implements two types of health checks:</p>
-<h3 id="liveness-check">Liveness Check</h3>
+<h3 id="liveness-check">Liveness Check<a class="headerlink" href="#liveness-check" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Basic service health validation</strong></li>
 <li><strong>No dependency checks</strong></li>
 <li><strong>Quick response</strong> for kubernetes probes</li>
 </ul>
-<h3 id="readiness-check">Readiness Check</h3>
+<h3 id="readiness-check">Readiness Check<a class="headerlink" href="#readiness-check" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Comprehensive dependency validation</strong></li>
 <li><strong>Store connectivity verification</strong></li>
 <li><strong>Service operational status</strong></li>
 </ul>
 </div>
-<h2 id="related-documents">Related Documents</h2>
+<h2 id="related-documents">Related Documents<a class="headerlink" href="#related-documents" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../../topics/services/blockPersister/">Block Persister Topic Guide</a></li>
 <li><a href="../../settings/services/blockpersister_settings/">Block Persister Settings</a></li>
@@ -7855,37 +8343,65 @@
             </div>
           
           
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
         
       </main>
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../validator_reference/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Validator">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Validator
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../p2p_reference/" class="md-footer__link md-footer__link--next" aria-label="Next: P2P">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                P2P
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
       <div class="md-copyright">
   
-    <div class="md-copyright__highlight">
-      Copyright © 2026 BSV Blockchain Org.
-    </div>
-  
-  
-</div>
-      
-        
-<div class="md-social">
-  
-    
-    
-    
-    
-      
-      
-    
-    <a href="https://github.com/bsv-blockchain/teranode" target="_blank" rel="noopener" title="github.com" class="md-social__link">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
-    </a>
   
 </div>
       
@@ -7902,12 +8418,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
-      
-        <script src="../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>
