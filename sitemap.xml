@@ -49,11 +49,19 @@
          <lastmod>2026-05-01</lastmod>
     </url>
     <url>
+         <loc>https://bsv-blockchain.github.io/teranode/howto/developerSetup/</loc>
+         <lastmod>2026-05-01</lastmod>
+    </url>
+    <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/developersHowToTeranodeCLI/</loc>
          <lastmod>2026-05-01</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/diagnose/</loc>
+         <lastmod>2026-05-01</lastmod>
+    </url>
+    <url>
+         <loc>https://bsv-blockchain.github.io/teranode/howto/forkAndPullRequestGuidelines/</loc>
          <lastmod>2026-05-01</lastmod>
     </url>
     <url>
@@ -158,10 +166,6 @@
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToInstallation/</loc>
-         <lastmod>2026-05-01</lastmod>
-    </url>
-    <url>
-         <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToInstallationDeprecated/</loc>
          <lastmod>2026-05-01</lastmod>
     </url>
     <url>
@@ -614,18 +618,6 @@
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/stores/utxo/</loc>
-         <lastmod>2026-05-01</lastmod>
-    </url>
-    <url>
-         <loc>https://bsv-blockchain.github.io/teranode/tutorials/developers/developerSetup/</loc>
-         <lastmod>2026-05-01</lastmod>
-    </url>
-    <url>
-         <loc>https://bsv-blockchain.github.io/teranode/tutorials/developers/forkAndPullRequestGuidelines/</loc>
-         <lastmod>2026-05-01</lastmod>
-    </url>
-    <url>
-         <loc>https://bsv-blockchain.github.io/teranode/tutorials/miners/minersGettingStarted/</loc>
          <lastmod>2026-05-01</lastmod>
     </url>
 </urlset>

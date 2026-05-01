@@ -10,31 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/tutorials/miners/minersGettingStarted/">
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/howto/forkAndPullRequestGuidelines/">
       
       
-        <link rel="prev" href="../../developers/developerSetup/">
+        <link rel="prev" href="../developerSetup/">
       
       
-        <link rel="next" href="../../../howto/locallyRunningServices/">
+        <link rel="next" href="../locallyRunningServices/">
       
       
         
       
       
-      <link rel="icon" href="../../../assets/favicon.png">
+      <link rel="icon" href="../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Miners Getting Started - Teranode</title>
+        <title>Fork and Pull Request Guidelines - Teranode</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -48,14 +48,14 @@
         
         
         
-        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
         <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="../../../overrides/custom.css?v=8cf07571">
+      <link rel="stylesheet" href="../../overrides/custom.css?v=8cf07571">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#getting-started-with-teranode" class="md-skip">
+        <a href="#teranode-public-repository-fork-and-pull-request-guidelines" class="md-skip">
           Skip to content
         </a>
       
@@ -96,9 +96,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../assets/bsv-logo.png" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -115,7 +115,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Miners Getting Started
+              Fork and Pull Request Guidelines
             
           </span>
         </div>
@@ -227,7 +227,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -249,30 +249,17 @@
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../developers/forkAndPullRequestGuidelines/" class="md-tabs__link">
-          
-  
-  
-    
-  
-  Tutorials
-
-        </a>
-      </li>
-    
-  
-
       
-        
-  
   
   
   
     
+  
+  
     
-      <li class="md-tabs__item">
-        <a href="../../../howto/locallyRunningServices/" class="md-tabs__link">
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../developerSetup/" class="md-tabs__link">
           
   
   
@@ -285,6 +272,9 @@
     
   
 
+    
+  
+
       
         
   
@@ -294,7 +284,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../topics/teranodeIntro/" class="md-tabs__link">
+        <a href="../../topics/teranodeIntro/" class="md-tabs__link">
           
   
   
@@ -316,7 +306,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../references/projectStructure/" class="md-tabs__link">
+        <a href="../../references/projectStructure/" class="md-tabs__link">
           
   
   
@@ -358,9 +348,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../assets/bsv-logo.png" alt="logo">
+  <img src="../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
@@ -387,7 +377,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -424,6 +414,22 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -450,7 +456,7 @@
   <span class="md-ellipsis">
     
   
-    Tutorials
+    How-To Guides
   
 
     
@@ -466,7 +472,74 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Tutorials
+    How-To Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
   
 
           </label>
@@ -479,35 +552,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developers/forkAndPullRequestGuidelines/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Fork and Pull Request Guidelines
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../developers/developerSetup/" class="md-nav__link">
+      <a href="../developerSetup/" class="md-nav__link">
         
   
   
@@ -551,7 +596,7 @@
   <span class="md-ellipsis">
     
   
-    Miners Getting Started
+    Fork and Pull Request Guidelines
   
 
     
@@ -569,7 +614,7 @@
   <span class="md-ellipsis">
     
   
-    Miners Getting Started
+    Fork and Pull Request Guidelines
   
 
     
@@ -595,10 +640,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#index" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Index
+        Overview
       
     </span>
   </a>
@@ -606,10 +651,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
+  <a href="#table-of-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Introduction
+        Table of Contents
       
     </span>
   </a>
@@ -617,55 +662,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#understanding-forks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Understanding Forks
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-is-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is Teranode?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#components-overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Components Overview
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#first-time-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        First-Time Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="First-Time Setup">
+    <nav class="md-nav" aria-label="Understanding Forks">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#step-1-prepare-your-environment" class="md-nav__link">
+  <a href="#what-is-a-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1: Prepare Your Environment
+        What is a Fork?
       
     </span>
   </a>
@@ -673,10 +685,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-2-initial-setup" class="md-nav__link">
+  <a href="#why-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 2: Initial Setup
+        Why Fork?
       
     </span>
   </a>
@@ -684,60 +696,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-3-start-teranode" class="md-nav__link">
+  <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 3: Start Teranode
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Step 3: Start Teranode">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#option-1-using-admin-dashboard-easiest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option 1: Using Admin Dashboard (Easiest)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-2-using-teranode-cli" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option 2: Using teranode-cli
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-4-verify-installation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 4: Verify Installation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-issues" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Issues
+        Best Practices
       
     </span>
   </a>
@@ -750,22 +712,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#basic-operations" class="md-nav__link">
+  <a href="#step-1-create-your-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Operations
+        Step 1: Create Your Fork
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Basic Operations">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-clone-your-fork-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Clone Your Fork Locally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Clone Your Fork Locally">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#checking-node-status" class="md-nav__link">
+  <a href="#1-get-your-repository-url" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking Node Status
+        1. Get Your Repository URL
       
     </span>
   </a>
@@ -773,10 +746,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#working-with-transactions" class="md-nav__link">
+  <a href="#2-clone-the-repository" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Working with Transactions
+        2. Clone the Repository
       
     </span>
   </a>
@@ -784,10 +757,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#monitoring-your-node" class="md-nav__link">
+  <a href="#3-add-the-upstream-remote" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring Your Node
+        3. Add the Upstream Remote
       
     </span>
   </a>
@@ -795,55 +768,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#basic-maintenance" class="md-nav__link">
+  <a href="#4-verify-your-remotes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Maintenance
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Operations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Next Steps
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Next Steps">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#docker-compose-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose Setup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kubernetes-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Kubernetes Deployment
+        4. Verify Your Remotes
       
     </span>
   </a>
@@ -854,9 +782,209 @@
     </nav>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-protect-your-main-branch-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Protect Your Main Branch (Recommended)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: Protect Your Main Branch (Recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-protect-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Protect Main?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-up-the-pre-commit-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set Up the Pre-Commit Hook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-if-i-accidentally-committed-to-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What If I Accidentally Committed to Main?
+      
+    </span>
+  </a>
+  
+</li>
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-keep-your-fork-synchronized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Keep Your Fork Synchronized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 4: Keep Your Fork Synchronized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#method-1-using-github-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method 1: Using GitHub UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#method-2-using-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method 2: Using Command Line
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-working-on-features-and-creating-pull-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Working on Features and Creating Pull Requests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: Working on Features and Creating Pull Requests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-create-a-feature-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Create a Feature Branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-make-your-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Make Your Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-prepare-for-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Prepare for Pull Request
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-resolve-merge-conflicts-if-any" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Resolve Merge Conflicts (if any)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-push-your-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Push Your Branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-create-a-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Create a Pull Request
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-reference-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Reference Commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary Workflow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#need-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Need Help?
+      
+    </span>
+  </a>
   
 </li>
       
@@ -869,91 +997,6 @@
 
               
             
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    How-To Guides
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    How-To Guides
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
               
                 
   
@@ -961,7 +1004,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/locallyRunningServices/" class="md-nav__link">
+      <a href="../locallyRunningServices/" class="md-nav__link">
         
   
   
@@ -989,7 +1032,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/howToRemoteDebugTeranode/" class="md-nav__link">
+      <a href="../howToRemoteDebugTeranode/" class="md-nav__link">
         
   
   
@@ -1010,6 +1053,14 @@
 
               
             
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
               
                 
   
@@ -1017,7 +1068,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/generatingProtobuf/" class="md-nav__link">
+      <a href="../generatingProtobuf/" class="md-nav__link">
         
   
   
@@ -1045,7 +1096,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/addingNewProtobufServices/" class="md-nav__link">
+      <a href="../addingNewProtobufServices/" class="md-nav__link">
         
   
   
@@ -1073,7 +1124,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/configuringGrpcLogging/" class="md-nav__link">
+      <a href="../configuringGrpcLogging/" class="md-nav__link">
         
   
   
@@ -1101,7 +1152,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/runningTests/" class="md-nav__link">
+      <a href="../runningTests/" class="md-nav__link">
         
   
   
@@ -1129,7 +1180,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/automatedTestingHowTo/" class="md-nav__link">
+      <a href="../automatedTestingHowTo/" class="md-nav__link">
         
   
   
@@ -1157,7 +1208,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/chain-integrity-testing/" class="md-nav__link">
+      <a href="../chain-integrity-testing/" class="md-nav__link">
         
   
   
@@ -1185,7 +1236,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/makefile/" class="md-nav__link">
+      <a href="../makefile/" class="md-nav__link">
         
   
   
@@ -1213,7 +1264,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/bugReporting/" class="md-nav__link">
+      <a href="../bugReporting/" class="md-nav__link">
         
   
   
@@ -1241,7 +1292,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/developersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../developersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -1295,17 +1346,20 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
         
           
-          <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="">
             
   
   
@@ -1323,8 +1377,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_12_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1347,10 +1401,6 @@
       
         
       
-        
-      
-        
-      
     
     
     
@@ -1364,10 +1414,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_1" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_1" id="__nav_2_11_1_label" tabindex="0">
             
   
   
@@ -1385,8 +1435,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_1">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_1">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1403,7 +1453,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToInstallation/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1431,7 +1481,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1439,62 +1489,6 @@
     
   
     Kubernetes
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    AWS POC Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Deprecated
   
 
     
@@ -1550,10 +1544,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_2" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_2" id="__nav_3_12_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_2" id="__nav_2_11_2_label" tabindex="0">
             
   
   
@@ -1571,8 +1565,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_2">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1589,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1617,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1645,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToAerospikeTuning/" class="md-nav__link">
+      <a href="../miners/minersHowToAerospikeTuning/" class="md-nav__link">
         
   
   
@@ -1673,7 +1667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
+      <a href="../miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
         
   
   
@@ -1701,7 +1695,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToInteractWithFSM/" class="md-nav__link">
+      <a href="../miners/minersHowToInteractWithFSM/" class="md-nav__link">
         
   
   
@@ -1729,7 +1723,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
+      <a href="../miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
         
   
   
@@ -1784,10 +1778,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_3" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_3" id="__nav_3_12_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_3" id="__nav_2_11_3_label" tabindex="0">
             
   
   
@@ -1805,8 +1799,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_3">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1823,7 +1817,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
         
   
   
@@ -1851,7 +1845,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
         
   
   
@@ -1906,10 +1900,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_4" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_4" id="__nav_3_12_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_4" id="__nav_2_11_4_label" tabindex="0">
             
   
   
@@ -1927,8 +1921,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1945,7 +1939,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../miners/docker/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1973,7 +1967,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -2028,10 +2022,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_5" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_5" id="__nav_3_12_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_5" id="__nav_2_11_5_label" tabindex="0">
             
   
   
@@ -2049,8 +2043,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2067,7 +2061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../miners/docker/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -2095,7 +2089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -2150,10 +2144,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_6" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_6" id="__nav_3_12_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_6" id="__nav_2_11_6_label" tabindex="0">
             
   
   
@@ -2171,8 +2165,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_6">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2189,7 +2183,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2217,7 +2211,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2272,10 +2266,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_7" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_7" id="__nav_3_12_7_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_7" id="__nav_2_11_7_label" tabindex="0">
             
   
   
@@ -2293,8 +2287,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_7">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2311,7 +2305,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2339,7 +2333,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2394,10 +2388,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_8" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_8" id="__nav_2_11_8_label" tabindex="0">
             
   
   
@@ -2415,8 +2409,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_8">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2433,7 +2427,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2461,7 +2455,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2522,10 +2516,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_9" >
         
           
-          <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11_9" id="__nav_2_11_9_label" tabindex="0">
             
   
   
@@ -2543,8 +2537,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_12_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2561,7 +2555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToBackup/" class="md-nav__link">
+      <a href="../miners/minersHowToBackup/" class="md-nav__link">
         
   
   
@@ -2589,7 +2583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToCPUMiner/" class="md-nav__link">
+      <a href="../miners/minersHowToCPUMiner/" class="md-nav__link">
         
   
   
@@ -2617,7 +2611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../miners/minersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -2645,7 +2639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersManagingDiskSpace/" class="md-nav__link">
+      <a href="../miners/minersManagingDiskSpace/" class="md-nav__link">
         
   
   
@@ -2673,7 +2667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howto/miners/minersHowToUseListenMode/" class="md-nav__link">
+      <a href="../miners/minersHowToUseListenMode/" class="md-nav__link">
         
   
   
@@ -2779,10 +2773,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -2800,8 +2794,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2818,7 +2812,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/teranodeIntro/" class="md-nav__link">
+      <a href="../../topics/teranodeIntro/" class="md-nav__link">
         
   
   
@@ -2846,7 +2840,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
+      <a href="../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
         
   
   
@@ -2874,7 +2868,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
+      <a href="../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
         
   
   
@@ -2902,7 +2896,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
+      <a href="../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
         
   
   
@@ -2930,7 +2924,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/transactionLifecycle/" class="md-nav__link">
+      <a href="../../topics/transactionLifecycle/" class="md-nav__link">
         
   
   
@@ -2958,7 +2952,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/architecture/stateManagement/" class="md-nav__link">
+      <a href="../../topics/architecture/stateManagement/" class="md-nav__link">
         
   
   
@@ -2986,7 +2980,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../state-machine.diagram/" class="md-nav__link">
+      <a href="../../state-machine.diagram/" class="md-nav__link">
         
   
   
@@ -3014,7 +3008,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
+      <a href="../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
         
   
   
@@ -3042,7 +3036,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/technologyStack/" class="md-nav__link">
+      <a href="../../topics/technologyStack/" class="md-nav__link">
         
   
   
@@ -3070,7 +3064,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/understandingTheTestingFramework/" class="md-nav__link">
+      <a href="../../topics/understandingTheTestingFramework/" class="md-nav__link">
         
   
   
@@ -3098,7 +3092,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/functionalRequirementTests/" class="md-nav__link">
+      <a href="../../topics/functionalRequirementTests/" class="md-nav__link">
         
   
   
@@ -3147,10 +3141,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_12" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
         
           
-          <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
             
   
   
@@ -3168,8 +3162,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_12_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_12">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3186,7 +3180,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/features/two_phase_commit/" class="md-nav__link">
+      <a href="../../topics/features/two_phase_commit/" class="md-nav__link">
         
   
   
@@ -3214,7 +3208,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/features/peer_registry_reputation/" class="md-nav__link">
+      <a href="../../topics/features/peer_registry_reputation/" class="md-nav__link">
         
   
   
@@ -3242,7 +3236,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/features/utxo_lock_records/" class="md-nav__link">
+      <a href="../../topics/features/utxo_lock_records/" class="md-nav__link">
         
   
   
@@ -3278,7 +3272,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/dashboard/" class="md-nav__link">
+      <a href="../../topics/dashboard/" class="md-nav__link">
         
   
   
@@ -3306,7 +3300,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/tui_tools/" class="md-nav__link">
+      <a href="../../topics/tui_tools/" class="md-nav__link">
         
   
   
@@ -3365,10 +3359,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_15" >
         
           
-          <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_15" id="__nav_3_15_label" tabindex="0">
             
   
   
@@ -3386,8 +3380,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_15_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_15">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_15">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3404,7 +3398,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/alert/" class="md-nav__link">
+      <a href="../../topics/services/alert/" class="md-nav__link">
         
   
   
@@ -3432,7 +3426,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/assetServer/" class="md-nav__link">
+      <a href="../../topics/services/assetServer/" class="md-nav__link">
         
   
   
@@ -3460,7 +3454,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/blockAssembly/" class="md-nav__link">
+      <a href="../../topics/services/blockAssembly/" class="md-nav__link">
         
   
   
@@ -3488,7 +3482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/blockValidation/" class="md-nav__link">
+      <a href="../../topics/services/blockValidation/" class="md-nav__link">
         
   
   
@@ -3516,7 +3510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/blockchain/" class="md-nav__link">
+      <a href="../../topics/services/blockchain/" class="md-nav__link">
         
   
   
@@ -3544,7 +3538,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/propagation/" class="md-nav__link">
+      <a href="../../topics/services/propagation/" class="md-nav__link">
         
   
   
@@ -3572,7 +3566,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/subtreeValidation/" class="md-nav__link">
+      <a href="../../topics/services/subtreeValidation/" class="md-nav__link">
         
   
   
@@ -3600,7 +3594,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/validator/" class="md-nav__link">
+      <a href="../../topics/services/validator/" class="md-nav__link">
         
   
   
@@ -3665,10 +3659,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_16" >
         
           
-          <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_16" id="__nav_3_16_label" tabindex="0">
             
   
   
@@ -3686,8 +3680,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_16_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_16">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_16">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3704,7 +3698,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/blockPersister/" class="md-nav__link">
+      <a href="../../topics/services/blockPersister/" class="md-nav__link">
         
   
   
@@ -3732,7 +3726,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/p2p/" class="md-nav__link">
+      <a href="../../topics/services/p2p/" class="md-nav__link">
         
   
   
@@ -3760,7 +3754,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
+      <a href="../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
         
   
   
@@ -3788,7 +3782,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/pruner/" class="md-nav__link">
+      <a href="../../topics/services/pruner/" class="md-nav__link">
         
   
   
@@ -3816,7 +3810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/legacy/" class="md-nav__link">
+      <a href="../../topics/services/legacy/" class="md-nav__link">
         
   
   
@@ -3844,7 +3838,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/rpc/" class="md-nav__link">
+      <a href="../../topics/services/rpc/" class="md-nav__link">
         
   
   
@@ -3872,7 +3866,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/services/utxoPersister/" class="md-nav__link">
+      <a href="../../topics/services/utxoPersister/" class="md-nav__link">
         
   
   
@@ -3927,10 +3921,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_17" >
         
           
-          <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_17" id="__nav_3_17_label" tabindex="0">
             
   
   
@@ -3948,8 +3942,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_17_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_17">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_17">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3966,7 +3960,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/stores/blob/" class="md-nav__link">
+      <a href="../../topics/stores/blob/" class="md-nav__link">
         
   
   
@@ -3994,7 +3988,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/stores/utxo/" class="md-nav__link">
+      <a href="../../topics/stores/utxo/" class="md-nav__link">
         
   
   
@@ -4055,10 +4049,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_18" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_18" >
         
           
-          <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_18" id="__nav_3_18_label" tabindex="0">
             
   
   
@@ -4076,8 +4070,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_18_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_18">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_18_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_18">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4094,7 +4088,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/datamodel/block_data_model/" class="md-nav__link">
+      <a href="../../topics/datamodel/block_data_model/" class="md-nav__link">
         
   
   
@@ -4122,7 +4116,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/datamodel/block_header_data_model/" class="md-nav__link">
+      <a href="../../topics/datamodel/block_header_data_model/" class="md-nav__link">
         
   
   
@@ -4150,7 +4144,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/datamodel/subtree_data_model/" class="md-nav__link">
+      <a href="../../topics/datamodel/subtree_data_model/" class="md-nav__link">
         
   
   
@@ -4178,7 +4172,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/datamodel/transaction_data_model/" class="md-nav__link">
+      <a href="../../topics/datamodel/transaction_data_model/" class="md-nav__link">
         
   
   
@@ -4206,7 +4200,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/datamodel/utxo_data_model/" class="md-nav__link">
+      <a href="../../topics/datamodel/utxo_data_model/" class="md-nav__link">
         
   
   
@@ -4259,10 +4253,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_19" >
         
           
-          <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_19" id="__nav_3_19_label" tabindex="0">
             
   
   
@@ -4280,8 +4274,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_19">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_19">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4298,7 +4292,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/kafka/kafka/" class="md-nav__link">
+      <a href="../../topics/kafka/kafka/" class="md-nav__link">
         
   
   
@@ -4351,10 +4345,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_20" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_20" >
         
           
-          <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3_20" id="__nav_3_20_label" tabindex="0">
             
   
   
@@ -4372,8 +4366,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_20_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_20">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_20_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_20">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4390,7 +4384,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../topics/commands/seeder/" class="md-nav__link">
+      <a href="../../topics/commands/seeder/" class="md-nav__link">
         
   
   
@@ -4462,10 +4456,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -4483,8 +4477,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4501,7 +4495,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/projectStructure/" class="md-nav__link">
+      <a href="../../references/projectStructure/" class="md-nav__link">
         
   
   
@@ -4556,10 +4550,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -4577,8 +4571,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_2">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4595,7 +4589,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/errorHandling/" class="md-nav__link">
+      <a href="../../references/errorHandling/" class="md-nav__link">
         
   
   
@@ -4623,7 +4617,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/glossary/" class="md-nav__link">
+      <a href="../../references/glossary/" class="md-nav__link">
         
   
   
@@ -4651,7 +4645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/codingConventions/" class="md-nav__link">
+      <a href="../../references/codingConventions/" class="md-nav__link">
         
   
   
@@ -4679,7 +4673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/kafkaMessageFormat/" class="md-nav__link">
+      <a href="../../references/kafkaMessageFormat/" class="md-nav__link">
         
   
   
@@ -4707,7 +4701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/networkConsensusRules/" class="md-nav__link">
+      <a href="../../references/networkConsensusRules/" class="md-nav__link">
         
   
   
@@ -4772,10 +4766,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_2_6" id="__nav_5_2_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_2_6" id="__nav_4_2_6_label" tabindex="0">
             
   
   
@@ -4793,8 +4787,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_2_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_2_6">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_2_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4811,7 +4805,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/alertProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/alertProto/" class="md-nav__link">
         
   
   
@@ -4839,7 +4833,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/assetProto/" class="md-nav__link">
         
   
   
@@ -4867,7 +4861,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
   
@@ -4895,7 +4889,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
         
   
   
@@ -4923,7 +4917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
         
   
   
@@ -4951,7 +4945,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
         
   
   
@@ -4979,7 +4973,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/p2pProto/" class="md-nav__link">
         
   
   
@@ -5007,7 +5001,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
   
@@ -5035,7 +5029,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/prunerProto/" class="md-nav__link">
         
   
   
@@ -5063,7 +5057,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
         
   
   
@@ -5091,7 +5085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/protobuf_docs/validatorProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/validatorProto/" class="md-nav__link">
         
   
   
@@ -5166,10 +5160,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -5187,8 +5181,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_3">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -5205,7 +5199,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/alert_reference/" class="md-nav__link">
+      <a href="../../references/services/alert_reference/" class="md-nav__link">
         
   
   
@@ -5233,7 +5227,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/asset_reference/" class="md-nav__link">
+      <a href="../../references/services/asset_reference/" class="md-nav__link">
         
   
   
@@ -5261,7 +5255,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/blockassembly_reference/" class="md-nav__link">
+      <a href="../../references/services/blockassembly_reference/" class="md-nav__link">
         
   
   
@@ -5289,7 +5283,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/blockvalidation_reference/" class="md-nav__link">
+      <a href="../../references/services/blockvalidation_reference/" class="md-nav__link">
         
   
   
@@ -5317,7 +5311,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/blockchain_reference/" class="md-nav__link">
+      <a href="../../references/services/blockchain_reference/" class="md-nav__link">
         
   
   
@@ -5345,7 +5339,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/propagation_reference/" class="md-nav__link">
+      <a href="../../references/services/propagation_reference/" class="md-nav__link">
         
   
   
@@ -5373,7 +5367,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/subtreevalidation_reference/" class="md-nav__link">
+      <a href="../../references/services/subtreevalidation_reference/" class="md-nav__link">
         
   
   
@@ -5401,7 +5395,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/validator_reference/" class="md-nav__link">
+      <a href="../../references/services/validator_reference/" class="md-nav__link">
         
   
   
@@ -5464,10 +5458,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
             
   
   
@@ -5485,8 +5479,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_4">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -5503,7 +5497,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/blockpersister_reference/" class="md-nav__link">
+      <a href="../../references/services/blockpersister_reference/" class="md-nav__link">
         
   
   
@@ -5531,7 +5525,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/p2p_reference/" class="md-nav__link">
+      <a href="../../references/services/p2p_reference/" class="md-nav__link">
         
   
   
@@ -5559,7 +5553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/legacy_reference/" class="md-nav__link">
+      <a href="../../references/services/legacy_reference/" class="md-nav__link">
         
   
   
@@ -5587,7 +5581,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/pruner_reference/" class="md-nav__link">
+      <a href="../../references/services/pruner_reference/" class="md-nav__link">
         
   
   
@@ -5615,7 +5609,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/rpc_reference/" class="md-nav__link">
+      <a href="../../references/services/rpc_reference/" class="md-nav__link">
         
   
   
@@ -5643,7 +5637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/services/utxopersister_reference/" class="md-nav__link">
+      <a href="../../references/services/utxopersister_reference/" class="md-nav__link">
         
   
   
@@ -5698,10 +5692,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" >
         
           
-          <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
             
   
   
@@ -5719,8 +5713,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_5">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -5737,7 +5731,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/stores/blob_reference/" class="md-nav__link">
+      <a href="../../references/stores/blob_reference/" class="md-nav__link">
         
   
   
@@ -5765,7 +5759,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/stores/utxo_reference/" class="md-nav__link">
+      <a href="../../references/stores/utxo_reference/" class="md-nav__link">
         
   
   
@@ -5830,10 +5824,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="0">
             
   
   
@@ -5851,8 +5845,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -5869,7 +5863,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/" class="md-nav__link">
+      <a href="../../references/settings/" class="md-nav__link">
         
   
   
@@ -5897,7 +5891,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings_reference/" class="md-nav__link">
+      <a href="../../references/settings_reference/" class="md-nav__link">
         
   
   
@@ -5925,7 +5919,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+      <a href="../../references/settings/global_settings/" class="md-nav__link">
         
   
   
@@ -5953,7 +5947,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+      <a href="../../references/settings/policy_settings/" class="md-nav__link">
         
   
   
@@ -5981,7 +5975,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
+      <a href="../../references/settings/kafka_settings/" class="md-nav__link">
         
   
   
@@ -6052,10 +6046,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_6_6" id="__nav_4_6_6_label" tabindex="0">
             
   
   
@@ -6073,8 +6067,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_6">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -6091,7 +6085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/alert_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/alert_settings/" class="md-nav__link">
         
   
   
@@ -6119,7 +6113,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/asset_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/asset_settings/" class="md-nav__link">
         
   
   
@@ -6147,7 +6141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/blockassembly_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockassembly_settings/" class="md-nav__link">
         
   
   
@@ -6175,7 +6169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/blockchain_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockchain_settings/" class="md-nav__link">
         
   
   
@@ -6203,7 +6197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/blockpersister_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockpersister_settings/" class="md-nav__link">
         
   
   
@@ -6231,7 +6225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
         
   
   
@@ -6259,7 +6253,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/legacy_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/legacy_settings/" class="md-nav__link">
         
   
   
@@ -6287,7 +6281,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/p2p_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/p2p_settings/" class="md-nav__link">
         
   
   
@@ -6315,7 +6309,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/propagation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/propagation_settings/" class="md-nav__link">
         
   
   
@@ -6343,7 +6337,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/pruner_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/pruner_settings/" class="md-nav__link">
         
   
   
@@ -6371,7 +6365,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/rpc_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/rpc_settings/" class="md-nav__link">
         
   
   
@@ -6399,7 +6393,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
         
   
   
@@ -6427,7 +6421,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/utxopersister_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/utxopersister_settings/" class="md-nav__link">
         
   
   
@@ -6455,7 +6449,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/services/validator_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/validator_settings/" class="md-nav__link">
         
   
   
@@ -6512,10 +6506,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_6_7" id="__nav_4_6_7_label" tabindex="0">
             
   
   
@@ -6533,8 +6527,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_7">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -6551,7 +6545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/aerospike_settings/" class="md-nav__link">
         
   
   
@@ -6579,7 +6573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/stores/blob_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/blob_settings/" class="md-nav__link">
         
   
   
@@ -6607,7 +6601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/settings/stores/utxo_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/utxo_settings/" class="md-nav__link">
         
   
   
@@ -6680,10 +6674,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="0">
             
   
   
@@ -6701,8 +6695,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_7">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -6719,7 +6713,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../misc/BIP-239/" class="md-nav__link">
+      <a href="../../misc/BIP-239/" class="md-nav__link">
         
   
   
@@ -6747,7 +6741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
+      <a href="../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
         
   
   
@@ -6775,7 +6769,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/licenseInformation/" class="md-nav__link">
+      <a href="../../references/licenseInformation/" class="md-nav__link">
         
   
   
@@ -6803,7 +6797,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/prometheusMetrics/" class="md-nav__link">
+      <a href="../../references/prometheusMetrics/" class="md-nav__link">
         
   
   
@@ -6831,7 +6825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/teranodeDaemonReference/" class="md-nav__link">
+      <a href="../../references/teranodeDaemonReference/" class="md-nav__link">
         
   
   
@@ -6859,7 +6853,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/testingTechnicalReference/" class="md-nav__link">
+      <a href="../../references/testingTechnicalReference/" class="md-nav__link">
         
   
   
@@ -6887,7 +6881,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
+      <a href="../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
         
   
   
@@ -6950,10 +6944,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#index" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Index
+        Overview
       
     </span>
   </a>
@@ -6961,10 +6955,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
+  <a href="#table-of-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Introduction
+        Table of Contents
       
     </span>
   </a>
@@ -6972,55 +6966,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#understanding-forks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Understanding Forks
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-is-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is Teranode?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#components-overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Components Overview
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#first-time-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        First-Time Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="First-Time Setup">
+    <nav class="md-nav" aria-label="Understanding Forks">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#step-1-prepare-your-environment" class="md-nav__link">
+  <a href="#what-is-a-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1: Prepare Your Environment
+        What is a Fork?
       
     </span>
   </a>
@@ -7028,10 +6989,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-2-initial-setup" class="md-nav__link">
+  <a href="#why-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 2: Initial Setup
+        Why Fork?
       
     </span>
   </a>
@@ -7039,60 +7000,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-3-start-teranode" class="md-nav__link">
+  <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 3: Start Teranode
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Step 3: Start Teranode">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#option-1-using-admin-dashboard-easiest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option 1: Using Admin Dashboard (Easiest)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-2-using-teranode-cli" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option 2: Using teranode-cli
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-4-verify-installation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 4: Verify Installation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-issues" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Issues
+        Best Practices
       
     </span>
   </a>
@@ -7105,22 +7016,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#basic-operations" class="md-nav__link">
+  <a href="#step-1-create-your-fork" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Operations
+        Step 1: Create Your Fork
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Basic Operations">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-clone-your-fork-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Clone Your Fork Locally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Clone Your Fork Locally">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#checking-node-status" class="md-nav__link">
+  <a href="#1-get-your-repository-url" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking Node Status
+        1. Get Your Repository URL
       
     </span>
   </a>
@@ -7128,10 +7050,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#working-with-transactions" class="md-nav__link">
+  <a href="#2-clone-the-repository" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Working with Transactions
+        2. Clone the Repository
       
     </span>
   </a>
@@ -7139,10 +7061,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#monitoring-your-node" class="md-nav__link">
+  <a href="#3-add-the-upstream-remote" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring Your Node
+        3. Add the Upstream Remote
       
     </span>
   </a>
@@ -7150,55 +7072,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#basic-maintenance" class="md-nav__link">
+  <a href="#4-verify-your-remotes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Maintenance
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Operations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Next Steps
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Next Steps">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#docker-compose-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose Setup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#kubernetes-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Kubernetes Deployment
+        4. Verify Your Remotes
       
     </span>
   </a>
@@ -7209,9 +7086,209 @@
     </nav>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-protect-your-main-branch-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Protect Your Main Branch (Recommended)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: Protect Your Main Branch (Recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-protect-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Protect Main?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-up-the-pre-commit-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set Up the Pre-Commit Hook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-if-i-accidentally-committed-to-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What If I Accidentally Committed to Main?
+      
+    </span>
+  </a>
+  
+</li>
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-keep-your-fork-synchronized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Keep Your Fork Synchronized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 4: Keep Your Fork Synchronized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#method-1-using-github-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method 1: Using GitHub UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#method-2-using-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method 2: Using Command Line
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-working-on-features-and-creating-pull-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Working on Features and Creating Pull Requests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: Working on Features and Creating Pull Requests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-create-a-feature-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Create a Feature Branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-make-your-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Make Your Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-prepare-for-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Prepare for Pull Request
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-resolve-merge-conflicts-if-any" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Resolve Merge Conflicts (if any)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-push-your-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Push Your Branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-create-a-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Create a Pull Request
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-reference-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Reference Commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary Workflow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#need-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Need Help?
+      
+    </span>
+  </a>
   
 </li>
       
@@ -7240,7 +7317,7 @@
   
   
     <li class="md-path__item">
-      <a href="../../.." class="md-path__link">
+      <a href="../.." class="md-path__link">
         
   <span class="md-ellipsis">
     Home
@@ -7257,11 +7334,37 @@
   
     
     
+      
+  
+  
+    
+    
       <li class="md-path__item">
-        <a href="../../developers/forkAndPullRequestGuidelines/" class="md-path__link">
+        <a href="../developerSetup/" class="md-path__link">
           
   <span class="md-ellipsis">
-    Tutorials
+    How-To Guides
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../developerSetup/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Development
   </span>
 
         </a>
@@ -7283,331 +7386,332 @@
   
 
 
-<h1 id="getting-started-with-teranode">Getting Started with Teranode<a class="headerlink" href="#getting-started-with-teranode" title="Permanent link">&para;</a></h1>
-<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
+<h1 id="teranode-public-repository-fork-and-pull-request-guidelines">Teranode Public Repository: Fork and Pull Request Guidelines<a class="headerlink" href="#teranode-public-repository-fork-and-pull-request-guidelines" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The Teranode public repository is hosted at <a href="https://github.com/bsv-blockchain/teranode">https://github.com/bsv-blockchain/teranode</a>. Like most public repositories, direct commits to the main repository are not permitted. Instead, contributors must use a <strong>fork-and-pull-request workflow</strong>. This document provides a comprehensive guide to this process.</p>
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="#introduction">Introduction</a></li>
-<li><a href="#prerequisites">Prerequisites</a></li>
-<li><a href="#what-is-teranode">What is Teranode?</a></li>
-<li><a href="#components-overview">Components Overview</a></li>
-<li><a href="#first-time-setup">First-Time Setup</a><ul>
-<li><a href="#step-1-prepare-your-environment">Step 1: Prepare Your Environment</a></li>
-<li><a href="#step-2-initial-setup">Step 2: Initial Setup</a></li>
-<li><a href="#step-3-start-teranode">Step 3: Start Teranode</a></li>
-<li><a href="#step-4-verify-installation">Step 4: Verify Installation</a></li>
-<li><a href="#common-issues">Common Issues</a></li>
+<li><a href="#understanding-forks">Understanding Forks</a><ul>
+<li><a href="#what-is-a-fork">What is a Fork?</a></li>
+<li><a href="#why-fork">Why Fork?</a></li>
+<li><a href="#best-practices">Best Practices</a></li>
 </ul>
 </li>
-<li><a href="#basic-operations">Basic Operations</a><ul>
-<li><a href="#checking-node-status">Checking Node Status</a></li>
-<li><a href="#working-with-transactions">Working with Transactions</a></li>
-<li><a href="#monitoring-your-node">Monitoring Your Node</a></li>
-<li><a href="#basic-maintenance">Basic Maintenance</a></li>
-<li><a href="#common-operations">Common Operations</a></li>
-<li><a href="#next-steps">Next Steps</a></li>
-<li><a href="#docker-compose-setup">Docker Compose Setup</a></li>
-<li><a href="#kubernetes-deployment">Kubernetes Deployment</a></li>
+<li><a href="#step-1-create-your-fork">Step 1: Create Your Fork</a></li>
+<li><a href="#step-2-clone-your-fork-locally">Step 2: Clone Your Fork Locally</a></li>
+<li><a href="#step-3-protect-your-main-branch-recommended">Step 3: Protect Your Main Branch (Recommended)</a></li>
+<li><a href="#step-4-keep-your-fork-synchronized">Step 4: Keep Your Fork Synchronized</a></li>
+<li><a href="#step-5-working-on-features-and-creating-pull-requests">Step 5: Working on Features and Creating Pull Requests</a></li>
+<li><a href="#quick-reference-commands">Quick Reference Commands</a></li>
+<li><a href="#summary-workflow">Summary Workflow</a></li>
+<li><a href="#need-help">Need Help?</a></li>
 </ul>
-</li>
-</ul>
-<h2 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">&para;</a></h2>
-<p>This tutorial will guide you through your first steps with Teranode using Docker Compose. By the end of this guide, you'll have a running <strong>testnet</strong> <strong>Teranode</strong> instance suitable for testing and development.</p>
-<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
-<p>Before you begin, ensure you have:</p>
+<hr />
+<h2 id="understanding-forks">Understanding Forks<a class="headerlink" href="#understanding-forks" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-a-fork">What is a Fork?<a class="headerlink" href="#what-is-a-fork" title="Permanent link">&para;</a></h3>
+<p>A <strong>fork</strong> is a complete copy of a repository that lives under your own GitHub account. When you fork a repository:</p>
 <ul>
-<li>Basic understanding of blockchain technology</li>
-<li>Familiarity with command-line operations</li>
-<li>The AWS CLI</li>
-<li>Docker Engine 17.03+</li>
-<li>Docker Compose</li>
-<li>The Teranode Docker Compose file</li>
-<li>100GB+ available disk space</li>
-<li>Stable internet connection</li>
+<li><strong>Original Repository</strong> (<code>bsv-blockchain/teranode</code>): This is the authoritative source maintained by the BSV Blockchain organization. You cannot directly push changes here.</li>
+<li><strong>Your Fork</strong> (<code>YOUR_USERNAME/teranode</code>): This is your personal copy where you have full control. You can create branches, commit changes, and experiment freely.</li>
 </ul>
-<h2 id="what-is-teranode">What is Teranode?<a class="headerlink" href="#what-is-teranode" title="Permanent link">&para;</a></h2>
-<p>Teranode is a scalable BSV Blockchain node implementation that:</p>
+<h3 id="why-fork">Why Fork?<a class="headerlink" href="#why-fork" title="Permanent link">&para;</a></h3>
+<p>Forking allows you to:</p>
 <ul>
-<li>Processes over 1 million transactions per second</li>
-<li>Uses a microservices architecture</li>
-<li>Maintains full Bitcoin protocol compatibility</li>
+<li>Work independently without affecting the original repository</li>
+<li>Experiment with changes safely</li>
+<li>Propose changes back to the original project via pull requests</li>
+<li>Maintain your own version of the codebase while staying synchronized with updates</li>
 </ul>
-<h2 id="components-overview">Components Overview<a class="headerlink" href="#components-overview" title="Permanent link">&para;</a></h2>
-<p>Your Teranode Docker Compose setup will include:</p>
+<h3 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Keep your fork synchronized</strong>: Regularly sync with the upstream repository to avoid diverging too far from the main codebase</li>
+<li><strong>One fork per contributor</strong>: You only need one fork per repository—create multiple branches within your fork for different features</li>
+<li><strong>Don't commit to your main branch</strong>: Keep your fork's <code>main</code> branch clean and aligned with upstream. Always work in feature branches</li>
+<li><strong>Descriptive branch names</strong>: Use clear, descriptive names like <code>feature/add-logging</code> or <code>bugfix/connection-timeout</code></li>
+</ul>
+<hr />
+<h2 id="step-1-create-your-fork">Step 1: Create Your Fork<a class="headerlink" href="#step-1-create-your-fork" title="Permanent link">&para;</a></h2>
 <ol>
 <li>
-<p><strong>Core Teranode Services</strong></p>
-<ul>
-<li>Asset Server</li>
-<li>Block Assembly</li>
-<li>Block Validation</li>
-<li>Blockchain</li>
-<li>Legacy Gateway</li>
-<li>P2P</li>
-<li>Propagation</li>
-<li>Subtree Validation</li>
-</ul>
+<p>Navigate to <a href="https://github.com/bsv-blockchain/teranode">https://github.com/bsv-blockchain/teranode</a></p>
 </li>
 <li>
-<p><strong>Optional Services</strong></p>
-<ul>
-<li>Block Persister</li>
-<li>UTXO Persister</li>
-</ul>
+<p>Click the <strong>"Fork"</strong> button in the top-right corner of the page</p>
+<p><img alt="creating-a-github-fork-step1.png" src="../img/creating-a-github-fork-step1.png" /></p>
 </li>
 <li>
-<p><strong>Supporting Services</strong></p>
+<p>Configure your fork:</p>
 <ul>
-<li>Kafka for message queuing</li>
-<li>PostgreSQL for blockchain data</li>
-<li>Aerospike for UTXO storage</li>
-<li>Grafana and Prometheus for monitoring</li>
+<li><strong>Owner</strong>: Select your GitHub account</li>
+<li><strong>Repository name</strong>: Keep it as <code>teranode</code> (or customize if needed)</li>
+<li><strong>Description</strong>: Optional—you can add a custom description</li>
+<li><strong>Copy the main branch only</strong>: ✓ Check this box (recommended for cleaner setup)</li>
 </ul>
+<p><img alt="creating-a-github-fork-step2.png" src="../img/creating-a-github-fork-step2.png" /></p>
+</li>
+<li>
+<p>Click <strong>"Create fork"</strong></p>
 </li>
 </ol>
-<h2 id="first-time-setup">First-Time Setup<a class="headerlink" href="#first-time-setup" title="Permanent link">&para;</a></h2>
-<h3 id="step-1-prepare-your-environment">Step 1: Prepare Your Environment<a class="headerlink" href="#step-1-prepare-your-environment" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Checkout the Teranode public repository:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span><span class="nv">$YOUR_WORKING_DIR</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-blockchain/teranode.git
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">cd</span><span class="w"> </span>teranode
+<p>Your fork will now be available at <code>https://github.com/YOUR_USERNAME/teranode</code></p>
+<hr />
+<h2 id="step-2-clone-your-fork-locally">Step 2: Clone Your Fork Locally<a class="headerlink" href="#step-2-clone-your-fork-locally" title="Permanent link">&para;</a></h2>
+<h3 id="1-get-your-repository-url">1. Get Your Repository URL<a class="headerlink" href="#1-get-your-repository-url" title="Permanent link">&para;</a></h3>
+<p>Navigate to your forked repository at <code>https://github.com/YOUR_USERNAME/teranode</code> and click the green <strong>"Code"</strong> button. Copy the SSH URL (recommended) or HTTPS URL.</p>
+<p><img alt="obtaining-your-fork-url.png" src="../img/obtaining-your-fork-url.png" /></p>
+<h3 id="2-clone-the-repository">2. Clone the Repository<a class="headerlink" href="#2-clone-the-repository" title="Permanent link">&para;</a></h3>
+<p>Open your terminal and run:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>git@github.com:YOUR_GITHUB_USERNAME/teranode.git
 </span></code></pre></div>
-<h3 id="step-2-initial-setup">Step 2: Initial Setup<a class="headerlink" href="#step-2-initial-setup" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Go to the testnet docker compose path:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span><span class="nv">$YOUR_WORKING_DIR</span>/teranode/deploy/docker/testnet
+<p>Replace <code>YOUR_GITHUB_USERNAME</code> with your actual GitHub username.</p>
+<h3 id="3-add-the-upstream-remote">3. Add the Upstream Remote<a class="headerlink" href="#3-add-the-upstream-remote" title="Permanent link">&para;</a></h3>
+<p>Navigate into your cloned repository and add a reference to the original repository:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>teranode
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Add the original repository as &quot;upstream&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>git<span class="w"> </span>remote<span class="w"> </span>add<span class="w"> </span>upstream<span class="w"> </span>https://github.com/bsv-blockchain/teranode.git
 </span></code></pre></div>
+<p><strong>Why do we need an upstream remote?</strong></p>
+<p>When you clone your fork, Git automatically sets up <code>origin</code> to point to your fork. However, you also need a way to pull in changes from the original repository as it evolves. By adding the upstream remote, you create a connection to the source repository, which allows you to:</p>
 <ul>
-<li>Pull required images:</li>
+<li><strong>Fetch the latest updates</strong> from the main project as other contributors merge their changes</li>
+<li><strong>Keep your fork synchronized</strong> with the official codebase</li>
+<li><strong>Avoid merge conflicts</strong> by regularly incorporating upstream changes before they diverge too far from your work</li>
+<li><strong>Base your pull requests on the latest code</strong>, ensuring compatibility with recent changes</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>pull
+<p>Think of it this way: <code>origin</code> is where you push your work, and <code>upstream</code> is where you pull updates from the main project.</p>
+<h3 id="4-verify-your-remotes">4. Verify Your Remotes<a class="headerlink" href="#4-verify-your-remotes" title="Permanent link">&para;</a></h3>
+<p>Confirm your setup by running:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>remote<span class="w"> </span>-v
 </span></code></pre></div>
-<h3 id="step-3-start-teranode">Step 3: Start Teranode<a class="headerlink" href="#step-3-start-teranode" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Launch all services:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+<p>You should see output similar to:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>origin    git@github.com:YOUR_GITHUB_USERNAME/teranode.git (fetch)
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>origin    git@github.com:YOUR_GITHUB_USERNAME/teranode.git (push)
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>upstream  https://github.com/bsv-blockchain/teranode.git (fetch)
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>upstream  https://github.com/bsv-blockchain/teranode.git (push)
 </span></code></pre></div>
-<p>Force the node to transition to Run mode:</p>
-<h4 id="option-1-using-admin-dashboard-easiest">Option 1: Using Admin Dashboard (Easiest)<a class="headerlink" href="#option-1-using-admin-dashboard-easiest" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Access the dashboard at http://localhost:8090/admin (default credentials bitcoin:bitcoin)</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># Navigate to FSM State section and select RUNNING or LEGACYSYNCING</span>
+<p><strong>What this means:</strong></p>
+<ul>
+<li><strong>origin</strong>: Your fork (where you push your changes)</li>
+<li><strong>upstream</strong>: The original repository (where you pull updates from)</li>
+</ul>
+<hr />
+<h2 id="step-3-protect-your-main-branch-recommended">Step 3: Protect Your Main Branch (Recommended)<a class="headerlink" href="#step-3-protect-your-main-branch-recommended" title="Permanent link">&para;</a></h2>
+<p><strong>Important</strong>: To prevent accidental commits to your <code>main</code> branch, set up a Git hook that will block direct commits.</p>
+<h3 id="why-protect-main">Why Protect Main?<a class="headerlink" href="#why-protect-main" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Prevents sync issues</strong>: Committing to main causes your fork to diverge from upstream, creating complex merge conflicts</li>
+<li><strong>Enforces best practices</strong>: Ensures all work happens in feature branches</li>
+<li><strong>Cleaner pull requests</strong>: PRs from feature branches are easier to review</li>
+<li><strong>Easier to reset</strong>: A clean main branch can always be safely reset to match upstream</li>
+</ul>
+<h3 id="set-up-the-pre-commit-hook">Set Up the Pre-Commit Hook<a class="headerlink" href="#set-up-the-pre-commit-hook" title="Permanent link">&para;</a></h3>
+<p>Run the following commands in your repository:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Create the pre-commit hook</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>cat<span class="w"> </span>&gt;<span class="w"> </span>.git/hooks/pre-commit<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="s">#!/bin/bash</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="s">branch=&quot;$(git rev-parse --abbrev-ref HEAD)&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="s">if [ &quot;$branch&quot; = &quot;main&quot; ]; then</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="s">  echo &quot;❌ ERROR: Direct commits to &#39;main&#39; branch are not allowed!&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="s">  echo &quot;👉 Please create a feature branch instead:&quot;</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="s">  echo &quot;   git checkout -b feature/your-feature-name&quot;</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="s">  exit 1</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="s">fi</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="s">EOF</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Make it executable</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>chmod<span class="w"> </span>+x<span class="w"> </span>.git/hooks/pre-commit
 </span></code></pre></div>
-<blockquote>
-<p><strong>Note:</strong> The embedded dashboard is only available when Teranode is built with dashboard support (default in Docker images). The dashboard provides:</p>
-<ul>
-<li><code>/admin</code> - FSM management, block invalidation/revalidation (requires authentication)</li>
-<li><code>/viewer</code> - Blockchain viewer (blocks, transactions, UTXOs, subtrees)</li>
-<li><code>/home</code> - Node overview and statistics</li>
-<li><code>/peers</code> - Peer management and reputation</li>
-<li><code>/network</code> - Network status and connected nodes</li>
-<li><code>/p2p</code> - P2P message monitor</li>
-</ul>
-<p>For comprehensive dashboard documentation, see <a href="../../../topics/dashboard/">Dashboard Documentation</a>.</p>
-</blockquote>
-<h4 id="option-2-using-teranode-cli">Option 2: Using teranode-cli<a class="headerlink" href="#option-2-using-teranode-cli" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Transition to Run mode</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Or transition to LegacySync mode</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>LEGACYSYNCING
+<p>Now, if you accidentally try to commit to main, you'll see:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>❌ ERROR: Direct commits to &#39;main&#39; branch are not allowed!
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>👉 Please create a feature branch instead:
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>   git checkout -b feature/your-feature-name
 </span></code></pre></div>
-<ul>
-<li>Verify services are running:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps
+<h3 id="what-if-i-accidentally-committed-to-main">What If I Accidentally Committed to Main?<a class="headerlink" href="#what-if-i-accidentally-committed-to-main" title="Permanent link">&para;</a></h3>
+<p><strong>If you haven't pushed yet:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Save your work to a new branch</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>git<span class="w"> </span>branch<span class="w"> </span>feature/my-work
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Reset main to match upstream</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>git<span class="w"> </span>checkout<span class="w"> </span>main
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># Continue working on your feature branch</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>git<span class="w"> </span>checkout<span class="w"> </span>feature/my-work
 </span></code></pre></div>
-<ul>
-<li>Check individual service logs:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Example commands</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>asset
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>blockchain
+<p><strong>If you already pushed:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Create a branch with your work</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>git<span class="w"> </span>branch<span class="w"> </span>feature/my-work
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Force reset main to match upstream</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>git<span class="w"> </span>checkout<span class="w"> </span>main
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>main<span class="w"> </span>--force
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="c1"># Continue working on your feature branch</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>git<span class="w"> </span>checkout<span class="w"> </span>feature/my-work
 </span></code></pre></div>
-<ul>
-<li>Verify legacy sync status:</li>
-</ul>
-<p>When the node is started for the first time, its first action is to perform a initial blockchain sync. You can check the sync progress by checking the Legacy service logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>legacy
-</span></code></pre></div>
-<h3 id="step-4-verify-installation">Step 4: Verify Installation<a class="headerlink" href="#step-4-verify-installation" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Check service health:</li>
-</ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>http://localhost:8090/health
-</span></code></pre></div>
-<ul>
-<li>
-<p>Access the built-in Teranode dashboard:</p>
-<ul>
-<li><strong>Service Viewer</strong>: <a href="http://localhost:8090/viewer">http://localhost:8090/viewer</a> - View blocks, transactions, UTXOs, and subtrees</li>
-<li><strong>Admin Interface</strong>: <a href="http://localhost:8090/admin">http://localhost:8090/admin</a> (credentials: bitcoin/bitcoin) - FSM state management and block operations</li>
-<li><strong>Home Overview</strong>: <a href="http://localhost:8090/home">http://localhost:8090/home</a> - Node statistics and block graphs</li>
-<li><strong>Peer Management</strong>: <a href="http://localhost:8090/peers">http://localhost:8090/peers</a> - Connected peers and reputation scores</li>
-<li><strong>Network Status</strong>: <a href="http://localhost:8090/network">http://localhost:8090/network</a> - Connected nodes and chain status</li>
-<li>For complete dashboard features, see <a href="../../../topics/dashboard/">Dashboard Documentation</a></li>
-</ul>
-</li>
-<li>
-<p>Access Grafana monitoring (metrics and time-series data):</p>
-<ul>
-<li>Open Grafana: <a href="http://localhost:3005">http://localhost:3005</a></li>
-<li>Login with the default credentials: admin/admin</li>
-</ul>
-</li>
-</ul>
-<blockquote>
-<p><strong>Note:</strong> The docker compose configuration in this repository includes Grafana but does not include pre-configured Teranode dashboards. You will see an empty Grafana instance that can collect metrics but won't have the "Teranode" folder with pre-built service dashboards.</p>
-<p>For a complete deployment with pre-configured Grafana dashboards (Teranode Service Overview, Legacy Service metrics, etc.), use the <strong><a href="https://github.com/bsv-blockchain/teranode-teratestnet">teranode-teratestnet repository</a></strong> which includes:</p>
-<ul>
-<li>Pre-built Grafana dashboards for all Teranode services</li>
-<li>Automated setup and configuration</li>
-<li>Production-ready monitoring visualization</li>
-</ul>
-<p>You can also manually create custom dashboards in Grafana by connecting to the Prometheus data source at <code>http://prometheus:9090</code>.</p>
-</blockquote>
-<h3 id="common-issues">Common Issues<a class="headerlink" href="#common-issues" title="Permanent link">&para;</a></h3>
+<hr />
+<h2 id="step-4-keep-your-fork-synchronized">Step 4: Keep Your Fork Synchronized<a class="headerlink" href="#step-4-keep-your-fork-synchronized" title="Permanent link">&para;</a></h2>
+<p>Before starting any new work, always sync your fork with the upstream repository to ensure you have the latest changes.</p>
+<h3 id="method-1-using-github-ui">Method 1: Using GitHub UI<a class="headerlink" href="#method-1-using-github-ui" title="Permanent link">&para;</a></h3>
 <ol>
+<li>Go to your forked repository on GitHub</li>
+<li>Click the <strong>"Sync fork"</strong> button near the top of the page</li>
 <li>
-<p><strong>Services fail to start</strong></p>
+<p>Click <strong>"Update branch"</strong> if changes are available</p>
+<p><img alt="syncing-your-fork.png" src="../img/syncing-your-fork.png" /></p>
+</li>
+</ol>
+<p>This merges all changes from <code>upstream/main</code> into your fork's <code>main</code> branch.</p>
+<h3 id="method-2-using-command-line">Method 2: Using Command Line<a class="headerlink" href="#method-2-using-command-line" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Ensure you&#39;re on your main branch</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>git<span class="w"> </span>checkout<span class="w"> </span>main
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Fetch and merge changes from upstream</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>git<span class="w"> </span>fetch<span class="w"> </span>upstream
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Push the updates to your fork on GitHub</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>main
+</span></code></pre></div>
+<p><strong>Important</strong>: Always sync before creating a new feature branch to ensure you're working with the latest code.</p>
+<hr />
+<h2 id="step-5-working-on-features-and-creating-pull-requests">Step 5: Working on Features and Creating Pull Requests<a class="headerlink" href="#step-5-working-on-features-and-creating-pull-requests" title="Permanent link">&para;</a></h2>
+<h3 id="1-create-a-feature-branch">1. Create a Feature Branch<a class="headerlink" href="#1-create-a-feature-branch" title="Permanent link">&para;</a></h3>
+<p>Always work in a dedicated branch, never directly in <code>main</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># First, make sure you&#39;re up to date</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>git<span class="w"> </span>checkout<span class="w"> </span>main
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>git<span class="w"> </span>fetch<span class="w"> </span>upstream
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># Create and switch to a new feature branch</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span>feature/your-feature-name
+</span></code></pre></div>
+<p>Use descriptive branch names such as:</p>
 <ul>
-<li>Check logs: <code>docker compose logs</code></li>
-<li>Verify disk space: <code>df -h</code></li>
-<li>Ensure all ports are available</li>
+<li><code>feature/add-transaction-validation</code></li>
+<li><code>bugfix/fix-memory-leak</code></li>
+<li><code>docs/update-readme</code></li>
+</ul>
+<h3 id="2-make-your-changes">2. Make Your Changes<a class="headerlink" href="#2-make-your-changes" title="Permanent link">&para;</a></h3>
+<p>Edit files, write code, and commit your changes:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Stage your changes</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>git<span class="w"> </span>add<span class="w"> </span>.
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Commit with a clear, descriptive message</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Add transaction validation logic&quot;</span>
+</span></code></pre></div>
+<h3 id="3-prepare-for-pull-request">3. Prepare for Pull Request<a class="headerlink" href="#3-prepare-for-pull-request" title="Permanent link">&para;</a></h3>
+<p>Before submitting a PR, ensure your branch is up to date with upstream to avoid merge conflicts:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Fetch the latest changes from upstream</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>git<span class="w"> </span>fetch<span class="w"> </span>upstream
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span></code></pre></div>
+<h3 id="4-resolve-merge-conflicts-if-any">4. Resolve Merge Conflicts (if any)<a class="headerlink" href="#4-resolve-merge-conflicts-if-any" title="Permanent link">&para;</a></h3>
+<p>If there are conflicts, Git will notify you. Open the conflicted files, resolve the conflicts manually, then:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># After resolving conflicts</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>git<span class="w"> </span>add<span class="w"> </span>.
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Resolve merge conflicts with upstream&quot;</span>
+</span></code></pre></div>
+<h3 id="5-push-your-branch">5. Push Your Branch<a class="headerlink" href="#5-push-your-branch" title="Permanent link">&para;</a></h3>
+<p>Push your feature branch to your fork:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># First push of a new branch</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>git<span class="w"> </span>push<span class="w"> </span>-u<span class="w"> </span>origin<span class="w"> </span>feature/your-feature-name
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Subsequent pushes</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>git<span class="w"> </span>push
+</span></code></pre></div>
+<h3 id="6-create-a-pull-request">6. Create a Pull Request<a class="headerlink" href="#6-create-a-pull-request" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Go to your forked repository on GitHub (<code>https://github.com/YOUR_USERNAME/teranode</code>)</li>
+<li>Navigate to the <strong>"Pull requests"</strong> tab or click the <strong>"Compare &amp; pull request"</strong> button that appears after pushing</li>
+<li>Alternatively, go to <strong>"Branches"</strong> → find your feature branch → click <strong>"New pull request"</strong></li>
+<li>
+<p>Ensure:</p>
+<ul>
+<li><strong>Base repository</strong>: <code>bsv-blockchain/teranode</code></li>
+<li><strong>Base branch</strong>: <code>main</code></li>
+<li><strong>Head repository</strong>: <code>YOUR_USERNAME/teranode</code></li>
+<li><strong>Compare branch</strong>: <code>feature/your-feature-name</code></li>
 </ul>
 </li>
 <li>
-<p><strong>Cannot connect to services</strong></p>
+<p>Fill in the PR title and description:</p>
 <ul>
-<li>Verify services are running: <code>docker compose ps</code></li>
-<li>Check service logs for specific errors</li>
-<li>Ensure ports are not blocked by firewall</li>
-</ul>
-</li>
-</ol>
-<h2 id="basic-operations">Basic Operations<a class="headerlink" href="#basic-operations" title="Permanent link">&para;</a></h2>
-<h3 id="checking-node-status">Checking Node Status<a class="headerlink" href="#checking-node-status" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>View all services status:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps
-</span></code></pre></div>
-</li>
-<li>
-<p>Check blockchain sync:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>curl<span class="w"> </span>http://localhost:8090/api/v1/blockstats
-</span></code></pre></div>
-</li>
-<li>
-<p>Monitor specific service logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>legacy
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>blockchain
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>asset
-</span></code></pre></div>
-</li>
-</ol>
-<h3 id="working-with-transactions">Working with Transactions<a class="headerlink" href="#working-with-transactions" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Get transaction details:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>curl<span class="w"> </span>http://localhost:8090/api/v1/tx/&lt;txid&gt;
-</span></code></pre></div>
-</li>
-</ol>
-<h3 id="monitoring-your-node">Monitoring Your Node<a class="headerlink" href="#monitoring-your-node" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Access Grafana dashboards:</p>
-<ul>
-<li>Open <a href="http://localhost:3005">http://localhost:3005</a></li>
-<li>Navigate to "TERANODE Service Overview"</li>
+<li>Clearly explain what changes you made</li>
+<li>Reference any related issues (e.g., "Fixes #123")</li>
+<li>Describe testing performed</li>
 </ul>
 </li>
 <li>
-<p>Key metrics to watch:</p>
-<ul>
-<li>Block queue length (should be near 0)</li>
-<li>Transaction processing rate</li>
-<li>Memory and CPU usage</li>
-<li>Disk space utilization</li>
-</ul>
+<p>Click <strong>"Create pull request"</strong></p>
 </li>
 </ol>
-<h3 id="basic-maintenance">Basic Maintenance<a class="headerlink" href="#basic-maintenance" title="Permanent link">&para;</a></h3>
+<hr />
+<h2 id="quick-reference-commands">Quick Reference Commands<a class="headerlink" href="#quick-reference-commands" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Initial Setup</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># =============</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1"># Clone your fork</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>git<span class="w"> </span>clone<span class="w"> </span>git@github.com:YOUR_USERNAME/teranode.git
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nb">cd</span><span class="w"> </span>teranode
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="c1"># Add upstream remote</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>git<span class="w"> </span>remote<span class="w"> </span>add<span class="w"> </span>upstream<span class="w"> </span>https://github.com/bsv-blockchain/teranode.git
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="c1"># Set up pre-commit hook to protect main branch</span>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>cat<span class="w"> </span>&gt;<span class="w"> </span>.git/hooks/pre-commit<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39;</span>
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="s">#!/bin/bash</span>
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="s">branch=&quot;$(git rev-parse --abbrev-ref HEAD)&quot;</span>
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="s">if [ &quot;$branch&quot; = &quot;main&quot; ]; then</span>
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="s">  echo &quot;❌ ERROR: Direct commits to &#39;main&#39; branch are not allowed!&quot;</span>
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="s">  echo &quot;👉 Please create a feature branch instead:&quot;</span>
+</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="s">  echo &quot;   git checkout -b feature/your-feature-name&quot;</span>
+</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="s">  exit 1</span>
+</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="s">fi</span>
+</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="s">EOF</span>
+</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a>chmod<span class="w"> </span>+x<span class="w"> </span>.git/hooks/pre-commit
+</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a>
+</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="c1"># Regular Workflow</span>
+</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="c1"># ================</span>
+</span><span id="__span-14-25"><a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a><span class="c1"># Sync with upstream</span>
+</span><span id="__span-14-26"><a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a>git<span class="w"> </span>checkout<span class="w"> </span>main
+</span><span id="__span-14-27"><a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a>git<span class="w"> </span>fetch<span class="w"> </span>upstream
+</span><span id="__span-14-28"><a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-14-29"><a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a>git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>main
+</span><span id="__span-14-30"><a id="__codelineno-14-30" name="__codelineno-14-30" href="#__codelineno-14-30"></a>
+</span><span id="__span-14-31"><a id="__codelineno-14-31" name="__codelineno-14-31" href="#__codelineno-14-31"></a><span class="c1"># Create feature branch</span>
+</span><span id="__span-14-32"><a id="__codelineno-14-32" name="__codelineno-14-32" href="#__codelineno-14-32"></a>git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span>feature/new-feature
+</span><span id="__span-14-33"><a id="__codelineno-14-33" name="__codelineno-14-33" href="#__codelineno-14-33"></a>
+</span><span id="__span-14-34"><a id="__codelineno-14-34" name="__codelineno-14-34" href="#__codelineno-14-34"></a><span class="c1"># Commit changes</span>
+</span><span id="__span-14-35"><a id="__codelineno-14-35" name="__codelineno-14-35" href="#__codelineno-14-35"></a>git<span class="w"> </span>add<span class="w"> </span>.
+</span><span id="__span-14-36"><a id="__codelineno-14-36" name="__codelineno-14-36" href="#__codelineno-14-36"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;Descriptive commit message&quot;</span>
+</span><span id="__span-14-37"><a id="__codelineno-14-37" name="__codelineno-14-37" href="#__codelineno-14-37"></a>
+</span><span id="__span-14-38"><a id="__codelineno-14-38" name="__codelineno-14-38" href="#__codelineno-14-38"></a><span class="c1"># Update feature branch with latest upstream</span>
+</span><span id="__span-14-39"><a id="__codelineno-14-39" name="__codelineno-14-39" href="#__codelineno-14-39"></a>git<span class="w"> </span>fetch<span class="w"> </span>upstream
+</span><span id="__span-14-40"><a id="__codelineno-14-40" name="__codelineno-14-40" href="#__codelineno-14-40"></a>git<span class="w"> </span>reset<span class="w"> </span>--hard<span class="w"> </span>upstream/main
+</span><span id="__span-14-41"><a id="__codelineno-14-41" name="__codelineno-14-41" href="#__codelineno-14-41"></a>
+</span><span id="__span-14-42"><a id="__codelineno-14-42" name="__codelineno-14-42" href="#__codelineno-14-42"></a><span class="c1"># Push feature branch</span>
+</span><span id="__span-14-43"><a id="__codelineno-14-43" name="__codelineno-14-43" href="#__codelineno-14-43"></a>git<span class="w"> </span>push<span class="w"> </span>-u<span class="w"> </span>origin<span class="w"> </span>feature/new-feature
+</span></code></pre></div>
+<hr />
+<h2 id="summary-workflow">Summary Workflow<a class="headerlink" href="#summary-workflow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>
-<p>View logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># All services</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Specific service</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>blockchain
-</span></code></pre></div>
-</li>
-<li>
-<p>Check disk usage:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>df<span class="w"> </span>-h
-</span></code></pre></div>
-</li>
-<li>
-<p>Restart a specific service:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>blockchain
-</span></code></pre></div>
-</li>
-<li>
-<p>Restart all services:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>down
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
-</span></code></pre></div>
-</li>
+<li><strong>Fork</strong> the repository on GitHub</li>
+<li><strong>Clone</strong> your fork locally</li>
+<li><strong>Add upstream</strong> remote to track the original repository</li>
+<li><strong>Set up pre-commit hook</strong> to protect your main branch</li>
+<li><strong>Sync</strong> your fork regularly with upstream</li>
+<li><strong>Create feature branches</strong> for all new work</li>
+<li><strong>Commit</strong> and <strong>push</strong> your changes to your fork</li>
+<li><strong>Update</strong> your feature branch with upstream changes before submitting</li>
+<li><strong>Create a pull request</strong> from your feature branch to the upstream main branch</li>
 </ol>
-<h3 id="common-operations">Common Operations<a class="headerlink" href="#common-operations" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Check current block height:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>curl<span class="w"> </span>http://localhost:8090/api/v1/bestblockheader/json
-</span></code></pre></div>
-</li>
-<li>
-<p>Get block information:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>curl<span class="w"> </span>http://localhost:8090/api/v1/block/&lt;blockhash&gt;
-</span></code></pre></div>
-</li>
-<li>
-<p>Check UTXO status:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>curl<span class="w"> </span>http://localhost:8090/api/v1/utxo/&lt;utxohash&gt;
-</span></code></pre></div>
-</li>
-</ol>
-<h3 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Explore the How-to Guides for advanced tasks</li>
-<li>Review the Reference documentation for detailed endpoint information</li>
-</ul>
-<h4 id="docker-compose-setup">Docker Compose Setup<a class="headerlink" href="#docker-compose-setup" title="Permanent link">&para;</a></h4>
-<ol>
-<li><a href="../../../howto/miners/docker/minersHowToInstallation/">Installation Guide</a></li>
-<li><a href="../../../howto/miners/docker/minersHowToStopStartDockerTeranode/">Starting and Stopping Teranode</a></li>
-<li><a href="../../../howto/miners/docker/minersHowToConfigureTheNode/">Configuration Guide</a></li>
-<li><a href="../../../howto/miners/docker/minersHowToSyncTheNode/">Blockchain Synchronization</a></li>
-<li><a href="../../../howto/miners/docker/minersUpdatingTeranode/">Update Procedures</a></li>
-<li><a href="../../../howto/miners/docker/minersHowToTroubleshooting/">Troubleshooting Guide</a></li>
-<li><a href="../../../howto/miners/docker/minersSecurityBestPractices/">Security Best Practices</a></li>
-</ol>
-<h4 id="kubernetes-deployment">Kubernetes Deployment<a class="headerlink" href="#kubernetes-deployment" title="Permanent link">&para;</a></h4>
-<ol>
-<li><a href="../../../howto/miners/kubernetes/minersHowToInstallation/">Installation with Kubernetes Operator</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/">Starting and Stopping Teranode</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersHowToConfigureTheNode/">Configuration Guide</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersHowToSyncTheNode/">Blockchain Synchronization</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersUpdatingTeranode/">Update Procedures</a></li>
-<li><a href="../../../howto/miners/minersHowToBackup/">Backup Procedures</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersHowToTroubleshooting/">Troubleshooting Guide</a></li>
-<li><a href="../../../howto/miners/kubernetes/minersSecurityBestPractices/">Security Best Practices</a></li>
-<li><a href="../../../howto/howToRemoteDebugTeranode/">Remote Debugging Guide</a></li>
-</ol>
+<hr />
+<h2 id="need-help">Need Help?<a class="headerlink" href="#need-help" title="Permanent link">&para;</a></h2>
+<p>If you encounter issues or have questions about this workflow, please reach out to the team or consult the <a href="https://docs.github.com/en/get-started/quickstart/fork-a-repo">GitHub documentation on forking</a>.</p>
 
 
 
@@ -7645,7 +7749,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../developers/developerSetup/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Developer Setup">
+          <a href="../developerSetup/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Developer Setup">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -7662,7 +7766,7 @@
         
         
           
-          <a href="../../../howto/locallyRunningServices/" class="md-footer__link md-footer__link--next" aria-label="Next: Running Services Locally">
+          <a href="../locallyRunningServices/" class="md-footer__link md-footer__link--next" aria-label="Next: Running Services Locally">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
@@ -7700,10 +7804,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
