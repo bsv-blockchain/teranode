@@ -270,6 +270,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			s.logger.Infof("[Pruner Service] Shutting down during FSM wait")
 			return err
 		}
+		s.logger.Errorf("[Pruner Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
 
