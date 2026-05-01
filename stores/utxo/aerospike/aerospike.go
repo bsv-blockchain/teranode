@@ -68,7 +68,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	asl "github.com/aerospike/aerospike-client-go/v8/logger"
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -80,6 +80,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
@@ -104,6 +106,7 @@ var (
 
 type batcherIfc[T any] interface {
 	Put(item *T, payloadSize ...int)
+	PutCtx(ctx context.Context, item *T, payloadSize ...int)
 	Trigger()
 	SetDrainMode(enabled bool)
 }
@@ -265,7 +268,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	batcherMaxConcurrent := tSettings.UtxoStore.BatcherMaxConcurrent
 	batcherBackground := tSettings.BatcherBackground
 
-	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground)
+	otelTracer := tracing.Tracer("aerospike").OTelTracer()
+	batcherOpts := func(name string) []batcher.Option {
+		return []batcher.Option{
+			batcher.WithName(name),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(otelTracer),
+		}
+	}
+
+	storeBatcherInst := batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendStoreBatch, batcherBackground, batcherOpts("aerospike_store")...)
 	if batcherMaxConcurrent > 0 {
 		storeBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -274,7 +287,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchSize := s.settings.UtxoStore.GetBatcherSize
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
-	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground)
+	getBatcherInst := batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, batcherBackground, batcherOpts("aerospike_get")...)
 	if batcherMaxConcurrent > 0 {
 		getBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -304,7 +317,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
-	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground)
+	spendBatcherInst := batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, batcherBackground, batcherOpts("aerospike_spend")...)
 	if batcherMaxConcurrent > 0 {
 		spendBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -321,7 +334,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
-	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground)
+	outpointBatcherInst := batcher.NewWithPool(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, batcherBackground, batcherOpts("aerospike_outpoint")...)
 	if batcherMaxConcurrent > 0 {
 		outpointBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -330,7 +343,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	incrementBatchSize := tSettings.UtxoStore.IncrementBatcherSize
 	incrementBatchDurationStr := tSettings.UtxoStore.IncrementBatcherDurationMillis
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
-	incrementBatcherInst := batcher.NewWithPool(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, batcherBackground)
+	incrementBatcherInst := batcher.NewWithPool(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, batcherBackground, batcherOpts("aerospike_increment")...)
 	if batcherMaxConcurrent > 0 {
 		incrementBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -339,7 +352,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setDAHBatchSize := tSettings.UtxoStore.SetDAHBatcherSize
 	setDAHBatchDurationStr := tSettings.UtxoStore.SetDAHBatcherDurationMillis
 	setDAHBatchDuration := time.Duration(setDAHBatchDurationStr) * time.Millisecond
-	setDAHBatcherInst := batcher.NewWithPool(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, batcherBackground)
+	setDAHBatcherInst := batcher.NewWithPool(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, batcherBackground, batcherOpts("aerospike_set_dah")...)
 	if batcherMaxConcurrent > 0 {
 		setDAHBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
@@ -348,17 +361,27 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatcherSize := tSettings.UtxoStore.LockedBatcherSize
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
-	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground)
+	lockedBatcherInst := batcher.NewWithPool(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, batcherBackground, batcherOpts("aerospike_locked")...)
 	if batcherMaxConcurrent > 0 {
 		lockedBatcherInst.SetMaxConcurrent(batcherMaxConcurrent)
 	}
 	s.lockedBatcher = lockedBatcherInst
 
-	if tSettings.BatcherDrainMode {
+	// Per-batcher drain mode: each batcher can be independently configured.
+	// Drain mode is beneficial for stages that receive bursts (Get, Create)
+	// but harmful for stages where items trickle in one-at-a-time (Spend,
+	// SetLocked) — single-item batches trigger Aerospike executeSingle fallback.
+	if tSettings.UtxoStore.GetBatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
+	}
+	if tSettings.UtxoStore.SpendBatcherDrainMode {
 		s.spendBatcher.SetDrainMode(true)
-		s.lockedBatcher.SetDrainMode(true)
+	}
+	if tSettings.UtxoStore.StoreBatcherDrainMode {
 		s.storeBatcher.SetDrainMode(true)
+	}
+	if tSettings.UtxoStore.LockedBatcherDrainMode {
+		s.lockedBatcher.SetDrainMode(true)
 	}
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)

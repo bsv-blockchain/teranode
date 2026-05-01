@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -15,6 +15,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
 // batchItem represents an item in a transaction batch.
@@ -114,7 +116,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	b := batcher.New(batchSize, duration, sendBatch, tSettings.BatcherBackground)
+	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
+		batcher.WithName("blockassembly_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
+	)
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
 	}
@@ -168,7 +175,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	b := batcher.New(batchSize, duration, sendBatch, tSettings.BatcherBackground)
+	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
+		batcher.WithName("blockassembly_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
+	)
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
 	}
@@ -250,7 +262,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	} else {
 		/* batch mode */
 		done := make(chan error)
-		s.batcher.Put(&batchItem{
+		s.batcher.PutCtx(ctx, &batchItem{
 			req:  req,
 			done: done,
 		})

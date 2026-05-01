@@ -31,7 +31,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 		g.Go(func() error {
 			errCh := make(chan error, 1)
 
-			s.lockedBatcher.Put(&batchLocked{
+			s.lockedBatcher.PutCtx(ctx, &batchLocked{
 				ctx:      ctx,
 				txHash:   txHash,
 				setValue: setValue,
@@ -123,7 +123,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				g.Go(func() error {
 					errCh := make(chan error, 1)
 
-					s.lockedBatcher.Put(&batchLocked{
+					s.lockedBatcher.PutCtx(batch[idx].ctx, &batchLocked{
 						txHash:     batch[idx].txHash,
 						childIndex: uint32(i), // nolint:gosec
 						setValue:   batch[idx].setValue,

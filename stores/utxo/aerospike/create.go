@@ -218,7 +218,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		done:         errCh,
 	}
 
-	s.storeBatcher.Put(item)
+	s.storeBatcher.PutCtx(ctx, item)
 
 	err = <-errCh
 	if err != nil {
