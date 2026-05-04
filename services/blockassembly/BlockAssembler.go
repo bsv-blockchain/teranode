@@ -153,6 +153,14 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
 
+	// unminedDropHashes accumulates hashes that should be dropped from the
+	// input queue at the end of loadUnminedTransactions. Populated by
+	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
+	// Read once by Start / postProcessFn after loadUnminedTransactions returns,
+	// then handed to subtreeProcessor.DrainQueue. Serialized by
+	// unminedTransactionsLoading; must not be touched concurrently.
+	unminedDropHashes map[chainhash.Hash]struct{}
+
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
 }
@@ -559,6 +567,14 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			return errors.NewProcessingError("[Reset] error loading unmined transactions", err)
 		}
 
+		// Drop any in-flight children of cascaded conflicting parents from
+		// the input queue before the existing post-postProcess drain runs
+		// and before default-case dequeue resumes.
+		if drop := b.unminedDropHashes; len(drop) > 0 {
+			b.subtreeProcessor.DrainQueue(drop)
+		}
+		b.unminedDropHashes = nil
+
 		return nil
 	}
 
@@ -840,6 +856,16 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
+
+	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions
+	// flagged any tx as conflicting (and cascaded its descendants), drain the
+	// input queue with that set as a drop filter before the event-loop
+	// goroutine starts — otherwise in-flight children whose parent was just
+	// flagged would be admitted to the next mining candidate.
+	if drop := b.unminedDropHashes; len(drop) > 0 {
+		b.subtreeProcessor.DrainQueue(drop)
+	}
+	b.unminedDropHashes = nil
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
@@ -2043,6 +2069,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 		b.logger.Infof("[loadUnminedTransactions] unmined transaction loading completed")
 	}()
 
+	// Reset the accumulator: any cascade fired during this load goes here so
+	// the caller can drain the input queue with this set as a drop filter.
+	b.unminedDropHashes = make(map[chainhash.Hash]struct{})
+
 	if b.utxoStore == nil {
 		return errors.NewServiceError("[BlockAssembler] no utxostore")
 	}
@@ -2507,6 +2537,14 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 	if err != nil {
 		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
 		return
+	}
+
+	// Stash cascade hashes for the post-load DrainQueue call. Safe because
+	// loadUnminedTransactions is serialised by unminedTransactionsLoading.
+	if b.unminedDropHashes != nil {
+		for _, h := range cascadedHashes {
+			b.unminedDropHashes[h] = struct{}{}
+		}
 	}
 
 	for _, h := range cascadedHashes {
