@@ -1534,6 +1534,19 @@ func (b *BlockAssembler) validateParentChain(
 
 	b.logger.Infof("[BlockAssembler][validateParentChain] Starting parent chain validation for %d unmined transactions", len(unminedTxs))
 
+	filteringEnabled := b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs
+
+	// Cascade tracking: when a parent is conflicting (or descended from a conflicting
+	// tx via this run), we must reject the child AND propagate the conflicting flag.
+	// The sort order (createdAt) processes parents before children, so by the time we
+	// reach a child, any rejected ancestor in our list is already in these maps.
+	//   - conflictingDescendants: cascade triggered by a conflicting ancestor; gets
+	//     propagated to the UTXO store via MarkConflictingRecursively at end of run
+	//   - rejectedHashes: superset — any tx filtered for any reason; used purely
+	//     in-memory to cascade-filter descendants
+	conflictingDescendants := make(map[chainhash.Hash]struct{})
+	rejectedHashes := make(map[chainhash.Hash]struct{})
+
 	// OPTIMIZATION: Two-pass approach to minimize memory usage
 	// Pass 1: Collect only the parent hashes that are actually referenced
 	// This is MUCH smaller than indexing all transactions
@@ -1662,6 +1675,29 @@ func (b *BlockAssembler) validateParentChain(
 			unminedParents := make([]chainhash.Hash, 0) // Track which parents are unmined
 
 			for _, parentTxID := range parentHashes {
+				// Cascade: parent was filtered earlier in this run as conflicting (or
+				// descendant of conflicting). Reject this child too AND propagate the
+				// conflicting flag — the parent's store metadata may not yet reflect
+				// the conflict, so we cannot rely on parentMeta.Conflicting alone.
+				if _, isConflictingCascade := conflictingDescendants[parentTxID]; isConflictingCascade {
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s is conflicting (cascade)", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					if filteringEnabled {
+						conflictingDescendants[tx.Hash] = struct{}{}
+					}
+					break
+				}
+
+				// Cascade: parent was filtered earlier in this run for some other reason
+				// (missing, orphaned, etc). Reject without marking conflicting.
+				if _, isRejectedCascade := rejectedHashes[parentTxID]; isRejectedCascade {
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s was filtered earlier in this run (cascade)", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					break
+				}
+
 				// Check if parent exists in UTXO store
 				parentMeta, exists := parentMetadata[parentTxID]
 				if !exists {
@@ -1677,6 +1713,9 @@ func (b *BlockAssembler) validateParentChain(
 					allParentsValid = false
 					invalidReason = fmt.Sprintf("parent tx %s is conflicting", parentTxID.String())
 					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					if filteringEnabled {
+						conflictingDescendants[tx.Hash] = struct{}{}
+					}
 					break
 				}
 
@@ -1777,8 +1816,9 @@ func (b *BlockAssembler) validateParentChain(
 				validTxs = append(validTxs, tx)
 			} else {
 				// Transaction has invalid parent chain - use setting to decide whether to exclude
-				if b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs {
-					// Filtering enabled - skip this transaction
+				if filteringEnabled {
+					// Filtering enabled - skip and track for cascade filtering of descendants
+					rejectedHashes[tx.Hash] = struct{}{}
 					skippedCount++
 				} else {
 					// Filtering disabled (default) - keep transaction despite invalid parents
@@ -1788,8 +1828,24 @@ func (b *BlockAssembler) validateParentChain(
 		}
 	}
 
+	// Propagate conflicting flag to UTXO store for cascaded descendants. This prevents
+	// future restarts from re-discovering the same orphans and leaking them into block
+	// assembly. Best-effort: even on failure the in-memory filter has already protected
+	// the current run.
+	if len(conflictingDescendants) > 0 {
+		cascadeHashes := make([]chainhash.Hash, 0, len(conflictingDescendants))
+		for h := range conflictingDescendants {
+			cascadeHashes = append(cascadeHashes, h)
+		}
+		if _, _, mErr := utxo.MarkConflictingRecursively(ctx, b.utxoStore, cascadeHashes); mErr != nil {
+			b.logger.Errorf("[BlockAssembler][validateParentChain] failed to mark %d cascaded conflicting txs: %v", len(cascadeHashes), mErr)
+		} else {
+			b.logger.Infof("[BlockAssembler][validateParentChain] marked %d txs conflicting (descendants of conflicting parents)", len(cascadeHashes))
+		}
+	}
+
 	filteringStatus := "disabled"
-	if b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs {
+	if filteringEnabled {
 		filteringStatus = "enabled"
 	}
 
