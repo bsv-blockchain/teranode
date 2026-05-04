@@ -61,6 +61,10 @@ var (
 
 	// StateMovingUp indicates the processor is moving up the blockchain
 	StateMovingUp State = 6
+
+	// StateReconciling indicates the processor is reconciling its tip with
+	// the blockchain after startup or a missed-notification window.
+	StateReconciling State = 7
 )
 
 var StateStrings = map[State]string{
@@ -70,6 +74,7 @@ var StateStrings = map[State]string{
 	StateBlockchainSubscription: "blockchainSubscription",
 	StateReorging:               "reorging",
 	StateMovingUp:               "movingUp",
+	StateReconciling:            "reconciling",
 }
 
 // BlockAssembler manages the assembly of new blocks and coordinates mining operations.
@@ -343,7 +348,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				b.setCurrentRunningState(StateRunning)
 
 			case <-b.reconcileCh:
-				b.setCurrentRunningState(StateBlockchainSubscription)
+				b.setCurrentRunningState(StateReconciling)
 				b.processNewBlockAnnouncement(ctx)
 				b.setCurrentRunningState(StateRunning)
 			} // select
