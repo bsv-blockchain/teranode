@@ -1144,3 +1144,281 @@ func TestAddBanScoreGRPC(t *testing.T) {
 		assert.True(t, resp.Ok)
 	})
 }
+
+// --- per-topic size limit tests ---
+//
+// Each topic handler enforces a tighter cap than the global maxP2PMessageSize.
+// We confirm that an oversized payload short-circuits before any peer-registry
+// side effect: if the handler had run past the size guard, LastMessageTime
+// would be updated.
+
+func newSizeLimitTestServer(t *testing.T) (*Server, peer.ID, *PeerRegistry) {
+	t.Helper()
+
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	selfPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	_, pub2, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	remotePeerID, err := peer.IDFromPublicKey(pub2)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = selfPeerID
+
+	registry := NewPeerRegistry()
+	registry.Put(remotePeerID, "", 0, nil, "")
+	// Force LastMessageTime to a known sentinel so we can detect updates.
+	registry.peers[remotePeerID].LastMessageTime = time.Time{}
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.ListenMode = settings.ListenModeFull
+
+	server := &Server{
+		logger:         ulogger.New("test"),
+		P2PClient:      mockP2P,
+		peerRegistry:   registry,
+		banManager:     NewPeerBanManager(context.Background(), nil, tSettings, registry),
+		settings:       tSettings,
+		notificationCh: make(chan *notificationMsg, 10),
+	}
+
+	return server, remotePeerID, registry
+}
+
+func TestHandleRejectedTxTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Build a syntactically valid RejectedTxMessage but pad the reason so the
+	// final JSON exceeds the per-topic limit. Without the size guard, the
+	// handler would update peer state.
+	padding := make([]byte, maxRejectedTxMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(RejectedTxMessage{
+		PeerID: remotePeerID.String(),
+		TxID:   "abc",
+		Reason: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxRejectedTxMessageSize)
+
+	server.handleRejectedTxTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized rejected_tx must not advance LastMessageTime")
+}
+
+func TestHandleNodeStatusTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxNodeStatusMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	// ClientName isn't bounded by anything in the message itself, so it's a
+	// convenient field to inflate without changing semantics.
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:     remotePeerID.String(),
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxNodeStatusMessageSize)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized node_status must not advance LastMessageTime")
+}
+
+func TestHandleBlockTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxBlockMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       "deadbeef",
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxBlockMessageSize)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized block must not advance LastMessageTime")
+}
+
+func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	padding := make([]byte, maxSubtreeMessageSize+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       "deadbeef",
+		ClientName: string(padding),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(msgBytes), maxSubtreeMessageSize)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "oversized subtree must not advance LastMessageTime")
+}
+
+// --- startPeerRegistryCleanup tests ---
+
+func TestStartPeerRegistryCleanup_NilRegistryReturnsEarly(t *testing.T) {
+	server := &Server{
+		logger:   ulogger.New("test"),
+		settings: createBaseTestSettings(),
+	}
+
+	server.startPeerRegistryCleanup(context.Background())
+
+	// No timer should be created when peerRegistry is nil — otherwise we would
+	// leak a ticker on every test setup that omits the registry.
+	assert.Nil(t, server.peerRegistryCleanupTimer)
+}
+
+func TestStartPeerRegistryCleanup_TickEvictsStalePeer(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	stale := peer.ID("stale-peer-1")
+	registry.Put(stale, "", 0, nil, "")
+	registry.peers[stale].LastMessageTime = time.Now().Add(-2 * time.Hour)
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	defer server.peerRegistryCleanupTimer.Stop()
+
+	require.Eventually(t, func() bool {
+		return registry.PeerCount() == 0
+	}, 2*time.Second, 10*time.Millisecond, "stale peer should be evicted by ticker")
+}
+
+func TestStartPeerRegistryCleanup_DefaultsAppliedWhenSettingsZero(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	tSettings := createBaseTestSettings()
+	// Both interval and ttl left at zero so the default fill-in branches run.
+	tSettings.P2P.PeerRegistryCleanupInterval = 0
+	tSettings.P2P.PeerRegistryTTL = 0
+	tSettings.P2P.PeerRegistryMaxSize = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	server.peerRegistryCleanupTimer.Stop()
+}
+
+func TestStartPeerRegistryCleanup_CancelStopsGoroutine(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+
+	// Let the ticker fire at least once before cancelling, so we exercise both
+	// select cases in the goroutine.
+	time.Sleep(30 * time.Millisecond)
+
+	cancel()
+	server.peerRegistryCleanupTimer.Stop()
+
+	// Goroutine exit isn't directly observable, but `go test -race` will surface
+	// any ordering bug when paired with the explicit ticker stop.
+	time.Sleep(20 * time.Millisecond)
+}
+
+func TestStartPeerRegistryCleanup_ExemptSaturationLogged(t *testing.T) {
+	// Drives the post-Cleanup Warn path: exempt count alone exceeds maxSize so
+	// the registry stays over-cap after a tick. We can't intercept the logger
+	// without a custom shim, so we just confirm: (a) the ticker fires, (b) no
+	// non-exempt entries remain, (c) the exempt entries are still there. The
+	// Warn statement runs as a side effect of (b) + (c).
+	registry := NewPeerRegistry()
+
+	exempt := GenerateTestPeerIDs(3)
+	for _, id := range exempt {
+		registry.Put(id, "", 0, nil, "")
+		registry.UpdateConnectionState(id, true)
+	}
+	stale := peer.ID("stale-peer")
+	registry.Put(stale, "", 0, nil, "")
+	registry.peers[stale].LastMessageTime = time.Now()
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 2 // below exempt count of 3
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	defer server.peerRegistryCleanupTimer.Stop()
+
+	require.Eventually(t, func() bool {
+		// Stale evicted, all three exempts retained, registry sits at 3 (> 2).
+		return registry.PeerCount() == 3
+	}, 2*time.Second, 10*time.Millisecond, "exempt-only registry should hold at exempt count")
+
+	for _, id := range exempt {
+		_, ok := registry.Get(id)
+		assert.True(t, ok, "exempt peer must remain")
+	}
+	_, ok := registry.Get(stale)
+	assert.False(t, ok, "stale non-exempt peer must be evicted")
+}

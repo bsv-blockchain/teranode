@@ -658,3 +658,114 @@ func TestSanitizePeerName(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerRegistry_Cleanup_TTL(t *testing.T) {
+	pr := NewPeerRegistry()
+	ids := GenerateTestPeerIDs(4)
+
+	// fresh: should be retained by TTL
+	pr.Put(ids[0], "", 0, nil, "")
+
+	// stale: LastMessageTime well outside TTL
+	pr.Put(ids[1], "", 0, nil, "")
+	pr.peers[ids[1]].LastMessageTime = time.Now().Add(-2 * time.Hour)
+
+	// stale but currently connected: exempt
+	pr.Put(ids[2], "", 0, nil, "")
+	pr.peers[ids[2]].LastMessageTime = time.Now().Add(-2 * time.Hour)
+	pr.UpdateConnectionState(ids[2], true)
+
+	// stale but banned: exempt so the ban entry survives
+	pr.Put(ids[3], "", 0, nil, "")
+	pr.peers[ids[3]].LastMessageTime = time.Now().Add(-2 * time.Hour)
+	pr.UpdateBanStatus(ids[3], 100, true)
+
+	expired, lru := pr.Cleanup(0, time.Hour)
+	assert.Equal(t, 1, expired, "only the unprotected stale peer should be evicted")
+	assert.Equal(t, 0, lru, "no LRU phase when maxSize is disabled")
+
+	_, ok := pr.Get(ids[0])
+	assert.True(t, ok, "fresh peer retained")
+	_, ok = pr.Get(ids[1])
+	assert.False(t, ok, "stale unprotected peer evicted")
+	_, ok = pr.Get(ids[2])
+	assert.True(t, ok, "connected peer exempt from TTL eviction")
+	_, ok = pr.Get(ids[3])
+	assert.True(t, ok, "banned peer exempt from TTL eviction")
+}
+
+func TestPeerRegistry_Cleanup_LRU(t *testing.T) {
+	pr := NewPeerRegistry()
+	ids := GenerateTestPeerIDs(6)
+
+	// All within TTL but spread across LastMessageTime so the oldest are evictable.
+	now := time.Now()
+	for i, id := range ids {
+		pr.Put(id, "", 0, nil, "")
+		pr.peers[id].LastMessageTime = now.Add(-time.Duration(i) * time.Minute)
+	}
+	// oldest (idx 5) connected: exempt and must remain even though it would be the
+	// first LRU candidate.
+	pr.UpdateConnectionState(ids[5], true)
+
+	expired, lru := pr.Cleanup(3, time.Hour)
+	assert.Equal(t, 0, expired, "nothing past TTL")
+	assert.Equal(t, 3, lru, "trim to maxSize=3")
+	assert.Equal(t, 3, pr.PeerCount())
+
+	// Newest three non-exempt entries (ids[0..2]) plus the exempt connected peer
+	// would exceed the limit; LRU should evict ids[2..4] non-exempt and leave the
+	// exempt one alone, but we capped lru at 3 so size is 6-3 = 3.
+	_, ok := pr.Get(ids[5])
+	assert.True(t, ok, "connected peer never evicted by LRU")
+	_, ok = pr.Get(ids[0])
+	assert.True(t, ok, "newest peer retained")
+	_, ok = pr.Get(ids[1])
+	assert.True(t, ok, "second-newest peer retained")
+}
+
+func TestPeerRegistry_Cleanup_ExemptSaturation(t *testing.T) {
+	// When the exempt (connected/banned) count alone is at or above maxSize,
+	// LRU should evict every non-exempt entry and report the registry as
+	// over-cap. This exercises the worst-case path that Cleanup deliberately
+	// cannot fix on its own — exempts can only roll off via disconnect or
+	// ban expiry.
+	pr := NewPeerRegistry()
+	ids := GenerateTestPeerIDs(6)
+
+	// Four connected peers (exempt) plus two stale non-exempt peers.
+	for i, id := range ids {
+		pr.Put(id, "", 0, nil, "")
+		pr.peers[id].LastMessageTime = time.Now().Add(-time.Duration(i+1) * time.Minute)
+	}
+	for i := 0; i < 4; i++ {
+		pr.UpdateConnectionState(ids[i], true)
+	}
+
+	expired, lru := pr.Cleanup(3, time.Hour)
+	assert.Equal(t, 0, expired, "all entries within TTL")
+	assert.Equal(t, 2, lru, "every non-exempt evicted")
+	assert.Equal(t, 4, pr.PeerCount(), "exempt count exceeds maxSize so registry stays over-cap")
+
+	for i := 0; i < 4; i++ {
+		_, ok := pr.Get(ids[i])
+		assert.True(t, ok, "exempt peer %d retained", i)
+	}
+	for i := 4; i < 6; i++ {
+		_, ok := pr.Get(ids[i])
+		assert.False(t, ok, "non-exempt peer %d evicted", i)
+	}
+}
+
+func TestPeerRegistry_Cleanup_Noop(t *testing.T) {
+	pr := NewPeerRegistry()
+	ids := GenerateTestPeerIDs(3)
+	for _, id := range ids {
+		pr.Put(id, "", 0, nil, "")
+	}
+
+	expired, lru := pr.Cleanup(100, time.Hour)
+	assert.Equal(t, 0, expired)
+	assert.Equal(t, 0, lru)
+	assert.Equal(t, 3, pr.PeerCount(), "fresh registry under capacity is left alone")
+}

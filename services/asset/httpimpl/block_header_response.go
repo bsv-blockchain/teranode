@@ -12,6 +12,8 @@ import (
 // blockHeaderResponse represents a formatted block header response that includes
 // additional metadata beyond the basic block header information. It embeds the
 // BlockHeader model and adds fields for presentation purposes.
+//
+// swagger:model blockHeaderResponse
 type blockHeaderResponse struct {
 	*model.BlockHeader            // Embedded block header model
 	Hash               string     `json:"hash"`          // Block hash in hexadecimal format

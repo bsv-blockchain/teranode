@@ -1,4 +1,6 @@
 // Package httpimpl provides HTTP REST API endpoints for blockchain data access.
+//
+//go:generate swagger generate spec -m -o swagger.json -w .
 package httpimpl
 
 import (

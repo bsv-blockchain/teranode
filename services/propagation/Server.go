@@ -319,6 +319,10 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	// Blocks until the FSM transitions from the IDLE state
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			ps.logger.Infof("[Propagation Service] Shutting down during FSM wait")
+			return err
+		}
 		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
@@ -607,10 +611,36 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+errors.UserMessage(err))
+			return c.String(httpStatusForTxError(err), "Failed to process transaction: "+errors.UserMessage(err))
 		}
 
 		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// httpStatusForTxError maps a transaction processing error to the appropriate
+// HTTP status code so clients can distinguish tx rejections from system
+// failures. Walks the error chain via errors.Is so wrapped inner errors are
+// classified by their actual cause.
+func httpStatusForTxError(err error) int {
+	switch {
+	case errors.Is(err, errors.ErrFrozen):
+		return http.StatusForbidden
+	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
+		errors.Is(err, errors.ErrTxConflicting),
+		errors.Is(err, errors.ErrSpent),
+		errors.Is(err, errors.ErrTxLocked):
+		return http.StatusConflict
+	case errors.Is(err, errors.ErrInvalidArgument),
+		errors.Is(err, errors.ErrTxInvalid),
+		errors.Is(err, errors.ErrTxLockTime),
+		errors.Is(err, errors.ErrNonFinal),
+		errors.Is(err, errors.ErrTxPolicy),
+		errors.Is(err, errors.ErrTxCoinbaseImmature),
+		errors.Is(err, errors.ErrUtxoInvalidSize):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
 	}
 }
 

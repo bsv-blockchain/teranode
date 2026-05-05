@@ -2988,3 +2988,94 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 	require.False(t, containsHash(hashes, *txAHash),
 		"after reset(validateInputs=true), a tx whose input is spent by another tx must NOT be in block assembly")
 }
+
+// TestTriggerReconcile verifies that triggerReconcile is non-blocking and
+// coalesces concurrent triggers into a single pending signal.
+func TestTriggerReconcile(t *testing.T) {
+	ba := &BlockAssembler{
+		reconcileCh: make(chan struct{}, 1),
+	}
+
+	// First trigger lands.
+	ba.triggerReconcile()
+	require.Len(t, ba.reconcileCh, 1, "first trigger should buffer one signal")
+
+	// Second trigger must not block; channel stays at cap 1 (coalesced).
+	done := make(chan struct{})
+	go func() {
+		ba.triggerReconcile()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("triggerReconcile blocked instead of coalescing")
+	}
+	require.Len(t, ba.reconcileCh, 1, "second trigger must coalesce, not stack")
+
+	// Drain.
+	<-ba.reconcileCh
+	require.Empty(t, ba.reconcileCh)
+}
+
+// TestStart_TriggersReconcileOnStartup verifies that Start fires a reconcile
+// against the blockchain tip after subscribing. With no notifications queued
+// on the subscription channel, only the new reconcile path can drive
+// processNewBlockAnnouncement — which calls GetBestBlockHeader. Asserting that
+// call proves the wiring delivers.
+func TestStart_TriggersReconcileOnStartup(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := createTestSettings(t)
+	tSettings.ChainCfgParams.Net = wire.MainNet
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStoreInst, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	stats := gocore.NewStat("test")
+
+	// Persisted checkpoint at genesis. processNewBlockAnnouncement compares
+	// that against GetBestBlockHeader (also genesis here) — same hash, returns
+	// early via the IsEqual branch. No reorg/move-forward mocks needed.
+	checkpointHeader := model.GenesisBlockHeader
+	checkpointBytes := make([]byte, 4+80)
+	binary.LittleEndian.PutUint32(checkpointBytes[:4], 0)
+	copy(checkpointBytes[4:], checkpointHeader.Bytes())
+
+	// Atomic counter incremented from the mock's Run callback so the
+	// race detector sees ordered access (instead of polling mock.Calls
+	// concurrently with the BA goroutine writing to it).
+	var getBestCalls atomic.Int32
+
+	bc := &blockchain.Mock{}
+	bc.On("GetState", mock.Anything, mock.Anything).Return(checkpointBytes, nil)
+	bc.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	bc.On("GetBestBlockHeader", mock.Anything).
+		Run(func(mock.Arguments) { getBestCalls.Add(1) }).
+		Return(checkpointHeader, &model.BlockHeaderMeta{Height: 0}, nil)
+	bc.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{checkpointHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
+	bc.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
+	bc.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	bc.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+	runningState := blockchain.FSMStateRUNNING
+	bc.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	// Empty subscription — no pre-loaded notifications. Any call to
+	// GetBestBlockHeader after Start must come from the reconcile path.
+	subChan := make(chan *blockchain_api.Notification, 1)
+	bc.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+
+	ba, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStoreInst, nil, bc, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ba)
+
+	require.NoError(t, ba.Start(t.Context()))
+
+	// Reconcile fires asynchronously via the channel listener goroutine.
+	require.Eventually(t, func() bool {
+		return getBestCalls.Load() > 0
+	}, 2*time.Second, 20*time.Millisecond, "expected GetBestBlockHeader to be called via reconcile path after Start")
+}

@@ -1,6 +1,10 @@
 # Local profiling artifacts
 /stores/txmetacache/testdata/pprof/
 
+# Python bytecode (mkdocs hooks)
+__pycache__/
+*.pyc
+
 
 .history/**
 *.tar.gz
@@ -104,7 +108,7 @@ teranode_peers.json
 *.key
 logs/
 teranode.logrotate
-teranode
+/teranode
 
 settings_local.conf
 .teranode-dev.yaml

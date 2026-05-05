@@ -106,6 +106,20 @@ cmd_up() {
 cmd_down() {
   require_stack
   compose down -v --remove-orphans
+
+  # 'compose down -v' removes named volumes but NOT bind mounts. Aerospike
+  # and teranode data dirs under data/multinode/ are bind-mounted and will
+  # otherwise persist stale UTXO/block state across runs, which breaks a
+  # fresh 'up' with errors like "utxo already spent by tx ...". Wipe them
+  # via a root-privileged container because docker created them as root.
+  local state_dir="$REPO_ROOT/data/multinode"
+  if [[ -d "$state_dir" ]]; then
+    echo "wiping bind-mounted state in data/multinode/..."
+    if ! docker run --rm -v "$state_dir:/data" alpine sh -c 'rm -rf /data/aerospike* /data/teranode* 2>/dev/null' >/dev/null 2>&1; then
+      echo "warning: could not wipe data/multinode/ state; next 'up' may see stale data" >&2
+    fi
+  fi
+
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
   local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"

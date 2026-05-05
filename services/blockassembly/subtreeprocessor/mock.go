@@ -214,6 +214,11 @@ func (m *MockSubtreeProcessor) Remove(ctx context.Context, hash chainhash.Hash) 
 	return args.Error(0)
 }
 
+// DrainQueue implements Interface.DrainQueue
+func (m *MockSubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) {
+	m.Called(dropHashes)
+}
+
 // GetCompletedSubtreesForMiningCandidate implements Interface.GetCompletedSubtreesForMiningCandidate
 func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtree.Subtree {
 	args := m.Called()

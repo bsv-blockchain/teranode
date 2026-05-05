@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -48,7 +49,17 @@ const (
 	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
 	MaxBlockSize = 4 * 1024 * 1024 * 1024
 
-	// MaxSatoshis defines the maximum number of satoshis that can exist in the BSV Blockchain ecosystem (21M BSV).
+	// MaxTxSizeConsensusBeforeGenesis defines the consensus limit for transaction size before Genesis (1 MB).
+	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS in consensus/consensus.h
+	// Transactions exceeding this size are invalid by consensus rules pre-Genesis.
+	MaxTxSizeConsensusBeforeGenesis = 1_000_000 // 1 MB
+
+	// MaxTxSizeConsensusAfterGenesis defines the consensus limit for transaction size after Genesis (1 GB).
+	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS in consensus/consensus.h
+	// Transactions exceeding this size are invalid by consensus rules post-Genesis.
+	MaxTxSizeConsensusAfterGenesis = 1_000_000_000 // 1 GB
+
+	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
 	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
@@ -198,7 +209,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		sendBatch := func(batch []*txmetaBatchItem) {
 			v.sendTxMetaBatch(batch)
 		}
-		b := batcher.New(txmetaKafkaBatchSize, duration, sendBatch, true)
+		b := batcher.NewWithPool(txmetaKafkaBatchSize, duration, sendBatch, true,
+			batcher.WithName("validator_txmeta_kafka"),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
+		)
 		v.txmetaKafkaBatcher = b
 		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}

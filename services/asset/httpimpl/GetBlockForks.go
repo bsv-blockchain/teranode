@@ -34,6 +34,8 @@ import (
 
 // forks represents the root structure for the block fork tree response.
 // It encapsulates the entire fork hierarchy starting from a given block.
+//
+// swagger:model forks
 type forks struct {
 	Tree forksTree `json:"tree"` // Root of the fork tree
 }

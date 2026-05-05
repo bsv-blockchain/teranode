@@ -259,3 +259,39 @@ func TestCreatingBinRemoval(t *testing.T) {
 		t.Logf("Small transaction: creating bin was never set (as expected)")
 	})
 }
+
+// TestStoreExternallyWithLock_BatchOperateFails verifies that a top-level error
+// from BatchOperate (e.g. connection lost, all-nodes timeout) is surfaced through
+// bItem.done rather than silently treated as success.
+func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, settings, logger)
+	defer cleanup()
+
+	cleanDB(t, client)
+
+	tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
+
+	store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) aerospike.Error {
+		return aerospike.ErrNetwork
+	})
+	defer store.SetBatchOperateFn(nil)
+
+	bItem, binsToStore := prepareBatchStoreItem(t, store, tx, 100, []uint32{}, []uint32{}, []int{})
+	go store.StoreTransactionExternally(ctx, bItem, binsToStore)
+
+	err := bItem.RecvDone()
+	require.Error(t, err, "BatchOperate failure must be surfaced to bItem.done")
+
+	var teranodeErr *errors.Error
+	require.True(t, errors.As(err, &teranodeErr), "error should be a teranode errors.Error: %v", err)
+	require.True(t, teranodeErr.Is(errors.ErrProcessing), "error should be a ProcessingError: %v", err)
+	require.Contains(t, err.Error(), tx.TxIDChainHash().String(), "error should mention the tx hash")
+}

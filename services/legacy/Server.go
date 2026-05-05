@@ -605,8 +605,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[Legacy Server] Shutting down during FSM wait")
+			return err
+		}
 		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 

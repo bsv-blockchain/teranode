@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/url"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -929,6 +930,322 @@ func TestOnMainChain_ConsistentWithFindBlocksContainingSubtree(t *testing.T) {
 				"block %d disagrees at maxBlocks=%d", i, maxBlocks)
 		}
 	}
+}
+
+// TestReconcileOnMainChain_ReorgDiff verifies the helper restores correct
+// on_main_chain flags after a typical reorg, leaving common ancestors
+// untouched.
+func TestReconcileOnMainChain_ReorgDiff(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build main chain genesis → block1 → block2 → block3 (all on_main_chain).
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Build a longer fork off block1: block1 → altBlock2 → forkB3 → forkB4.
+	// Storing the fork blocks via StoreBlock triggers the reorg path which
+	// already calls reconcile. To exercise the helper directly we then
+	// rewind the flags manually and re-run reconcile.
+	forkB3 := createBlock3OnFork(blockAlternative2)
+	forkB4 := createBlock3OnFork(forkB3)
+	storeBlocks(t, s, blockAlternative2, forkB3, forkB4)
+
+	// Rewind flags to the pre-reorg world so reconcile has work to do.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1 OR hash = $2 OR hash = $3`,
+		blockAlternative2.Hash().CloneBytes(), forkB3.Hash().CloneBytes(), forkB4.Hash().CloneBytes())
+	require.NoError(t, err)
+	_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = true WHERE hash = $1 OR hash = $2 OR hash = $3`,
+		block1.Hash().CloneBytes(), block2.Hash().CloneBytes(), block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	// Sanity: pre-state matches the pre-reorg world.
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, forkB3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
+
+	// Reconcile: walks from the actual best (forkB4 by chain_work) and fixes flags.
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+
+	// Post-state: block1 (LCA) untouched, block2/block3 off-chain, fork chain on-chain.
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "LCA stays on main chain")
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "old branch flipped off")
+	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "old branch flipped off")
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "new branch flipped on")
+	require.True(t, getOnMainChain(t, s, forkB3.Hash().CloneBytes()), "new branch flipped on")
+	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()), "new branch flipped on (tip)")
+
+	// Idempotency: a second call against the now-correct state must be a no-op.
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, forkB4.Hash().CloneBytes()))
+}
+
+// TestReconcileOnMainChain_AlreadyConsistent verifies the helper is a no-op
+// when on_main_chain already reflects the chain_work-best lineage.
+func TestReconcileOnMainChain_AlreadyConsistent(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()), "block1 unchanged")
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "tip unchanged")
+}
+
+// TestReconcileOnMainChain_EmptyDB exercises the ErrNoRows branch: when the
+// blocks table is empty (no valid rows) reconcile commits cleanly without
+// running the UPDATE.
+func TestReconcileOnMainChain_EmptyDB(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	_, err := s.db.Exec(`DELETE FROM blocks`)
+	require.NoError(t, err)
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()),
+		"reconcile must commit cleanly on an empty blocks table")
+}
+
+// TestReconcileOnMainChain_LowCoinbaseMaturityFloor exercises the maxDepth
+// floor branch (maxDepth = max(2*CoinbaseMaturity, 100)). With
+// CoinbaseMaturity = 0, maxDepth would be 0 without the floor; the floor
+// keeps the walk usable for tests with small consensus parameters.
+func TestReconcileOnMainChain_LowCoinbaseMaturityFloor(t *testing.T) {
+	s := newOnMainChainTestStoreWith(t, func(ts *settings.Settings) {
+		ts.ChainCfgParams.CoinbaseMaturity = 0
+	})
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Manually clear a flag inside the walk window; reconcile must restore it.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`,
+		block2.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()),
+		"floor-bounded walk must still cover the actual best's lineage")
+}
+
+// TestReconcileOnMainChain_BeginTxError exercises the BeginTx error branch
+// by closing the underlying DB before invocation. The deferred rollback in
+// the err != nil case is also exercised through this path.
+func TestReconcileOnMainChain_BeginTxError(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	require.NoError(t, s.db.Close())
+
+	err := s.reconcileOnMainChain(context.Background())
+	require.Error(t, err, "reconcile must return an error when the DB is unusable")
+}
+
+// TestReconcileOnMainChain_QueryError exercises the non-ErrNoRows scan error
+// branch via a pre-canceled context. The exact branch hit depends on whether
+// BeginTx or Scan checks the context first — both surface as a non-nil error
+// return from the helper.
+func TestReconcileOnMainChain_QueryError(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := s.reconcileOnMainChain(ctx)
+	require.Error(t, err, "reconcile must return an error when context is canceled")
+}
+
+// TestInvalidateBlock_CanceledContextErrorPath covers the QueryContext error
+// branch in InvalidateBlock by passing a pre-canceled context.
+func TestInvalidateBlock_CanceledContextErrorPath(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := s.InvalidateBlock(ctx, block2.Hash())
+	require.Error(t, err, "InvalidateBlock must surface a canceled-context error")
+}
+
+// TestRevalidateBlock_CanceledContextErrorPath covers the ExecContext error
+// branch in RevalidateBlock by passing a pre-canceled context.
+func TestRevalidateBlock_CanceledContextErrorPath(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1, block2)
+
+	// Invalidate first so RevalidateBlock has work to do; uses a fresh context.
+	_, err := s.InvalidateBlock(context.Background(), block2.Hash())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = s.RevalidateBlock(ctx, block2.Hash())
+	require.Error(t, err, "RevalidateBlock must surface a canceled-context error")
+}
+
+// TestReconcileOnMainChain_FillsFastPathDescendantGap is the regression test
+// for the race the reviewer flagged: a concurrent fast-path StoreBlock can
+// extend the actual best with on_main_chain=true while a slow-path writer is
+// in flight, leaving its ancestor flagged false. Reconcile must fill the gap
+// rather than skipping the diff because the caller's "expected" tip moved.
+//
+// We simulate the race deterministically by manually rewinding the on_main_chain
+// flag on a block that lies on the actual best's lineage, mimicking the state
+// the reviewer described (F+1 on_main_chain=true, F on_main_chain=false above
+// a still-flagged ancestor Y). Reconcile must restore F's flag.
+func TestReconcileOnMainChain_FillsFastPathDescendantGap(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build genesis → block1 → block2 → block3. block3 is the chain_work best.
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Manually create a "gap": clear block2's on_main_chain while leaving
+	// block1 and block3 flagged. This is exactly the inconsistent state a
+	// fast-path INSERT can produce when it extends a not-yet-flagged best
+	// during a slow-path window.
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`,
+		block2.Hash().CloneBytes())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "pre-condition: gap")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+
+	// Reconcile must walk the actual best's lineage and flip the gap closed.
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()), "gap on the actual main chain must be filled")
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+}
+
+// TestReconcileOnMainChain_NoStaleBranchSurvives is the regression test for
+// the stale-old-tip race the reviewer flagged: a previous reconciliation
+// already marked branch A as the main chain, but a later reconciliation
+// using a stale snapshot would leave A flagged alongside the new winner B.
+// We simulate by leaving two branches flagged on_main_chain=true and asserting
+// reconcile clears the loser.
+func TestReconcileOnMainChain_NoStaleBranchSurvives(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Main chain genesis → block1 → block2 → block3 (block3 is best).
+	storeBlocks(t, s, block1, block2, block3)
+
+	// Manually flag a fork block on_main_chain=true to simulate a stray
+	// "old branch" that a previous broken reconciliation left behind.
+	storeBlocks(t, s, blockAlternative2)
+	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = true WHERE hash = $1`,
+		blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	require.True(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()), "pre-condition: stale flag")
+
+	require.NoError(t, s.reconcileOnMainChain(context.Background()))
+
+	require.True(t, getOnMainChain(t, s, block1.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block2.Hash().CloneBytes()))
+	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()))
+	require.False(t, getOnMainChain(t, s, blockAlternative2.Hash().CloneBytes()),
+		"stale on_main_chain=true on a non-best branch must be cleared")
+}
+
+// TestStoreBlock_NoTwoSiblingsFlaggedUnderRace is the regression test for the
+// reviewer's third-round finding: two concurrent same-parent StoreBlock calls
+// must not both end up with on_main_chain=true. Without slowPathMu in the
+// fast path, both calls could read the same cached preBestHash, both compute
+// onMainChain=true, both INSERT with on_main_chain=true, and both succeed at
+// the maxBlockID CAS in sequence (the CAS only proves ID-sequence headship,
+// not chain_work tiebreak winner). With serialization, the second writer
+// observes the first's row as the new best, so its onMainChain comes out
+// false and it is INSERTed correctly as a fork.
+func TestStoreBlock_NoTwoSiblingsFlaggedUnderRace(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+	storeBlocks(t, s, block1)
+
+	// block2 and blockAlternative2 both extend block1 — siblings at height 2.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _, _ = s.StoreBlock(context.Background(), block2, "peerA")
+	}()
+	go func() {
+		defer wg.Done()
+		_, _, _ = s.StoreBlock(context.Background(), blockAlternative2, "peerB")
+	}()
+	wg.Wait()
+
+	// Invariant: at every height (in particular height 2) at most one block
+	// is on_main_chain=true.
+	rows, err := s.db.Query(`
+		SELECT height, COUNT(*) FROM blocks
+		WHERE on_main_chain = true
+		GROUP BY height
+		HAVING COUNT(*) > 1
+	`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var h, c int64
+		require.NoError(t, rows.Scan(&h, &c))
+		t.Fatalf("multiple on_main_chain=true blocks at height %d (count=%d) — sibling race not serialized", h, c)
+	}
+	require.NoError(t, rows.Err())
+
+	// Sanity: exactly one of the two siblings is flagged.
+	var flagged int
+	require.NoError(t, s.db.QueryRow(`
+		SELECT COUNT(*) FROM blocks
+		WHERE on_main_chain = true AND height = 2
+	`).Scan(&flagged))
+	require.Equal(t, 1, flagged, "exactly one sibling at height 2 must be on_main_chain=true")
+}
+
+// TestReconcileOnMainChain_SingleMainChainAfterConcurrentInvalidates fires
+// invalidate calls from multiple goroutines and asserts the post-state has
+// exactly one block on_main_chain=true at any height — the invariant that was
+// broken by the parameter-based switch helper under the same concurrency.
+func TestReconcileOnMainChain_SingleMainChainAfterConcurrentInvalidates(t *testing.T) {
+	s := newOnMainChainTestStore(t)
+
+	// Build a chain with a fork: genesis → block1 → block2 → block3 (main),
+	// plus blockAlternative2 (fork off block1).
+	storeBlocks(t, s, block1, block2, block3, blockAlternative2)
+
+	// Concurrently: invalidate the fork tip, invalidate the main tip,
+	// and revalidate the main tip. The mutex must serialize them and the
+	// in-transaction best re-read must reject any stale diffs.
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_, _ = s.InvalidateBlock(context.Background(), blockAlternative2.Hash())
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = s.InvalidateBlock(context.Background(), block3.Hash())
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.RevalidateBlock(context.Background(), block3.Hash())
+	}()
+	wg.Wait()
+
+	// Whatever the final outcome, the invariant is: at every height there is
+	// at most one block with on_main_chain=true.
+	rows, err := s.db.Query(`
+		SELECT height, COUNT(*) FROM blocks
+		WHERE on_main_chain = true
+		GROUP BY height
+		HAVING COUNT(*) > 1
+	`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var h, c int64
+		require.NoError(t, rows.Scan(&h, &c))
+		t.Fatalf("multiple on_main_chain=true blocks at height %d (count=%d) — concurrency invariant broken", h, c)
+	}
+	require.NoError(t, rows.Err())
 }
 
 // TestOnMainChain_MigrationTimeoutExceedsWindowedTimeout guards the invariant

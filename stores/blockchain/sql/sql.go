@@ -126,6 +126,16 @@ type SQL struct {
 	// startup + concurrent RPC) may overlap: a bool would be cleared by the first to
 	// finish, exposing readers while later callers are still mid-update.
 	mainChainRebuilding atomic.Int32
+	// slowPathMu serializes all chain-mutating slow paths that depend on
+	// "the current main-chain tip" being stable across an INSERT/UPDATE and
+	// the follow-up on_main_chain reconciliation: StoreBlock's non-extend
+	// branch, InvalidateBlock, RevalidateBlock, and applyOnMainChainSwitch.
+	// Without it two concurrent slow-path writers can each capture the same
+	// pre-best, each pick a different "winning" tip, and each commit a diff
+	// that leaves the table with multiple branches flagged on_main_chain=true.
+	// The fast extend path (parent == preBest, atomic INSERT, won the
+	// maxBlockID CAS) does NOT take this mutex.
+	slowPathMu sync.Mutex
 	// blockTimestampCache is a sliding-window cache of recent block timestamps,
 	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
 	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
@@ -169,7 +179,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		// The 'seeder' query parameter is used to optimize bulk imports by bypassing index creation.
 		// Creating indexes during data insertion can significantly slow down the process, so we skip
 		// index creation when 'seeder=true' is specified in the query parameters.
-		if err = createPostgresSchema(db, storeURL.Query().Get("seeder") != trueStr); err != nil {
+		if err = createPostgresSchema(logger, db, storeURL.Query().Get("seeder") != trueStr); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -345,7 +355,149 @@ func (s *SQL) Close() error {
 	return s.db.Close()
 }
 
-func createPostgresSchema(db *usql.DB, withIndexes bool) error {
+// Advisory lock IDs for schema creation serialization across pods.
+// These must be unique per schema-creation context and stable across releases.
+const blockchainSchemaLockID int64 = 7_265_726_101 // "tera" + "bc" in ASCII-ish
+
+func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) error {
+	logger.Infof("[blockchain schema] acquiring advisory lock (id=%d) and checking schema", blockchainSchemaLockID)
+	return usql.WithAdvisoryLock(context.Background(), db, blockchainSchemaLockID, func() error {
+		// Fast path: if the schema is already current, skip the DDL sequence
+		// entirely. All DDL statements below ultimately take at least a SHARE
+		// lock on blocks (CREATE INDEX IF NOT EXISTS still does so briefly on
+		// some postgres versions, and CREATE TABLE IF NOT EXISTS touches the
+		// type catalog). When a concurrent pod has spawned its async
+		// on_main_chain rebuild — which holds ROW EXCLUSIVE on blocks for the
+		// duration of the walk — any SHARE request queues, and postgres fair
+		// queueing then parks subsequent AccessShare (SELECT) callers behind
+		// it. That cascade is what blocks readers during otherwise idle
+		// startup.
+		//
+		// Probing the schema via system catalogs (information_schema and
+		// pg_class) only takes AccessShare on catalog tables, never on
+		// blocks, so it cannot be blocked by the rebuild UPDATE. If
+		// everything we expect is already in place we return early and no
+		// blocks-table lock is ever requested.
+		current, err := isBlockchainSchemaCurrent(db, withIndexes)
+		if err != nil {
+			logger.Warnf("[blockchain schema] current-schema probe failed, will run full DDL: %v", err)
+		} else if current {
+			logger.Infof("[blockchain schema] current (withIndexes=%v), skipping DDL", withIndexes)
+			return nil
+		} else {
+			logger.Infof("[blockchain schema] not current (withIndexes=%v), running DDL sequence", withIndexes)
+		}
+		if err := createPostgresSchemaUnlocked(db, withIndexes); err != nil {
+			return err
+		}
+		logger.Infof("[blockchain schema] DDL sequence complete")
+		return nil
+	})
+}
+
+// blockchainSchemaExpectedColumns is the list of columns createPostgresSchemaUnlocked
+// guarantees exist on the blocks table after a successful run. Kept in sync with
+// the CREATE TABLE / ADD COLUMN statements below.
+var blockchainSchemaExpectedColumns = []string{
+	"processed_at",
+	"persisted_at",
+	"median_time_past",
+	"coinbase_bump",
+	"on_main_chain",
+}
+
+// blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
+// withIndexes branch guarantees. Kept in sync with the CREATE INDEX statements
+// below. ux_blocks_hash is always created, so it lives in the base set.
+var (
+	blockchainSchemaExpectedBaseIndexes = []string{
+		"ux_blocks_hash",
+	}
+	blockchainSchemaExpectedFullIndexes = []string{
+		"idx_chain_work_peer_id",
+		"idx_chain_work_valid",
+		"idx_subtrees_mined_height",
+		"idx_subtrees_set_height",
+		"idx_not_persisted_height",
+		"idx_height",
+		"idx_parent_id",
+		"idx_inserted_at",
+		"idx_invalid_height",
+		"idx_on_main_chain_height",
+	}
+)
+
+// isBlockchainSchemaCurrent returns true when the blocks table exists with all
+// expected columns and indexes in place. Uses only system-catalog reads
+// (AccessShare on pg_class / information_schema) so it never contends with
+// writes on blocks. Callers that see true can skip the DDL sequence.
+//
+// Returns (false, nil) if anything is missing. Returns (false, err) only for
+// transport errors — a missing column / table / index is not an error.
+func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
+	// blocks table present?
+	var hasBlocks bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'blocks')`,
+	).Scan(&hasBlocks); err != nil {
+		return false, err
+	}
+	if !hasBlocks {
+		return false, nil
+	}
+
+	// peer_id must exist and already be TEXT — otherwise we still need the
+	// ALTER COLUMN. Use EXISTS so a missing column returns (false, nil)
+	// rather than sql.ErrNoRows from QueryRow.Scan.
+	var peerIDIsText bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'blocks' AND column_name = 'peer_id' AND data_type = 'text'
+		)`,
+	).Scan(&peerIDIsText); err != nil {
+		return false, err
+	}
+	if !peerIDIsText {
+		return false, nil
+	}
+
+	// All expected columns present?
+	for _, col := range blockchainSchemaExpectedColumns {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'blocks' AND column_name = $1)`,
+			col,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	// All expected indexes present?
+	expected := blockchainSchemaExpectedBaseIndexes
+	if withIndexes {
+		expected = append(expected, blockchainSchemaExpectedFullIndexes...)
+	}
+	for _, idx := range expected {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`,
+			idx,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
@@ -1044,16 +1196,144 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 	return onMainChainCount != bestHeight+1, nil
 }
 
-// rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
-// current canonical chain. It walks the main chain backward from the best block via
-// parent_id.
+// reconcileOnMainChain restores the invariant that on_main_chain is true on
+// exactly the chain from genesis to the chain_work-best valid block. It is
+// the hot-path replacement for rebuildOnMainChainFlag's window scan and is
+// called from StoreBlock's reorg branch — the only chain-mutating path
+// where consensus bounds the divergence between the new chain and the old.
 //
-// When full is false, the walk is bounded to the last 10×CoinbaseMaturity blocks above
-// the tip. The bound is safe because a reorg deeper than CoinbaseMaturity is
-// consensus-invalid — blocks beyond that depth have immutable on_main_chain status.
-// When full is true, the walk covers the entire chain back to genesis. Full rebuild
-// is required once after the on_main_chain column is first added to an existing DB
-// (migration), since default values need to be corrected chain-wide.
+// InvalidateBlock and RevalidateBlock are administrative operations whose
+// fork point can lie arbitrarily deep below the current tip; reconciling
+// them with this bounded helper would silently leave incorrect flags below
+// the walked window. Those paths therefore use rebuildOnMainChainFlag with
+// full=true, which is slower but unbounded and correct.
+//
+// The function takes no parameters: caller-supplied tips are unsafe under
+// realistic concurrency. Reconciliation also runs as a single UPDATE
+// statement rather than a SELECT-then-UPDATE pair — under PostgreSQL's
+// READ COMMITTED isolation those two statements would use different
+// snapshots, allowing a fast-path INSERT slipped between them to be
+// included in the UPDATE's snapshot while new_path was still rooted at
+// the old tip; the UPDATE would then clear the now-best descendant. By
+// fusing best-block selection, lineage walk, and reconciliation into one
+// statement, all three CTEs and the UPDATE share one snapshot.
+//
+// Failure modes the design avoids:
+//
+//  1. Fast-path descendant. A concurrent fast-path StoreBlock can extend the
+//     actual current best with on_main_chain=true while a slow-path
+//     reconciliation is in flight (e.g. between an InvalidateBlock UPDATE
+//     and its deferred reconciliation). Trusting a caller's snapshot would
+//     either skip — leaving the descendant flagged true above a non-flagged
+//     ancestor (a "gap" in the main chain) — or apply a diff that misses
+//     the gap. We instead read the actual best by chain_work inside the
+//     UPDATE statement, walk its lineage in the same snapshot, and ensure
+//     every ancestor in the walk is flagged true.
+//  2. Stale old tip. Two slow-path callers can both read the same pre-best
+//     before either acquires slowPathMu. After the first reconciliation
+//     marks branch A as main, the second sees the now-stale pre-best and
+//     would walk a branch that is no longer on_main_chain=true, leaving A
+//     flagged forever alongside the new winner. We instead identify any
+//     incorrectly-flagged blocks within the walked window directly from
+//     current on_main_chain state.
+//  3. Snapshot drift between SELECT and UPDATE. With a separate SELECT to
+//     pick the tip followed by an UPDATE, READ COMMITTED would let a
+//     fast-path INSERT slip in between: the UPDATE's snapshot would
+//     include the new descendant but new_path would still be rooted at
+//     the old tip, so the second OR clause would clear the new best.
+//     Fusing into one statement eliminates the cross-statement window.
+//
+// Algorithm (single statement):
+//
+//  1. best_block CTE: highest chain_work valid block.
+//  2. new_path CTE: walks best_block's lineage backward via parent_id up
+//     to maxDepth steps.
+//  3. UPDATE in one go:
+//     a. blocks in new_path with on_main_chain=false → true
+//     (covers reorgs and the fast-path-descendant gap).
+//     b. blocks NOT in new_path with on_main_chain=true and height
+//     within the walked window → false
+//     (clears the divergent suffix of any previous chain or any stray
+//     flagged sibling, regardless of whether the caller knew the right
+//     "old tip").
+//
+// Bounds: maxDepth = max(2*CoinbaseMaturity, 100). Reorgs deeper than
+// CoinbaseMaturity are consensus-invalid, so the bound is always safe
+// for StoreBlock-driven reorgs; the floor of 100 covers tests with very
+// small CoinbaseMaturity. The function does NOT include a deep-fork
+// fallback because the obvious cheap check (count of on_main_chain=true
+// vs bestHeight+1) is necessary but not sufficient: when a stale flag
+// at one height is replaced by a wrongly-flagged sibling at the same
+// height the count still matches. Callers that may produce deep
+// divergences must use rebuildOnMainChainFlag instead.
+//
+// The caller must hold s.mainChainRebuilding (Add(1)/Add(-1)) so concurrent
+// readers take the CTE fallback during the brief commit window, and
+// s.slowPathMu so concurrent slow-path writers cannot interleave their
+// reconciliations.
+//
+// Idempotent: a no-op when on_main_chain already matches the chain_work
+// best's lineage within the walked window.
+func (s *SQL) reconcileOnMainChain(ctx context.Context) error {
+	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
+	if maxDepth < 100 {
+		maxDepth = 100
+	}
+
+	// best_block, new_path, window_floor and the UPDATE all live in one
+	// statement so they share one snapshot. The EXISTS guard on best_block
+	// keeps the empty-DB / all-invalid case as a no-op (without it, an
+	// empty new_path would match every flagged row in the second OR clause).
+	q := `
+		WITH RECURSIVE
+		best_block(id) AS (
+			SELECT id FROM blocks WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		new_path(id, parent_id, height, depth) AS (
+			SELECT id, parent_id, height, 0 FROM blocks
+			WHERE id IN (SELECT id FROM best_block)
+			UNION ALL
+			SELECT b.id, b.parent_id, b.height, np.depth + 1
+			FROM blocks b
+			INNER JOIN new_path np ON b.id = np.parent_id
+			WHERE b.id != np.id AND np.depth < $1
+		),
+		window_floor(h) AS (
+			SELECT MIN(height) FROM new_path
+		)
+		UPDATE blocks
+		SET on_main_chain = (id IN (SELECT id FROM new_path))
+		WHERE EXISTS (SELECT 1 FROM best_block)
+		  AND (
+				(on_main_chain = false AND id IN (SELECT id FROM new_path))
+				OR
+				(on_main_chain = true
+					AND height >= COALESCE((SELECT h FROM window_floor), 0)
+					AND id NOT IN (SELECT id FROM new_path))
+			  )
+	`
+	if _, err := s.db.ExecContext(ctx, q, maxDepth); err != nil {
+		return errors.NewStorageError("reconcileOnMainChain: failed to apply diff", err)
+	}
+	return nil
+}
+
+// rebuildOnMainChainFlag updates the on_main_chain column to accurately reflect the
+// current canonical chain by scanning a height window. It walks the main chain
+// backward from the best block via parent_id.
+//
+// As of the diff-update refactor this is no longer called from any hot path —
+// StoreBlock (reorg case), InvalidateBlock and RevalidateBlock all use
+// reconcileOnMainChain instead, which walks only the recent lineage from the
+// actual chain_work-best block and avoids the wide UPDATE that previously held
+// the blocks-table write lock.
+// rebuildOnMainChainFlag remains in place for the startup migration only:
+//   - full=true: one-shot, runs once after the on_main_chain column is first
+//     added (column-add migration). Walks to genesis.
+//   - full=false: bounded recovery rebuild on subsequent boots, walks the last
+//     10×CoinbaseMaturity blocks. Used as a startup safety net.
 //
 // Two UPDATEs run inside a single transaction so readers never see a partial state:
 //   - Step 1: clear on_main_chain for blocks in the window no longer on the chain

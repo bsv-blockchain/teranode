@@ -4,6 +4,7 @@ package kafka
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"net/url"
 	"strings"
 
@@ -154,7 +155,7 @@ func NewKafkaProducerWithContext(ctx context.Context, kafkaURL *url.URL, kafkaSe
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokersURL...),
 		kgo.DefaultProduceTopic(topic),
-		kgo.ProducerBatchMaxBytes(int32(flushBytes)),
+		kgo.ProducerBatchMaxBytes(clampSyncBatchMaxBytes(flushBytes)),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RecordRetries(5),
@@ -220,7 +221,7 @@ func ConnectProducer(brokersURL []string, topic string, partitions int32, kafkaS
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokersURL...),
 		kgo.DefaultProduceTopic(topic),
-		kgo.ProducerBatchMaxBytes(int32(flush)),
+		kgo.ProducerBatchMaxBytes(clampSyncBatchMaxBytes(flush)),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RecordRetries(5),
@@ -247,4 +248,16 @@ func ConnectProducer(brokersURL []string, topic string, partitions int32, kafkaS
 		Partitions: partitions,
 		Topic:      topic,
 	}, nil
+}
+
+const defaultSyncBatchMaxBytes int32 = 1_048_576
+
+func clampSyncBatchMaxBytes(flushBytes int) int32 {
+	if flushBytes <= int(defaultSyncBatchMaxBytes) {
+		return defaultSyncBatchMaxBytes
+	}
+	if flushBytes > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(flushBytes) //nolint:gosec // bounds checked above
 }

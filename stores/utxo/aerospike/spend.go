@@ -308,7 +308,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			errCh := make(chan error, 1)
-			s.spendBatcher.Put(&batchSpend{
+			s.spendBatcher.PutCtx(ctx, &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
@@ -451,6 +451,14 @@ type keyIgnoreLocked struct {
 	ignoreLocked      bool
 }
 
+// useExpressionSpend returns true when the expression-based spend path is safe for
+// the configured store. Multi-UTXO records (utxoBatchSize > 1) require Lua because
+// Aerospike expressions cannot byte-compare list elements, so the offset alone cannot
+// uniquely identify the target UTXO and ListSetOp would mutate the wrong slot.
+func (s *Store) useExpressionSpend() bool {
+	return s.settings.Aerospike.EnableSpendFilterExpressions && s.utxoBatchSize == 1
+}
+
 // sendSpendBatchLua processes a batch of spend requests via Lua scripts or expressions.
 // The function:
 //  1. Groups spends by transaction
@@ -460,8 +468,11 @@ type keyIgnoreLocked struct {
 //  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
-	// Use expression-based implementation if enabled
-	if s.settings.Aerospike.EnableSpendFilterExpressions {
+	// Use expression-based implementation only when each Aerospike record holds a single
+	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
+	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
+	// performs the strict precondition check inside the UDF.
+	if s.useExpressionSpend() {
 		s.SpendMultiWithExpressions(s.ctx, batch)
 		return
 	}
@@ -910,7 +921,7 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 							// Lua already set DAH on the master record inline.
 							// Clear it since children aren't actually all-spent.
 							errCh := make(chan error, 1)
-							s.setDAHBatcher.Put(&batchDAH{
+							s.setDAHBatcher.PutCtx(ctx, &batchDAH{
 								txID:           txID,
 								childIdx:       0, // master record
 								deleteAtHeight: 0, // clear DAH

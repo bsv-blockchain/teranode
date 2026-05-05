@@ -12,6 +12,27 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
+// createP2PKHUnlockScript creates a typical P2PKH unlocking script (signature + pubkey)
+func createP2PKHUnlockScript() *bscript.Script {
+	// Typical P2PKH unlock: <sig> <pubkey>
+	// Signature is ~71 bytes, pubkey is 33 bytes (compressed)
+	script := bscript.Script{}
+
+	// Push signature (71 bytes)
+	script = append(script, 0x47) // Push 71 bytes
+	for i := 0; i < 71; i++ {
+		script = append(script, 0xaa)
+	}
+
+	// Push pubkey (33 bytes)
+	script = append(script, 0x21) // Push 33 bytes
+	for i := 0; i < 33; i++ {
+		script = append(script, 0xbb)
+	}
+
+	return &script
+}
+
 // BenchmarkIsConsolidationTxForFees measures the performance of the simplified consolidation check
 func BenchmarkIsConsolidationTxForFees(b *testing.B) {
 	policy := settings.NewPolicySettings()
@@ -100,55 +121,6 @@ func BenchmarkIsConsolidationTxFull(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_ = tv.isConsolidationTx(tx, utxoHeights, currentHeight)
-			}
-		})
-	}
-}
-
-// BenchmarkIsStandardInputScript measures the performance of script validation
-func BenchmarkIsStandardInputScript(b *testing.B) {
-	uahfHeight := uint32(478559)
-	postUAHFHeight := uint32(500000)
-
-	benchmarks := []struct {
-		name   string
-		script *bscript.Script
-	}{
-		{
-			name:   "empty_script",
-			script: &bscript.Script{},
-		},
-		{
-			name:   "standard_p2pkh_unlock",
-			script: createP2PKHUnlockScript(),
-		},
-		{
-			name: "complex_push_only",
-			script: func() *bscript.Script {
-				s := &bscript.Script{}
-				// Multiple push operations
-				for i := 0; i < 10; i++ {
-					*s = append(*s, 0x14)                // OP_DATA_20
-					*s = append(*s, make([]byte, 20)...) // 20 bytes of data
-				}
-				return s
-			}(),
-		},
-		{
-			name: "non_standard_with_ops",
-			script: &bscript.Script{
-				0x76, // OP_DUP
-				0xa9, // OP_HASH160
-				0x14, // OP_DATA_20
-			},
-		},
-	}
-
-	for _, bm := range benchmarks {
-		b.Run(bm.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = isStandardInputScript(bm.script, postUAHFHeight, uahfHeight)
 			}
 		})
 	}

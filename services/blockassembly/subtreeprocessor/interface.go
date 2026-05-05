@@ -151,6 +151,24 @@ type Interface interface {
 	//   - error: Any error encountered during transaction removal
 	Remove(ctx context.Context, hash chainhash.Hash) error
 
+	// DrainQueue drains the input queue and routes valid txs the same way the
+	// during-block-movement drain does, with one filter: any tx whose own hash
+	// is in dropHashes, or whose TxInpoints.ParentTxHashes contains a hash in
+	// dropHashes, is dropped on the floor. On parent match the dropped tx's
+	// own hash is added to dropHashes so any later-in-batch descendants are
+	// also caught without an extra store round-trip.
+	//
+	// Used by BlockAssembler after loadUnminedTransactions has flagged a set
+	// of txs as conflicting in the UTXO store (and cascaded their descendants).
+	// AddTx is already enqueueing on the gRPC side at that point, so by the
+	// time the event-loop goroutine is started (or resumed, for the Reset
+	// path) the queue can hold in-flight children whose parents were just
+	// flagged. Without this drain those children land in the next mining
+	// candidate.
+	//
+	// The set is scoped to a single drain and discarded by the caller.
+	DrainQueue(dropHashes map[chainhash.Hash]struct{})
+
 	// GetCompletedSubtreesForMiningCandidate returns completed subtrees ready for mining.
 	// These subtrees contain validated transactions that can be included in a block.
 	//

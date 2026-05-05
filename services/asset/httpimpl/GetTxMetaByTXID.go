@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// swagger:model aerospikeRecord
 type aerospikeRecord struct {
 	Key        string                 `json:"key"`
 	Digest     string                 `json:"digest"`
