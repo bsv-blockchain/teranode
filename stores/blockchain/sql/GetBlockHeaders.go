@@ -156,23 +156,31 @@ func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chai
 			,b.median_time_past`
 
 	if s.mainChainRebuilding.Load() == 0 {
-		var onMain bool
-		// Treat any error or missing row as "not on main chain"; the CTE fallback
-		// will surface the same condition (or no rows) to the caller.
+		var (
+			onMain      bool
+			startHeight uint32
+		)
+		// Resolve start-block height in the probe so the main query binds it as
+		// a literal parameter. This (a) lets the planner pick the
+		// idx_on_main_chain_height partial index for the height range, and
+		// (b) eliminates the intra-query race that a same-query subquery
+		// evaluated twice would have. Treat any error / missing row / off-main-chain
+		// as "not eligible" and fall through to the CTE.
 		if scanErr := s.db.QueryRowContext(ctx,
-			`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+			`SELECT COALESCE(on_main_chain, false), COALESCE(height, 0)
+			 FROM blocks WHERE hash = $1 LIMIT 1`,
 			blockHashFrom[:],
-		).Scan(&onMain); scanErr == nil && onMain {
+		).Scan(&onMain, &startHeight); scanErr == nil && onMain {
 			fastPath := `
 		SELECT` + blockColumns + `
 		FROM blocks b
 		WHERE b.on_main_chain = true
-		  AND b.height <= (SELECT height FROM blocks WHERE hash = $1 LIMIT 1)
-		  AND b.height > (SELECT height FROM blocks WHERE hash = $1 LIMIT 1) - $2
+		  AND b.height <= $1
+		  AND b.height > $1 - $2
 		ORDER BY b.height DESC
 		LIMIT $2
 	`
-			return fastPath, []interface{}{blockHashFrom[:], numberOfHeaders}
+			return fastPath, []interface{}{startHeight, numberOfHeaders}
 		}
 	}
 
