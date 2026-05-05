@@ -53,12 +53,12 @@ import (
 //  2. On cache miss, dispatches to buildGetBlockHeaderIDsQuery which picks
 //     between two SQL strategies:
 //     - on_main_chain fast path: a single backward index scan on the
-//       partial index, restricted to the height range derived from the
-//       start block. Used whenever the start hash is on the main chain
-//       and no rebuild is in flight.
+//     partial index, restricted to the height range derived from the
+//     start block. Used whenever the start hash is on the main chain
+//     and no rebuild is in flight.
 //     - Recursive CTE fallback: walks parent_id pointers from the start
-//       block. Used for fork tips, unknown hashes, and during main-chain
-//       rebuilds.
+//     block. Used for fork tips, unknown hashes, and during main-chain
+//     rebuilds.
 //
 // The fast path replaces an O(N) recursive walk with a contiguous index
 // scan and is ~3-6x faster on small datasets, expected 10-20x on
