@@ -122,22 +122,11 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	}
 	ids := make([]uint32, 0, initialCap)
 
-	q := `
-		WITH RECURSIVE ChainBlocks AS (
-			SELECT id, parent_id, 1 AS depth
-			FROM blocks
-			WHERE hash = $1
-			UNION ALL
-			SELECT bb.id, bb.parent_id, cb.depth + 1
-			FROM blocks bb
-			JOIN ChainBlocks cb ON bb.id = cb.parent_id
-			WHERE bb.id != cb.id
-			  AND cb.depth < $2
-		)
-		SELECT id FROM ChainBlocks
-		LIMIT $2
-	`
-	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
+	// Try the on_main_chain fast path; fall back to the recursive CTE on fork
+	// tips, unknown hashes, or while a main-chain rebuild is in flight. Same
+	// semantics as buildGetBlockHeadersQuery — see comment there.
+	q, args := s.buildGetBlockHeaderIDsQuery(ctx, blockHashFrom, numberOfHeaders)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -169,4 +158,46 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	}
 
 	return ids, nil
+}
+
+// buildGetBlockHeaderIDsQuery returns the SQL query and args for GetBlockHeaderIDs.
+// The fast path uses the on_main_chain partial index when the start hash is on
+// the main chain. Otherwise the recursive CTE walks parent_id pointers and is
+// authoritative for fork tips and rebuilds.
+func (s *SQL) buildGetBlockHeaderIDsQuery(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) (string, []interface{}) {
+	if s.mainChainRebuilding.Load() == 0 {
+		var onMain bool
+		if scanErr := s.db.QueryRowContext(ctx,
+			`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+			blockHashFrom[:],
+		).Scan(&onMain); scanErr == nil && onMain {
+			fastPath := `
+		SELECT b.id
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height <= (SELECT height FROM blocks WHERE hash = $1 LIMIT 1)
+		  AND b.height > (SELECT height FROM blocks WHERE hash = $1 LIMIT 1) - $2
+		ORDER BY b.height DESC
+		LIMIT $2
+	`
+			return fastPath, []interface{}{blockHashFrom[:], numberOfHeaders}
+		}
+	}
+
+	cte := `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, 1 AS depth
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, cb.depth + 1
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND cb.depth < $2
+		)
+		SELECT id FROM ChainBlocks
+		LIMIT $2
+	`
+	return cte, []interface{}{blockHashFrom[:], numberOfHeaders}
 }
