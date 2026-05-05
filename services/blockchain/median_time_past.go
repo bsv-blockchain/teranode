@@ -70,6 +70,20 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		}
 	}
 
+	// Try the in-process cache first. The store-level responseCache is wiped
+	// per StoreBlock, so it has near-zero hit rate for committed-block MTP
+	// during sync; this cache survives across StoreBlock and is only invalidated
+	// on chain reorganisation.
+	if b.mtpCache != nil {
+		if cached, ok := b.mtpCache.getRange(minHeight, maxHeight); ok {
+			mtps := make([]uint32, len(heights))
+			for i, height := range heights {
+				mtps[i] = cached[height-minHeight]
+			}
+			return mtps, nil
+		}
+	}
+
 	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
@@ -95,6 +109,21 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		mtps[i] = mtpByHeight[height]
 	}
 
+	// Cache the dense range for future calls. We only cache values for heights
+	// that we actually fetched from the store; the not-yet-persisted top is
+	// recomputed on the fly so we deliberately skip caching it (its MTP is
+	// finalised when the block is persisted via AddBlock, which truncates this
+	// height anyway).
+	if b.mtpCache != nil && len(metas) > 0 {
+		dense := make([]uint32, maxHeight-minHeight+1)
+		for _, meta := range metas {
+			if meta.Height >= minHeight && meta.Height <= maxHeight {
+				dense[meta.Height-minHeight] = meta.MedianTimePast
+			}
+		}
+		b.mtpCache.putRange(minHeight, dense)
+	}
+
 	return mtps, nil
 }
 
@@ -104,6 +133,14 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
 	if toHeight < fromHeight {
 		return []uint32{}, nil
+	}
+
+	// Try the in-process cache first. See note on caching in
+	// GetMedianTimePastForHeights for rationale.
+	if b.mtpCache != nil {
+		if cached, ok := b.mtpCache.getRange(fromHeight, toHeight); ok {
+			return cached, nil
+		}
 	}
 
 	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
@@ -125,6 +162,19 @@ func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toH
 			return nil, err
 		}
 		result[toHeight-fromHeight] = computed
+	}
+
+	// Cache the persisted-block portion of the range. Skip the not-yet-persisted
+	// top entry — its MTP is finalised by AddBlock, which truncates the cache
+	// at that height.
+	if b.mtpCache != nil && len(metas) > 0 {
+		cacheTop := toHeight
+		if topMissing {
+			cacheTop = toHeight - 1
+		}
+		if cacheTop >= fromHeight {
+			b.mtpCache.putRange(fromHeight, result[:cacheTop-fromHeight+1])
+		}
 	}
 
 	return result, nil
