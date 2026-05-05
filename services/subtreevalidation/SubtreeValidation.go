@@ -1247,11 +1247,15 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 						// this is less efficient than reading straight to disk with SetFromReader, but we need to validate the
 						// data before storing it on disk
 						// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+						// defer the pool return so a panic / future early return still releases the reader,
+						// matching the pattern used at check_block_subtrees.go:201 and the second callsite below.
 						bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
 						bufferedReader.Reset(body)
+						defer func() {
+							bufferedReader.Reset(nil) // clear reference before returning to pool
+							bufioReaderPool.Put(bufferedReader)
+						}()
 						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufferedReader)
-						bufferedReader.Reset(nil) // clear reference before returning to pool
-						bufioReaderPool.Put(bufferedReader)
 						_ = body.Close()
 						if err != nil {
 							u.logger.Errorf("[validateSubtree][%s] failed to create subtree data from reader: %v", subtreeHash.String(), err)
