@@ -1416,3 +1416,123 @@ func TestHandleNodeStatusTopic_StorageUpdate(t *testing.T) {
 	assert.Equal(t, "full", info.Storage, "storage mode should be propagated to the registry")
 	assert.Equal(t, uint32(7), info.Height)
 }
+
+// --- shouldSkipDuringSync branch coverage ---
+//
+// shouldSkipDuringSync gates announcement processing while we're catching up
+// from a designated sync peer. The function has six exit paths; these tests
+// cover each one. Tests build a SyncCoordinator and write directly to its
+// currentSyncPeer field (matching the pattern in sync_coordinator_test.go).
+
+func newSyncSkipTestServer(t *testing.T, fsm blockchain_api.FSMStateType, syncPeer peer.ID, syncPeerHeight uint32) *Server {
+	t.Helper()
+
+	tSettings := createBaseTestSettings()
+	registry := NewPeerRegistry()
+	if syncPeer != "" && syncPeerHeight > 0 {
+		registry.Put(syncPeer, "", syncPeerHeight, nil, "")
+	}
+
+	mockBC := new(blockchain.Mock)
+	state := fsm
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&state, nil).Maybe()
+
+	selector := NewPeerSelector(ulogger.New("test"), tSettings)
+	banManager := NewPeerBanManager(context.Background(), nil, tSettings, registry)
+
+	sc := NewSyncCoordinator(
+		ulogger.New("test"),
+		tSettings,
+		registry,
+		selector,
+		banManager,
+		mockBC,
+		nil,
+	)
+	if syncPeer != "" {
+		sc.mu.Lock()
+		sc.currentSyncPeer = syncPeer
+		sc.mu.Unlock()
+	}
+
+	return &Server{
+		logger:           ulogger.New("test"),
+		settings:         tSettings,
+		blockchainClient: mockBC,
+		peerRegistry:     registry,
+		syncCoordinator:  sc,
+		gCtx:             context.Background(),
+	}
+}
+
+func TestShouldSkipDuringSync_NoSyncPeer(t *testing.T) {
+	// syncCoordinator nil → getSyncPeer returns "" → function exits before
+	// touching the blockchain client.
+	server := &Server{
+		logger:           ulogger.New("test"),
+		settings:         createBaseTestSettings(),
+		blockchainClient: nil,
+		peerRegistry:     NewPeerRegistry(),
+		gCtx:             context.Background(),
+	}
+
+	skip := server.shouldSkipDuringSync("from", "originator", 100, "block")
+	assert.False(t, skip, "no sync peer must not skip")
+}
+
+func TestShouldSkipDuringSync_NotSyncing(t *testing.T) {
+	// Sync peer is set but FSM reports RUNNING — we're caught up, so the
+	// announcement should pass through.
+	syncPeer := peer.ID("sync-peer")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_RUNNING, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", "originator", 100, "block")
+	assert.False(t, skip, "RUNNING FSM must not skip")
+}
+
+func TestShouldSkipDuringSync_BelowSyncPeerHeight(t *testing.T) {
+	// Syncing and announcement is older than where the sync peer already is.
+	syncPeer := peer.ID("sync-peer-1")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 100)
+
+	skip := server.shouldSkipDuringSync("from", syncPeer.String(), 50, "block")
+	assert.True(t, skip, "announcement below sync peer height must skip")
+}
+
+func TestShouldSkipDuringSync_NotFromSyncPeer(t *testing.T) {
+	// Syncing, height ok, but originator is not the sync peer.
+	syncPeer := peer.ID("sync-peer-2")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 10)
+
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	otherPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	skip := server.shouldSkipDuringSync("from", otherPeer.String(), 100, "block")
+	assert.True(t, skip, "announcement from non-sync peer must skip")
+}
+
+func TestShouldSkipDuringSync_InvalidOriginator(t *testing.T) {
+	// Syncing, height ok, but originatorPeerID doesn't decode. Falls into the
+	// same "not from sync peer" branch via the err != nil short-circuit.
+	syncPeer := peer.ID("sync-peer-3")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_LEGACYSYNCING, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", "not-a-valid-peer-id", 100, "block")
+	assert.True(t, skip, "undecodable originator must skip")
+}
+
+func TestShouldSkipDuringSync_FromSyncPeer(t *testing.T) {
+	// All gates pass: sync peer set, FSM CATCHINGBLOCKS, height ok, originator
+	// is the sync peer. Announcement is allowed through.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	syncPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", syncPeer.String(), 100, "block")
+	assert.False(t, skip, "announcement from sync peer at higher height must not skip")
+}
