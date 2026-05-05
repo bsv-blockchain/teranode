@@ -5,11 +5,19 @@
 // This file implements the GetBlockHeaders method, which retrieves a sequence of consecutive
 // block headers starting from a specified block hash. This functionality is essential for
 // blockchain synchronization, where nodes need to efficiently retrieve chains of headers
-// to validate and update their local blockchain state. The implementation uses a recursive
-// Common Table Expression (CTE) in SQL to efficiently traverse the blockchain graph structure,
-// following the parent-child relationships between blocks. It also includes caching mechanisms
-// to optimize performance for frequently requested header sequences and handles special cases
-// like chain reorganizations and invalid blocks.
+// to validate and update their local blockchain state.
+//
+// The implementation uses a hybrid query strategy:
+//
+//  1. An in-memory response/chain-walk cache to short-circuit repeated requests.
+//  2. A fast path that filters by the on_main_chain partial index and a height
+//     range derived from the start block — used whenever the start hash is on
+//     the main chain and no rebuild is in flight. This replaces an O(N)
+//     recursive parent_id walk with a single backward index scan.
+//  3. A recursive Common Table Expression (CTE) fallback that walks
+//     parent_id pointers — used for fork tips, unknown hashes, and while a
+//     main-chain rebuild is in flight, so the CTE remains authoritative for
+//     reorg / fork scenarios.
 //
 // In Teranode's high-throughput architecture, efficient header retrieval is critical for
 // maintaining synchronization with the network, especially during initial block download
@@ -42,17 +50,23 @@ import (
 // network consensus.
 //
 // The implementation follows a tiered approach to optimize performance:
-//  1. First checks the blocks cache for the requested headers sequence
-//  2. If not found in cache, executes a SQL query to recursively traverse the blockchain graph structure
-//  3. The query follows parent-child relationships between blocks, starting from the
-//     specified block and retrieving the requested number of headers
-//  4. For each block, constructs both a BlockHeader object containing the core consensus
-//     fields and a BlockHeaderMeta object containing additional metadata
+//  1. First checks the blocks cache for the requested headers sequence.
+//  2. If not found in cache, takes the on_main_chain fast path when the
+//     start hash is on the main chain and no rebuild is in flight: a single
+//     backward index scan over (height) where on_main_chain = true,
+//     restricted to the height range derived from the start block.
+//  3. Otherwise (fork tips, unknown hashes, mid-rebuild), falls back to a
+//     recursive CTE that walks parent_id pointers from the start block
+//     backwards.
+//  4. For each block, constructs both a BlockHeader object containing the
+//     core consensus fields and a BlockHeaderMeta object containing
+//     additional metadata.
 //
 // The SQL implementation uses database-specific optimizations for both PostgreSQL and
-// SQLite to ensure efficient execution of the recursive query. The method also handles
-// special cases such as chain reorganizations and invalid blocks, ensuring that only
-// valid headers are returned.
+// SQLite to ensure efficient execution of both the fast path and the CTE
+// fallback. The method also handles special cases such as chain
+// reorganizations and invalid blocks, ensuring that only valid headers are
+// returned.
 //
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
