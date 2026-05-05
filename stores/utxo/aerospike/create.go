@@ -888,7 +888,16 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	_ = s.client.BatchOperate(batchPolicy, batchRecords)
+
+	batchOperate := s.batchOperateFn
+	if batchOperate == nil {
+		batchOperate = s.client.BatchOperate
+	}
+
+	if err := batchOperate(batchPolicy, batchRecords); err != nil {
+		util.SafeSend[error](bItem.done, errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
+		return
+	}
 
 	// Check results - KEY_EXISTS_ERROR means recovery (completing previous attempt)
 	hasFailures := false
