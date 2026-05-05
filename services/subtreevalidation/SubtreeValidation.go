@@ -1246,8 +1246,12 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 						// load the subtree data, making sure to validate it against the subtree txs
 						// this is less efficient than reading straight to disk with SetFromReader, but we need to validate the
 						// data before storing it on disk
-						// Use buffered reader to reduce syscalls - each tx.ReadFrom() makes many small reads
-						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufio.NewReaderSize(body, 1024*1024))
+						// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+						bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+						bufferedReader.Reset(body)
+						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufferedReader)
+						bufferedReader.Reset(nil) // clear reference before returning to pool
+						bufioReaderPool.Put(bufferedReader)
 						_ = body.Close()
 						if err != nil {
 							u.logger.Errorf("[validateSubtree][%s] failed to create subtree data from reader: %v", subtreeHash.String(), err)
@@ -1705,8 +1709,14 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	}
 	defer subtreeDataReader.Close()
 
-	// Use buffered reader to reduce syscalls - each tx.ReadFrom() makes many small reads
-	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufio.NewReaderSize(subtreeDataReader, 1024*1024))
+	// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(subtreeDataReader)
+	defer func() {
+		bufferedReader.Reset(nil) // clear reference before returning to pool
+		bufioReaderPool.Put(bufferedReader)
+	}()
+	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
 		return nil, err
 	}
