@@ -1279,3 +1279,140 @@ func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
 	require.True(t, exists)
 	assert.True(t, info.LastMessageTime.IsZero(), "oversized subtree must not advance LastMessageTime")
 }
+
+// --- handleNodeStatusTopic branch coverage ---
+//
+// TestServerHandleNodeStatusTopic in Server_test.go covers self/remote happy
+// paths; TestHandleNodeStatusTopic_OversizedDropped covers the size guard.
+// These tests fill in the validation/error branches: bad JSON, peer ID
+// spoofing, SSRF rejection, invalid block-hash, full notification channel,
+// and the storage-update side effect.
+
+func TestHandleNodeStatusTopic_BadJSON(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Garbage that passes the size guard but fails json.Unmarshal.
+	server.handleNodeStatusTopic(context.Background(), []byte("{not-json"), remotePeerID.String())
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("bad JSON must not produce a notification, got %+v", msg)
+	default:
+	}
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "bad JSON must not advance LastMessageTime")
+}
+
+func TestHandleNodeStatusTopic_PeerIDSpoofing(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+
+	// Make claimed peer differ from the gossip sender.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	otherPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        otherPeerID.String(),
+		BestBlockHash: "0000000000000000000000000000000000000000000000000000000000000001",
+		BestHeight:    1,
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	score, _, _ := server.banManager.GetBanScore(remotePeerID.String())
+	assert.Equal(t, 20, score, "spoofing should add ReasonProtocolViolation (20) to sender score")
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("spoofing must short-circuit before notification, got %+v", msg)
+	default:
+	}
+}
+
+func TestHandleNodeStatusTopic_InvalidBaseURL(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+	// AllowPrivateIPs is false by default in createBaseTestSettings, so a
+	// loopback URL is rejected by validateDataHubURL.
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:  remotePeerID.String(),
+		BaseURL: "http://127.0.0.1:8080",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	score, _, _ := server.banManager.GetBanScore(remotePeerID.String())
+	assert.Equal(t, 20, score, "invalid BaseURL should add ReasonProtocolViolation (20) to sender score")
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("SSRF rejection must short-circuit before notification, got %+v", msg)
+	default:
+	}
+}
+
+func TestHandleNodeStatusTopic_InvalidBestBlockHash(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Hash that fails chainhash.NewHashFromStr — but height > 0 to enter the
+	// branch in the first place. The notification fires before the hash
+	// parse, so it must still arrive.
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    42,
+		BestBlockHash: "not-a-real-hex-hash",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case msg := <-server.notificationCh:
+		assert.Equal(t, remotePeerID.String(), msg.PeerID)
+	default:
+		t.Fatal("notification should fire before invalid block-hash check")
+	}
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.Equal(t, uint32(0), info.Height, "invalid block hash must abort before peer height update")
+}
+
+func TestHandleNodeStatusTopic_NotificationChannelFull(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+	// Replace the buffered channel with an unbuffered one so the non-blocking
+	// send hits the default branch.
+	server.notificationCh = make(chan *notificationMsg)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID: remotePeerID.String(),
+	})
+	require.NoError(t, err)
+
+	// Must not panic or deadlock.
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+}
+
+func TestHandleNodeStatusTopic_StorageUpdate(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	validHash := "0000000000000000000000000000000000000000000000000000000000000001"
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    7,
+		BestBlockHash: validHash,
+		Storage:       "full",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.Equal(t, "full", info.Storage, "storage mode should be propagated to the registry")
+	assert.Equal(t, uint32(7), info.Height)
+}
