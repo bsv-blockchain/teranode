@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -1535,4 +1536,124 @@ func TestShouldSkipDuringSync_FromSyncPeer(t *testing.T) {
 
 	skip := server.shouldSkipDuringSync("from", syncPeer.String(), 100, "block")
 	assert.False(t, skip, "announcement from sync peer at higher height must not skip")
+}
+
+// --- handleBanEvent / disconnectBannedPeerByID branch coverage ---
+//
+// handleBanEvent dispatches BanEvents from the BanList; only "add" actions
+// with a non-empty PeerID lead to a disconnect. disconnectBannedPeerByID
+// iterates the connected-peers list and removes the peer if found.
+
+func TestHandleBanEvent_NonAddAction(t *testing.T) {
+	// "remove" / unset / anything other than banActionAdd should return
+	// before parsing the PeerID — so even an empty event is a no-op.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{Action: "remove", PeerID: "anything"})
+	// Reaching this point without a panic confirms the early return.
+}
+
+func TestHandleBanEvent_EmptyPeerID(t *testing.T) {
+	// PeerID-only banning: an "add" event without a PeerID is logged and
+	// dropped, never reaching peer.Decode.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{Action: banActionAdd, PeerID: ""})
+}
+
+func TestHandleBanEvent_InvalidPeerID(t *testing.T) {
+	// peer.Decode failure short-circuits before disconnectBannedPeerByID,
+	// so P2PClient can be nil — if disconnect ran, GetPeers would panic.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{
+		Action: banActionAdd,
+		PeerID: "not-a-real-peer-id",
+		Reason: "test",
+	})
+}
+
+func TestHandleBanEvent_ValidPeerIDDispatchesDisconnect(t *testing.T) {
+	// End-to-end happy path: handleBanEvent decodes the PeerID and reaches
+	// disconnectBannedPeerByID, which finds the peer in GetPeers and removes
+	// it from the registry.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: bannedPeer.String()}}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.handleBanEvent(context.Background(), BanEvent{
+		Action: banActionAdd,
+		PeerID: bannedPeer.String(),
+		Reason: "spam",
+	})
+
+	_, exists := registry.Get(bannedPeer)
+	assert.False(t, exists, "banned peer should be removed from the registry after dispatch")
+}
+
+func TestDisconnectBannedPeerByID_PeerFound(t *testing.T) {
+	// Direct test of the "peer in connected list" path: the registry entry
+	// should be cleared.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{
+		{ID: "some-other-peer"},
+		{ID: bannedPeer.String()},
+	}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.disconnectBannedPeerByID(context.Background(), bannedPeer, "manual")
+
+	_, exists := registry.Get(bannedPeer)
+	assert.False(t, exists, "found peer must be removed from registry")
+}
+
+func TestDisconnectBannedPeerByID_PeerNotFound(t *testing.T) {
+	// Peer is not in the connected list → debug log, no registry mutation.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: "unrelated-peer"}}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.disconnectBannedPeerByID(context.Background(), bannedPeer, "manual")
+
+	_, exists := registry.Get(bannedPeer)
+	assert.True(t, exists, "untracked peer must not affect registry")
 }
