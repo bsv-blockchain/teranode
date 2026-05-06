@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -1657,6 +1657,7 @@ func TestDisconnectBannedPeerByID_PeerNotFound(t *testing.T) {
 	_, exists := registry.Get(bannedPeer)
 	assert.True(t, exists, "untracked peer must not affect registry")
 }
+
 // --- startPeerRegistryCleanup tests ---
 
 func TestStartPeerRegistryCleanup_NilRegistryReturnsEarly(t *testing.T) {

@@ -29,9 +29,9 @@ import (
 //	mockNode.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 //	// Use mockNode in place of real P2PNodeI implementation
 type MockServerP2PClient struct {
-	mock.Mock                                // Embedded mock for method call recording and expectations
-	peerID    peer.ID                        // Configurable peer ID for testing scenarios
-	peers     []p2pMessageBus.PeerInfo       // If non-nil, returned by GetPeers() instead of the default
+	mock.Mock                          // Embedded mock for method call recording and expectations
+	peerID    peer.ID                  // Configurable peer ID for testing scenarios
+	peers     []p2pMessageBus.PeerInfo // If non-nil, returned by GetPeers() instead of the default
 }
 
 func (m *MockServerP2PClient) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
