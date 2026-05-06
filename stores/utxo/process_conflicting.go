@@ -48,8 +48,17 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
+// ProcessConflicting returns:
+//   - losingTxHashesMap: hashes of txs displaced by the winners (the immediate
+//     counter-conflicting set from GetCounterConflicting). Used by callers to
+//     mark losers in subtrees / drop them from upstream paths.
+//   - allMarkedConflicting: every hash marked Conflicting=true during this run,
+//     in BFS order — losers + every descendant the cascade reached. Callers
+//     (notably block assembly) need this superset to populate a conflictingMap
+//     so the queue→subtree dequeue path can reject children of conflicting
+//     parents that arrive after the cascade has run.
 func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, conflictingTxHashes []chainhash.Hash,
-	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, err error) {
+	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
@@ -70,7 +79,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 
 		if txHash.Equal(subtree.CoinbasePlaceholderHashValue) {
 			// the counter-conflicting tx is frozen, we should not process anything further
-			return nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
+			return nil, nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
 		}
 
 		g.Go(func() error {
@@ -102,7 +111,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// create a unique list of all the losing tx hashes
@@ -118,15 +127,18 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 
 	losingTxHashes := losingTxHashesMap.Keys()
 
-	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively
-	affectedParentSpends, _, err := MarkConflictingRecursively(ctx, s, losingTxHashes)
+	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
+	//   markedOrder is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
+	//   the block-assembly conflictingMap can include the cascaded descendants (not just the immediate losers).
+	affectedParentSpends, markedOrder, err := MarkConflictingRecursively(ctx, s, losingTxHashes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	allMarkedConflicting = markedOrder
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
-		return nil, errors.NewProcessingError("error unspending affected parent spends", err)
+		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
 
 	// get the unique hashes of the transactions that were marked as not spendable
@@ -158,21 +170,21 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 				}
 			}
 
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// - 4: mark txb as not conflicting
 	if _, _, err = s.SetConflicting(ctx, conflictingTxHashes, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// - 5: mark txp & txq as spendable again
 	if err = s.SetLocked(ctx, markedAsNotSpendableHashes, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return losingTxHashesMap, nil
+	return losingTxHashesMap, allMarkedConflicting, nil
 }
 
 // MarkConflictingRecursively marks the given transactions as conflicting, and iteratively marks all their spending

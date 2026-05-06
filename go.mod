@@ -181,13 +181,13 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.1.3
 	github.com/bsv-blockchain/go-alert-system v0.1.6
-	github.com/bsv-blockchain/go-batcher v1.2.10
+	github.com/bsv-blockchain/go-batcher/v2 v2.0.0
 	github.com/bsv-blockchain/go-bc v1.1.5
 	github.com/bsv-blockchain/go-bn v1.1.4
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.1.2
-	github.com/bsv-blockchain/go-tx-map v1.3.3
+	github.com/bsv-blockchain/go-tx-map v1.3.4
 	github.com/bsv-blockchain/go-wire v1.2.1
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10

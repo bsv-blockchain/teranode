@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1432,4 +1434,29 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 		require.NotNil(t, resp)
 		assert.Len(t, resp.Errors, 2)
 	})
+}
+
+// TestPropagationServer_Start_FSMContextCancellation verifies graceful shutdown
+// handling when the context is cancelled during the FSM wait. The error must be
+// returned (not swallowed) and must be a context error so the service manager
+// can distinguish it from a real failure.
+func TestPropagationServer_Start_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+	tSettings.Propagation.IPv6Addresses = ""
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	ps := New(logger, tSettings, nil, nil, mockBlockchainClient, nil, nil)
+
+	readyCh := make(chan struct{})
+	err := ps.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+	mockBlockchainClient.AssertExpectations(t)
 }

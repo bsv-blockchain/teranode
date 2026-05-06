@@ -1086,6 +1086,35 @@ func TestStart_FSMTransitionError(t *testing.T) {
 	}
 }
 
+// TestStart_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func TestStart_FSMContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMTransitionFromIdleError(context.Canceled)
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+	readyCh := make(chan struct{})
+
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+
+	select {
+	case <-readyCh:
+	default:
+		t.Fatal("Ready channel should be closed on shutdown")
+	}
+}
+
 // TestStart_HTTPServerSetup tests HTTP server setup when configured
 func TestStart_HTTPServerSetup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

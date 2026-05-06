@@ -553,8 +553,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[P2P Service] Shutting down during FSM wait")
+			return err
+		}
 		s.logger.Errorf("[P2P Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 

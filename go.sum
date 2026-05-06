@@ -176,8 +176,8 @@ github.com/bketelsen/crypt v0.0.4/go.mod h1:aI6NrJ0pMGgvZKL1iVgXLnfIFJtfV+bKCoqO
 github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dRnpXw/yCqJaO+ZrUyxD+3VXMFFr56k5XYrpB4=
 github.com/bsv-blockchain/go-alert-system v0.1.6 h1:pXJqJZVJw4ha46CircxOhcV0iNzohf2nt1l4O3TNtSI=
 github.com/bsv-blockchain/go-alert-system v0.1.6/go.mod h1:3Pwm4O0GcGiYFuofRml7UEWBWt0a4kKLCsvisyOpQps=
-github.com/bsv-blockchain/go-batcher v1.2.10 h1:MBdKx9RO9HkR3emDZRKTReIJBLw0rLBnGXzqw8M0bjg=
-github.com/bsv-blockchain/go-batcher v1.2.10/go.mod h1:dvaESIp34v2WkJG75k9MEauCHGd4GaBYJGwgol2c4Is=
+github.com/bsv-blockchain/go-batcher/v2 v2.0.0 h1:A97RDYPqjS+jp9fe585H6squUSTuZRdhRnwJKCkK8rk=
+github.com/bsv-blockchain/go-batcher/v2 v2.0.0/go.mod h1:Eb9GE3w6I98YarHXAkwUon/C2a7ctgqsG+JYQk2DuJY=
 github.com/bsv-blockchain/go-bc v1.1.5 h1:G9hioz7yz6ARS5YHYJhA4c0xCU5EnRm6PsjDM8C6DTA=
 github.com/bsv-blockchain/go-bc v1.1.5/go.mod h1:g0ZjqK5pNMvgIQpeN0QXchAKEzl15ro3Fm0LG/8PFyI=
 github.com/bsv-blockchain/go-bn v1.1.4 h1:mEOqX7NwBScGbxq5icxbDI0GOQYtjJBz+xC27xwWQFI=
@@ -196,8 +196,8 @@ github.com/bsv-blockchain/go-sdk v1.2.19 h1:KInzoyKp/dh21YiMpPDpKmHu5z37yaQXF02O
 github.com/bsv-blockchain/go-sdk v1.2.19/go.mod h1:5mmw1QLusuAkjWmQgUOurQYCXdIsQEsWXbAZ9zwme3g=
 github.com/bsv-blockchain/go-subtree v1.2.0 h1:3JadLIFsr990CVeelr6/RJqKlkgJ79xQ1siESVbdDPY=
 github.com/bsv-blockchain/go-subtree v1.2.0/go.mod h1:KdvhBjVsvEjMLGtxhY20iwP+54agV0iKiWINzKmng04=
-github.com/bsv-blockchain/go-tx-map v1.3.3 h1:xW5bC24p38Dw+xtEwvDw5JXxuHrgxHIoXew7gduow4E=
-github.com/bsv-blockchain/go-tx-map v1.3.3/go.mod h1:GUULYeFp6QhHSxemHhvPtG7HoFun9KYJunjfw9r0+DM=
+github.com/bsv-blockchain/go-tx-map v1.3.4 h1:nwR4PdmAt2JJTYkqAlqxxxghYMT0ts2RpqzDq13ohsY=
+github.com/bsv-blockchain/go-tx-map v1.3.4/go.mod h1:AiIQRQWbCz9QWrziCFAi9Fu04EygPN1dPB+z7qEyFbg=
 github.com/bsv-blockchain/go-wire v1.2.1 h1:4Mya0mySoaIGvchF7OxmClG1910pG/M+hdejg6AFFS8=
 github.com/bsv-blockchain/go-wire v1.2.1/go.mod h1:rJa+pcsTY2cU8OwB5g2md1ykcQ8MlSKeSxuoa0tUdtg=
 github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2 h1:wuQkh6oGYkHDEPDFA+MDsgYrXdibzrwZxx277ZBevZ4=

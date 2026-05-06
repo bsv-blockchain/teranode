@@ -55,7 +55,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -69,6 +69,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5"
@@ -190,6 +191,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:             ctx,
 	}
 
+	otelTracer := tracing.Tracer("utxo").OTelTracer()
+	batcherOpts := func(name string) []batcher.Option {
+		return []batcher.Option{
+			batcher.WithName(name),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(otelTracer),
+		}
+	}
+
 	// Initialize spend batcher — mirrors aerospike/aerospike.go batcher setup.
 	// Batches individual spend operations to control DB connection concurrency.
 	// Always use background=false for SQL: batch callbacks must be serialized to
@@ -198,7 +209,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// DB-level row locking.
 	spendBatchSize := tSettings.UtxoStore.SpendBatcherSize
 	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
-	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, false)
+	s.spendBatcher = batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatch, false, batcherOpts("sql_spend")...)
 	if tSettings.BatcherDrainMode {
 		s.spendBatcher.SetDrainMode(true)
 	}
@@ -209,7 +220,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchSize := tSettings.UtxoStore.GetBatcherSize
 	getBatchDuration := time.Duration(tSettings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond
 	if getBatchSize > 1 {
-		s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, true)
+		s.getBatcher = batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, true, batcherOpts("sql_get")...)
 		if tSettings.BatcherDrainMode {
 			s.getBatcher.SetDrainMode(true)
 		}
@@ -222,7 +233,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.StoreBatcherSize > 1 {
 		storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 		storeBatchDuration := time.Duration(tSettings.UtxoStore.StoreBatcherDurationMillis) * time.Millisecond
-		s.createBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true)
+		s.createBatcher = batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true, batcherOpts("sql_create")...)
 		if tSettings.BatcherDrainMode {
 			s.createBatcher.SetDrainMode(true)
 		}
@@ -232,7 +243,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.LockedBatcherSize > 1 {
 		unlockBatchSize := tSettings.UtxoStore.LockedBatcherSize
 		unlockBatchDuration := time.Duration(tSettings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond
-		s.unlockBatcher = batcher.New(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true)
+		s.unlockBatcher = batcher.NewWithPool(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true, batcherOpts("sql_unlock")...)
 		if tSettings.BatcherDrainMode {
 			s.unlockBatcher.SetDrainMode(true)
 		}
@@ -337,7 +348,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 // Mirrors aerospike/create.go storeBatcher.Put pattern.
 func (s *Store) createBatched(ctx context.Context, tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions) (*meta.Data, error) {
 	done := make(chan batchCreateResult, 1)
-	s.createBatcher.Put(&batchCreateItem{
+	s.createBatcher.PutCtx(ctx, &batchCreateItem{
 		tx:          tx,
 		blockHeight: blockHeight,
 		options:     options,
@@ -1301,7 +1312,7 @@ func (s *Store) getBatched(ctx context.Context, hash *chainhash.Hash, bins []fie
 	done := make(chan batchGetItemData, 1)
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
-	s.getBatcher.Put(item)
+	s.getBatcher.PutCtx(ctx, item)
 
 	select {
 	case data := <-done:
@@ -1659,7 +1670,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 		g.Go(func() error {
 			errCh := make(chan error, 1)
-			s.spendBatcher.Put(&batchSpend{
+			s.spendBatcher.PutCtx(ctx, &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
@@ -4074,7 +4085,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 			return ctx.Err()
 		}
 		done := make(chan error, 1)
-		s.unlockBatcher.Put(&batchUnlockItem{hash: txHashes[0], done: done})
+		s.unlockBatcher.PutCtx(ctx, &batchUnlockItem{hash: txHashes[0], done: done})
 		select {
 		case err := <-done:
 			return err

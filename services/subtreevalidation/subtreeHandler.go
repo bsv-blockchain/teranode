@@ -34,11 +34,13 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 	return func(msg *kafka.KafkaMessage) error {
 		if msg == nil {
 			u.logger.Errorf("[subtreeMessageHandler] received nil message")
+			prometheusSubtreeKafkaMalformed.WithLabelValues("nil_message").Inc()
 			return nil
 		}
 
 		if len(msg.Value) < 32 {
 			u.logger.Errorf("[subtreeMessageHandler] received subtree message of only %d bytes", len(msg.Value))
+			prometheusSubtreeKafkaMalformed.WithLabelValues("too_short").Inc()
 			return nil
 		}
 
@@ -67,18 +69,21 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to unmarshal kafka message: %v", err)
+			prometheusSubtreeKafkaMalformed.WithLabelValues("unmarshal_failure").Inc()
 			return nil
 		}
 
 		hash, err := chainhash.NewHashFromStr(kafkaMsg.Hash)
 		if err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to parse block hash from message: %v", err)
+			prometheusSubtreeKafkaMalformed.WithLabelValues("bad_hash").Inc()
 			return nil
 		}
 
 		baseURL, err := url.Parse(kafkaMsg.URL)
 		if err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to parse block base url from message: %v", err)
+			prometheusSubtreeKafkaMalformed.WithLabelValues("bad_url").Inc()
 			return nil
 		}
 

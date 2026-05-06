@@ -297,6 +297,13 @@ type UTracer struct {
 	tracer trace.Tracer
 }
 
+// OTelTracer returns the underlying OpenTelemetry tracer. Useful when
+// integrating with libraries that accept a trace.Tracer directly (e.g.
+// go-batcher v2's WithTracer option).
+func (u *UTracer) OTelTracer() trace.Tracer {
+	return u.tracer
+}
+
 // USpan represents an active tracing span with associated statistics
 type USpan struct {
 	stat *gocore.Stat

@@ -348,7 +348,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
 	if s.getBatcher != nil {
-		s.getBatcher.Put(item)
+		s.getBatcher.PutCtx(ctx, item)
 	} else {
 		// if the batcher is disabled, we still want to process the request in a go routine
 		go func() {

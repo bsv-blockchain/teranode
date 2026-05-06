@@ -34,7 +34,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -42,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -173,7 +174,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
-	c.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	c.batcher = *batcher.NewWithPool(batchSize, duration, sendBatch, true,
+		batcher.WithName("propagation_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("PropagationClient").OTelTracer()),
+	)
 
 	return c, nil
 }
@@ -221,7 +227,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize > 0 {
 		done := make(chan error)
 
-		c.batcher.Put(&batchItem{
+		c.batcher.PutCtx(ctx, &batchItem{
 			ctx:  ctx,
 			tx:   tx,
 			done: done,

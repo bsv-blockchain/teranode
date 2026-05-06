@@ -1280,6 +1280,72 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 // TODO reactivate this test when we have a way to check for duplicate transactions
 // require.Error(t, err)
 
+// TestBlock_Valid_DupTxDetected_NilSubtreeStore verifies that the duplicate-tx check (CVE-2012-2459)
+// runs even when subtreeStore is nil, provided SubtreeSlices is already populated. The audit
+// (#4584) flagged the original gate (subtreeStore != nil) as a defense-in-depth gap.
+func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(t, err)
+
+	leafCount := 4
+	subtree, err := subtreepkg.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+
+	// First node is the coinbase placeholder (skipped by the dup check on subIdx==0,txIdx==0).
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	dupBytes := make([]byte, 32)
+	_, _ = rand.Read(dupBytes)
+	dupHash, err := chainhash.NewHash(dupBytes)
+	require.NoError(t, err)
+
+	otherBytes := make([]byte, 32)
+	_, _ = rand.Read(otherBytes)
+	otherHash, err := chainhash.NewHash(otherBytes)
+	require.NoError(t, err)
+
+	require.NoError(t, subtree.AddNode(*dupHash, 1, 0))
+	require.NoError(t, subtree.AddNode(*otherHash, 1, 0))
+	require.NoError(t, subtree.AddNode(*dupHash, 1, 0)) // duplicate
+
+	b, err := NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{subtree.RootHash()},
+		uint64(leafCount),
+		123, 0, 0)
+	require.NoError(t, err)
+
+	// Pre-populate SubtreeSlices so Valid can reach checkDuplicateTransactions without a subtree store.
+	b.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+	currentChain := make([]*BlockHeader, 11)
+	currentChainIDs := make([]uint32, 11)
+	for i := 0; i < 11; i++ {
+		currentChain[i] = &BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      1231469665 - uint32(i), // nolint:gosec
+		}
+		currentChainIDs[i] = uint32(i) // nolint:gosec
+	}
+	currentChain[0].HashPrevBlock = &chainhash.Hash{}
+
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+	valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
+	require.False(t, valid)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	require.Contains(t, err.Error(), "duplicate transaction")
+}
+
 func TestCheckParentExistsOnChain(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
