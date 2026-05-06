@@ -2,6 +2,7 @@ package rewindblockchain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -68,9 +69,13 @@ func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult)
 func (e *env) resetBlockPersisterHeight(ctx context.Context, pf *preflightResult) error {
 	existing, err := e.blockchainStore.GetState(ctx, blockPersisterHeightKey)
 	if err != nil {
-		// Missing is fine — first-run node.
-		e.logger.Debugf("state[%s] not present: %v", blockPersisterHeightKey, err)
-		return nil
+		// SQL blockchain store returns sql.ErrNoRows directly for missing keys;
+		// future implementations may wrap into errors.ErrNotFound.
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errors.ErrNotFound) {
+			e.logger.Debugf("state[%s] not present: %v", blockPersisterHeightKey, err)
+			return nil
+		}
+		return errors.NewStorageError("failed to read state[%s]: %w", blockPersisterHeightKey, err)
 	}
 	if len(existing) == 0 {
 		return nil

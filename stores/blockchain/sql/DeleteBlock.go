@@ -56,7 +56,7 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()
-		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		rebuildCtx, rebuildCancel := context.WithTimeout(ctx, rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 		if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("DeleteBlock: %v", rebuildErr)

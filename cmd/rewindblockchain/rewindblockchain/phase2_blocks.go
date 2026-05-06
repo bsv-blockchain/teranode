@@ -88,7 +88,7 @@ func (e *env) rewindOneBlock(ctx context.Context, pf *preflightResult, bl blockT
 func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseHash *chainhash.Hash) error {
 	meta, err := e.utxoStore.Get(ctx, coinbaseHash, fields.BlockIDs)
 	if err != nil {
-		if errors.Is(err, errors.ErrTxNotFound) {
+		if isNotFound(err) {
 			return nil
 		}
 		return errors.NewStorageError("Get coinbase %s: %w", coinbaseHash.String(), err)
@@ -114,7 +114,7 @@ func (e *env) deleteCoinbase(ctx context.Context, pf *preflightResult, coinbaseH
 	}
 
 	if err = e.utxoStore.Delete(ctx, coinbaseHash); err != nil {
-		if !errors.Is(err, errors.ErrTxNotFound) {
+		if !isNotFound(err) {
 			return errors.NewStorageError("Delete coinbase: %w", err)
 		}
 	}
