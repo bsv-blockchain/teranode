@@ -237,3 +237,64 @@ func TestSetConflicting_ShouldInvalidateCache(t *testing.T) {
 	// If not found, that's correct — forces a store lookup which
 	// returns the correct value.
 }
+
+// forwardingStore lets a test configure the exact return values of SetConflicting
+// so we can verify that TxMetaCache.SetConflicting forwards them unchanged.
+type forwardingStore struct {
+	*nullstore.NullStore
+	spendsToReturn   []*utxo.Spend
+	childrenToReturn []chainhash.Hash
+	lastInput        []chainhash.Hash
+}
+
+func newForwardingStore(t testing.TB, spends []*utxo.Spend, children []chainhash.Hash) *forwardingStore {
+	t.Helper()
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+	require.NoError(t, ns.SetBlockHeight(100))
+	return &forwardingStore{
+		NullStore:        ns,
+		spendsToReturn:   spends,
+		childrenToReturn: children,
+	}
+}
+
+func (s *forwardingStore) SetConflicting(_ context.Context, txHashes []chainhash.Hash, _ bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	s.lastInput = append([]chainhash.Hash(nil), txHashes...)
+	return s.spendsToReturn, s.childrenToReturn, nil
+}
+
+// TestSetConflicting_ForwardsReturnValues proves that TxMetaCache.SetConflicting
+// does not silently discard the affected-spends slice and the spending-children
+// slice returned by the underlying store. Before the fix, the wrapper returned
+// (nil, txHashes, nil) — echoing the input hashes back as "children" and dropping
+// the spends. A recursive caller like MarkConflictingRecursively would then see
+// its own input fed back, the visited dedup would reject it, and BFS would
+// terminate after one level with no cascade.
+func TestSetConflicting_ForwardsReturnValues(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := testHash(1)
+	childHash := testHash(2)
+	grandchildHash := testHash(3)
+
+	parentSpendTxID := parentHash
+	expectedSpends := []*utxo.Spend{{TxID: &parentSpendTxID, Vout: 0}}
+	expectedChildren := []chainhash.Hash{childHash, grandchildHash}
+
+	store := newForwardingStore(t, expectedSpends, expectedChildren)
+
+	c, err := NewTxMetaCache(ctx, test.CreateBaseTestSettings(t), ulogger.TestLogger{}, store, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	spends, children, err := cache.SetConflicting(ctx, []chainhash.Hash{parentHash}, true)
+	require.NoError(t, err)
+
+	require.Equal(t, expectedSpends, spends,
+		"wrapper must forward affected-parent-spends from underlying store")
+	require.Equal(t, expectedChildren, children,
+		"wrapper must forward spending-children from underlying store, not echo the input")
+	require.Equal(t, []chainhash.Hash{parentHash}, store.lastInput,
+		"underlying store should have received exactly the input hashes")
+}

@@ -58,7 +58,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestProcessConflicting_FrozenTxError(t *testing.T) {
 	conflictingTxHashes := []chainhash.Hash{subtree.CoinbasePlaceholderHashValue}
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -98,7 +98,7 @@ func TestProcessConflicting_TxNotConflictingError(t *testing.T) {
 	}, nil)
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -118,7 +118,7 @@ func TestProcessConflicting_GetTxError(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(nil, errors.NewProcessingError("database error"))
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -145,7 +145,7 @@ func TestProcessConflicting_GetCounterConflictingError(t *testing.T) {
 		Return([]chainhash.Hash{}, errors.NewProcessingError("counter conflicting error"))
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -180,7 +180,7 @@ func TestProcessConflicting_UnspendError(t *testing.T) {
 		Return(errors.NewProcessingError("unspend failed"))
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -223,7 +223,7 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 		Return([]*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
 
 	// Execute test
-	result, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -252,11 +252,13 @@ func TestMarkConflictingRecursively_Success(t *testing.T) {
 		Return(childAffectedSpends, []chainhash.Hash{}, nil)
 
 	// Execute test
-	result, err := markConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
+	result, markedHashes, err := MarkConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
 
 	// Assertions
 	require.NoError(t, err)
 	assert.Len(t, result, 2) // Should contain both parent and child spends
+	assert.Equal(t, []chainhash.Hash{txHash, childHash}, markedHashes,
+		"marked set must be returned in BFS order: input first, then cascaded child")
 	mockStore.AssertExpectations(t)
 }
 
@@ -271,10 +273,11 @@ func TestMarkConflictingRecursively_SetConflictingError(t *testing.T) {
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("set conflicting error"))
 
 	// Execute test
-	result, err := markConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
+	result, markedHashes, err := MarkConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
 
 	// Assertions
 	assert.Nil(t, result)
+	assert.Nil(t, markedHashes)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "set conflicting error")
 	mockStore.AssertExpectations(t)
@@ -292,12 +295,13 @@ func TestMarkConflictingRecursively_NoChildren(t *testing.T) {
 		Return(affectedSpends, []chainhash.Hash{}, nil)
 
 	// Execute test
-	result, err := markConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
+	result, markedHashes, err := MarkConflictingRecursively(ctx, mockStore, []chainhash.Hash{txHash})
 
 	// Assertions
 	require.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, txHash, *result[0].TxID)
+	assert.Equal(t, []chainhash.Hash{txHash}, markedHashes)
 	mockStore.AssertExpectations(t)
 }
 

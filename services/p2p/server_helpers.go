@@ -32,8 +32,8 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleBlockTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxBlockMessageSize {
+		s.logger.Errorf("[handleBlockTopic] message size %d exceeds max %d from peer %s", len(m), maxBlockMessageSize, fromID)
 		return
 	}
 
@@ -147,8 +147,8 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleSubtreeTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxSubtreeMessageSize {
+		s.logger.Errorf("[handleSubtreeTopic] message size %d exceeds max %d from peer %s", len(m), maxSubtreeMessageSize, fromID)
 		return
 	}
 
@@ -375,8 +375,8 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	)
 
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleRejectedTxTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, fromID)
+	if len(m) > maxRejectedTxMessageSize {
+		s.logger.Errorf("[handleRejectedTxTopic] message size %d exceeds max %d from peer %s", len(m), maxRejectedTxMessageSize, fromID)
 		return
 	}
 
@@ -968,6 +968,53 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// startPeerRegistryCleanup runs periodic TTL+LRU eviction on the peer registry
+// so it cannot grow unboundedly under churn.
+func (s *Server) startPeerRegistryCleanup(ctx context.Context) {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	interval := s.settings.P2P.PeerRegistryCleanupInterval
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ttl := s.settings.P2P.PeerRegistryTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	maxSize := s.settings.P2P.PeerRegistryMaxSize
+
+	s.peerRegistryCleanupTimer = time.NewTicker(interval)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Infof("[startPeerRegistryCleanup] stopping peer registry cleanup")
+				return
+			case <-s.peerRegistryCleanupTimer.C:
+				expired, lru := s.peerRegistry.Cleanup(maxSize, ttl)
+				size := s.peerRegistry.PeerCount()
+				if expired+lru > 0 {
+					s.logger.Infof("[startPeerRegistryCleanup] evicted %d expired and %d over-limit entries (registry size now %d)",
+						expired, lru, size)
+				}
+				// LRU cannot evict connected/banned peers; if exempt entries alone
+				// exceed maxSize, the registry stays over-cap until they age out.
+				// Surface that explicitly so it does not look like cleanup is broken.
+				if maxSize > 0 && size > maxSize {
+					s.logger.Warnf("[startPeerRegistryCleanup] registry size %d exceeds max %d — exempt (connected or banned) peers cannot be evicted",
+						size, maxSize)
+				}
+			}
+		}
+	}()
+
+	s.logger.Infof("[startPeerRegistryCleanup] started peer registry cleanup with interval %v, ttl %v, max size %d",
+		interval, ttl, maxSize)
 }
 
 // startPeerRegistryCacheSave starts periodic saving of peer registry cache

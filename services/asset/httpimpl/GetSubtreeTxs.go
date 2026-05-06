@@ -15,6 +15,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// SubtreeTx represents a transaction within a subtree.
+//
+// swagger:model SubtreeTx
 type SubtreeTx struct {
 	Index        int    `json:"index"`
 	TxID         string `json:"txid"`

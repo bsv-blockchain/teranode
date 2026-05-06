@@ -189,7 +189,7 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 
 	// Create block 4b with parentB (forking from block 3 [grandparent])
 	_, block4b := td.CreateTestBlock(t, block3gp, 10302, parentB)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b with parentB")
 
 	//                      / 4a [parent] -> 5a [child1, child2, parentSibling] (*)
@@ -207,10 +207,10 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 	t.Log("\n=== Extending Chain B to trigger reorg ===")
 
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0))
 
 	_, block6b := td.CreateTestBlock(t, block5b, 10502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0))
 
 	//                      / 4a [parent] -> 5a [child1, child2, parentSibling]
 	// 0 -> 1 -> 2 -> 3 [GP]

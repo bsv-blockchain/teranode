@@ -61,9 +61,24 @@ const (
 	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
 
-	// maxP2PMessageSize limits P2P message sizes to prevent memory exhaustion attacks.
-	// Messages exceeding this limit are rejected before parsing.
+	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
+	// Anything larger is dropped before parsing. Per-topic limits below should
+	// always be tighter than this; this is the safety net.
 	maxP2PMessageSize = 10 * 1024 * 1024 // 10MB
+
+	// Per-topic size limits. Each topic's payload is well-bounded, so these are
+	// kept tight to drop obvious abuse (e.g. multi-MB blobs) before JSON parsing
+	// and to give us a clear ceiling per message type.
+	//
+	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
+	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	maxBlockMessageSize   = 32 * 1024 // 32KB
+	maxSubtreeMessageSize = 32 * 1024 // 32KB
+	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
+	// peers list. Allow generous headroom for very large meshes.
+	maxNodeStatusMessageSize = 64 * 1024 // 64KB
+	// rejected_tx messages carry: tx hash, short reason string, peer ID.
+	maxRejectedTxMessageSize = 16 * 1024 // 16KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -121,10 +136,11 @@ type Server struct {
 	syncConnectionTimes               sync.Map         // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
-	peerMapCleanupTicker    *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize          int           // Maximum number of entries in peer maps
-	peerMapTTL              time.Duration // Time-to-live for peer map entries
-	registryCacheSaveTicker *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerMapCleanupTicker     *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize           int           // Maximum number of entries in peer maps
+	peerMapTTL               time.Duration // Time-to-live for peer map entries
+	registryCacheSaveTicker  *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerRegistryCleanupTimer *time.Ticker  // Ticker for periodic eviction of stale peer registry entries
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -330,6 +346,7 @@ func NewServer(
 		Logger:             logger,
 		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
 		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
+		StaticPeers:        tSettings.P2P.StaticPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
 		DHTMode:            dhtMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
@@ -536,8 +553,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[P2P Service] Shutting down during FSM wait")
+			return err
+		}
 		s.logger.Errorf("[P2P Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -635,6 +655,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start periodic save of peer registry cache
 	s.startPeerRegistryCacheSave(ctx)
+
+	// Start periodic eviction of stale peer registry entries
+	s.startPeerRegistryCleanup(ctx)
 
 	// Start sync coordinator (it handles all sync logic internally)
 	if s.syncCoordinator != nil {
@@ -910,8 +933,8 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
 	// Check message size before parsing to prevent memory exhaustion
-	if len(m) > maxP2PMessageSize {
-		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, peerID)
+	if len(m) > maxNodeStatusMessageSize {
+		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
 		return
 	}
 
@@ -1631,6 +1654,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.peerMapCleanupTicker != nil {
 		s.peerMapCleanupTicker.Stop()
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
+	// Stop the peer registry cleanup ticker
+	if s.peerRegistryCleanupTimer != nil {
+		s.peerRegistryCleanupTimer.Stop()
+		s.logger.Infof("[Stop] stopped peer registry cleanup ticker")
 	}
 
 	// Clear the peer maps to free memory

@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -880,4 +881,91 @@ func SetMinedWithSpent(t *testing.T, db utxostore.Store) {
 	require.Equal(t, []uint32{600, 601}, txMeta.BlockIDs)
 	require.Equal(t, []uint32{300, 301}, txMeta.BlockHeights)
 	require.Equal(t, []int{0, 1}, txMeta.SubtreeIdxs)
+}
+
+// MinedThenSpendAllPrunes covers the full delete-at-height lifecycle that
+// production nodes depend on for disk reclamation:
+//
+//  1. Create a tx marked as mined on the longest chain (block_ids populated).
+//     At this point its outputs are still unspent, so DAH should be NULL.
+//  2. Spend every output one by one via the normal Spend() path — this is
+//     the common production case (a tx is mined, then over time its outputs
+//     are consumed by child txs).
+//  3. Advance block height past any plausible DAH and run the pruner.
+//  4. Assert the tx is gone — which is only possible if DAH was set during
+//     spend (or via some other DAH path) and picked up by the pruner.
+//
+// If DAH is never set on a mined-then-spent tx, the pruner has nothing to
+// delete and the tx accumulates forever — the disk-bloat bug this test
+// guards against.
+//
+// The caller provides a started, ready pruner service because different
+// backends have different readiness requirements (e.g. aerospike builds
+// a secondary index asynchronously).
+func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.Service) {
+	ctx := context.Background()
+
+	require.NotNil(t, prunerSvc, "pruner service must be supplied and started by the caller")
+
+	const mineHeight uint32 = 1000
+	require.NoError(t, db.SetBlockHeight(mineHeight))
+
+	// Parent is referenced by Tx's input; create first (unmined is fine for this test).
+	_, err := db.Create(ctx, ParentTx, mineHeight-1)
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, ParentTx.TxIDChainHash()) }()
+
+	// Create Tx as UNMINED, then transition to mined via SetMinedMulti — this is the
+	// real production flow (tx arrives, gets validated, later a block includes it).
+	// Creating directly with WithMinedBlockInfo would skip the mined-transition path
+	// that the disk-bloat bug was observed under.
+	_, err = db.Create(ctx, Tx, mineHeight)
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
+
+	txHash := Tx.TxIDChainHash()
+
+	// Transition to mined on the longest chain. After this, block_ids is populated
+	// and unmined_since is NULL, but all outputs are still unspent — so DAH stays
+	// NULL (SetMinedMulti only sets DAH when outputs happen to already be spent).
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID:        100,
+		BlockHeight:    mineHeight,
+		SubtreeIdx:     0,
+		OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	// Sanity: tx is retrievable before spending.
+	_, err = db.Get(ctx, txHash)
+	require.NoError(t, err, "tx must be retrievable before spending")
+
+	// Spend every output via the normal Spend path — the exact path production uses.
+	for i, out := range Tx.Outputs {
+		spendTx := bt.NewTx()
+		require.NoError(t, spendTx.From(
+			txHash.String(), uint32(i),
+			out.LockingScript.String(),
+			out.Satoshis,
+		))
+		require.NoError(t, spendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+		_, err = db.Spend(ctx, spendTx, mineHeight+1)
+		require.NoError(t, err, "spending output %d should succeed", i)
+	}
+
+	// Advance block height well past any plausible DAH and run the pruner.
+	// DAH = blockHeight + 1 + retention; pruneHeight is chosen high enough that
+	// any reasonable retention value is cleared.
+	const pruneHeight uint32 = 1_000_000
+	require.NoError(t, db.SetBlockHeight(pruneHeight))
+
+	_, err = prunerSvc.Prune(ctx, pruneHeight, "<MinedThenSpendAllPrunes>")
+	require.NoError(t, err)
+
+	// The tx must no longer be retrievable. If DAH was never set, the pruner had
+	// nothing to delete, Get returns the tx, and the assertion fails — which is
+	// exactly the disk-bloat regression this test guards against.
+	_, err = db.Get(ctx, txHash)
+	require.Error(t, err, "tx must be deleted by pruner after all outputs are spent on a mined, on-longest-chain tx")
+	require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected ErrTxNotFound, got %v", err)
 }

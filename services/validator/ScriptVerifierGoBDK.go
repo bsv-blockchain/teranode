@@ -8,7 +8,6 @@ This verifier is only built when the 'bdk' build tag is specified.
 package validator
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -25,7 +24,6 @@ import (
 const (
 	errMsgInvalidTx = "ScriptVerifierGoBDK fail to VerifyScript"
 	errMsgPolicy    = "ScriptVerifierGoBDK fail to VerifyScript by policy settings"
-	errMsgConsensus = "ScriptVerifierGoBDK fail to CheckConsensus"
 )
 
 // init registers the Go-BDK script verifier with the verification factory
@@ -126,6 +124,9 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		panic(err)
 	}
 
+	se.SetAcceptNonStandardOutput(po.AcceptNonStdOutputs)
+	se.SetRequireStandard(po.RequireStandard)
+
 	return &scriptVerifierGoBDK{
 		logger: l,
 		policy: po,
@@ -174,15 +175,6 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 	}
 
 	// #nosec G115 -- blockHeight won't overflow
-	if consensus {
-		errConsensus := v.se.CheckConsensus(eTxBytes, intUtxoHeights, intBlockHeight)
-		if errConsensus != nil {
-			consensusErr := errors.NewTxConsensusError(errMsgConsensus, errConsensus)
-			return errors.NewTxInvalidError(errMsgInvalidTx, consensusErr)
-		}
-	}
-
-	// #nosec G115 -- blockHeight won't overflow
 	errVerify := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if errVerify != nil {
 		// Get the information of all utxo heights
@@ -192,9 +184,8 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		}
 
 		utxoInfoStr := strings.Join(utxoHeighstStr, "|")
-		errorLogMsg := fmt.Sprintf("%v \n\n TxID : %v\n\nBlock Height : %v\n\nUTXO Heights : %v\n\nerror:\n%v\n\n", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
-		v.logger.Warnf("%s", errorLogMsg)
+		v.logger.Warnf("%s txID=%s blockHeight=%d utxoHeights=%s error=%v", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
 		errCode := errVerify.Code()
 		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||

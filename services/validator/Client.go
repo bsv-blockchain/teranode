@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
@@ -39,6 +39,8 @@ import (
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/tracing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -130,7 +132,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			client.sendBatchToValidator(ctx, batch)
 		}
 		duration := time.Duration(sendBatchTimeout) * time.Millisecond
-		client.batcher = *batcher.New(sendBatchSize, duration, sendBatch, true)
+		client.batcher = *batcher.NewWithPool(sendBatchSize, duration, sendBatch, true,
+			batcher.WithName("validator_client"),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
+		)
 	}
 
 	return client, nil
@@ -251,7 +258,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// Batch mode
 	doneCh := make(chan validateBatchResponse)
-	c.batcher.Put(&batchItem{
+	c.batcher.PutCtx(ctx, &batchItem{
 		req: &validator_api.ValidateTransactionRequest{
 			TransactionData:      tx.SerializeBytes(),
 			BlockHeight:          blockHeight,

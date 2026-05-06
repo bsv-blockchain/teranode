@@ -1546,6 +1546,38 @@ func TestSmokeTests(t *testing.T) {
 
 		tests.Conflicting(t, store)
 	})
+
+	t.Run("aerospike_mined_then_spend_all_prunes", func(t *testing.T) {
+		// Pruner service is a process-wide singleton. Reset at both ends so
+		// this subtest doesn't leak a started service into later aerospike
+		// tests that expect GetPrunerService() to initialize fresh state.
+		teranode_aerospike.ResetPrunerServiceForTests()
+		t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+		_ = store.Delete(ctx, tests.TXHash)
+		_ = store.Delete(ctx, tests.ParentTx.TxIDChainHash())
+
+		prunerSvc, err := store.GetPrunerService()
+		require.NoError(t, err)
+		require.NotNil(t, prunerSvc)
+		prunerSvc.Start(ctx)
+
+		// Aerospike builds its secondary index asynchronously after Start; wait
+		// for the pruner to accept work before handing off to the shared suite.
+		waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer waitCancel()
+		for {
+			_, pruneErr := prunerSvc.Prune(waitCtx, 1, "<readiness-probe>")
+			if pruneErr == nil {
+				break
+			}
+			if waitCtx.Err() != nil {
+				require.NoError(t, pruneErr, "aerospike pruner did not become ready")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
+	})
 }
 
 func TestCreateZeroSat(t *testing.T) {

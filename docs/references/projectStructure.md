@@ -72,8 +72,7 @@ teranode/
 │   │   ├── stores/              # Store reference documentation
 │   │   ├── settings/            # Settings reference documentation
 │   │   └── kafkaMessageFormat.md # Kafka message format documentation
-│   ├── topics/                   # Topic-based documentation
-│   └── tutorials/                # Step-by-step tutorials
+│   └── topics/                   # Topic-based documentation
 │
 ├── compose/                      # Docker compose configurations
 │

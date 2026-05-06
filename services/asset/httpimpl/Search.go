@@ -13,6 +13,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// swagger:model searchResult
 type res struct {
 	Type string `json:"type"`
 	Hash string `json:"hash"`

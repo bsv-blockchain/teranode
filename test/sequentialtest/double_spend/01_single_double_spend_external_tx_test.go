@@ -55,7 +55,7 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 	// create 103A
 	// 0 -> 1 ... 101 -> 102a -> 103a (*)
 	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	// Create block 102b with a double spend external transaction
@@ -68,7 +68,7 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 	// Create block 103b to make the longest chain...
 	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	td.WaitForBlockHeight(t, block104b, blockWait, true)
@@ -94,11 +94,11 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 
 	// Fork back to the original chain and check that everything is processed properly
 	_, block104a := td.CreateTestBlock(t, block103a, 10401) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	_, block105a := td.CreateTestBlock(t, block104a, 10501) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy", 0),
 		"Failed to process block")
 
 	td.WaitForBlock(t, block105a, blockWait)

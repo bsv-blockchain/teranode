@@ -247,7 +247,7 @@ Note that the node is initialized in IDLE mode by default. You'll need to transi
 
 ### 7.1. Executing the Teranode-CLI as a Developer
 
-The Teranode-CLI allows you to interact with Teranode services. You can use it to transition the node to different states, query its current state, and perform various maintenance operations. For a comprehensive guide on using the Teranode-CLI as a developer, see the [Developer's Guide to Teranode-CLI](../../howto/developersHowToTeranodeCLI.md).
+The Teranode-CLI allows you to interact with Teranode services. You can use it to transition the node to different states, query its current state, and perform various maintenance operations. For a comprehensive guide on using the Teranode-CLI as a developer, see the [Developer's Guide to Teranode-CLI](./developersHowToTeranodeCLI.md).
 
 #### Building the Teranode-CLI
 
@@ -377,7 +377,7 @@ This method allows you to start the application with Delve and attach your IDE r
 
 For debugging Teranode running in Kubernetes environments:
 
-- See the [Remote Debug Guide](../../howto/howToRemoteDebugTeranode.md) for detailed instructions on:
+- See the [Remote Debug Guide](./howToRemoteDebugTeranode.md) for detailed instructions on:
 
     - Configuring the Kubernetes cluster for remote debugging
     - Port forwarding the debugger
@@ -517,4 +517,4 @@ Running `init` again presents your previous choices as defaults - just press ent
 
 ## Next Steps
 
-- [Check our Git Commit Signing Setup Guide for Contributors](../../references/gitCommitSigningSetupGuide.md)
+- [Check our Git Commit Signing Setup Guide for Contributors](../references/gitCommitSigningSetupGuide.md)

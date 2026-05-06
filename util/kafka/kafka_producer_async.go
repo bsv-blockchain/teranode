@@ -90,7 +90,9 @@ type KafkaAsyncProducer struct {
 	Config         KafkaProducerConfig // Producer configuration
 	client         *kgo.Client         // Underlying franz-go client
 	publishChannel chan *Message       // Channel for publishing messages
+	shuttingDown   atomic.Bool         // Flag indicating shutdown has started (reject new publishes)
 	closed         atomic.Bool         // Flag indicating if producer is closed
+	adaptiveSlow   atomic.Bool         // Flag enabling adaptive batching during constrained bandwidth
 	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
 	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
 
@@ -180,6 +182,10 @@ func clampBatchMaxBytes(flushBytes int) int32 {
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
+	producer := &KafkaAsyncProducer{
+		Config: cfg,
+	}
+
 	if cfg.URL != nil && cfg.URL.Scheme == memoryScheme {
 		broker := inmemorykafka.GetSharedBroker()
 		bufferSize := 256
@@ -231,6 +237,14 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		slowCfg = DefaultSlowTransferConfig()
 	}
 	hook := newProducerMetricsHook(logger, cfg.Topic, slowCfg)
+	hook.setSlowStateHandler(func(slow bool, rateBps float64) {
+		producer.adaptiveSlow.Store(slow)
+		if slow {
+			logger.Infof("[kafka] enabling adaptive batching on topic %s (observed %.1f KB/s)", cfg.Topic, rateBps/1024)
+			return
+		}
+		logger.Infof("[kafka] restoring normal batching on topic %s", cfg.Topic)
+	})
 	opts = append(opts, kgo.WithHooks(hook))
 
 	// Create the franz-go client
@@ -245,12 +259,75 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		return nil, err
 	}
 
-	producer := &KafkaAsyncProducer{
-		Config: cfg,
-		client: client,
-	}
+	producer.client = client
 
 	return producer, nil
+}
+
+func (c *KafkaAsyncProducer) currentBatchLinger() time.Duration {
+	if c.adaptiveSlow.Load() {
+		linger := c.Config.FlushFrequency * 4
+		if linger < 200*time.Millisecond {
+			linger = 200 * time.Millisecond
+		}
+		if linger > 5*time.Second {
+			linger = 5 * time.Second
+		}
+		return linger
+	}
+	if c.Config.FlushFrequency <= 0 {
+		return 10 * time.Second
+	}
+	return c.Config.FlushFrequency
+}
+
+func (c *KafkaAsyncProducer) currentBatchSize() int {
+	base := c.Config.FlushMessages
+	if base <= 0 {
+		base = 1000
+	}
+	if c.adaptiveSlow.Load() {
+		sz := base * 4
+		if sz < 100 {
+			sz = 100
+		}
+		if sz > 20000 {
+			sz = 20000
+		}
+		return sz
+	}
+	if base < 1 {
+		return 1
+	}
+	return base
+}
+
+func (c *KafkaAsyncProducer) currentBackpressureThreshold() int {
+	threshold := c.currentBatchSize() * 2
+	if threshold < 200 {
+		return 200
+	}
+	return threshold
+}
+
+func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered []*Message) {
+	for _, msgBytes := range buffered {
+		if c.closed.Load() || c.shuttingDown.Load() {
+			return
+		}
+		record := &kgo.Record{
+			Topic: c.Config.Topic,
+			Key:   msgBytes.Key,
+			Value: msgBytes.Value,
+		}
+		c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
+			if err != nil {
+				c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %x", r.Topic, err, r.Key)
+			} else {
+				c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
+			}
+		})
+	}
 }
 
 // Start begins the async producer operation.
@@ -258,6 +335,8 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
+	c.shuttingDown.Store(false)
+	c.closed.Store(false)
 
 	// Handle in-memory case
 	if c.isInMemory {
@@ -285,30 +364,131 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			ch := c.publishChannel
 			c.channelMu.RUnlock()
 
-			for msgBytes := range ch {
-				if c.closed.Load() {
-					break
-				}
+			buffered := make([]*Message, 0, 256)
+			backpressureLogged := false
+			bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
+			backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
+			bufferedGauge.Set(0)
 
-				record := &kgo.Record{
-					Topic: c.Config.Topic,
-					Key:   msgBytes.Key,
-					Value: msgBytes.Value,
-				}
+			slowMode := c.adaptiveSlow.Load()
+			linger := c.currentBatchLinger()
+			maxBatch := c.currentBatchSize()
+			backpressureThreshold := c.currentBackpressureThreshold()
 
-				if c.closed.Load() {
-					break
-				}
+			const metricsUpdateInterval = 64
+			metricTick := 0
 
-				// Produce asynchronously with callback
-				c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
-					if err != nil {
-						c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %x", r.Topic, err, r.Key)
-					} else {
-						c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
+			var lingerTimer *time.Timer
+			var lingerCh <-chan time.Time
+			defer func() {
+				if lingerTimer == nil {
+					return
+				}
+				if !lingerTimer.Stop() {
+					select {
+					case <-lingerTimer.C:
+					default:
 					}
-				})
+				}
+			}()
+
+			resetLingerTimer := func(d time.Duration) {
+				if lingerTimer == nil {
+					lingerTimer = time.NewTimer(d)
+				} else {
+					if !lingerTimer.Stop() {
+						select {
+						case <-lingerTimer.C:
+						default:
+						}
+					}
+					lingerTimer.Reset(d)
+				}
+				lingerCh = lingerTimer.C
 			}
+
+			flushBufferedFinal := func() {
+				if len(buffered) == 0 {
+					return
+				}
+				// Use a fresh context so final drain still runs after parent cancellation.
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer flushCancel()
+				c.flushBuffered(flushCtx, buffered)
+				buffered = buffered[:0]
+				bufferedGauge.Set(0)
+			}
+
+			for {
+				if c.closed.Load() || c.shuttingDown.Load() {
+					break
+				}
+
+				newSlowMode := c.adaptiveSlow.Load()
+				if newSlowMode != slowMode {
+					slowMode = newSlowMode
+					linger = c.currentBatchLinger()
+					maxBatch = c.currentBatchSize()
+					backpressureThreshold = c.currentBackpressureThreshold()
+				}
+
+				metricTick++
+				if metricTick >= metricsUpdateInterval {
+					bufferedGauge.Set(float64(len(buffered)))
+					metricTick = 0
+				}
+
+				if len(buffered) > backpressureThreshold {
+					if !backpressureLogged {
+						backpressureLogged = true
+						backpressureCounter.Inc()
+						c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
+							c.Config.Topic, len(buffered), backpressureThreshold)
+					}
+				} else {
+					backpressureLogged = false
+				}
+
+				if len(buffered) == 0 {
+					msgBytes, ok := <-ch
+					if !ok {
+						break
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+					continue
+				}
+
+				if len(buffered) >= maxBatch {
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+					continue
+				}
+
+				resetLingerTimer(linger)
+
+				select {
+				case msgBytes, ok := <-ch:
+					if !ok {
+						flushBufferedFinal()
+						return
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+				case <-lingerCh:
+					lingerCh = nil
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+				case <-internalCtx.Done():
+					flushBufferedFinal()
+					return
+				}
+			}
+
 		}()
 
 		signals := make(chan os.Signal, 1)
@@ -401,11 +581,15 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
-	if c.closed.Load() {
+	if c.shuttingDown.Load() {
 		return nil
 	}
 
-	c.closed.Store(true)
+	c.shuttingDown.Store(true)
+
+	if c.closed.Load() {
+		return nil
+	}
 
 	c.channelMu.Lock()
 	ch := c.publishChannel
@@ -416,6 +600,7 @@ func (c *KafkaAsyncProducer) Stop() error {
 	c.channelMu.Unlock()
 
 	c.publishWg.Wait()
+	c.closed.Store(true)
 
 	if c.isInMemory {
 		if c.inMemoryProducer != nil {
@@ -455,7 +640,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.channelMu.RLock()
 	defer c.channelMu.RUnlock()
 
-	if c.closed.Load() || c.publishChannel == nil {
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 

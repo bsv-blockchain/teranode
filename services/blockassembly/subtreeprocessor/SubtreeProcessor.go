@@ -151,6 +151,12 @@ type RemainderTransactionParams struct {
 	CurrentSubtree    *subtreepkg.Subtree
 	TransactionMap    *SplitSwissMap
 	LosingTxHashesMap txmap.TxMap
+	// ConflictingHashes is the transient set of every tx hash flagged
+	// Conflicting=true by the cascade that triggered this drain (immediate
+	// losers + every descendant returned by MarkConflictingRecursively).
+	// Scoped to a single drain — the dequeue filter checks self-hash and
+	// every TxInpoints.ParentTxHashes entry, then the set is discarded.
+	ConflictingHashes map[chainhash.Hash]struct{}
 	CurrentTxMap      TxInpointsMap
 	SkipDequeue       bool
 	SkipNotification  bool
@@ -749,9 +755,12 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					stp.setCurrentRunningState(StateRunning)
 
 				case <-stp.announcementTicker.C:
-					// Periodically announce the current subtree if it has transactions
-					if stp.currentSubtree.Load().Length() > 1 {
-						logger.Debugf("[SubtreeProcessor] periodic announcement of current subtree with %d transactions", stp.currentSubtree.Load().Length()-1)
+					// Periodically announce the current subtree if it has transactions.
+					// Skip if the subtree is nearly full: a complete subtree is imminent and
+					// a partial here would just duplicate the announcement that follows.
+					currentSt := stp.currentSubtree.Load()
+					if currentSt.Length() > 1 && !nearlyFullSubtree(currentSt) {
+						logger.Debugf("[SubtreeProcessor] periodic announcement of current subtree with %d transactions", currentSt.Length()-1)
 
 						incompleteSubtree, err := stp.createIncompleteSubtreeCopy()
 						if err != nil {
@@ -943,6 +952,26 @@ func (stp *SubtreeProcessor) setCurrentRunningState(state State) {
 	prometheusSubtreeProcessorCurrentState.Set(float64(state))
 }
 
+// nearlyFullSubtreeThresholdPct is the fill percentage at or above which the periodic
+// announcement skips emitting a partial subtree, because a complete subtree is imminent.
+const nearlyFullSubtreeThresholdPct = 90
+
+// nearlyFullSubtree reports whether the subtree is at or above the threshold fill ratio,
+// indicating that natural completion is imminent and a partial announcement would just
+// duplicate the full one that is about to follow.
+func nearlyFullSubtree(st *subtreepkg.Subtree) bool {
+	if st == nil {
+		return false
+	}
+
+	capacity := st.Size()
+	if capacity <= 0 {
+		return false
+	}
+
+	return st.Length()*100 >= capacity*nearlyFullSubtreeThresholdPct
+}
+
 // resetAnnouncementTicker safely resets the announcement ticker by draining any pending ticks
 // before resetting. This prevents an immediate tick if one was already queued.
 //
@@ -962,13 +991,28 @@ func (stp *SubtreeProcessor) resetAnnouncementTicker() {
 // It creates a new subtree with the same configuration and copies all nodes (except coinbase placeholder)
 // from the current subtree.
 //
+// The new subtree is sized to match the source subtree's capacity, not the current
+// currentItemsPerFile setting. adjustSubtreeSize can shrink currentItemsPerFile
+// between blocks while the in-flight currentSubtree retains its larger original
+// capacity; sizing the copy off currentItemsPerFile in that window would overflow.
+//
 // Returns:
 //   - *subtreepkg.Subtree: The incomplete subtree copy, or nil if creation failed
 //   - error: Any error encountered during subtree creation or node copying
 func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree, error) {
-	itemsPerFile := int(stp.currentItemsPerFile.Load())
+	currentSt := stp.currentSubtree.Load()
+	if currentSt == nil {
+		return nil, errors.NewProcessingError("createIncompleteSubtreeCopy: no current subtree")
+	}
 
-	incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(itemsPerFile)
+	capacity := currentSt.Size()
+	if capacity <= 0 {
+		// Fall back to the configured size if the current subtree somehow reports
+		// no capacity; NewTreeByLeafCount will reject zero/negative values.
+		capacity = int(stp.currentItemsPerFile.Load())
+	}
+
+	incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -979,7 +1023,6 @@ func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree,
 	}
 
 	// Copy all nodes from current subtree (skipping the coinbase placeholder at index 0)
-	currentSt := stp.currentSubtree.Load()
 	for _, node := range currentSt.Nodes[1:] {
 		if err = incompleteSubtree.AddSubtreeNodeWithoutLock(node); err != nil {
 			return nil, err
@@ -1237,7 +1280,12 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					block.Height = blockHeaderMeta.Height
 				}
 
-				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap)
+				// The Reset path replays moveForwardBlocks and discards the entire
+				// queue at the end (see the validUntilMillis drain after
+				// postProcess). Any in-flight tx whose parent gets cascaded here
+				// is dropped by that drain regardless of cascade discovery, so
+				// the per-block transient set is not needed here.
+				losingTxHashesMap, _, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap)
 				if err != nil {
 					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 				}
@@ -2604,7 +2652,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	}
 
 	// dequeueDuringBlockMovement all transactions that are in the queue
-	if err = stp.dequeueDuringBlockMovement(nil, nil, true); err != nil {
+	if err = stp.dequeueDuringBlockMovement(nil, nil, nil, true); err != nil {
 		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
 	}
 
@@ -3220,10 +3268,19 @@ func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, b
 	return transactionMap, conflictingNodes, nil
 }
 
-// processConflictingTransactions handles conflicting transactions and returns losing transaction hashes
+// processConflictingTransactions handles conflicting transactions and returns
+// losing transaction hashes plus the transient conflicting-hash set populated
+// from the BFS cascade. Callers feed the set into the immediately-following
+// dequeueDuringBlockMovement so any queue-resident children of cascaded
+// parents are rejected before the default-case dequeue picks them up. The
+// set is scoped to this single block-movement event and not persisted on the
+// processor.
 func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context, block *model.Block,
-	conflictingNodes []chainhash.Hash, processedConflictingHashesMap map[chainhash.Hash]bool) (txmap.TxMap, error) {
-	var losingTxHashesMap txmap.TxMap
+	conflictingNodes []chainhash.Hash, processedConflictingHashesMap map[chainhash.Hash]bool) (txmap.TxMap, map[chainhash.Hash]struct{}, error) {
+	var (
+		losingTxHashesMap txmap.TxMap
+		conflictingSet    map[chainhash.Hash]struct{}
+	)
 
 	// process conflicting txs
 	if len(conflictingNodes) > 0 {
@@ -3239,32 +3296,40 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 		// we can then process the conflicting transactions
 		_, err := stp.waitForBlockBeingMined(ctx, block.Header.Hash())
 		if err != nil {
-			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error waiting for block to be mined", block.String(), err)
+			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error waiting for block to be mined", block.String(), err)
 		}
 
 		if block.Height == 0 {
 			// get the block height from the blockchain client
 			_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
 			if err != nil {
-				return nil, errors.NewProcessingError("[moveForwardBlock][%s] error getting block header for genesis block", block.String(), err)
+				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error getting block header for genesis block", block.String(), err)
 			}
 
 			block.Height = blockHeaderMeta.Height
 		}
 
-		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap); err != nil {
-			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+		var allMarkedConflicting []chainhash.Hash
+		if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap); err != nil {
+			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+		}
+
+		if len(allMarkedConflicting) > 0 {
+			conflictingSet = make(map[chainhash.Hash]struct{}, len(allMarkedConflicting))
+			for _, h := range allMarkedConflicting {
+				conflictingSet[h] = struct{}{}
+			}
 		}
 
 		if losingTxHashesMap.Length() > 0 {
 			// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 			if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
-				return nil, errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
+				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
 			}
 		}
 	}
 
-	return losingTxHashesMap, nil
+	return losingTxHashesMap, conflictingSet, nil
 }
 
 // resetSubtreeState resets the current subtree state and returns the old state
@@ -3345,7 +3410,7 @@ func (stp *SubtreeProcessor) processRemainderTransactionsAndDequeue(ctx context.
 		stp.logger.Debugf("[moveForwardBlock][%s] processing queue while moveForwardBlock: %d", params.Block.String(), stp.queue.length())
 
 		if !params.SkipDequeue {
-			if err := stp.dequeueDuringBlockMovement(params.TransactionMap, params.LosingTxHashesMap, params.SkipNotification); err != nil {
+			if err := stp.dequeueDuringBlockMovement(params.TransactionMap, params.LosingTxHashesMap, params.ConflictingHashes, params.SkipNotification); err != nil {
 				return errors.NewProcessingError("[moveForwardBlock][%s] error moving up block deQueue", params.Block.String(), err)
 			}
 		}
@@ -3532,7 +3597,8 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	// Process conflicting transactions
-	losingTxHashesMap, err = stp.processConflictingTransactions(ctx, block, conflictingNodes, processedConflictingHashesMap)
+	var conflictingHashes map[chainhash.Hash]struct{}
+	losingTxHashesMap, conflictingHashes, err = stp.processConflictingTransactions(ctx, block, conflictingNodes, processedConflictingHashesMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3552,6 +3618,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		CurrentSubtree:    originalCurrentSubtree,
 		TransactionMap:    transactionMap,
 		LosingTxHashesMap: losingTxHashesMap,
+		ConflictingHashes: conflictingHashes,
 		CurrentTxMap:      originalCurrentTxMap,
 		SkipDequeue:       skipDequeue,
 		SkipNotification:  skipNotification,
@@ -3666,16 +3733,43 @@ func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	return err
 }
 
+// DrainQueue is the public entry point for BlockAssembler to flush in-flight
+// children of conflicting parents from the input queue before the event-loop
+// goroutine starts (BA.Start path) or before the existing post-postProcess
+// drain runs (Reset path's postProcess closure).
+//
+// Internally calls dequeueDuringBlockMovement with the supplied transient
+// drop set as the filter. Non-conflicting txs in the queue are added to the
+// current subtree as part of the same drain — same routing as default-case
+// dequeue would have used. skipNotification=true so this is safe to invoke
+// before subtree-announcement listeners are wired up.
+func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) {
+	if len(dropHashes) == 0 {
+		return
+	}
+	if err := stp.dequeueDuringBlockMovement(nil, nil, dropHashes, true); err != nil {
+		stp.logger.Errorf("[SubtreeProcessor][DrainQueue] error: %v", err)
+	}
+}
+
 // dequeueDuringBlockMovement processes the transaction queue during block movement.
 //
 // Parameters:
 //   - transactionMap: Map of transactions that were in the block and need to be removed
 //   - losingTxHashesMap: Map of transactions that were conflicting and need to be removed
+//   - conflictingHashes: transient set of every tx hash flagged Conflicting=true
+//     by the cascade that triggered this drain (immediate losers + every
+//     descendant returned by MarkConflictingRecursively). May be nil/empty.
+//     A queued tx is rejected if its own hash is in the set OR any hash in
+//     its TxInpoints.ParentTxHashes is in the set; on rejection by parent
+//     match the tx's own hash is added to the set so any later-in-batch
+//     descendants are also caught. The set is scoped to this single drain
+//     and discarded by the caller.
 //   - skipNotification: Whether to skip notification of new subtrees
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrBatchesProcessed := int64(0)
@@ -3691,9 +3785,33 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 			for i, node := range batch.nodes {
 				txInpoints := batch.txInpoints[i]
 
-				if (transactionMap == nil || !transactionMap.Exists(node.Hash)) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(node.Hash)) {
-					_ = stp.addNode(node, txInpoints, skipNotification)
+				if transactionMap != nil && transactionMap.Exists(node.Hash) {
+					continue
 				}
+				if losingTxHashesMap != nil && losingTxHashesMap.Exists(node.Hash) {
+					continue
+				}
+
+				if len(conflictingHashes) > 0 {
+					if _, ok := conflictingHashes[node.Hash]; ok {
+						continue
+					}
+					if txInpoints != nil {
+						matched := false
+						for _, parent := range txInpoints.ParentTxHashes {
+							if _, ok := conflictingHashes[parent]; ok {
+								matched = true
+								break
+							}
+						}
+						if matched {
+							conflictingHashes[node.Hash] = struct{}{}
+							continue
+						}
+					}
+				}
+
+				_ = stp.addNode(node, txInpoints, skipNotification)
 			}
 
 			prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(batch.nodes)))

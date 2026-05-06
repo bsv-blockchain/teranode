@@ -1030,6 +1030,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		// Blocks until the FSM transitions from the IDLE state
 		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
 		if err != nil {
+			if errors.IsContextError(err) {
+				u.logger.Infof("[Block Validation Service] Shutting down during FSM wait")
+				return err
+			}
 			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 			return err
 		}
@@ -1260,6 +1264,13 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	block.Height = height
+
+	// If a block ID was pre-assigned by the caller (e.g. legacy netsync in LEGACYSYNCING mode),
+	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
+	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	if request.BlockId != 0 {
+		block.ID = request.BlockId
+	}
 
 	baseURL := request.BaseUrl
 	if baseURL == "" {

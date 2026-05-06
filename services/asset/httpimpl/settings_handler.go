@@ -37,6 +37,8 @@ func NewSettingsHandler(s *settings.Settings, logger ulogger.Logger) *SettingsHa
 }
 
 // SettingsResponse represents the API response for settings.
+//
+// swagger:model SettingsResponse
 type SettingsResponse struct {
 	Settings   []settings.SettingMetadata `json:"settings"`
 	Categories []string                   `json:"categories"`

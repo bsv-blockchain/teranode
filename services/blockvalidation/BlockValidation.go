@@ -1101,6 +1101,32 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //   - disableOptimisticMining: Optional flag to force standard validation
 //
 // Returns an error if validation fails or nil on success.
+
+// buildAddBlockOpts returns AddBlock options for the block.
+//
+// When block.ID is pre-assigned (set by legacy netsync in LEGACYSYNCING mode), it uses that ID
+// and sets mined_set=true upfront. This causes the setMinedChan worker to skip setTxMinedStatus
+// via its existing MinedSet guard (BlockValidation.go setMinedChan worker, MinedSet check),
+// eliminating redundant SetMinedMulti calls for every UTXO.
+//
+// Trade-off: skipping setTxMinedStatus also skips its post-storage double-spend cross-check
+// (UpdateTxMinedStatus → SetMinedMulti). This is safe for LEGACYSYNCING because:
+//  1. block.Valid() performs pre-storage double-spend detection via checkParentExistsOnChain
+//     before AddBlock is called.
+//  2. LEGACYSYNCING processes a canonical chain with trusted historical blocks.
+//
+// For any block arriving without a pre-assigned ID (block.ID == 0), this function returns nil
+// and AddBlock behaves exactly as before — setTxMinedStatus runs normally.
+func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
+	if block.ID == 0 {
+		return nil
+	}
+	return []blockchainoptions.StoreBlockOption{
+		blockchainoptions.WithID(uint64(block.ID)),
+		blockchainoptions.WithMinedSet(true),
+	}
+}
+
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
 	// Convert legacy parameters to options
 	opts := &ValidateBlockOptions{}
@@ -1363,7 +1389,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 			}
 
-			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID); err != nil {
+			addBlockOpts := u.buildAddBlockOpts(block)
+			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID, addBlockOpts...); err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 			}
 
@@ -1534,7 +1561,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 				}
 
-				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID); err != nil {
+				addBlockOpts := u.buildAddBlockOpts(block)
+				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
 					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 				}
 			}

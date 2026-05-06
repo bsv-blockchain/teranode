@@ -136,7 +136,7 @@ func TestPrunerUnminedParentRetention(t *testing.T) {
 
 	for i := 0; i < 8; i++ {
 		_, newBlock := node.CreateTestBlock(t, prevBlock, uint32(9000+i))
-		err = node.BlockValidationClient.ProcessBlock(ctx, newBlock, newBlock.Height, "", "legacy")
+		err = node.BlockValidationClient.ProcessBlock(ctx, newBlock, newBlock.Height, "", "legacy", 0)
 		require.NoError(t, err)
 		t.Logf("Processed empty block at height %d", newBlock.Height)
 		prevBlock = newBlock
@@ -269,7 +269,7 @@ func TestPrunerMixedChildrenParentPreservation(t *testing.T) {
 
 	// Block 1: includes minedChild (tx1 spending parent output 0)
 	_, block := node.CreateTestBlock(t, prevBlock, 9000, minedChild)
-	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy", 0)
 	require.NoError(t, err)
 	t.Logf("Block %d: mined child (tx1) %s included (spends parent output 0)", block.Height, minedChildHash)
 	prevBlock = block
@@ -277,7 +277,7 @@ func TestPrunerMixedChildrenParentPreservation(t *testing.T) {
 	// Blocks 2-8: empty blocks to exceed parent's DAH
 	for i := 1; i < 8; i++ {
 		_, block = node.CreateTestBlock(t, prevBlock, uint32(9000+i))
-		err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+		err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy", 0)
 		require.NoError(t, err)
 		prevBlock = block
 	}

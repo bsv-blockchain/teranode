@@ -92,6 +92,8 @@ type KafkaConsumerGroup struct {
 	client   *kgo.Client
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
+	closeMu  sync.Mutex
+	closed   bool
 
 	// For in-memory support
 	inMemoryConsumer *inmemorykafka.InMemoryConsumerGroup
@@ -208,13 +210,25 @@ func (k *KafkaConsumerGroup) Close() error {
 			}
 		}
 	} else {
-		if k.client != nil {
-			k.client.Close()
-			k.Config.Logger.Infof("[Kafka] %s: successfully closed consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
-		}
+		k.closeClient()
 	}
 
 	return nil
+}
+
+func (k *KafkaConsumerGroup) closeClient() {
+	k.closeMu.Lock()
+	defer k.closeMu.Unlock()
+
+	if k.closed {
+		return
+	}
+
+	if k.client != nil {
+		k.client.Close()
+	}
+	k.closed = true
+	k.Config.Logger.Infof("[Kafka] %s: successfully closed consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 }
 
 // NewKafkaConsumerGroup creates a new Kafka consumer group using franz-go
@@ -494,9 +508,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.ConsumerGroupID)
 		}
 
-		if k.client != nil {
-			k.client.Close()
-		}
+		k.closeClient()
 	}()
 }
 

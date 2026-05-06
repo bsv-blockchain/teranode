@@ -48,8 +48,17 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
+// ProcessConflicting returns:
+//   - losingTxHashesMap: hashes of txs displaced by the winners (the immediate
+//     counter-conflicting set from GetCounterConflicting). Used by callers to
+//     mark losers in subtrees / drop them from upstream paths.
+//   - allMarkedConflicting: every hash marked Conflicting=true during this run,
+//     in BFS order — losers + every descendant the cascade reached. Callers
+//     (notably block assembly) need this superset to populate a conflictingMap
+//     so the queue→subtree dequeue path can reject children of conflicting
+//     parents that arrive after the cascade has run.
 func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, conflictingTxHashes []chainhash.Hash,
-	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, err error) {
+	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
@@ -70,7 +79,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 
 		if txHash.Equal(subtree.CoinbasePlaceholderHashValue) {
 			// the counter-conflicting tx is frozen, we should not process anything further
-			return nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
+			return nil, nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
 		}
 
 		g.Go(func() error {
@@ -102,7 +111,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// create a unique list of all the losing tx hashes
@@ -118,15 +127,18 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 
 	losingTxHashes := losingTxHashesMap.Keys()
 
-	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively
-	affectedParentSpends, err := markConflictingRecursively(ctx, s, losingTxHashes)
+	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
+	//   markedOrder is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
+	//   the block-assembly conflictingMap can include the cascaded descendants (not just the immediate losers).
+	affectedParentSpends, markedOrder, err := MarkConflictingRecursively(ctx, s, losingTxHashes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	allMarkedConflicting = markedOrder
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
-		return nil, errors.NewProcessingError("error unspending affected parent spends", err)
+		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
 
 	// get the unique hashes of the transactions that were marked as not spendable
@@ -158,24 +170,24 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 				}
 			}
 
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// - 4: mark txb as not conflicting
 	if _, _, err = s.SetConflicting(ctx, conflictingTxHashes, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// - 5: mark txp & txq as spendable again
 	if err = s.SetLocked(ctx, markedAsNotSpendableHashes, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return losingTxHashesMap, nil
+	return losingTxHashesMap, allMarkedConflicting, nil
 }
 
-// markConflictingRecursively marks the given transactions as conflicting, and iteratively marks all their spending
+// MarkConflictingRecursively marks the given transactions as conflicting, and iteratively marks all their spending
 // children as conflicting too using breadth-first traversal.
 //
 // Parameters:
@@ -185,9 +197,13 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 //
 // Returns:
 //   - A slice of pointers to Spend structs representing the affected parent spends.
+//   - A slice of all transaction hashes that were marked conflicting by this call,
+//     including the input hashes and every descendant reached via BFS. Insertion
+//     order is BFS order (input level first, then each descendant level) — callers
+//     can rely on this for deterministic logs, traces, and eviction ordering.
 //   - An error if any issues occur during the process.
-func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, error) {
-	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "markConflictingRecursively")
+func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, []chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "MarkConflictingRecursively")
 
 	defer deferFn()
 
@@ -195,14 +211,18 @@ func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	toProcess := hashes
 
 	visited := make(map[chainhash.Hash]struct{}, len(hashes))
+	markedOrder := make([]chainhash.Hash, 0, len(hashes))
 	for _, h := range hashes {
-		visited[h] = struct{}{}
+		if _, ok := visited[h]; !ok {
+			visited[h] = struct{}{}
+			markedOrder = append(markedOrder, h)
+		}
 	}
 
 	for len(toProcess) > 0 {
 		affectedParentSpends, spendingChildTxs, err := s.SetConflicting(ctx, toProcess, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		allAffectedSpends = append(allAffectedSpends, affectedParentSpends...)
@@ -212,13 +232,14 @@ func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 		for _, child := range spendingChildTxs {
 			if _, ok := visited[child]; !ok {
 				visited[child] = struct{}{}
+				markedOrder = append(markedOrder, child)
 				nextBatch = append(nextBatch, child)
 			}
 		}
 		toProcess = nextBatch
 	}
 
-	return allAffectedSpends, nil
+	return allAffectedSpends, markedOrder, nil
 }
 
 func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {

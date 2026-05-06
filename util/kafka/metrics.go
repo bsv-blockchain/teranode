@@ -19,6 +19,8 @@ var (
 	prometheusProduceRequestLatency prometheus.Histogram
 	prometheusBrokerConnects        prometheus.Counter
 	prometheusBrokerDisconnects     prometheus.Counter
+	prometheusBackpressureSignals   *prometheus.CounterVec
+	prometheusBufferedMessages      *prometheus.GaugeVec
 )
 
 var prometheusMetricsInitOnce sync.Once
@@ -111,5 +113,23 @@ func _initProducerMetrics() {
 			Name:      "broker_disconnects_total",
 			Help:      "Total broker disconnection events",
 		},
+	)
+	prometheusBackpressureSignals = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "backpressure_signals_total",
+			Help:      "Number of times producer backlog exceeded backpressure threshold",
+		},
+		[]string{"topic"},
+	)
+	prometheusBufferedMessages = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "buffered_messages",
+			Help:      "Current number of buffered messages in adaptive producer loop",
+		},
+		[]string{"topic"},
 	)
 }

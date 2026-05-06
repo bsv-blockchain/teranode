@@ -899,10 +899,10 @@ func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 			b.logger.Warnf("[AddBlock] blocks-final message size %d bytes maybe too large for Kafka, block hash: %s (height: %d)", len(value), block.Header.Hash(), block.Height)
 		}
 
-		b.kafkaChan <- &kafka.Message{
+		b.blocksFinalKafkaAsyncProducer.Publish(&kafka.Message{
 			Key:   []byte(key),
 			Value: value,
-		}
+		})
 	}
 
 	return nil

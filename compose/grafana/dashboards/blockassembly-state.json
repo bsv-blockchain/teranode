@@ -827,6 +827,173 @@
         }
       ],
       "type": "table"
+    },
+    {
+      "id": 37,
+      "type": "timeseries",
+      "title": "Tx Meta Cache Size in Subtree Validation",
+      "gridPos": {
+        "x": 12,
+        "y": 131,
+        "h": 14,
+        "w": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "auto",
+            "showValues": false,
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "Entries",
+            "axisColorMode": "text",
+            "axisBorderShow": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "axisCenteredZero": false,
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "Memory"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sum(teranode_tx_meta_cache_valid_entries_count{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (container,instance)\n",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Cache Total Entries - {{container}} - {{instance}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sum(teranode_tx_meta_cache_map_size{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (container,instance)\n",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Cache size - {{container}} - {{instance}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sum(teranode_tx_meta_cache_previous_gen_entries{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (container,instance)\n",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Cache Prev Gen Entries - {{container}} - {{instance}}",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sum(teranode_tx_meta_cache_current_gen_entries{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (container,instance)\n",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Cache Curr Gen Entries - {{container}} - {{instance}}",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc",
+          "hideZeros": false
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true
+        }
+      }
     }
   ],
   "refresh": "5s",
