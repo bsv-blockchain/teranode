@@ -1656,7 +1656,7 @@ func TestDisconnectBannedPeerByID_PeerNotFound(t *testing.T) {
 
 	_, exists := registry.Get(bannedPeer)
 	assert.True(t, exists, "untracked peer must not affect registry")
-
+}
 // --- startPeerRegistryCleanup tests ---
 
 func TestStartPeerRegistryCleanup_NilRegistryReturnsEarly(t *testing.T) {
