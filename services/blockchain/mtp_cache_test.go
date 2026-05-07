@@ -110,6 +110,61 @@ func TestMTPCache_Overwrite(t *testing.T) {
 	assert.Equal(t, []uint32{5, 100, 101, 102, 9}, got)
 }
 
+func TestMTPCache_PutRangeIfGen_AcceptsMatchingGeneration(t *testing.T) {
+	c := newMTPCache()
+	gen := c.generation()
+
+	ok := c.putRangeIfGen(0, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, gen)
+	assert.True(t, ok, "matching generation must be accepted")
+
+	got, ok := c.getRange(0, 11)
+	require.True(t, ok)
+	assert.Equal(t, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, got)
+}
+
+func TestMTPCache_PutRangeIfGen_RejectsAfterTruncate(t *testing.T) {
+	c := newMTPCache()
+	// Pre-populate so a later putRangeIfGen with a stale snapshot would
+	// otherwise overwrite real data.
+	c.putRange(0, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+
+	// Snapshot generation BEFORE the simulated reorg.
+	staleGen := c.generation()
+
+	// Concurrent reorg: truncate from height 5 onwards. Bumps generation.
+	c.truncate(5)
+
+	// Stale writeback: tries to put 12 entries from height 0. Heights 5-11
+	// would be poisoned with pre-reorg values if the gen check were missing.
+	stalePayload := []uint32{1, 2, 3, 4, 5, 999, 999, 999, 999, 999, 999, 999}
+	ok := c.putRangeIfGen(0, stalePayload, staleGen)
+	assert.False(t, ok, "stale generation must be rejected")
+
+	// Heights 0-4 still have their pre-truncate values; heights >=5 should
+	// miss (truncated, not repopulated by the rejected write).
+	for h := uint32(0); h <= 4; h++ {
+		mtp, hit := c.get(h)
+		require.True(t, hit, "height %d must still be cached after truncate; pre-existing values below the truncate point are preserved", h)
+		assert.Equal(t, h+1, mtp)
+	}
+	for h := uint32(5); h <= 11; h++ {
+		_, hit := c.get(h)
+		assert.False(t, hit, "height %d must be a miss; the rejected stale write must not have repopulated it", h)
+	}
+}
+
+func TestMTPCache_PutRangeIfGen_RejectsAfterReset(t *testing.T) {
+	c := newMTPCache()
+	staleGen := c.generation()
+	c.reset() // bumps generation even on an empty cache
+
+	ok := c.putRangeIfGen(0, []uint32{1, 2, 3}, staleGen)
+	assert.False(t, ok, "stale generation must be rejected after reset")
+
+	_, hit := c.get(0)
+	assert.False(t, hit, "rejected write must not populate cache")
+}
+
 func TestMTPCache_ConcurrentReadWrite(t *testing.T) {
 	c := newMTPCache()
 	c.putRange(0, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
