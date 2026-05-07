@@ -3,12 +3,12 @@ package httpimpl
 
 import (
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
@@ -133,9 +133,12 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
 
 		if mode == JSON {
-			// get subtree is much less efficient than get subtree reader and then only deserializing the nodes
-			// this is only needed for the json response
-			subtree, err := h.repository.GetSubtree(ctx, hash)
+			offset, limit, err := h.getLimitOffset(c)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			}
+
+			subtree, offset, totalNodes, err := h.repository.GetSubtreePage(ctx, hash, offset, limit)
 			if err != nil {
 				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -144,27 +147,13 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				}
 			}
 
-			offset, limit, err := h.getLimitOffset(c)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-			}
-
-			totalNodes := subtree.Length()
-			if offset >= totalNodes {
-				offset = 0
-			}
-
-			end := min(offset+limit, totalNodes)
-
-			paginatedNodes := subtree.Nodes[offset:end]
-
 			response := ExtendedResponse{
 				Data: map[string]any{
 					"Height":           subtree.Height,
 					"Fees":             subtree.Fees,
 					"SizeInBytes":      subtree.SizeInBytes,
 					"FeeHash":          &subtree.FeeHash,
-					"Nodes":            paginatedNodes,
+					"Nodes":            subtree.Nodes,
 					"ConflictingNodes": subtree.ConflictingNodes,
 				},
 				Pagination: Pagination{
@@ -177,8 +166,13 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return c.JSONPretty(200, response, "  ")
 		}
 
-		// get subtree reader is much more efficient than get subtree
-		subtreeReader, err := h.repository.GetSubtreeTxIDsReader(ctx, hash)
+		if mode != BINARY_STREAM && mode != HEX {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
+		}
+
+		// Stream only the node hashes out of the serialized subtree file. This avoids
+		// allocating 32 bytes for every node before the response can start.
+		subtreeReader, err := h.repository.GetSubtreeNodeHashesReader(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -188,22 +182,17 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		}
 		defer subtreeReader.Close()
 
-		var b []byte
-
-		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
-		if b, err = subtreepkg.DeserializeNodesFromReader(subtreeReader); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-
 		switch mode {
 		case BINARY_STREAM:
-			return c.Blob(200, echo.MIMEOctetStream, b)
+			return c.Stream(http.StatusOK, echo.MIMEOctetStream, subtreeReader)
 
 		case HEX:
-			return c.String(200, hex.EncodeToString(b))
-
-		default:
-			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
+			c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlainCharsetUTF8)
+			c.Response().WriteHeader(http.StatusOK)
+			_, err = io.Copy(hex.NewEncoder(c.Response()), subtreeReader)
+			return err
 		}
+
+		return nil
 	}
 }
