@@ -1385,6 +1385,10 @@ func (stp *SubtreeProcessor) getConflictingNodes(ctx context.Context, block *mod
 				}
 			}
 
+			defer func() {
+				_ = subtreeReader.Close()
+			}()
+
 			subtreeConflictingNodes, err := subtreepkg.DeserializeSubtreeConflictingFromReader(subtreeReader)
 			if err != nil {
 				return errors.NewProcessingError("[moveForwardBlock][%s] error deserializing subtree conflicting nodes", block.String(), err)
@@ -3186,6 +3190,10 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 					return errors.NewServiceError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
 				}
 
+				defer func() {
+					_ = subtreeMetaReader.Close()
+				}()
+
 				subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 				if err != nil {
 					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
@@ -4380,6 +4388,10 @@ func (stp *SubtreeProcessor) getSubtreeAndConflictingTransactionsMap(ctx context
 			return nil, nil, errors.NewServiceError("error getting subtree %s", subtreeHash.String())
 		}
 	}
+
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
 
 	subtree := &subtreepkg.Subtree{}
 	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {

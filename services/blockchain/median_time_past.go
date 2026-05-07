@@ -70,6 +70,24 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		}
 	}
 
+	// Try the in-process cache first. The store-level responseCache is wiped
+	// per StoreBlock, so it has near-zero hit rate for committed-block MTP
+	// during sync; this cache survives across StoreBlock and is only invalidated
+	// on chain reorganisation. Snapshot the cache generation BEFORE the store
+	// read so a concurrent reorg between read and writeback can be detected via
+	// putRangeIfGen and the (now-stale) write rejected.
+	var cacheGen uint64
+	if b.mtpCache != nil {
+		cacheGen = b.mtpCache.generation()
+		if cached, ok := b.mtpCache.getRange(minHeight, maxHeight); ok {
+			mtps := make([]uint32, len(heights))
+			for i, height := range heights {
+				mtps[i] = cached[height-minHeight]
+			}
+			return mtps, nil
+		}
+	}
+
 	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
@@ -95,6 +113,32 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		mtps[i] = mtpByHeight[height]
 	}
 
+	// Cache the persisted-block portion of the range. Mirror the cacheTop logic
+	// from GetMedianTimePastRange: if maxHeight was not in the store (the block
+	// is not yet persisted), exclude it from the cache write so we do not
+	// overwrite a slot that might already hold a genuine cached value, and so the
+	// zero-as-miss sentinel is not incorrectly served on the next cache hit.
+	//
+	// putRangeIfGen rejects the write if a concurrent truncate/reset bumped the
+	// generation since the cacheGen snapshot taken before the store read — so a
+	// reorg that lands mid-fetch cannot poison the cache with pre-reorg MTPs.
+	if b.mtpCache != nil && len(metas) > 0 {
+		topMissing := metas[len(metas)-1].Height < maxHeight
+		cacheTop := maxHeight
+		if topMissing {
+			cacheTop = maxHeight - 1
+		}
+		if cacheTop >= minHeight {
+			dense := make([]uint32, cacheTop-minHeight+1)
+			for _, meta := range metas {
+				if meta.Height >= minHeight && meta.Height <= cacheTop {
+					dense[meta.Height-minHeight] = meta.MedianTimePast
+				}
+			}
+			b.mtpCache.putRangeIfGen(minHeight, dense, cacheGen)
+		}
+	}
+
 	return mtps, nil
 }
 
@@ -104,6 +148,17 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
 	if toHeight < fromHeight {
 		return []uint32{}, nil
+	}
+
+	// Try the in-process cache first. See note on caching in
+	// GetMedianTimePastForHeights for rationale; same generation-snapshot
+	// pattern is used here to detect concurrent reorg invalidation.
+	var cacheGen uint64
+	if b.mtpCache != nil {
+		cacheGen = b.mtpCache.generation()
+		if cached, ok := b.mtpCache.getRange(fromHeight, toHeight); ok {
+			return cached, nil
+		}
 	}
 
 	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
@@ -125,6 +180,20 @@ func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toH
 			return nil, err
 		}
 		result[toHeight-fromHeight] = computed
+	}
+
+	// Cache the persisted-block portion of the range. Skip the not-yet-persisted
+	// top entry — its MTP is finalised by AddBlock, which truncates the cache
+	// at that height. putRangeIfGen rejects the write if a concurrent reorg
+	// bumped the generation since cacheGen was snapshotted.
+	if b.mtpCache != nil && len(metas) > 0 {
+		cacheTop := toHeight
+		if topMissing {
+			cacheTop = toHeight - 1
+		}
+		if cacheTop >= fromHeight {
+			b.mtpCache.putRangeIfGen(fromHeight, result[:cacheTop-fromHeight+1], cacheGen)
+		}
 	}
 
 	return result, nil

@@ -63,6 +63,11 @@ var (
 	prometheusBlockchainGetBlockLocator                      prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders                   prometheus.Histogram
 	// prometheusExportBlockDb                        prometheus.Histogram
+
+	prometheusBlockchainMTPCacheHits        prometheus.Counter
+	prometheusBlockchainMTPCacheMisses      prometheus.Counter
+	prometheusBlockchainMTPCacheTruncations prometheus.Counter
+	prometheusBlockchainMTPCacheResets      prometheus.Counter
 )
 
 var (
@@ -459,6 +464,42 @@ func _initPrometheusMetrics() {
 			Name:      "locate_block_headers",
 			Help:      "Histogram of LocateBlockHeaders calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainMTPCacheHits = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_hits_total",
+			Help:      "Total number of in-process MTP cache hits",
+		},
+	)
+
+	prometheusBlockchainMTPCacheMisses = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_misses_total",
+			Help:      "Total number of in-process MTP cache misses",
+		},
+	)
+
+	prometheusBlockchainMTPCacheTruncations = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_truncations_total",
+			Help:      "Total number of in-process MTP cache truncations",
+		},
+	)
+
+	prometheusBlockchainMTPCacheResets = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "mtp_cache_resets_total",
+			Help:      "Total number of in-process MTP cache resets",
 		},
 	)
 }

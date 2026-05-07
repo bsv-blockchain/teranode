@@ -107,6 +107,12 @@ type Blockchain struct {
 	// Blob deletion batch token management
 	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
 	batchTokensMu sync.RWMutex                       // Mutex for batch tokens map
+
+	// In-process Median Time Past cache. Avoids re-fetching MTP values from the
+	// store on every block validation and validator MTP refresh — the store-level
+	// responseCache is wiped per StoreBlock, so committed-block MTPs there have
+	// near-zero hit rate during sync.
+	mtpCache *mtpCache
 }
 
 // blobDeletionBatchToken represents an acquired batch of deletions with a lock.
@@ -163,6 +169,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
 		batchTokens:                   make(map[string]*blobDeletionBatchToken),
+		mtpCache:                      newMTPCache(),
 	}
 
 	// Initialize subscription manager as not ready
@@ -846,6 +853,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	// Clear difficulty cache when chain state changes to prevent stale cached values
 	// from causing incorrect difficulty calculations during rapid block processing
 	b.difficulty.ResetCache()
+
+	// Drop any speculative MTP cache entries at or above the new block's height
+	// so the next GetMedianTimePastRange/ForHeights call repopulates them from the
+	// store. Heights below the new block remain valid.
+	b.mtpCache.truncate(height)
 
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
@@ -2067,6 +2079,17 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
+	// Reorg-style invalidation: MTP for heights at and above the invalidated block
+	// is no longer authoritative. Truncate from that height so ancestors below it
+	// remain cached. Fall back to a full reset if the header lookup fails — that
+	// is the safe behaviour and should not happen under normal operation.
+	if _, invalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(invalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[InvalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
+
 	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
 	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
@@ -2169,6 +2192,16 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
+
+	// Revalidation can change which block is considered canonical at heights from
+	// the revalidated block forward. Truncate from that height so ancestors below
+	// it remain cached. Fall back to a full reset if the header lookup fails.
+	if _, revalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(revalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[RevalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
 
 	return &emptypb.Empty{}, nil
 }
