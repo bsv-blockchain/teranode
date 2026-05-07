@@ -2021,22 +2021,37 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 
 	// Phase 3: Deduplicate toUpdate entries targeting the same (transactionID, vout).
 	// Within a single UPDATE statement, PostgreSQL can only affect each row once.
-	// Duplicate entries (from parallel processing of the same tx) would cause the
-	// second entry to be missing from RETURNING, triggering a false UtxoSpentError.
+	// Duplicate entries fall into two categories:
+	//   1. Same spending data (same tx, idempotent re-spend): drop duplicate, mark successful after UPDATE.
+	//   2. Different spending data (two competing txs, double-spend): the first arrival wins; record
+	//      the second as UTXO_SPENT immediately — do NOT let it silently succeed.
 	type utxoKey struct {
 		transactionID int
 		vout          uint32
 	}
-	seenKeys := make(map[utxoKey]int, len(toUpdate)) // key -> first batchIdx
+	type seenEntry struct {
+		batchIdx     int
+		spendingData []byte
+	}
+	seenKeys := make(map[utxoKey]seenEntry, len(toUpdate)) // key -> first entry
 	var dedupedUpdate []updateItem
 	for _, u := range toUpdate {
 		key := utxoKey{u.transactionID, u.vout}
-		if firstIdx, seen := seenKeys[key]; seen {
-			// Duplicate: same UTXO being spent by the same tx — link to first entry
-			// The first entry will be updated; this duplicate is idempotent
-			_ = firstIdx // tracked via updatedSet after UPDATE
+		if entry, seen := seenKeys[key]; seen {
+			if !bytes.Equal(entry.spendingData, u.spendingData) {
+				// Two different transactions competing for the same UTXO in this batch.
+				// First arrival wins; record the second as a double-spend now.
+				spend := batch[u.batchIdx].spend
+				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(entry.spendingData)
+				if parseErr != nil {
+					validationErrors[u.batchIdx] = errors.NewProcessingError("failed to create spending data from bytes", parseErr)
+				} else {
+					validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+				}
+			}
+			// else: same spending data — idempotent re-spend, will be marked successful after UPDATE
 		} else {
-			seenKeys[key] = u.batchIdx
+			seenKeys[key] = seenEntry{batchIdx: u.batchIdx, spendingData: u.spendingData}
 			dedupedUpdate = append(dedupedUpdate, u)
 		}
 	}
@@ -2272,11 +2287,12 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
 			}
 		}
-		// Mark duplicate batch entries as successful (same UTXO, same spending data — idempotent)
+		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
+		// Double-spend duplicates (different spending data) are already in validationErrors — skip them.
 		for _, u := range toUpdate {
 			key := utxoKey{u.transactionID, u.vout}
-			if firstIdx, ok := seenKeys[key]; ok && firstIdx != u.batchIdx {
-				if updatedSet[firstIdx] {
+			if entry, ok := seenKeys[key]; ok && entry.batchIdx != u.batchIdx {
+				if bytes.Equal(entry.spendingData, u.spendingData) && updatedSet[entry.batchIdx] {
 					updatedSet[u.batchIdx] = true
 				}
 			}
