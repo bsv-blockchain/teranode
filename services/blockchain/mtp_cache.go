@@ -38,18 +38,27 @@ func (c *mtpCache) getRange(fromHeight, toHeight uint32) ([]uint32, bool) {
 	defer c.mu.RUnlock()
 
 	if uint32(len(c.mtps)) <= toHeight {
+		if prometheusBlockchainMTPCacheMisses != nil {
+			prometheusBlockchainMTPCacheMisses.Inc()
+		}
 		return nil, false
 	}
 
 	out := make([]uint32, toHeight-fromHeight+1)
 	for h := fromHeight; h <= toHeight; h++ {
 		mtp := c.mtps[h]
-		if mtp == 0 && h >= mtpMedianTimeBlocks {
+		if mtp == 0 && h >= uint32(MedianTimeBlocks) {
 			// Sentinel: never populated for a height where MTP could be
 			// non-zero. Force a miss so the caller refetches.
+			if prometheusBlockchainMTPCacheMisses != nil {
+				prometheusBlockchainMTPCacheMisses.Inc()
+			}
 			return nil, false
 		}
 		out[h-fromHeight] = mtp
+	}
+	if prometheusBlockchainMTPCacheHits != nil {
+		prometheusBlockchainMTPCacheHits.Inc()
 	}
 	return out, true
 }
@@ -61,11 +70,20 @@ func (c *mtpCache) get(height uint32) (uint32, bool) {
 	defer c.mu.RUnlock()
 
 	if uint32(len(c.mtps)) <= height {
+		if prometheusBlockchainMTPCacheMisses != nil {
+			prometheusBlockchainMTPCacheMisses.Inc()
+		}
 		return 0, false
 	}
 	mtp := c.mtps[height]
-	if mtp == 0 && height >= mtpMedianTimeBlocks {
+	if mtp == 0 && height >= uint32(MedianTimeBlocks) {
+		if prometheusBlockchainMTPCacheMisses != nil {
+			prometheusBlockchainMTPCacheMisses.Inc()
+		}
 		return 0, false
+	}
+	if prometheusBlockchainMTPCacheHits != nil {
+		prometheusBlockchainMTPCacheHits.Inc()
 	}
 	return mtp, true
 }
@@ -102,6 +120,9 @@ func (c *mtpCache) truncate(fromHeight uint32) {
 	if uint32(len(c.mtps)) > fromHeight {
 		c.mtps = c.mtps[:fromHeight]
 	}
+	if prometheusBlockchainMTPCacheTruncations != nil {
+		prometheusBlockchainMTPCacheTruncations.Inc()
+	}
 }
 
 // reset clears the entire cache. Used on store-wide events (e.g. test resets)
@@ -111,9 +132,7 @@ func (c *mtpCache) reset() {
 	defer c.mu.Unlock()
 
 	c.mtps = c.mtps[:0]
+	if prometheusBlockchainMTPCacheResets != nil {
+		prometheusBlockchainMTPCacheResets.Inc()
+	}
 }
-
-// mtpMedianTimeBlocks mirrors MedianTimeBlocks in median_time_past.go to avoid
-// an import cycle within the package; kept as a typed local constant for the
-// zero-as-miss sentinel.
-const mtpMedianTimeBlocks uint32 = 11
