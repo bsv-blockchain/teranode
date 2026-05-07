@@ -584,6 +584,26 @@ func TestSetFromReader_RemovesBlobWhenChecksumPublicationFails(t *testing.T) {
 	}
 }
 
+func TestFileStoreRelPath(t *testing.T) {
+	tempDir := t.TempDir()
+	f := &File{path: tempDir}
+
+	rel, err := f.storeRelPath(filepath.Join(tempDir, "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
+
+	_, err = f.storeRelPath(filepath.Join(tempDir, "..", "outside.testing"))
+	require.Error(t, err)
+
+	_, err = f.storeRelPath(tempDir + "-sibling/blob.testing")
+	require.Error(t, err)
+
+	f = &File{path: filepath.Join("relative", "store")}
+	rel, err = f.storeRelPath(filepath.Join("relative", "store", "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
+}
+
 func TestFileGetHead(t *testing.T) {
 	t.Run("get head of content", func(t *testing.T) {
 		// Get a temporary directory

@@ -559,6 +559,47 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	return nil
 }
 
+func (s *File) storeRelPath(filename string) (string, error) {
+	if filename == "" {
+		return "", errors.NewInvalidArgumentError("file store path is empty")
+	}
+
+	rel, err := filepath.Rel(s.path, filename)
+	if err != nil {
+		return "", errors.NewStorageError("[File][%s] failed to calculate relative file path", filename, err)
+	}
+
+	if rel == "." || !filepath.IsLocal(rel) {
+		return "", errors.NewInvalidArgumentError("[File][%s] path escapes file store root %s", filename, s.path)
+	}
+
+	return rel, nil
+}
+
+func (s *File) openStoreRoot() (*os.Root, error) {
+	root, err := os.OpenRoot(s.path)
+	if err != nil {
+		return nil, errors.NewStorageError("[File][%s] failed to open store root", s.path, err)
+	}
+
+	return root, nil
+}
+
+func (s *File) removeStorePath(filename string) error {
+	rel, err := s.storeRelPath(filename)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	return root.Remove(rel)
+}
+
 // SetFromReader stores a blob in the file store from a streaming reader.
 // This method is more memory-efficient than Set for large blobs as it streams data
 // directly to disk without loading the entire blob into memory. It handles file creation,
@@ -618,7 +659,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 
 		if cleanupTmpFile {
 			// Remove temp file on any error path to prevent incomplete files
-			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
+			if removeErr := s.removeStorePath(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
 				s.logger.Warnf("[File][SetFromReader] failed to remove temp file %s: %v", tmpFilename, removeErr)
 			}
 		}
@@ -660,7 +701,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 
 	// Write SHA256 hash file
 	if err = s.writeHashFile(hasher, filename); err != nil {
-		if removeErr := os.Remove(filename); removeErr != nil && !os.IsNotExist(removeErr) {
+		if removeErr := s.removeStorePath(filename); removeErr != nil && !os.IsNotExist(removeErr) {
 			s.logger.Warnf("[File][SetFromReader] failed to remove blob file %s after hash write error: %v", filename, removeErr)
 		}
 
@@ -1143,8 +1184,19 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, string, error) {
 	const maxAttempts = 10
 
-	dir := filepath.Dir(filename)
-	base := filepath.Base(filename)
+	finalRel, err := s.storeRelPath(filename)
+	if err != nil {
+		return nil, "", err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+
+	dir := filepath.Dir(finalRel)
+	base := filepath.Base(finalRel)
 
 	for i := 0; i < maxAttempts; i++ {
 		randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
@@ -1152,11 +1204,11 @@ func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, s
 			return nil, "", errors.NewStorageError("[File][%s] failed to generate temporary filename", filename, err)
 		}
 
-		tmpFilename := filepath.Join(dir, fmt.Sprintf(".%s.%d.tmp", base, randNum))
+		tmpRel := filepath.Join(dir, fmt.Sprintf(".%s.%d.tmp", base, randNum))
 		//nolint:gosec // Blob store files intentionally preserve the existing 0644 file mode.
-		file, err := os.OpenFile(tmpFilename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		file, err := root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 		if err == nil {
-			return file, tmpFilename, nil
+			return file, filepath.Join(s.path, tmpRel), nil
 		}
 
 		if os.IsExist(err) {
@@ -1209,7 +1261,20 @@ func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
 // at debug level and do not turn an already-successful rename into a failed blob write.
 // Callers should rely on it as a durability improvement, not as a portable hard guarantee.
 func (s *File) syncParentDirBestEffort(filename string) {
-	dir, err := os.Open(filepath.Dir(filename))
+	rel, err := s.storeRelPath(filename)
+	if err != nil {
+		s.debugf("[File][%s] failed to calculate parent directory for sync: %v", filename, err)
+		return
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		s.debugf("[File][%s] failed to open store root for parent sync: %v", filename, err)
+		return
+	}
+	defer root.Close()
+
+	dir, err := root.Open(filepath.Dir(rel))
 	if err != nil {
 		s.debugf("[File][%s] failed to open parent directory for sync: %v", filename, err)
 		return
@@ -1224,7 +1289,7 @@ func (s *File) syncParentDirBestEffort(filename string) {
 // renameTempFile publishes a completed temp file at its final filename.
 //
 // The temp file must be a sibling of filename; createTempSibling enforces that pattern.
-// When source and destination are on the same filesystem, os.Rename makes the final path
+// When source and destination are on the same filesystem, rename makes the final path
 // appear atomically, so readers either see the previous complete file or the new complete
 // file, never a partially written final file.
 //
@@ -1237,8 +1302,24 @@ func (s *File) syncParentDirBestEffort(filename string) {
 // name is more likely to survive a crash. That directory sync is best-effort; see
 // syncParentDirBestEffort for the portability caveat.
 func (s *File) renameTempFile(tmpFilename, filename string) error {
-	if err := os.Rename(tmpFilename, filename); err != nil {
-		if fileInfo, statErr := os.Stat(filename); statErr == nil && !fileInfo.IsDir() {
+	tmpRel, err := s.storeRelPath(tmpFilename)
+	if err != nil {
+		return err
+	}
+
+	finalRel, err := s.storeRelPath(filename)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if err := root.Rename(tmpRel, finalRel); err != nil {
+		if fileInfo, statErr := root.Stat(finalRel); statErr == nil && !fileInfo.IsDir() {
 			return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
 		}
 
@@ -1280,7 +1361,7 @@ func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMod
 		}
 
 		if cleanupTmpFile {
-			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
+			if removeErr := s.removeStorePath(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
 				s.logger.Warnf("[File][%s] failed to remove temporary file: %v", tmpFilename, removeErr)
 			}
 		}
