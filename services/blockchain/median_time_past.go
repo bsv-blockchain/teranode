@@ -109,19 +109,26 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 		mtps[i] = mtpByHeight[height]
 	}
 
-	// Cache the dense range for future calls. We only cache values for heights
-	// that we actually fetched from the store; the not-yet-persisted top is
-	// recomputed on the fly so we deliberately skip caching it (its MTP is
-	// finalised when the block is persisted via AddBlock, which truncates this
-	// height anyway).
+	// Cache the persisted-block portion of the range. Mirror the cacheTop logic
+	// from GetMedianTimePastRange: if maxHeight was not in the store (the block
+	// is not yet persisted), exclude it from the cache write so we do not
+	// overwrite a slot that might already hold a genuine cached value, and so the
+	// zero-as-miss sentinel is not incorrectly served on the next cache hit.
 	if b.mtpCache != nil && len(metas) > 0 {
-		dense := make([]uint32, maxHeight-minHeight+1)
-		for _, meta := range metas {
-			if meta.Height >= minHeight && meta.Height <= maxHeight {
-				dense[meta.Height-minHeight] = meta.MedianTimePast
-			}
+		topMissing := metas[len(metas)-1].Height < maxHeight
+		cacheTop := maxHeight
+		if topMissing {
+			cacheTop = maxHeight - 1
 		}
-		b.mtpCache.putRange(minHeight, dense)
+		if cacheTop >= minHeight {
+			dense := make([]uint32, cacheTop-minHeight+1)
+			for _, meta := range metas {
+				if meta.Height >= minHeight && meta.Height <= cacheTop {
+					dense[meta.Height-minHeight] = meta.MedianTimePast
+				}
+			}
+			b.mtpCache.putRange(minHeight, dense)
+		}
 	}
 
 	return mtps, nil
