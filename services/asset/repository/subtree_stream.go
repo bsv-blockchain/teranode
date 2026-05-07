@@ -17,6 +17,7 @@ const (
 	subtreeStreamHeaderSize = chainhash.HashSize + 24
 	subtreeNodeRecordSize   = chainhash.HashSize + 16
 	subtreeStreamBufferSize = 32 * 1024
+	subtreePageMaxNodes     = 100 // Keep in sync with HTTP pagination bounds.
 )
 
 type subtreeStreamHeader struct {
@@ -82,6 +83,9 @@ func readSubtreeNodesPageFromReader(ctx context.Context, reader io.Reader, offse
 	if limit < 0 {
 		return nil, 0, errors.NewInvalidArgumentError("limit cannot be negative: %d", limit)
 	}
+	if limit > subtreePageMaxNodes {
+		limit = subtreePageMaxNodes
+	}
 
 	buf := bufio.NewReaderSize(reader, subtreeStreamBufferSize)
 	header, err := readSubtreeStreamHeader(buf)
@@ -107,7 +111,10 @@ func readSubtreeNodesPageFromReader(ctx context.Context, reader io.Reader, offse
 		}
 	}
 
-	pageSize := min(limit, totalNodes-offset)
+	pageSize := limit
+	if pageSize > totalNodes-offset {
+		pageSize = totalNodes - offset
+	}
 	nodes := make([]subtreepkg.Node, 0, pageSize)
 	for i := 0; i < pageSize; i++ {
 		if err = ctx.Err(); err != nil {
@@ -132,6 +139,9 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 	if limit < 0 {
 		return nil, 0, 0, errors.NewInvalidArgumentError("limit cannot be negative: %d", limit)
 	}
+	if limit > subtreePageMaxNodes {
+		limit = subtreePageMaxNodes
+	}
 
 	buf := bufio.NewReaderSize(reader, subtreeStreamBufferSize)
 	header, err := readSubtreeStreamHeader(buf)
@@ -150,7 +160,10 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 
 	pageSize := 0
 	if limit > 0 && offset < totalNodes {
-		pageSize = min(limit, totalNodes-offset)
+		pageSize = limit
+		if pageSize > totalNodes-offset {
+			pageSize = totalNodes - offset
+		}
 	}
 
 	for i := 0; i < offset; i++ {
@@ -176,18 +189,15 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		nodes = append(nodes, subtreeNodeFromRecord(byteBuffer))
 	}
 
-	for i := offset + pageSize; i < totalNodes; i++ {
-		if err = ctx.Err(); err != nil {
+	pageCoversFullSubtree := totalNodes == 0 || (offset == 0 && pageSize == totalNodes)
+	conflictingNodes := []chainhash.Hash{}
+	// Conflicting nodes are serialized after all node records, so reading them
+	// for partial pages would scan the rest of large subtrees.
+	if pageCoversFullSubtree {
+		conflictingNodes, err = readSubtreeConflictingNodes(ctx, buf, totalNodes)
+		if err != nil {
 			return nil, 0, 0, err
 		}
-		if _, err = readSubtreeNodeRecord(buf); err != nil {
-			return nil, 0, 0, err
-		}
-	}
-
-	conflictingNodes, err := readSubtreeConflictingNodes(ctx, buf)
-	if err != nil {
-		return nil, 0, 0, err
 	}
 
 	height := 0
@@ -204,7 +214,7 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 	}, offset, totalNodes, nil
 }
 
-func readSubtreeConflictingNodes(ctx context.Context, buf *bufio.Reader) ([]chainhash.Hash, error) {
+func readSubtreeConflictingNodes(ctx context.Context, buf *bufio.Reader, maxConflictingNodes int) ([]chainhash.Hash, error) {
 	var bytes8 [8]byte
 	if _, err := io.ReadFull(buf, bytes8[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to read number of conflicting nodes", err)
@@ -213,6 +223,13 @@ func readSubtreeConflictingNodes(ctx context.Context, buf *bufio.Reader) ([]chai
 	numConflictingLeaves, err := safeconversion.Uint64ToInt(binary.LittleEndian.Uint64(bytes8[:]))
 	if err != nil {
 		return nil, errors.NewProcessingError("unable to convert conflicting node count", err)
+	}
+
+	if maxConflictingNodes > subtreePageMaxNodes {
+		maxConflictingNodes = subtreePageMaxNodes
+	}
+	if numConflictingLeaves > maxConflictingNodes {
+		return nil, errors.NewProcessingError("conflicting node count exceeds node count: %d > %d", numConflictingLeaves, maxConflictingNodes)
 	}
 
 	conflictingNodes := make([]chainhash.Hash, numConflictingLeaves)
