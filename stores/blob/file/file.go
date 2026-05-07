@@ -161,7 +161,7 @@ const (
 //    should be well under the system limit to account for other file descriptors
 //    (network sockets, log files, etc.). Default: 768 + 256 = 1024.
 //    ALL file operations MUST be protected by semaphores, including those in background
-//    goroutines (loadDAHs, cleanup), to ensure ulimit protection is comprehensive.
+//    cleanup goroutines, to ensure ulimit protection is comprehensive.
 //
 // 2. INITIALIZATION REQUIREMENT:
 //    InitSemaphores() MUST be called in main() before ANY file store operations begin.
@@ -176,15 +176,7 @@ const (
 //    - Calling it before any file operations that use the semaphores
 //    - Not testing the initialization function in the same suite as code using it
 //
-// 4. INTERNAL VARIANTS PATTERN:
-//    To avoid nested semaphore acquisition (which reduces effective capacity and wastes
-//    ulimit protection), helper functions have two variants:
-//    - Public versions (e.g., readDAHFromFile): acquire semaphore for standalone/background use
-//    - Internal versions (e.g., readDAHFromFile_internal): no semaphore, for use within
-//      already-protected contexts (API operations like SetFromReader that hold semaphores)
-//    This ensures every file operation is protected exactly once, maximizing ulimit protection.
-//
-// 5. SEPARATE READ/WRITE SEMAPHORES:
+// 4. SEPARATE READ/WRITE SEMAPHORES:
 //    Using separate semaphores prevents deadlocks where write operations holding the
 //    write semaphore are blocked waiting for pipe data, while the operations that
 //    would provide that data (ProcessSubtree reads) cannot acquire read slots because
@@ -474,81 +466,6 @@ func (s *File) SetCurrentBlockHeight(height uint32) {
 	s.currentBlockHeight.Store(height)
 }
 
-// readDAHFromFile_internal reads a DAH value from file WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore or be in a context where protection isn't needed.
-func (s *File) readDAHFromFile_internal(fileName string) (uint32, error) {
-	// read the dah
-	dahBytes, err := os.ReadFile(fileName)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, errors.NewNotFoundError("[File] DAH file %s not found", fileName)
-		}
-
-		return 0, errors.NewStorageError("[File] failed to read DAH file", err)
-	}
-
-	// Trim whitespace and validate content
-	dahStr := strings.TrimSpace(string(dahBytes))
-	if dahStr == "" {
-		return 0, errors.NewProcessingError("[File] DAH file %s is empty", fileName)
-	}
-
-	dah, err := strconv.ParseUint(dahStr, 10, 32)
-	if err != nil {
-		return 0, errors.NewProcessingError("[File] failed to parse DAH from %s: %s", fileName, dahStr)
-	}
-
-	// Validate DAH value - should never be 0
-	if dah == 0 {
-		return 0, errors.NewProcessingError("[File] invalid DAH value 0 in file %s", fileName)
-	}
-
-	return uint32(dah), nil
-}
-
-// readDAHFromFile reads a DAH value from file WITH semaphore protection.
-// Use this for background operations or when caller doesn't hold a semaphore.
-func (s *File) readDAHFromFile(fileName string) (uint32, error) {
-	ctx := context.Background()
-	if err := acquireReadPermit(ctx); err != nil {
-		return 0, err
-	}
-	defer releaseReadPermit()
-
-	return s.readDAHFromFile_internal(fileName)
-}
-
-// writeDAHToFileInternal writes a DAH value to file WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore.
-func (s *File) writeDAHToFileInternal(dahFilename string, dah uint32) error {
-	// Validate DAH value before writing
-	if dah == 0 {
-		return errors.NewProcessingError("[File] attempted to write invalid DAH value 0 to file %s", dahFilename)
-	}
-
-	dahContent := []byte(strconv.FormatUint(uint64(dah), 10))
-
-	// Write directly to the file
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err := os.WriteFile(dahFilename, dahContent, 0644); err != nil {
-		return errors.NewStorageError("[File][%s] failed to write DAH to file", dahFilename, err)
-	}
-
-	return nil
-}
-
-// writeDAHToFile writes a DAH value to file WITH semaphore protection.
-// Use this when caller doesn't already hold a semaphore.
-func (s *File) writeDAHToFile(dahFilename string, dah uint32) error {
-	ctx := context.Background()
-	if err := acquireWritePermit(ctx); err != nil {
-		return err
-	}
-	defer releaseWritePermit()
-
-	return s.writeDAHToFileInternal(dahFilename, dah)
-}
-
 // Health checks the health status of the file-based blob store.
 // It verifies that the storage directory exists and is accessible by attempting to
 // create a temporary file. This ensures that the store can perform basic read/write
@@ -684,25 +601,21 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return err
 	}
 
-	// Generate a cryptographically secure random number
-	randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+	file, tmpFilename, err := s.createTempSibling(filename, 0644)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] failed to generate random number", err)
-	}
-
-	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, randNum)
-
-	// Create the file first
-	file, err := os.Create(tmpFilename)
-	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", filename, err)
+		return err
 	}
 
 	// Track whether we should clean up the temp file on exit.
 	// Default to true (cleanup); only set to false on success path after rename.
 	cleanupTmpFile := true
 	defer func() {
-		file.Close()
+		if file != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][SetFromReader] failed to close temp file %s during cleanup: %v", tmpFilename, closeErr)
+			}
+		}
+
 		if cleanupTmpFile {
 			// Remove temp file on any error path to prevent incomplete files
 			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -733,25 +646,24 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return errors.NewStorageError("[File][SetFromReader] [%s] reader provided zero bytes of data", filename)
 	}
 
-	// Success path - don't cleanup temp file, we're about to rename it
-	cleanupTmpFile = false
+	if err = s.syncAndCloseTempFile(file, tmpFilename); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
 
 	// rename the file to remove the .tmp extension
-	if err = os.Rename(tmpFilename, filename); err != nil {
-		// check is some other process has created this file before us
-		if _, statErr := os.Stat(filename); statErr != nil {
-			// Rename failed and file doesn't exist - clean up temp file
-			_ = os.Remove(tmpFilename)
-			return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
-		} else {
-			// Another process created the file - clean up our temp file
-			_ = os.Remove(tmpFilename)
-			s.logger.Warnf("[File][SetFromReader] [%s] already exists so another process created it first", filename)
-		}
+	if err = s.renameTempFile(tmpFilename, filename); err != nil {
+		return err
 	}
+	cleanupTmpFile = false
 
 	// Write SHA256 hash file
 	if err = s.writeHashFile(hasher, filename); err != nil {
+		if removeErr := os.Remove(filename); removeErr != nil && !os.IsNotExist(removeErr) {
+			s.logger.Warnf("[File][SetFromReader] failed to remove blob file %s after hash write error: %v", filename, removeErr)
+		}
+
 		return errors.NewStorageError("[File][SetFromReader] failed to write hash file", err)
 	}
 
@@ -773,22 +685,9 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 		base)
 
 	hashFilename := filename + checksumExtension
-	tmpHashFilename := hashFilename + ".tmp"
 
-	var err error
-
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(tmpHashFilename, []byte(hashStr), 0644); err != nil {
-		return errors.NewStorageError("[File] failed to write hash file", err)
-	}
-
-	if err = os.Rename(tmpHashFilename, hashFilename); err != nil {
-		// check is some other process has created this file before us
-		if _, statErr := os.Stat(hashFilename); statErr != nil {
-			return errors.NewStorageError("[File] failed to rename hash file", err)
-		} else {
-			s.logger.Warnf("[File] hash file %s already exists so another process created it first", hashFilename)
-		}
+	if err := s.writeFileAtomically(hashFilename, []byte(hashStr), 0644); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write hash file atomically", hashFilename, err)
 	}
 
 	return nil
@@ -868,8 +767,8 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 
 // SetDAH sets the Delete-At-Height (DAH) value for a blob in the file store.
 // The DAH value determines at which blockchain height the blob will be automatically deleted.
-// This implementation stores the DAH value in a separate file with the same name as the blob
-// but with a .dah extension, and also maintains an in-memory map of DAH values for quick access.
+// This implementation schedules or cancels deletion via the configured blob deletion scheduler;
+// the pruner service owns deletion execution.
 //
 // If the store has DisableDAH=true, this method returns immediately without error, as DAH
 // functionality is disabled for this store (lifecycle managed externally).
@@ -1224,4 +1123,183 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 	return nil
 }
 
-// findFilesByExtension removed - was only used by loadDAHs which has been removed
+// createTempSibling creates a new temporary file in the same directory as filename.
+//
+// The same-directory constraint is intentional. POSIX rename is atomic only when the
+// source and destination are on the same filesystem, so callers that intend to publish
+// data with renameTempFile must first write to a sibling of the final path. The temp
+// filename includes the final basename, a cryptographically random suffix, and ".tmp";
+// this keeps operational debugging straightforward while avoiding collisions between
+// concurrent writers for the same blob.
+//
+// The file is opened with O_EXCL so an existing temp path is never truncated. Random
+// collisions are retried a small fixed number of times. Any non-collision creation
+// failure is returned immediately because it usually indicates a real storage problem
+// such as permissions, a missing directory, or an exhausted filesystem.
+//
+// The caller owns the returned file descriptor and must close it. On any failure after
+// this function returns successfully, the caller is also responsible for removing the
+// returned temporary filename.
+func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, string, error) {
+	const maxAttempts = 10
+
+	dir := filepath.Dir(filename)
+	base := filepath.Base(filename)
+
+	for i := 0; i < maxAttempts; i++ {
+		randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+		if err != nil {
+			return nil, "", errors.NewStorageError("[File][%s] failed to generate temporary filename", filename, err)
+		}
+
+		tmpFilename := filepath.Join(dir, fmt.Sprintf(".%s.%d.tmp", base, randNum))
+		//nolint:gosec // Blob store files intentionally preserve the existing 0644 file mode.
+		file, err := os.OpenFile(tmpFilename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err == nil {
+			return file, tmpFilename, nil
+		}
+
+		if os.IsExist(err) {
+			continue
+		}
+
+		return nil, "", errors.NewStorageError("[File][%s] failed to create temporary file", filename, err)
+	}
+
+	return nil, "", errors.NewStorageError("[File][%s] failed to create unique temporary file after %d attempts", filename, maxAttempts)
+}
+
+// syncAndCloseTempFile flushes a temporary file's contents to stable storage and closes it.
+//
+// This helper is used immediately before publishing a temp file with renameTempFile.
+// Syncing before rename prevents the final filename from becoming visible while the
+// data still only exists in userspace or kernel buffers. That does not make the whole
+// operation fully crash-proof by itself: the directory entry created by the later rename
+// has its own durability boundary, handled best-effort by syncParentDirBestEffort.
+//
+// Close errors are treated as write failures. Some filesystems report delayed write
+// errors on close, so a caller must not publish the temp file if this function returns
+// an error. If Sync fails, this function still attempts to close the descriptor and logs
+// a close failure without replacing the original sync error.
+func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
+	if err := file.Sync(); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			s.logger.Warnf("[File][%s] failed to close temporary file after sync error: %v", tmpFilename, closeErr)
+		}
+
+		return errors.NewStorageError("[File][%s] failed to sync temporary file", tmpFilename, err)
+	}
+
+	if err := file.Close(); err != nil {
+		return errors.NewStorageError("[File][%s] failed to close temporary file", tmpFilename, err)
+	}
+
+	return nil
+}
+
+// syncParentDirBestEffort attempts to persist the directory entry for filename.
+//
+// After os.Rename succeeds, readers will observe the final filename atomically. A crash
+// immediately after rename can still lose the directory update on some filesystems unless
+// the parent directory is synced. This helper performs that extra durability step where
+// the platform and filesystem allow it.
+//
+// Directory sync support is not consistent across all operating systems, mounted volumes,
+// and network filesystems. For that reason this helper is best-effort: failures are logged
+// at debug level and do not turn an already-successful rename into a failed blob write.
+// Callers should rely on it as a durability improvement, not as a portable hard guarantee.
+func (s *File) syncParentDirBestEffort(filename string) {
+	dir, err := os.Open(filepath.Dir(filename))
+	if err != nil {
+		s.debugf("[File][%s] failed to open parent directory for sync: %v", filename, err)
+		return
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		s.debugf("[File][%s] failed to sync parent directory: %v", filename, err)
+	}
+}
+
+// renameTempFile publishes a completed temp file at its final filename.
+//
+// The temp file must be a sibling of filename; createTempSibling enforces that pattern.
+// When source and destination are on the same filesystem, os.Rename makes the final path
+// appear atomically, so readers either see the previous complete file or the new complete
+// file, never a partially written final file.
+//
+// If rename fails and a regular file already exists at the final path, the error is
+// normalized to ErrBlobAlreadyExists. That preserves the blob store's no-overwrite
+// contract for races where another writer published the same blob between the initial
+// existence check and this rename. Other rename failures are reported as storage errors.
+//
+// On success this helper also attempts to sync the parent directory so the newly published
+// name is more likely to survive a crash. That directory sync is best-effort; see
+// syncParentDirBestEffort for the portability caveat.
+func (s *File) renameTempFile(tmpFilename, filename string) error {
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		if fileInfo, statErr := os.Stat(filename); statErr == nil && !fileInfo.IsDir() {
+			return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
+		}
+
+		return errors.NewStorageError("[File][%s] failed to rename temporary file %s", filename, tmpFilename, err)
+	}
+
+	s.syncParentDirBestEffort(filename)
+	return nil
+}
+
+// writeFileAtomically writes a small sidecar file via temp-file publication.
+//
+// This is used for metadata sidecars such as checksum files, where the complete payload is
+// already available in memory. It mirrors the blob publication sequence used by
+// SetFromReader: create a sibling temp file, write the full payload, sync and close it,
+// then rename it into place. The final filename is not created or replaced until all data
+// has been written successfully.
+//
+// The helper owns cleanup for the temp path. Any error before a successful rename leaves
+// cleanupTmpFile set and the deferred cleanup removes the temp file. After a successful
+// rename, cleanup is disabled because tmpFilename no longer exists. The file descriptor is
+// also closed during cleanup if an early return happens before syncAndCloseTempFile takes
+// ownership of closing it.
+//
+// Callers should use this only for bounded in-memory data. Large blob bodies should continue
+// to use SetFromReader so they can be streamed without loading the full content into memory.
+func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMode) error {
+	file, tmpFilename, err := s.createTempSibling(filename, perm)
+	if err != nil {
+		return err
+	}
+
+	cleanupTmpFile := true
+	defer func() {
+		if file != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][%s] failed to close temporary file during cleanup: %v", tmpFilename, closeErr)
+			}
+		}
+
+		if cleanupTmpFile {
+			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
+				s.logger.Warnf("[File][%s] failed to remove temporary file: %v", tmpFilename, removeErr)
+			}
+		}
+	}()
+
+	if _, err = file.Write(data); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write temporary file", filename, err)
+	}
+
+	if err = s.syncAndCloseTempFile(file, tmpFilename); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
+
+	if err = s.renameTempFile(tmpFilename, filename); err != nil {
+		return err
+	}
+	cleanupTmpFile = false
+
+	return nil
+}
