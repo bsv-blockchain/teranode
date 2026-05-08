@@ -122,6 +122,29 @@ func Test_queueWithTime(t *testing.T) {
 	assert.Equal(t, 10, batches)
 }
 
+type fixedQueueClock struct{ t time.Time }
+
+func (f fixedQueueClock) Now() time.Time { return f.t }
+
+// Test_queueClockOverride verifies the clock seam: when a fake clock is
+// installed, batch.time matches the fake's value rather than wall time.
+// This is the hook tests will use to drive deterministic batch timestamps.
+func Test_queueClockOverride(t *testing.T) {
+	q := NewLockFreeQueue()
+
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	q.clock = fixedQueueClock{t: fixed}
+
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	batch, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, fixed.UnixMilli(), batch.time)
+}
+
 func Test_queue2Threads(t *testing.T) {
 	q := NewLockFreeQueue()
 

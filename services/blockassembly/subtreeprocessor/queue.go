@@ -24,7 +24,19 @@ type LockFreeQueue struct {
 	head        *TxBatch                // Points to the head of the queue (sentinel node)
 	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
 	queueLength atomic.Int64            // Tracks the current number of batches in the queue
+	clock       queueClock              // Source of batch timestamps; replaced in tests
 }
+
+// queueClock supplies the wall time stamped on each enqueued batch. The
+// production implementation is realQueueClock; tests substitute a fake to
+// drive deterministic batch timestamps without touching wall time.
+type queueClock interface {
+	Now() time.Time
+}
+
+type realQueueClock struct{}
+
+func (realQueueClock) Now() time.Time { return time.Now() }
 
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
 //
@@ -35,6 +47,7 @@ func NewLockFreeQueue() *LockFreeQueue {
 		head:        &TxBatch{},
 		tail:        atomic.Pointer[TxBatch]{},
 		queueLength: atomic.Int64{},
+		clock:       realQueueClock{},
 	}
 }
 
@@ -59,7 +72,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	batch := &TxBatch{
 		nodes:      nodes,
 		txInpoints: txInpoints,
-		time:       time.Now().UnixMilli(),
+		time:       q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
 
