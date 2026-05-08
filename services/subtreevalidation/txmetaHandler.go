@@ -30,36 +30,33 @@ type txmetaCacheJob struct {
 	enqueued  time.Time
 }
 
-// applyTxmetaCacheJob does the actual cache writes for one parsed Kafka batch.
+// applyTxmetaCacheJob fans every ADD entry out to its own goroutine. Each goroutine
+// does ONE SetCacheFromBytes and exits — no waiting, no bounding, no per-batch
+// sequential walk. ADDs are best-effort: a missed write falls through to the UTXO
+// store on the next BatchDecorate. We therefore optimise for latency-to-cache,
+// not for delivery guarantees. Spawning per-entry maximises bucket-shard
+// parallelism — each writer holds the bucket lock ~1 µs, and across 8192 buckets
+// the contention queue stays shallow even at multi-million ops/sec.
 //
-// Writes are emitted per-entry via SetCacheFromBytes — NOT batched into a single
-// SetCacheMulti call. Reason: cache.SetMulti's bucket fan-out takes each touched
-// bucket's write lock for the full duration of writing all keys mapped to that
-// bucket (typically ~1 ms for 1024-key batches under load). With many concurrent
-// writers, contenders queue up behind that 1 ms-ish lock holder and end-of-queue
-// wait inflates with concurrency.
+// DELETEs are NOT handled here — they run synchronously in txmetaHandler so the
+// Kafka offset commits only after the delete actually lands. See txmetaHandler
+// for why.
 //
-// Per-entry SetCacheFromBytes acquires/releases the bucket lock for ONE key at a
-// time (~1 µs holds). Aggregate work is the same; instantaneous queue depth on
-// each bucket lock is much smaller, so 99th-percentile contention drops sharply.
-// This restores the lock-contention profile the txmetaHandler had before #834,
-// when production was observed sustaining 2M+ ops/sec on this path.
+// txmetaHandler invokes us via `go applyTxmetaCacheJob(...)` so the per-entry
+// spawn cost (~1 µs per goroutine × N entries) is paid off the Kafka consumer's
+// critical path and never blocks PollFetches.
 func (u *Server) applyTxmetaCacheJob(ctx context.Context, job txmetaCacheJob) {
 	for i := range job.addKeys {
-		if err := u.SetTxMetaCacheFromBytes(ctx, job.addKeys[i], job.addValues[i]); err != nil {
-			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-			u.logger.Debugf("[txmetaHandler] failed to set tx meta entry: %v", err)
-		}
-		prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(time.Since(job.enqueued).Seconds())
-	}
+		key := job.addKeys[i]
+		value := job.addValues[i]
 
-	for i := range job.delHashes {
-		hash := job.delHashes[i]
-		if err := u.DelTxMetaCache(ctx, &hash); err != nil {
-			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-			u.logger.Errorf("[txmetaHandler][%s] failed to delete tx meta data: %v", hash, err)
-		}
-		prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(time.Since(job.enqueued).Seconds())
+		go func() {
+			if err := u.SetTxMetaCacheFromBytes(ctx, key, value); err != nil {
+				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				u.logger.Debugf("[txmetaHandler] failed to set tx meta entry: %v", err)
+			}
+			prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(time.Since(job.enqueued).Seconds())
+		}()
 	}
 }
 
@@ -82,18 +79,24 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 //
-// Parses on the Kafka consumer goroutine and immediately spawns one goroutine per
-// message to apply the writes — no channel hop, no worker pool. This is the
-// minimum-latency design: every µs of queueing matters because cache fill is
-// always racing against subtree validation arrival, and a stale cache forces
-// fall-through to the UTXO store which is far more expensive.
+// Two-tier execution model:
 //
-// Per-entry SetCacheFromBytes inside applyTxmetaCacheJob keeps each bucket-lock
-// hold short (~1 µs), so even thousands of concurrent goroutines drain the
-// bucket-lock queues quickly without piling up.
+//   - DELETEs run SYNCHRONOUSLY in this function (the Kafka consumer goroutine).
+//     A delete typically corresponds to a tx being conflicted/replaced; if the
+//     cache forgets to drop the old entry, future BatchDecorate calls will return
+//     stale metadata and validation will be incorrect. Delete must therefore land
+//     before the offset is committed. Returning an error from the handler causes
+//     the consumer to skip the rest of this batch without committing, so on
+//     restart the message will be re-delivered and the delete retried.
+//
+//   - ADDs are spawned via `go applyTxmetaCacheJob(...)` and from there each
+//     entry gets its own goroutine. ADDs are best-effort: a missed write falls
+//     through to the UTXO store on the next BatchDecorate. We therefore optimise
+//     for latency-to-cache here, not for delivery guarantees, and impose no
+//     goroutine ceiling.
 //
 // Processing errors on malformed messages are logged and the message is acked
-// (return nil) to avoid infinite retry loops.
+// (return nil) to avoid infinite retry loops on corrupt input.
 func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) error {
 	if msg == nil || len(msg.Value) < 4 {
 		return nil
@@ -108,10 +111,25 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	}
 	job.enqueued = time.Now()
 
-	// Fire-and-forget: don't block the Kafka consumer on cache writes. Errors
-	// are logged inside applyTxmetaCacheJob; the Kafka offset is committed by
-	// the consumer once consumerFn returns nil.
-	go u.applyTxmetaCacheJob(ctx, job)
+	// DELETEs first, synchronously. If any delete fails we surface the error so
+	// the consumer doesn't commit this record. The (rare) consequence is that
+	// any ADDs in this same batch get applied twice across re-delivery — that's
+	// idempotent for SetCacheFromBytes (writing the same value), so safe.
+	for i := range job.delHashes {
+		hash := job.delHashes[i]
+		if err := u.DelTxMetaCache(ctx, &hash); err != nil {
+			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+			u.logger.Errorf("[txmetaHandler][%s] failed to delete tx meta data: %v", hash, err)
+			return err
+		}
+		prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(time.Since(job.enqueued).Seconds())
+	}
+
+	if len(job.addKeys) > 0 {
+		// Fire-and-forget for ADDs: don't block the Kafka consumer on cache
+		// writes. Errors are logged inside applyTxmetaCacheJob.
+		go u.applyTxmetaCacheJob(ctx, job)
+	}
 
 	return nil
 }

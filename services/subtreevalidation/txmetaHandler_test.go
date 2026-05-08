@@ -338,10 +338,17 @@ func TestServer_txmetaHandler(t *testing.T) {
 			server, stop := newTestServerForHandler(t, mockLogger, mockCache)
 
 			err := server.txmetaHandler(context.Background(), tt.input)
-			assert.NoError(t, err)
+			if tt.name == "failed delete operation logs error" {
+				// DELETE is synchronous and must surface failures so the Kafka
+				// consumer leaves the offset uncommitted and the message gets
+				// re-delivered.
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 
-			// stop() closes the work channel and waits for the worker to finish
-			// processing any pending jobs — deterministic alternative to time.Sleep.
+			// stop() drains any in-flight apply goroutines (ADDs only — DELETE
+			// runs synchronously above) before AssertExpectations.
 			stop()
 
 			mockCache.AssertExpectations(t)
