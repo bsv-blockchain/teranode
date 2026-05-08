@@ -38,27 +38,26 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 //
-// Two-tier execution model, no intermediate job struct or apply goroutine — we are
-// already running inside the Kafka consumer's per-partition goroutine, so we just
-// dispatch directly:
+// All entries are applied SYNCHRONOUSLY in the calling goroutine (the Kafka
+// consumer's per-partition goroutine). Earlier we spawned one goroutine per
+// ADD entry to maximise parallelism, but at ~1.1M entries/sec on the scaling
+// cluster this overwhelmed the Go scheduler — the per-entry goroutine queue
+// reached ~89K depth and average enqueue→complete latency ballooned to ~80 ms
+// (p50). Cache writes themselves take microseconds; spawn + queue cost
+// dominated. Walking the batch serially within the partition goroutine costs
+// ~5 ms for 1024 entries, but parallelism still comes from 256 partition
+// goroutines running in parallel — exactly the bucket-shard concurrency we
+// wanted, with two orders of magnitude fewer goroutines.
 //
-//   - DELETEs run SYNCHRONOUSLY here. A delete typically corresponds to a tx being
-//     conflicted/replaced; if the cache forgets to drop the old entry, future
-//     BatchDecorate calls will return stale metadata and validation will be wrong.
-//     Delete must therefore land before the Kafka offset is committed. Returning
-//     an error makes the consumer skip the rest of this record without committing,
-//     so on restart the message is re-delivered and the delete retried.
-//
-//   - ADDs spawn one fire-and-forget goroutine per entry. Best-effort: a missed
-//     write falls through to the UTXO store on the next BatchDecorate. No
-//     goroutine ceiling — we optimise for latency-to-cache.
+// DELETEs return their error so the Kafka offset stays uncommitted on
+// failure; on restart the message is re-delivered and the delete retried.
+// ADD failures are logged at Debug — the cache fill is best-effort, a missed
+// write falls through to the UTXO store on the next BatchDecorate.
 //
 // Memory: keys and values are SUBSLICES of msg.Value (no per-entry copies).
-// franz-go's Record.Value is stable for the lifetime of the record — not pooled
-// or reused — so as long as any apply goroutine holds a subslice, Go's GC keeps
-// the underlying buffer alive. The only per-entry copy is the 32-byte
-// chainhash.Hash for DELETEs, forced by the [32]byte array type (value copy, no
-// allocation).
+// franz-go's Record.Value is stable for the lifetime of the record. The only
+// per-entry copy is the 32-byte chainhash.Hash for DELETEs (forced by the
+// [32]byte array type, value copy, no allocation).
 //
 // Processing errors on malformed messages are logged and the message is acked
 // (return nil) to avoid infinite retry loops on corrupt input.
@@ -109,13 +108,11 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			value := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
 
-			go func(k, v []byte) {
-				if err := u.SetTxMetaCacheFromBytes(ctx, k, v); err != nil {
-					prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-					u.logger.Debugf("[txmetaHandler] failed to set tx meta entry: %v", err)
-				}
-				prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(time.Since(enqueued).Seconds())
-			}(key, value)
+			if err := u.SetTxMetaCacheFromBytes(ctx, key, value); err != nil {
+				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				u.logger.Debugf("[txmetaHandler] failed to set tx meta entry: %v", err)
+			}
+			prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(time.Since(enqueued).Seconds())
 
 		default:
 			// Unknown action — skip the content if any.
