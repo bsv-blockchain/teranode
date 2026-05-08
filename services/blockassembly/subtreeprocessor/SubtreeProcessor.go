@@ -311,6 +311,10 @@ type SubtreeProcessor struct {
 
 	// diskTxMap is the disk-backed tx map (non-nil when txMapDirs is set).
 	diskTxMap *DiskTxMap
+
+	// clock is the source of wall time for codepaths that need a deterministic
+	// substitute in tests (validFromMillis calculations). Replaced in tests.
+	clock clock
 }
 
 type State uint32
@@ -449,6 +453,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		stats:                        gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:          atomic.Value{},
 		announcementTicker:           time.NewTicker(tSettings.BlockAssembly.SubtreeAnnouncementInterval),
+		clock:                        realClock{},
 	}
 	stp.currentSubtree.Store(firstSubtree)
 	stp.setCurrentRunningState(StateStarting)
@@ -804,7 +809,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// Calculate validFromMillis based on DoubleSpendWindow
 					validFromMillis := int64(0)
 					if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-						validFromMillis = time.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+						validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 					}
 
 					for batchNum := 0; batchNum < maxBatchesPerIteration; batchNum++ {
@@ -3781,7 +3786,7 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrBatchesProcessed := int64(0)
-		validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+		validFromMillis := stp.clock.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 
 		for {
 			batch, found := stp.queue.dequeueBatch(validFromMillis)

@@ -3,7 +3,6 @@ package subtreeprocessor
 
 import (
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/go-subtree"
 )
@@ -24,19 +23,8 @@ type LockFreeQueue struct {
 	head        *TxBatch                // Points to the head of the queue (sentinel node)
 	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
 	queueLength atomic.Int64            // Tracks the current number of batches in the queue
-	clock       queueClock              // Source of batch timestamps; replaced in tests
+	clock       clock                   // Source of batch timestamps; replaced in tests
 }
-
-// queueClock supplies the wall time stamped on each enqueued batch. The
-// production implementation is realQueueClock; tests substitute a fake to
-// drive deterministic batch timestamps without touching wall time.
-type queueClock interface {
-	Now() time.Time
-}
-
-type realQueueClock struct{}
-
-func (realQueueClock) Now() time.Time { return time.Now() }
 
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
 //
@@ -47,7 +35,7 @@ func NewLockFreeQueue() *LockFreeQueue {
 		head:        &TxBatch{},
 		tail:        atomic.Pointer[TxBatch]{},
 		queueLength: atomic.Int64{},
-		clock:       realQueueClock{},
+		clock:       realClock{},
 	}
 }
 
