@@ -253,10 +253,18 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 }
 
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
+//
+// The error type is chosen to let callers branch with errors.Is:
+//   - 404 → ErrNotFound
+//   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
+//   - other → generic ServiceError
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
-	if resp.StatusCode == http.StatusNotFound {
+	switch resp.StatusCode {
+	case http.StatusNotFound:
 		errFn = errors.NewNotFoundError
+	case http.StatusServiceUnavailable:
+		errFn = errors.NewServiceUnavailableError
 	}
 
 	if resp.Body != nil {
@@ -275,4 +283,136 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 	}
 
 	return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode)
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value into a duration.
+// Per RFC 7231 the value is either delta-seconds or an HTTP-date; we accept the seconds form
+// (the asset server emits it that way) and ignore HTTP-date for simplicity.
+// Returns 0 if the header is absent, invalid, or non-positive.
+func parseRetryAfter(h string) time.Duration {
+	if h == "" {
+		return 0
+	}
+	secs, err := time.ParseDuration(h + "s")
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return secs
+}
+
+// retryConfig parameterizes DoHTTPRequestBodyReaderWithRetry. Exposed at package level so
+// tests can shrink delays without using the production constants.
+type retryConfig struct {
+	maxAttempts  int
+	initialDelay time.Duration
+	maxDelay     time.Duration
+}
+
+var defaultRetryConfig = retryConfig{
+	maxAttempts:  6,
+	initialDelay: 250 * time.Millisecond,
+	maxDelay:     5 * time.Second,
+}
+
+// DoHTTPRequestBodyReaderWithRetry behaves like DoHTTPRequestBodyReader but retries on
+// HTTP 503 (Service Unavailable) with exponential backoff. Used for endpoints where the
+// server signals admission-control rejection (e.g. asset /subtree_data) and the right
+// behavior is to back off and retry rather than fail the caller.
+//
+// Behavior:
+//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable).
+//   - Other errors (404, 500, network errors) are returned immediately — they are not
+//     transient admission rejections.
+//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts.
+//   - Honors the server's Retry-After header on each 503 (clamped to maxDelay).
+//   - ctx cancellation aborts the retry loop and returns the parent ctx error.
+//
+// Each attempt is a fresh GET — for POST callers passing requestBody, the body is re-sent
+// each time. Make sure that's idempotent before using this helper for non-GET workloads.
+func DoHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
+	return doHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, requestBody...)
+}
+
+func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retryConfig, requestBody ...[]byte) (io.ReadCloser, error) {
+	delay := cfg.initialDelay
+	var lastErr error
+
+	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
+		body, retryAfter, err := doHTTPRequestForStreamingWithRetryAfter(ctx, url, requestBody...)
+		if err == nil {
+			return body, nil
+		}
+		if !errors.Is(err, errors.ErrServiceUnavailable) {
+			return nil, err
+		}
+		lastErr = err
+
+		if attempt == cfg.maxAttempts {
+			break
+		}
+
+		sleepFor := delay
+		if retryAfter > 0 && retryAfter <= cfg.maxDelay {
+			sleepFor = retryAfter
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(sleepFor):
+		}
+
+		delay *= 2
+		if delay > cfg.maxDelay {
+			delay = cfg.maxDelay
+		}
+	}
+
+	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts: %v", url, cfg.maxAttempts, lastErr)
+}
+
+// doHTTPRequestForStreamingWithRetryAfter is doHTTPRequestForStreaming + extracts
+// the Retry-After header on non-OK responses. On success returns (body, 0, nil).
+func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
+	cancelFn := func() {}
+	if _, ok := ctx.Deadline(); !ok {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+	}
+
+	if err := ValidateURL(rawURL); err != nil {
+		cancelFn()
+		return nil, 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		cancelFn()
+		return nil, 0, errors.NewServiceError("failed to create http request", err)
+	}
+	if len(requestBody) > 0 && requestBody[0] != nil {
+		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+		req.Method = http.MethodPost
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		cancelFn()
+		return nil, 0, errors.NewServiceError("failed to do http request", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		err := buildHTTPError(resp, rawURL)
+		cancelFn()
+		return nil, retryAfter, err
+	}
+
+	ct := strings.ToLower(resp.Header.Get("content-type"))
+	if strings.HasPrefix(ct, "text/html") {
+		cancelFn()
+		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+	}
+
+	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, nil
 }

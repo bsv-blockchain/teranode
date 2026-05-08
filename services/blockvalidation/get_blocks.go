@@ -711,8 +711,10 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 
-	// Use the existing HTTP utility to fetch subtree data
-	subtreeDataReader, err := util.DoHTTPRequestBodyReader(ctx, url)
+	// Retry on 503 — peer's asset service may reject under admission control while it
+	// generates the file on-demand from Aerospike. The retry loop honors the peer's
+	// Retry-After header.
+	subtreeDataReader, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] failed to fetch subtree data from %s", url, err)
 	}

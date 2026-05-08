@@ -271,7 +271,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree data from the peer and process it directly
 					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
 
-					body, subtreeDataErr := util.DoHTTPRequestBodyReader(gCtx, url)
+					// Retry on 503 — peer's asset service may reject under admission control
+					// while it generates the file on-demand from Aerospike.
+					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(gCtx, url)
 					if subtreeDataErr != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 					}

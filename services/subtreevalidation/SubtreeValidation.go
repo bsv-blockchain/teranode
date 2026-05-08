@@ -1214,7 +1214,9 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 			// get the whole subtree from the other peer
 			url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
 
-			body, subtreeDataErr := util.DoHTTPRequestBodyReader(ctx, url)
+			// Retry on 503 — peer's asset service may be admission-rejecting under load
+			// (asset_concurrency_subtree_data_create cap). Other errors fail through immediately.
+			body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 			if subtreeDataErr != nil {
 				// Peer cannot provide subtree data - report as invalid subtree
 				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, "peer_cannot_provide_subtree_data")

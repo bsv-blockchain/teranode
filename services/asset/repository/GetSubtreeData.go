@@ -53,21 +53,32 @@ func (sr *semaphoreReadCloser) Close() error {
 // It returns a PipeReader that can be used to read the subtree data as it is being streamed.
 // The data is either retrieved from the block store or the subtree store, depending on availability.
 //
+// Concurrency model:
+//   - File-exists fast path: gated by semGetSubtreeDataReader (waits for permit). Cheap — only
+//     holds an open file descriptor while the client streams.
+//   - On-demand creation slow path: gated by semSubtreeDataCreate via non-blocking TryAcquire.
+//     Returns ErrServiceUnavailable (→ HTTP 503) if the cap is reached. The create path holds
+//     chunk-sized batches of transaction metadata in memory and is the dominant memory consumer
+//     under load, so it has its own hard cap and fails fast rather than queueing.
+//
 // Parameters:
 // - ctx: The context for managing cancellation and timeouts.
 // - subtreeHash: The hash of the subtree to retrieve.
 //
 // Returns:
-// - *io.PipeReader: A PipeReader that can be used to read the subtree data.
-// - error: An error if the retrieval fails, or nil if successful.
+// - io.ReadCloser: Reader for the subtree data; release semaphore permits via Close().
+// - error: errors.ErrServiceUnavailable when the create path is at capacity; other errors otherwise.
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
-		return nil, err
-	}
-	// Note: semaphore will be released when the returned reader is closed
+	// Cheap existence check first, without holding any reader-permit. If the file exists we
+	// only need an FD-bound permit to stream it; if it doesn't we need an admission slot in
+	// the (much smaller) create-path semaphore.
+	subtreeDataExists, existsErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 
-	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-	if err == nil && subtreeDataExists {
+	if existsErr == nil && subtreeDataExists {
+		if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+			return nil, err
+		}
+
 		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		if err != nil {
 			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
@@ -80,7 +91,16 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 		}, nil
 	}
 
-	// File doesn't exist - create it on-demand while streaming to HTTP response
+	// File doesn't exist (or Exists errored) — on-demand creation path. Fail fast under load
+	// rather than queueing: each in-flight creation holds chunk-sized tx metadata in memory.
+	if !tryAcquireSemaphorePermit(repo.semSubtreeDataCreate) {
+		return nil, errors.NewServiceUnavailableError(
+			"[GetSubtreeDataReader] subtree data create concurrency limit reached for %s; retry later",
+			subtreeHash.String())
+	}
+
+	// Hand off to dualStreamWithFileCreation. It owns the create permit lifecycle from here:
+	// released either on early-return below or by the producer goroutine when streaming finishes.
 	return repo.dualStreamWithFileCreation(ctx, subtreeHash)
 }
 
@@ -115,9 +135,39 @@ func (repo *Repository) getOrCreateQuorum() *subtreevalidation.Quorum {
 
 // dualStreamWithFileCreation creates a subtreeData file while simultaneously streaming to HTTP response.
 // If quorum is configured, uses distributed locking to ensure only one instance creates the file.
+//
+// Ownership: callers MUST have already acquired a permit on repo.semSubtreeDataCreate. This function
+// owns the permit lifecycle from here on:
+//   - Released synchronously on early-return paths (file appeared, error before goroutine spawn).
+//   - Released by the producer goroutine when streaming completes (success or write error).
+//
+// On the file-appeared path the returned reader uses the reader semaphore (a fresh permit acquired
+// here) so the caller doesn't accidentally double-count the create permit while the client streams.
 func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
 	// Initialize metrics (safe to call multiple times due to sync.Once)
 	initPrometheusMetrics()
+
+	// fileAppearedReadback returns a reader for an already-existing file, releases the create
+	// permit, and acquires a reader permit instead. Used when another instance produced the file
+	// while we were waiting/setting up.
+	fileAppearedReadback := func(metricStatus, metricLabel string) (io.ReadCloser, error) {
+		releaseSemaphorePermit(repo.semSubtreeDataCreate)
+
+		if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+			return nil, err
+		}
+		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+		if err != nil {
+			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+			return nil, err
+		}
+		repo.logger.Debugf("[GetSubtreeDataReader] SubtreeData file for %s already exists, reading from file", subtreeHash.String())
+		prometheusAssetSubtreeDataCreated.WithLabelValues(metricStatus, metricLabel).Inc()
+		return &semaphoreReadCloser{
+			ReadCloser: reader,
+			sem:        repo.semGetSubtreeDataReader,
+		}, nil
+	}
 
 	// On-demand subtreeData files are created with a finite DAH so they expire naturally
 	// on pruned nodes. Only the block persister promotes files to permanent (DAH=0).
@@ -133,18 +183,7 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "quorum_lock_failed").Inc()
 		} else if exists {
 			// File was created by another instance while we waited - just read it
-			repo.logger.Debugf("[GetSubtreeDataReader] SubtreeData file for %s created by another instance, reading from file", subtreeHash.String())
-			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "waited_for_other").Inc()
-
-			reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-			if err != nil {
-				releaseSemaphorePermit(repo.semGetSubtreeDataReader)
-				return nil, err
-			}
-			return &semaphoreReadCloser{
-				ReadCloser: reader,
-				sem:        repo.semGetSubtreeDataReader,
-			}, nil
+			return fileAppearedReadback("success", "waited_for_other")
 		} else if locked {
 			// We acquired the lock - will release after file creation
 			repo.logger.Debugf("[GetSubtreeDataReader] Acquired quorum lock for %s", subtreeHash.String())
@@ -166,21 +205,10 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 		}
 		if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
 			// File appeared between check and creation - read from it
-			repo.logger.Debugf("[GetSubtreeDataReader] SubtreeData file for %s already exists, reading from file", subtreeHash.String())
-			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "file_existed").Inc()
-
-			reader, readErr := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-			if readErr != nil {
-				releaseSemaphorePermit(repo.semGetSubtreeDataReader)
-				return nil, readErr
-			}
-			return &semaphoreReadCloser{
-				ReadCloser: reader,
-				sem:        repo.semGetSubtreeDataReader,
-			}, nil
+			return fileAppearedReadback("success", "file_existed")
 		}
 		// Other error
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		prometheusAssetSubtreeDataCreated.WithLabelValues("error", "creation_failed").Inc()
 		return nil, err
 	}
@@ -194,7 +222,7 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		defer releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		defer releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		if release != nil {
 			defer release() // Release quorum lock when done
 		}
