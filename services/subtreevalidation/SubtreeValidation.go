@@ -136,6 +136,12 @@ type txMetaCacheOps interface {
 	// This method allows direct storage of pre-serialized metadata for performance optimization.
 	// Returns an error if the cache operation fails.
 	SetCacheFromBytes(key, txMetaBytes []byte) error
+
+	// SetCacheMulti stores multiple cache entries in a single call.
+	// Implementations are expected to fan out across the cache's bucket-shard locks so that
+	// a single Kafka message containing many entries acquires each touched bucket lock once
+	// instead of once per entry. Critical for txmetaHandler throughput under heavy load.
+	SetCacheMulti(keys [][]byte, values [][]byte) error
 }
 
 // SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
@@ -160,6 +166,20 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
 
+	return nil
+}
+
+// SetTxMetaCacheMulti stores multiple transaction metadata entries in the cache in a single call.
+// Used by the Kafka txmeta handler to batch all ADD entries from one Kafka message into a single
+// cache call, allowing the cache's per-bucket locks to be acquired once per touched bucket
+// (rather than once per entry, sequentially, as the previous one-at-a-time path did).
+func (u *Server) SetTxMetaCacheMulti(_ context.Context, keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMulti(keys, values)
+	}
 	return nil
 }
 

@@ -546,6 +546,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
+			TxmetaCacheKafkaWorkers:                   getInt("subtreevalidation_txmetaCacheKafkaWorkers", 8, alternativeContext...),
+			TxmetaCacheKafkaQueueSize:                 getInt("subtreevalidation_txmetaCacheKafkaQueueSize", 256, alternativeContext...),
 			TxMetaCacheMaxMB:                          getInt("txMetaCacheMaxMB", 256, alternativeContext...),
 			TxChanBufferSize:                          getInt("subtreevalidation_txChanBufferSize", 0, alternativeContext...),
 			BatchMissingTransactions:                  getBool("subtreevalidation_batch_missing_transactions", true, alternativeContext...),

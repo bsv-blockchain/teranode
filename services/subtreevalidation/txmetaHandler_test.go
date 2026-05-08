@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -19,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -81,6 +81,11 @@ func (m *mockCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
 
 func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	args := m.Called(key, txMetaBytes)
+	return args.Error(0)
+}
+
+func (m *mockCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
+	args := m.Called(keys, values)
 	return args.Error(0)
 }
 
@@ -240,9 +245,43 @@ func createKafkaMessage(t *testing.T, delete bool, content []byte) *kafka.KafkaM
 	}
 }
 
+// newTestServerWithWorker builds a Server wired up with the txmeta worker-pool plumbing
+// and a single worker goroutine running. Returns a stop function that closes the work
+// channel and waits for the worker to drain — call it after enqueueing to deterministically
+// observe the cache-write side effects.
+//
+// If `log` is a *mockLogger, this helper pre-registers the Infof startup log so individual
+// tests don't have to. Tests that care about specific Infof calls can still add their own
+// expectations on top.
+func newTestServerWithWorker(t *testing.T, log ulogger.Logger, cache utxo.Store) (*Server, func()) {
+	t.Helper()
+
+	if ml, ok := log.(*mockLogger); ok {
+		// startTxmetaCacheWorkers logs an "Infof" startup line; allow it implicitly.
+		ml.On("Infof", mock.Anything, mock.Anything).Maybe().Return()
+	}
+
+	tSettings := &settings.Settings{}
+	tSettings.SubtreeValidation.TxmetaCacheKafkaWorkers = 1
+	tSettings.SubtreeValidation.TxmetaCacheKafkaQueueSize = 16
+
+	server := &Server{
+		logger:    log,
+		settings:  tSettings,
+		utxoStore: cache,
+	}
+	server.initTxmetaCacheWorkerPool()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	server.startTxmetaCacheWorkers(ctx)
+
+	return server, func() {
+		cancel()
+		server.stopTxmetaCacheWorkers()
+	}
+}
+
 func TestServer_txmetaHandler(t *testing.T) {
-	// Note: The handler processes messages asynchronously (in a goroutine) and always returns nil.
-	// Tests verify proper parsing of the binary batch format.
 	tests := []struct {
 		name       string
 		setupMocks func(*mockLogger, *mockCache)
@@ -269,22 +308,23 @@ func TestServer_txmetaHandler(t *testing.T) {
 			name: "failed delete operation logs error",
 			setupMocks: func(l *mockLogger, c *mockCache) {
 				c.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(errors.ErrProcessing)
-				l.On("Errorf", mock.Anything, mock.Anything).Return()
+				l.On("Errorf", mock.Anything, mock.Anything, mock.Anything).Return()
 			},
 			input: createKafkaMessage(t, true, []byte{}),
 		},
 		{
-			name: "successful set operation",
+			name: "successful set operation uses SetCacheMulti",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+				// One Kafka message → one SetCacheMulti call (not N SetCacheFromBytes).
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
 		},
 		{
 			name: "failed set operation logs debug",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
-				l.On("Debugf", mock.Anything, mock.Anything).Return()
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
+				l.On("Debugf", mock.Anything, mock.Anything, mock.Anything).Return()
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
 		},
@@ -296,20 +336,164 @@ func TestServer_txmetaHandler(t *testing.T) {
 			mockCache := &mockCache{}
 			tt.setupMocks(mockLogger, mockCache)
 
-			server := &Server{
-				logger:    mockLogger,
-				utxoStore: mockCache,
-			}
+			server, stop := newTestServerWithWorker(t, mockLogger, mockCache)
 
-			// The handler always returns nil (async processing)
 			err := server.txmetaHandler(context.Background(), tt.input)
 			assert.NoError(t, err)
 
-			// Wait briefly for async goroutine to complete
-			// This is a bit awkward but necessary since processing is async
-			<-time.After(10 * time.Millisecond)
+			// stop() closes the work channel and waits for the worker to finish
+			// processing any pending jobs — deterministic alternative to time.Sleep.
+			stop()
 
 			mockCache.AssertExpectations(t)
 		})
 	}
 }
+
+// createMultiEntryKafkaMessage builds a binary batch with N ADD entries, used to verify
+// that one Kafka message produces ONE SetCacheMulti call (not N SetCacheFromBytes).
+func createMultiEntryKafkaMessage(t *testing.T, n int) *kafka.KafkaMessage {
+	t.Helper()
+
+	const contentLen = 8
+	dataSize := 4 + n*(32+1+4+contentLen)
+	data := make([]byte, dataSize)
+	offset := 0
+
+	binary.LittleEndian.PutUint32(data[offset:], uint32(n))
+	offset += 4
+
+	for i := 0; i < n; i++ {
+		// Hash: byte 0 is i so we can verify per-entry distinctness if needed.
+		data[offset] = byte(i)
+		offset += 32
+		data[offset] = txmetaActionADD
+		offset++
+		binary.LittleEndian.PutUint32(data[offset:], contentLen)
+		offset += 4
+		// Content: filled with i so values are also distinct.
+		for j := 0; j < contentLen; j++ {
+			data[offset+j] = byte(i)
+		}
+		offset += contentLen
+	}
+
+	return &kafka.KafkaMessage{Value: data}
+}
+
+func TestServer_txmetaHandler_BatchesIntoSingleSetCacheMulti(t *testing.T) {
+	const entries = 50
+
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	// The whole regression this test guards against: one Kafka message of N entries
+	// must result in ONE SetCacheMulti call carrying all N keys, not N individual calls.
+	mockCache.On("SetCacheMulti",
+		mock.MatchedBy(func(keys [][]byte) bool { return len(keys) == entries }),
+		mock.MatchedBy(func(values [][]byte) bool { return len(values) == entries }),
+	).Return(nil).Once()
+
+	server, stop := newTestServerWithWorker(t, mockLogger, mockCache)
+	defer stop()
+
+	err := server.txmetaHandler(context.Background(), createMultiEntryKafkaMessage(t, entries))
+	assert.NoError(t, err)
+
+	stop()
+	mockCache.AssertExpectations(t)
+	// Belt-and-braces: explicitly assert the singular path is NOT used.
+	mockCache.AssertNotCalled(t, "SetCacheFromBytes", mock.Anything, mock.Anything)
+}
+
+func TestParseTxmetaBatch(t *testing.T) {
+	t.Run("empty data is rejected", func(t *testing.T) {
+		_, ok := parseTxmetaBatch(&silentLogger{}, []byte{})
+		assert.False(t, ok)
+	})
+
+	t.Run("zero-entry batch parses to empty job", func(t *testing.T) {
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, 0)
+		job, ok := parseTxmetaBatch(&silentLogger{}, buf)
+		require.True(t, ok)
+		assert.Empty(t, job.addKeys)
+		assert.Empty(t, job.delHashes)
+	})
+
+	t.Run("multi-entry batch with mix of ADD/DELETE", func(t *testing.T) {
+		// 3 entries: ADD, DELETE, ADD
+		buf := []byte{}
+		// count
+		count := make([]byte, 4)
+		binary.LittleEndian.PutUint32(count, 3)
+		buf = append(buf, count...)
+
+		appendEntry := func(action byte, key byte, content []byte) {
+			hash := make([]byte, 32)
+			hash[0] = key
+			buf = append(buf, hash...)
+			buf = append(buf, action)
+			lenBuf := make([]byte, 4)
+			binary.LittleEndian.PutUint32(lenBuf, uint32(len(content)))
+			buf = append(buf, lenBuf...)
+			buf = append(buf, content...)
+		}
+		appendEntry(txmetaActionADD, 0xAA, []byte("a-data"))
+		appendEntry(txmetaActionDELETE, 0xBB, nil)
+		appendEntry(txmetaActionADD, 0xCC, []byte("c-data-longer"))
+
+		job, ok := parseTxmetaBatch(&silentLogger{}, buf)
+		require.True(t, ok)
+		assert.Len(t, job.addKeys, 2, "two ADD entries")
+		assert.Len(t, job.addValues, 2)
+		assert.Len(t, job.delHashes, 1, "one DELETE entry")
+		assert.Equal(t, byte(0xAA), job.addKeys[0][0])
+		assert.Equal(t, byte(0xCC), job.addKeys[1][0])
+		assert.Equal(t, []byte("a-data"), job.addValues[0])
+		assert.Equal(t, []byte("c-data-longer"), job.addValues[1])
+		assert.Equal(t, byte(0xBB), job.delHashes[0][0])
+	})
+
+	t.Run("truncated batch returns ok=false", func(t *testing.T) {
+		// Claims 2 entries but only contains data for 1.
+		buf := make([]byte, 0, 4+32+1+4)
+		buf = binary.LittleEndian.AppendUint32(buf, 2)
+		// First entry: hash + action + contentLen=0
+		buf = append(buf, make([]byte, 32+1+4)...)
+		// Second entry header is missing entirely.
+
+		_, ok := parseTxmetaBatch(&silentLogger{}, buf)
+		assert.False(t, ok, "truncated batch must be rejected, not partially applied")
+	})
+
+	t.Run("buffer reuse safety: keys/values are deep-copied", func(t *testing.T) {
+		// Build a batch in a single backing buffer.
+		buf := make([]byte, 0, 4+32+1+4+4)
+		buf = binary.LittleEndian.AppendUint32(buf, 1)
+		hash := make([]byte, 32)
+		hash[0] = 0x42
+		buf = append(buf, hash...)
+		buf = append(buf, txmetaActionADD)
+		buf = binary.LittleEndian.AppendUint32(buf, 4)
+		buf = append(buf, 'a', 'b', 'c', 'd')
+
+		job, ok := parseTxmetaBatch(&silentLogger{}, buf)
+		require.True(t, ok)
+		require.Len(t, job.addKeys, 1)
+		require.Len(t, job.addValues, 1)
+
+		// Mutate the source buffer — the parsed job must not see the change.
+		// (The handler keeps the message on the consumer side; the worker reads later.)
+		for i := range buf {
+			buf[i] = 0xFF
+		}
+		assert.Equal(t, byte(0x42), job.addKeys[0][0], "key was not deep-copied")
+		assert.Equal(t, []byte("abcd"), job.addValues[0], "value was not deep-copied")
+	})
+}
+
+// silentLogger satisfies the small logger interface that parseTxmetaBatch needs without
+// pulling in the full mockLogger machinery.
+type silentLogger struct{}
+
+func (silentLogger) Errorf(format string, args ...interface{}) {}
