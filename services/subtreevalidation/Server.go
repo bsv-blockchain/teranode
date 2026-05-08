@@ -145,6 +145,17 @@ type Server struct {
 	// txmetaCacheCloseOnce ensures the worker-pool channel is closed exactly once,
 	// even if Stop() is called multiple times (e.g. tests with deferred + explicit stops).
 	txmetaCacheCloseOnce *sync.Once
+
+	// txmetaCacheCloseMu coordinates senders (txmetaHandler) with the close in
+	// stopTxmetaCacheWorkers. Senders take the read lock and check txmetaCacheClosed
+	// before pushing onto txmetaCacheJobCh; the closer takes the write lock to flip
+	// the flag and close the channel atomically. Without this, an in-flight Kafka
+	// message arriving during shutdown can send on the closed channel and panic.
+	txmetaCacheCloseMu sync.RWMutex
+
+	// txmetaCacheClosed is set under txmetaCacheCloseMu's write lock immediately
+	// before closing txmetaCacheJobCh. Senders check it under the read lock.
+	txmetaCacheClosed bool
 }
 
 // New creates a new Server instance with the provided dependencies.

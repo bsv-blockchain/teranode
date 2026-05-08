@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -497,3 +499,53 @@ func TestParseTxmetaBatch(t *testing.T) {
 type silentLogger struct{}
 
 func (silentLogger) Errorf(format string, args ...interface{}) {}
+
+// TestServer_txmetaHandler_ShutdownRace asserts that Kafka messages arriving concurrently
+// with Server.Stop() do NOT panic with "send on closed channel" — the production bug
+// observed in legacy-sync e2e where the in-memory Kafka consumer delivered one more
+// message after stopTxmetaCacheWorkers had already closed the work channel.
+func TestServer_txmetaHandler_ShutdownRace(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	// Cache may or may not see writes depending on timing — accept any number of calls
+	// (or none). The point of this test is the absence of a panic.
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockCache.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(nil).Maybe()
+	mockLogger.On("Debugf", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	mockLogger.On("Errorf", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+	server, stop := newTestServerWithWorker(t, mockLogger, mockCache)
+
+	// Hammer the handler from multiple goroutines while another goroutine triggers stop.
+	// Without the RWMutex coordination, this would reliably panic under -race.
+	const senders = 16
+	var senderWg sync.WaitGroup
+	stopRequested := make(chan struct{})
+
+	for i := 0; i < senders; i++ {
+		senderWg.Add(1)
+		go func() {
+			defer senderWg.Done()
+			for {
+				select {
+				case <-stopRequested:
+					return
+				default:
+				}
+				// txmetaHandler must never panic, even after stop().
+				_ = server.txmetaHandler(context.Background(),
+					createKafkaMessage(t, false, []byte("payload")))
+			}
+		}()
+	}
+
+	// Let senders ramp up, then stop concurrently.
+	time.Sleep(5 * time.Millisecond)
+	stop()
+
+	// Senders observe shutdown — let them drain and exit.
+	close(stopRequested)
+	senderWg.Wait()
+
+	// If we got here without panicking, the race is closed.
+}

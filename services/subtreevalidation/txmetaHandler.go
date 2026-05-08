@@ -143,6 +143,19 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	}
 	job.enqueued = time.Now()
 
+	// Coordinate with shutdown via RWMutex: stopTxmetaCacheWorkers takes the write lock,
+	// flips closed=true, and closes the channel — all under the write lock. Senders take
+	// the read lock and check the flag, so we never send on a closed channel.
+	//
+	// This protects against the in-memory Kafka consumer (test path) delivering one more
+	// message after Server.Stop() has closed the channel. Without this, the legacy-sync
+	// e2e test panics with "send on closed channel" when shutdown races with delivery.
+	u.txmetaCacheCloseMu.RLock()
+	defer u.txmetaCacheCloseMu.RUnlock()
+	if u.txmetaCacheClosed {
+		return nil
+	}
+
 	// Blocking enqueue: applies backpressure to the Kafka consumer when workers are busy.
 	// ctx cancellation lets us drain cleanly on shutdown.
 	select {
@@ -231,10 +244,18 @@ func (u *Server) initTxmetaCacheWorkerPool() {
 // stopTxmetaCacheWorkers closes the work channel and waits for in-flight workers to drain.
 // Idempotent (sync.Once on the close) so callers can defer it without worrying about
 // double-close panics. Called from Server.Stop().
+//
+// Take the write lock around the close so any concurrent txmetaHandler senders (which
+// hold the read lock) either see closed=false and complete their send before we close,
+// or queue behind us and see closed=true after, dropping their message. Either way no
+// send-on-closed-channel panic.
 func (u *Server) stopTxmetaCacheWorkers() {
 	if u.txmetaCacheCloseOnce != nil && u.txmetaCacheJobCh != nil {
 		u.txmetaCacheCloseOnce.Do(func() {
+			u.txmetaCacheCloseMu.Lock()
+			u.txmetaCacheClosed = true
 			close(u.txmetaCacheJobCh)
+			u.txmetaCacheCloseMu.Unlock()
 		})
 	}
 	if u.txmetaCacheWg != nil {
