@@ -975,8 +975,10 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			isDelete:  false,
 		}})
 
+		// Hash key spreads single-item fallback messages evenly across partitions
+		// instead of bunching on franz-go's StickyKeyPartitioner default for nil keys.
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Key:   nil,
+			Key:   txHash[:],
 			Value: value,
 		})
 	}
@@ -987,6 +989,17 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 }
 
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
+//
+// The Kafka message key is set to the first item's tx hash. With franz-go's default
+// StickyKeyPartitioner this hashes onto a single partition deterministically, which:
+//  1. Distributes traffic evenly across the topic's partitions (tx hashes are uniform).
+//  2. Keeps every record from one batch on the same partition (preserves any
+//     intra-batch ordering the consumer might rely on).
+//
+// Previously Key was nil, which makes StickyKeyPartitioner equivalent to a
+// StickyPartitioner — bunching consecutive batches onto the same partition until
+// linger expires. That created bursty partition usage and the observed Kafka-read
+// throughput oscillation on the consumer side.
 func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 	if len(batch) == 0 {
 		return
@@ -995,7 +1008,7 @@ func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 	value := serializeTxMetaBatch(batch)
 
 	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   nil,
+		Key:   batch[0].hash[:],
 		Value: value,
 	})
 }
