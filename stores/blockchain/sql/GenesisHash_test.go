@@ -2,7 +2,6 @@ package sql
 
 import (
 	"net/url"
-	"runtime"
 	"testing"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -107,16 +106,9 @@ func TestGenesisHashWrongParams(t *testing.T) {
 			require.NoError(t, err)
 			defer store.Close()
 
-			// Wait for the background rebuild goroutine started by New() to finish
-			// before mutating chainParams — concurrent access is a data race.
-			for store.mainChainRebuilding.Load() > 0 {
-				runtime.Gosched()
-			}
-
-			// Now try to insert the wrong genesis block
-			store.chainParams = tc.wrongParams
-
-			err = store.insertGenesisTransaction(logger)
+			// Pass wrong params explicitly. Avoids racing with background
+			// goroutines that read store.chainParams.
+			err = store.insertGenesisTransaction(logger, tc.wrongParams)
 
 			// Verify we get a configuration error about mismatched genesis hash
 			assert.ErrorContains(t, err, "genesis block hash mismatch")
