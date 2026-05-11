@@ -1727,17 +1727,23 @@ func Test_consumerMessageHandler(t *testing.T) {
 		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
-			logger:              logger,
-			settings:            tSettings,
-			blockFoundCh:        make(chan processBlockFound, 10),
+			logger:   logger,
+			settings: tSettings,
+			// Unbuffered: the inner blockHandler goroutine blocks on this send
+			// (no reader in the test), so the handler's select can only fire
+			// ctx.Done(). Without this, the buffered send returned immediately
+			// and racy select could pick errCh=nil.
+			blockFoundCh:        make(chan processBlockFound),
 			blockValidation:     bv,
 			stats:               gocore.NewStat("test"),
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		}
 
-		// Create a cancellable context
+		// Create a cancellable context, then cancel before invoking the handler
+		// so ctx.Done() is selectable for the very first iteration.
 		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 
 		kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
 			Hash: hashStr,
@@ -1751,9 +1757,6 @@ func Test_consumerMessageHandler(t *testing.T) {
 		}
 
 		handler := server.consumerMessageHandler(ctx)
-
-		// Cancel the context immediately
-		cancel()
 
 		err = handler(msg)
 		require.Error(t, err)

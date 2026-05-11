@@ -266,6 +266,40 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
+	InitPrometheusMetrics()
+
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
+	defer deferFunc()
+
+	_, err := utxoStore.Create(context.Background(), tx1, 0)
+	require.NoError(t, err)
+
+	_, err = utxoStore.Create(context.Background(), tx2, 0)
+	require.NoError(t, err)
+
+	txHashes := []chainhash.Hash{*subtreepkg.CoinbasePlaceholderHash, *hash1, *hash2, *hash1}
+
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	require.NoError(t, err)
+
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseURL:       "legacy",
+		TxHashes:      txHashes,
+		AllowFailFast: false,
+	}
+
+	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	require.Contains(t, err.Error(), "duplicate")
+	require.Contains(t, err.Error(), hash1.String())
+}
+
 func TestServer_prepareTxsPerLevel(t *testing.T) {
 	t.Run("per block", func(t *testing.T) {
 		testCases := []struct {

@@ -1287,12 +1287,14 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		// Should fail because transaction has missing parent
+		// Missing-parent errors are deferred (not fatal) so the caller's
+		// sequential revalidation pass can re-run the failed subtrees in
+		// block order and resolve cross-subtree parent dependencies. The tx
+		// is still recorded in the orphanage.
 		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "processTransactionsInLevels")
+		require.NoError(t, err)
 
-		// Verify transaction was added to orphanage even though processing failed
+		// Verify transaction was added to orphanage for the caller to retry
 		assert.Equal(t, 1, server.orphanage.Len())
 	})
 
@@ -1317,10 +1319,11 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(false, nil)
 
-		// Should fail because transaction has validation errors and blockchain not running
+		// Missing-parent errors are deferred to the sequential revalidation
+		// pass. The orphanage is skipped because FSM isn't RUNNING, but the
+		// caller still gets a chance to retry.
 		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "processTransactionsInLevels")
+		require.NoError(t, err)
 
 		// Verify transaction was NOT added to orphanage (blockchain not running)
 		assert.Equal(t, 0, server.orphanage.Len())
@@ -1347,10 +1350,12 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(false, errors.NewServiceError("blockchain client error"))
 
-		// Should fail because transaction has validation errors and blockchain client error
+		// Missing-parent errors are deferred even when the FSM check fails.
+		// The orphanage is skipped (conservative when we can't confirm running
+		// state) but the caller's sequential revalidation pass still gets a
+		// chance to retry.
 		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "processTransactionsInLevels")
+		require.NoError(t, err)
 
 		// Verify transaction was NOT added to orphanage (blockchain client error)
 		assert.Equal(t, 0, server.orphanage.Len())
@@ -1460,6 +1465,207 @@ func createTestTransaction(txIDStr string) (*bt.Tx, error) {
 	}
 
 	return tx, nil
+}
+
+// TestValidateMissingSubtreesWithOrderedRetry covers the phase-2/phase-3
+// interaction that resolves cross-subtree parent dependencies in block order.
+//
+// The core contract:
+//
+//   - Phase 2 validates every subtree in parallel. Cross-subtree parent
+//     dependencies race here — a child subtree may run before its parent has
+//     populated the cache and fail with TxMissingParent.
+//   - Phase 3 revalidates the failures. It MUST walk them in missingSubtrees
+//     (block) order, not goroutine-completion order, so each child's parent
+//     has already been revalidated before the child runs.
+//
+// A revalidation order that is any permutation other than block order can
+// leave a child ahead of its parent and fail the block. The old
+// mutex-appended failures slice had exactly that bug.
+func TestValidateMissingSubtreesWithOrderedRetry(t *testing.T) {
+	// Build five subtree hashes in a fixed, identifiable order. Index
+	// encoded in the first byte so we can tell them apart by position.
+	makeHashes := func(n int) []chainhash.Hash {
+		hashes := make([]chainhash.Hash, n)
+		for i := range hashes {
+			hashes[i][0] = byte(i + 1) // avoid zero hash
+		}
+		return hashes
+	}
+
+	t.Run("AllParallelSucceed_NoRevalidation", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		missing := makeHashes(5)
+
+		var mu sync.Mutex
+		callOrder := []chainhash.Hash{}
+
+		validateFn := func(_ context.Context, h chainhash.Hash) (*subtreepkg.Subtree, error) {
+			mu.Lock()
+			callOrder = append(callOrder, h)
+			mu.Unlock()
+			return nil, nil
+		}
+
+		err := server.validateMissingSubtreesWithOrderedRetry(context.Background(), missing, validateFn)
+		require.NoError(t, err)
+
+		// Every subtree validated exactly once (no phase-3 retries because
+		// phase 2 all succeeded).
+		require.Len(t, callOrder, len(missing))
+	})
+
+	t.Run("CrossSubtreeDependencies_RevalidateInBlockOrder", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Chain dependency: subtree[i] depends on subtree[i-1] (except i=0).
+		// A subtree is only "resolvable" once every earlier subtree has been
+		// validated. This models the real cross-subtree parent case: children
+		// can only succeed after their parents populate the cache.
+		missing := makeHashes(5)
+		indexOf := make(map[chainhash.Hash]int, len(missing))
+		for i, h := range missing {
+			indexOf[h] = i
+		}
+
+		var mu sync.Mutex
+		validated := make([]bool, len(missing))
+		phase2Count := 0
+		phase3Order := []int{}
+
+		validateFn := func(_ context.Context, h chainhash.Hash) (*subtreepkg.Subtree, error) {
+			i := indexOf[h]
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			// The first len(missing) calls are phase 2 (parallel). In this
+			// phase only subtree 0 can succeed; every other subtree's parent
+			// has not yet been validated. This matches the observed
+			// behaviour on dense-dep blocks where only subtree 0 succeeds in
+			// parallel.
+			if phase2Count < len(missing) {
+				phase2Count++
+
+				if i == 0 {
+					validated[0] = true
+					return nil, nil
+				}
+				return nil, errors.NewTxMissingParentError("parallel race: parent of subtree %d not validated", i)
+			}
+
+			// Phase 3: ordered sequential. By contract, subtree i-1 must
+			// already be validated when we reach subtree i.
+			phase3Order = append(phase3Order, i)
+			if i > 0 && !validated[i-1] {
+				return nil, errors.NewTxMissingParentError("ordering broken: parent %d not validated before %d", i-1, i)
+			}
+			validated[i] = true
+			return nil, nil
+		}
+
+		err := server.validateMissingSubtreesWithOrderedRetry(context.Background(), missing, validateFn)
+		require.NoError(t, err)
+
+		// Every subtree must have ultimately validated successfully.
+		for i, ok := range validated {
+			require.True(t, ok, "subtree %d was never validated", i)
+		}
+
+		// Phase 3 must have run every failed subtree except #0 (the only one
+		// that could succeed in parallel) in strict block order.
+		require.Equal(t, []int{1, 2, 3, 4}, phase3Order,
+			"phase 3 must revalidate failed subtrees in strict block order")
+	})
+
+	t.Run("PersistentFailureInPhase3_IsReturned", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		missing := makeHashes(3)
+		indexOf := make(map[chainhash.Hash]int, len(missing))
+		for i, h := range missing {
+			indexOf[h] = i
+		}
+
+		// Subtree 1 always fails. Subtree 0 succeeds. Subtree 2 succeeds in
+		// parallel (its "dependency" is satisfied). The contract is that a
+		// failure that persists into phase 3 is surfaced to the caller — not
+		// silently dropped.
+		validateFn := func(_ context.Context, h chainhash.Hash) (*subtreepkg.Subtree, error) {
+			switch indexOf[h] {
+			case 1:
+				return nil, errors.NewTxInvalidError("subtree 1 is permanently invalid")
+			default:
+				return nil, nil
+			}
+		}
+
+		err := server.validateMissingSubtreesWithOrderedRetry(context.Background(), missing, validateFn)
+		require.Error(t, err)
+	})
+
+	t.Run("RevalidationOrderWouldFailIfNotBlockOrder", func(t *testing.T) {
+		// This test encodes the essence of the bug the PR fixes: if phase 3
+		// walked failures in any order other than missingSubtrees order, it
+		// would reproduce the same TxMissingParent error. We assert block
+		// order explicitly by recording the sequence.
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		missing := makeHashes(4)
+		indexOf := make(map[chainhash.Hash]int, len(missing))
+		for i, h := range missing {
+			indexOf[h] = i
+		}
+
+		var mu sync.Mutex
+		var callOrder []int
+		validated := make([]bool, len(missing))
+
+		// Phase 2: everything fails so phase 3 retries in order.
+		// Phase 3: a subtree succeeds iff its predecessor has been validated.
+		// This mimics a strict chain dependency.
+		phase2Calls := 0
+		validateFn := func(_ context.Context, h chainhash.Hash) (*subtreepkg.Subtree, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			i := indexOf[h]
+
+			// First len(missing) calls are phase 2. Phase 2 subtree 0 is the
+			// only one that could succeed; force all to fail to isolate the
+			// phase 3 ordering assertion.
+			if phase2Calls < len(missing) {
+				phase2Calls++
+				callOrder = append(callOrder, -i-1) // negative = phase 2 call
+				return nil, errors.NewTxMissingParentError("phase 2 dep race on subtree %d", i)
+			}
+
+			callOrder = append(callOrder, i)
+			if i > 0 && !validated[i-1] {
+				return nil, errors.NewTxMissingParentError("predecessor subtree %d not validated", i-1)
+			}
+			validated[i] = true
+			return nil, nil
+		}
+
+		err := server.validateMissingSubtreesWithOrderedRetry(context.Background(), missing, validateFn)
+		require.NoError(t, err, "phase 3 ordered walk must resolve chain deps in one pass")
+
+		// Extract only the phase-3 calls and assert they went in block order.
+		var phase3 []int
+		for _, v := range callOrder {
+			if v >= 0 {
+				phase3 = append(phase3, v)
+			}
+		}
+		require.Equal(t, []int{0, 1, 2, 3}, phase3,
+			"phase 3 must revalidate in strict missingSubtrees order")
+	})
 }
 
 func TestValidateSubtreeInternal(t *testing.T) {

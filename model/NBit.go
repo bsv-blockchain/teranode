@@ -56,7 +56,7 @@ func (b NBit) CloneBytes() []byte {
 
 // CalculateTarget from nBits returns the target as a big.Int.
 // Returns big.NewInt(0) for malformed nBits (negative-encoded or overflowing
-// 256 bits), matching Bitcoin Core's arith_uint256::SetCompact rejection
+// 256 bits), matching SVNode's arith_uint256::SetCompact rejection
 // criteria. A zero target makes any positive hash fail the PoW comparison
 // and contributes zero chainwork — the safe semantic for a malformed value.
 func (b NBit) CalculateTarget() *big.Int {
@@ -65,7 +65,7 @@ func (b NBit) CalculateTarget() *big.Int {
 	exponent := nb >> 24
 	mantissa := nb & 0x007FFFFF
 
-	// Reject malformed encodings. Bitcoin Core requires a non-zero mantissa
+	// Reject malformed encodings. The Bitcoin Protocol requires a non-zero mantissa
 	// for both negative and overflow flags — a zero mantissa just encodes
 	// the value zero, regardless of sign bit or exponent.
 	if mantissa != 0 {
@@ -98,11 +98,10 @@ func (b NBit) CalculateTarget() *big.Int {
 // CalculateDifficulty from nBits using the standard Bitcoin algorithm
 func (b NBit) CalculateDifficulty() *big.Float {
 	// This implementation follows the standard Bitcoin difficulty calculation
-	// as used in both Bitcoin Core and SV Node:
-	// https://github.com/bitcoin/bitcoin/blob/master/src/rpc/blockchain.cpp
+	// as used in SVNode:
 	// https://github.com/bitcoin-sv/bitcoin-sv/blob/master/src/rpc/blockchain.cpp
 	//
-	// The algorithm is identical in both implementations:
+	// The algorithm:
 	// double GetDifficulty(const CBlockIndex& blockindex) {
 	//     int nShift = (blockindex.nBits >> 24) & 0xff;
 	//     double dDiff = (double)0x0000ffff / (double)(blockindex.nBits & 0x00ffffff);

@@ -39,8 +39,12 @@ service BlockAssemblyAPI {
   // Includes all necessary components for miners to begin work.
   rpc GetMiningCandidate (GetMiningCandidateRequest) returns (model.MiningCandidate) {}
 
-  // GetCurrentDifficulty retrieves the current network mining difficulty.
-  // Used by miners to understand the current mining requirements.
+  // GetCurrentDifficulty retrieves the difficulty required for the NEXT block,
+  // not the current tip's difficulty. Computed against the current chain tip
+  // and the current wall-clock time, so the value reflects any retargeting that
+  // would apply to a block produced now. The returned BlockHash is the current
+  // tip's hash, provided as context. Despite the name, this is effectively
+  // "GetNextRequiredDifficulty"; the original name is retained for compatibility.
   rpc GetCurrentDifficulty (EmptyMessage) returns (GetCurrentDifficultyResponse) {}
 
   // SubmitMiningSolution submits a solved block to the network.
@@ -227,10 +231,11 @@ message StateMessage {
   repeated string subtrees = 10; // the hashes of the current subtrees
 }
 
-// Response containing the current difficulty of the blockchain.
+// Response containing the difficulty required for the next block (not the
+// current tip's difficulty).
 message GetCurrentDifficultyResponse {
-  double difficulty = 1; // the current difficulty of the blockchain
-  bytes blockHash = 2; // the hash of the block at which the difficulty is measured
+  double difficulty = 1; // the difficulty the NEXT block must satisfy
+  bytes blockHash = 2;   // the hash of the current chain tip, provided as context
 }
 
 // Request for generating a block.

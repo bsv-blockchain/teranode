@@ -71,7 +71,7 @@ func TestCalculateTarget_NegativeNBitsRejected(t *testing.T) {
 	})
 
 	t.Run("sign bit set with zero mantissa is just zero, not negative", func(t *testing.T) {
-		// 0x1d800000 — sign bit set but mantissa is zero. Bitcoin Core treats
+		// 0x1d800000 — sign bit set but mantissa is zero. The Bitcoin Protocol treats
 		// this as the value zero (fNegative requires nWord != 0). The end-state
 		// is a zero target either way, but we exercise the precondition here.
 		bits, err := NewNBitFromString("1d800000")
@@ -96,7 +96,7 @@ func TestCalculateTarget_NegativeNBitsRejected(t *testing.T) {
 }
 
 func TestCalculateTarget_OverflowRejected(t *testing.T) {
-	// Overflow rules per Bitcoin Core's arith_uint256::SetCompact:
+	// Overflow rules per SVNode's arith_uint256::SetCompact:
 	//   - exponent > 34            → any non-zero mantissa overflows 2^256
 	//   - mantissa > 0xff   && exp > 33
 	//   - mantissa > 0xffff && exp > 32
@@ -145,7 +145,7 @@ func TestBlock911636Difficulty(t *testing.T) {
 	// This test verifies the standard Bitcoin difficulty calculation
 	// Block 911636 has nBits value 0x180f9ff5
 	// Note: SVNode may report a different value (~35858832210.37) which appears
-	// to be incorrect based on the SV Node C++ source code analysis
+	// to be incorrect based on the SVNode C++ source code analysis
 
 	bits, err := NewNBitFromString("180f9ff5")
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestBlock911636Difficulty(t *testing.T) {
 	difficultyFloat, _ := difficulty.Float64()
 
 	// Expected difficulty using standard Bitcoin algorithm
-	// This matches what Bitcoin Core and SV Node C++ code produces
+	// This matches what SVNode C++ code produces
 	expectedDifficulty := 70368426346.669891357421875
 
 	t.Logf("nBits: 0x180f9ff5")

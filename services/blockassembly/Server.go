@@ -1300,7 +1300,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	bestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
 	if bestBlockHeader.HashPrevBlock.IsEqual(hashPrevBlock) {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] candidate is stale: chain has already advanced past its parent", jobID)
 	}
 
 	var coinbaseTx *bt.Tx

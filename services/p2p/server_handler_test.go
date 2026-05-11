@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -1278,4 +1279,524 @@ func TestHandleSubtreeTopic_OversizedDropped(t *testing.T) {
 	info, exists := registry.Get(remotePeerID)
 	require.True(t, exists)
 	assert.True(t, info.LastMessageTime.IsZero(), "oversized subtree must not advance LastMessageTime")
+}
+
+// --- handleNodeStatusTopic branch coverage ---
+//
+// TestServerHandleNodeStatusTopic in Server_test.go covers self/remote happy
+// paths; TestHandleNodeStatusTopic_OversizedDropped covers the size guard.
+// These tests fill in the validation/error branches: bad JSON, peer ID
+// spoofing, SSRF rejection, invalid block-hash, full notification channel,
+// and the storage-update side effect.
+
+func TestHandleNodeStatusTopic_BadJSON(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Garbage that passes the size guard but fails json.Unmarshal.
+	server.handleNodeStatusTopic(context.Background(), []byte("{not-json"), remotePeerID.String())
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("bad JSON must not produce a notification, got %+v", msg)
+	default:
+	}
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.True(t, info.LastMessageTime.IsZero(), "bad JSON must not advance LastMessageTime")
+}
+
+func TestHandleNodeStatusTopic_PeerIDSpoofing(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+
+	// Make claimed peer differ from the gossip sender.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	otherPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        otherPeerID.String(),
+		BestBlockHash: "0000000000000000000000000000000000000000000000000000000000000001",
+		BestHeight:    1,
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	score, _, _ := server.banManager.GetBanScore(remotePeerID.String())
+	assert.Equal(t, 20, score, "spoofing should add ReasonProtocolViolation (20) to sender score")
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("spoofing must short-circuit before notification, got %+v", msg)
+	default:
+	}
+}
+
+func TestHandleNodeStatusTopic_InvalidBaseURL(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+	// AllowPrivateIPs is false by default in createBaseTestSettings, so a
+	// loopback URL is rejected by validateDataHubURL.
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:  remotePeerID.String(),
+		BaseURL: "http://127.0.0.1:8080",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	score, _, _ := server.banManager.GetBanScore(remotePeerID.String())
+	assert.Equal(t, 20, score, "invalid BaseURL should add ReasonProtocolViolation (20) to sender score")
+
+	select {
+	case msg := <-server.notificationCh:
+		t.Fatalf("SSRF rejection must short-circuit before notification, got %+v", msg)
+	default:
+	}
+}
+
+func TestHandleNodeStatusTopic_InvalidBestBlockHash(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	// Hash that fails chainhash.NewHashFromStr — but height > 0 to enter the
+	// branch in the first place. The notification fires before the hash
+	// parse, so it must still arrive.
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    42,
+		BestBlockHash: "not-a-real-hex-hash",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case msg := <-server.notificationCh:
+		assert.Equal(t, remotePeerID.String(), msg.PeerID)
+	default:
+		t.Fatal("notification should fire before invalid block-hash check")
+	}
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.Equal(t, uint32(0), info.Height, "invalid block hash must abort before peer height update")
+}
+
+func TestHandleNodeStatusTopic_NotificationChannelFull(t *testing.T) {
+	server, remotePeerID, _ := newSizeLimitTestServer(t)
+	// Replace the buffered channel with an unbuffered one so the non-blocking
+	// send hits the default branch.
+	server.notificationCh = make(chan *notificationMsg)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID: remotePeerID.String(),
+	})
+	require.NoError(t, err)
+
+	// Must not panic or deadlock.
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+}
+
+func TestHandleNodeStatusTopic_StorageUpdate(t *testing.T) {
+	server, remotePeerID, registry := newSizeLimitTestServer(t)
+
+	validHash := "0000000000000000000000000000000000000000000000000000000000000001"
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    7,
+		BestBlockHash: validHash,
+		Storage:       "full",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	info, exists := registry.Get(remotePeerID)
+	require.True(t, exists)
+	assert.Equal(t, "full", info.Storage, "storage mode should be propagated to the registry")
+	assert.Equal(t, uint32(7), info.Height)
+}
+
+// --- shouldSkipDuringSync branch coverage ---
+//
+// shouldSkipDuringSync gates announcement processing while we're catching up
+// from a designated sync peer. The function has six exit paths; these tests
+// cover each one. Tests build a SyncCoordinator and write directly to its
+// currentSyncPeer field (matching the pattern in sync_coordinator_test.go).
+
+func newSyncSkipTestServer(t *testing.T, fsm blockchain_api.FSMStateType, syncPeer peer.ID, syncPeerHeight uint32) *Server {
+	t.Helper()
+
+	tSettings := createBaseTestSettings()
+	registry := NewPeerRegistry()
+	if syncPeer != "" && syncPeerHeight > 0 {
+		registry.Put(syncPeer, "", syncPeerHeight, nil, "")
+	}
+
+	mockBC := new(blockchain.Mock)
+	state := fsm
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&state, nil).Maybe()
+
+	selector := NewPeerSelector(ulogger.New("test"), tSettings)
+	banManager := NewPeerBanManager(context.Background(), nil, tSettings, registry)
+
+	sc := NewSyncCoordinator(
+		ulogger.New("test"),
+		tSettings,
+		registry,
+		selector,
+		banManager,
+		mockBC,
+		nil,
+	)
+	if syncPeer != "" {
+		sc.mu.Lock()
+		sc.currentSyncPeer = syncPeer
+		sc.mu.Unlock()
+	}
+
+	return &Server{
+		logger:           ulogger.New("test"),
+		settings:         tSettings,
+		blockchainClient: mockBC,
+		peerRegistry:     registry,
+		syncCoordinator:  sc,
+		gCtx:             context.Background(),
+	}
+}
+
+func TestShouldSkipDuringSync_NoSyncPeer(t *testing.T) {
+	// syncCoordinator nil → getSyncPeer returns "" → function exits before
+	// touching the blockchain client.
+	server := &Server{
+		logger:           ulogger.New("test"),
+		settings:         createBaseTestSettings(),
+		blockchainClient: nil,
+		peerRegistry:     NewPeerRegistry(),
+		gCtx:             context.Background(),
+	}
+
+	skip := server.shouldSkipDuringSync("from", "originator", 100, "block")
+	assert.False(t, skip, "no sync peer must not skip")
+}
+
+func TestShouldSkipDuringSync_NotSyncing(t *testing.T) {
+	// Sync peer is set but FSM reports RUNNING — we're caught up, so the
+	// announcement should pass through.
+	syncPeer := peer.ID("sync-peer")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_RUNNING, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", "originator", 100, "block")
+	assert.False(t, skip, "RUNNING FSM must not skip")
+}
+
+func TestShouldSkipDuringSync_BelowSyncPeerHeight(t *testing.T) {
+	// Syncing and announcement is older than where the sync peer already is.
+	syncPeer := peer.ID("sync-peer-1")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 100)
+
+	skip := server.shouldSkipDuringSync("from", syncPeer.String(), 50, "block")
+	assert.True(t, skip, "announcement below sync peer height must skip")
+}
+
+func TestShouldSkipDuringSync_NotFromSyncPeer(t *testing.T) {
+	// Syncing, height ok, but originator is not the sync peer.
+	syncPeer := peer.ID("sync-peer-2")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 10)
+
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	otherPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	skip := server.shouldSkipDuringSync("from", otherPeer.String(), 100, "block")
+	assert.True(t, skip, "announcement from non-sync peer must skip")
+}
+
+func TestShouldSkipDuringSync_InvalidOriginator(t *testing.T) {
+	// Syncing, height ok, but originatorPeerID doesn't decode. Falls into the
+	// same "not from sync peer" branch via the err != nil short-circuit.
+	syncPeer := peer.ID("sync-peer-3")
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_LEGACYSYNCING, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", "not-a-valid-peer-id", 100, "block")
+	assert.True(t, skip, "undecodable originator must skip")
+}
+
+func TestShouldSkipDuringSync_FromSyncPeer(t *testing.T) {
+	// All gates pass: sync peer set, FSM CATCHINGBLOCKS, height ok, originator
+	// is the sync peer. Announcement is allowed through.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	syncPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	server := newSyncSkipTestServer(t, blockchain_api.FSMStateType_CATCHINGBLOCKS, syncPeer, 10)
+
+	skip := server.shouldSkipDuringSync("from", syncPeer.String(), 100, "block")
+	assert.False(t, skip, "announcement from sync peer at higher height must not skip")
+}
+
+// --- handleBanEvent / disconnectBannedPeerByID branch coverage ---
+//
+// handleBanEvent dispatches BanEvents from the BanList; only "add" actions
+// with a non-empty PeerID lead to a disconnect. disconnectBannedPeerByID
+// iterates the connected-peers list and removes the peer if found.
+
+func TestHandleBanEvent_NonAddAction(t *testing.T) {
+	// "remove" / unset / anything other than banActionAdd should return
+	// before parsing the PeerID — so even an empty event is a no-op.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{Action: "remove", PeerID: "anything"})
+	// Reaching this point without a panic confirms the early return.
+}
+
+func TestHandleBanEvent_EmptyPeerID(t *testing.T) {
+	// PeerID-only banning: an "add" event without a PeerID is logged and
+	// dropped, never reaching peer.Decode.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{Action: banActionAdd, PeerID: ""})
+}
+
+func TestHandleBanEvent_InvalidPeerID(t *testing.T) {
+	// peer.Decode failure short-circuits before disconnectBannedPeerByID,
+	// so P2PClient can be nil — if disconnect ran, GetPeers would panic.
+	server := &Server{logger: ulogger.New("test")}
+
+	server.handleBanEvent(context.Background(), BanEvent{
+		Action: banActionAdd,
+		PeerID: "not-a-real-peer-id",
+		Reason: "test",
+	})
+}
+
+func TestHandleBanEvent_ValidPeerIDDispatchesDisconnect(t *testing.T) {
+	// End-to-end happy path: handleBanEvent decodes the PeerID and reaches
+	// disconnectBannedPeerByID, which finds the peer in GetPeers and removes
+	// it from the registry.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: bannedPeer.String()}}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.handleBanEvent(context.Background(), BanEvent{
+		Action: banActionAdd,
+		PeerID: bannedPeer.String(),
+		Reason: "spam",
+	})
+
+	_, exists := registry.Get(bannedPeer)
+	assert.False(t, exists, "banned peer should be removed from the registry after dispatch")
+}
+
+func TestDisconnectBannedPeerByID_PeerFound(t *testing.T) {
+	// Direct test of the "peer in connected list" path: the registry entry
+	// should be cleared.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{
+		{ID: "some-other-peer"},
+		{ID: bannedPeer.String()},
+	}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.disconnectBannedPeerByID(context.Background(), bannedPeer, "manual")
+
+	_, exists := registry.Get(bannedPeer)
+	assert.False(t, exists, "found peer must be removed from registry")
+}
+
+func TestDisconnectBannedPeerByID_PeerNotFound(t *testing.T) {
+	// Peer is not in the connected list → debug log, no registry mutation.
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	bannedPeer, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: "unrelated-peer"}}
+
+	registry := NewPeerRegistry()
+	registry.Put(bannedPeer, "", 0, nil, "")
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		P2PClient:    mockP2P,
+		peerRegistry: registry,
+	}
+
+	server.disconnectBannedPeerByID(context.Background(), bannedPeer, "manual")
+
+	_, exists := registry.Get(bannedPeer)
+	assert.True(t, exists, "untracked peer must not affect registry")
+}
+
+// --- startPeerRegistryCleanup tests ---
+
+func TestStartPeerRegistryCleanup_NilRegistryReturnsEarly(t *testing.T) {
+	server := &Server{
+		logger:   ulogger.New("test"),
+		settings: createBaseTestSettings(),
+	}
+
+	server.startPeerRegistryCleanup(context.Background())
+
+	// No timer should be created when peerRegistry is nil — otherwise we would
+	// leak a ticker on every test setup that omits the registry.
+	assert.Nil(t, server.peerRegistryCleanupTimer)
+}
+
+func TestStartPeerRegistryCleanup_TickEvictsStalePeer(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	stale := peer.ID("stale-peer-1")
+	registry.Put(stale, "", 0, nil, "")
+	registry.peers[stale].LastMessageTime = time.Now().Add(-2 * time.Hour)
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	defer server.peerRegistryCleanupTimer.Stop()
+
+	require.Eventually(t, func() bool {
+		return registry.PeerCount() == 0
+	}, 2*time.Second, 10*time.Millisecond, "stale peer should be evicted by ticker")
+}
+
+func TestStartPeerRegistryCleanup_DefaultsAppliedWhenSettingsZero(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	tSettings := createBaseTestSettings()
+	// Both interval and ttl left at zero so the default fill-in branches run.
+	tSettings.P2P.PeerRegistryCleanupInterval = 0
+	tSettings.P2P.PeerRegistryTTL = 0
+	tSettings.P2P.PeerRegistryMaxSize = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	server.peerRegistryCleanupTimer.Stop()
+}
+
+func TestStartPeerRegistryCleanup_CancelStopsGoroutine(t *testing.T) {
+	registry := NewPeerRegistry()
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+
+	// Let the ticker fire at least once before cancelling, so we exercise both
+	// select cases in the goroutine.
+	time.Sleep(30 * time.Millisecond)
+
+	cancel()
+	server.peerRegistryCleanupTimer.Stop()
+
+	// Goroutine exit isn't directly observable, but `go test -race` will surface
+	// any ordering bug when paired with the explicit ticker stop.
+	time.Sleep(20 * time.Millisecond)
+}
+
+func TestStartPeerRegistryCleanup_ExemptSaturationLogged(t *testing.T) {
+	// Drives the post-Cleanup Warn path: exempt count alone exceeds maxSize so
+	// the registry stays over-cap after a tick. We can't intercept the logger
+	// without a custom shim, so we just confirm: (a) the ticker fires, (b) no
+	// non-exempt entries remain, (c) the exempt entries are still there. The
+	// Warn statement runs as a side effect of (b) + (c).
+	registry := NewPeerRegistry()
+
+	exempt := GenerateTestPeerIDs(3)
+	for _, id := range exempt {
+		registry.Put(id, "", 0, nil, "")
+		registry.UpdateConnectionState(id, true)
+	}
+	stale := peer.ID("stale-peer")
+	registry.Put(stale, "", 0, nil, "")
+	registry.peers[stale].LastMessageTime = time.Now()
+
+	tSettings := createBaseTestSettings()
+	tSettings.P2P.PeerRegistryCleanupInterval = 10 * time.Millisecond
+	tSettings.P2P.PeerRegistryTTL = time.Hour
+	tSettings.P2P.PeerRegistryMaxSize = 2 // below exempt count of 3
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		logger:       ulogger.New("test"),
+		settings:     tSettings,
+		peerRegistry: registry,
+	}
+	server.startPeerRegistryCleanup(ctx)
+	require.NotNil(t, server.peerRegistryCleanupTimer)
+	defer server.peerRegistryCleanupTimer.Stop()
+
+	require.Eventually(t, func() bool {
+		// Stale evicted, all three exempts retained, registry sits at 3 (> 2).
+		return registry.PeerCount() == 3
+	}, 2*time.Second, 10*time.Millisecond, "exempt-only registry should hold at exempt count")
+
+	for _, id := range exempt {
+		_, ok := registry.Get(id)
+		assert.True(t, ok, "exempt peer must remain")
+	}
+	_, ok := registry.Get(stale)
+	assert.False(t, ok, "stale non-exempt peer must be evicted")
 }

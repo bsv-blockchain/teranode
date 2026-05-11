@@ -22,7 +22,7 @@ func createTestMiningCandidate() *model.MiningCandidate {
 		Time:          uint32(time.Now().Unix()),
 		NBits:         []byte{0xff, 0xff, 0x7f, 0x20}, // Very easy difficulty for testing (nBits 0x207fffff, little-endian)
 		Height:        100,
-		CoinbaseValue: 5000000000, // 50 BTC in satoshis
+		CoinbaseValue: 5000000000, // 50 BSV in satoshis
 	}
 }
 
