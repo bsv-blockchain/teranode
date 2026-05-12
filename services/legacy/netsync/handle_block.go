@@ -19,7 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	teranodeblockchain "github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
@@ -385,7 +385,7 @@ func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
 		return false
 	}
 
-	highest := teranodeblockchain.HighestCheckpointHeight(sm.chainParams.Checkpoints)
+	highest := blockchain.HighestCheckpointHeight(sm.chainParams.Checkpoints)
 	if highest == 0 {
 		return false
 	}
