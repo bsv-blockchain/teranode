@@ -1347,15 +1347,15 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		}
 	}
 
-	// dequeue all batches
+	// dequeue all batches enqueued up to the time anchor below. Batches
+	// arriving concurrently after this anchor (e.g. fresh producer
+	// enqueues during the reset) are intentionally left in the queue.
 	stp.logger.Warnf("[SubtreeProcessor][Reset] Dequeueing all transactions")
 
-	validUntilMillis := time.Now().UnixMilli()
+	validUntilMillis := stp.clock.Now().UnixMilli()
 
 	for {
-		batch, found := stp.queue.dequeueBatch(0)
-		if !found || batch.time > validUntilMillis {
-			// we are done
+		if _, found := stp.queue.dequeueBatchUntil(validUntilMillis); !found {
 			break
 		}
 	}

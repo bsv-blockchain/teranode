@@ -305,6 +305,65 @@ func Test_clockBackwardJumpHoldsBatchesLonger(t *testing.T) {
 	require.Equal(t, enqueueAt.UnixMilli(), batch.time)
 }
 
+// Test_dequeueBatchUntilPreservesPostBoundaryBatch pins the
+// inclusive-until admit semantics of dequeueBatchUntil. The boundary
+// batch (batch.time == maxTimeMillis) is admitted; any batch with
+// batch.time > maxTimeMillis is rejected without being removed from
+// the queue.
+//
+// Regression guard for the Reset drain loop bug: the previous
+// implementation called dequeueBatch(0) then checked batch.time
+// post-hoc, which removed the boundary batch from the queue before
+// discovering it was too new. dequeueBatchUntil peeks first.
+func Test_dequeueBatchUntilPreservesPostBoundaryBatch(t *testing.T) {
+	preSnapshot := time.UnixMilli(1_700_000_000_000).UTC()
+	postSnapshot := preSnapshot.Add(10 * time.Millisecond)
+
+	q := NewLockFreeQueue()
+
+	q.clock = fixedClock{t: preSnapshot}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("pre")), Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	q.clock = fixedClock{t: postSnapshot}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("post")), Fee: 2, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	require.Equal(t, int64(2), q.length(), "precondition: both batches enqueued")
+
+	// Drain everything up to and including preSnapshot.
+	var consumedFees []uint64
+	for {
+		batch, found := q.dequeueBatchUntil(preSnapshot.UnixMilli())
+		if !found {
+			break
+		}
+		consumedFees = append(consumedFees, batch.nodes[0].Fee)
+	}
+
+	require.Equal(t, []uint64{1}, consumedFees,
+		"pre-snapshot batch must drain inside the loop body")
+	require.Equal(t, int64(1), q.length(),
+		"post-snapshot batch must survive: dequeueBatchUntil peeks before consuming")
+
+	// Boundary check: a batch enqueued at exactly maxTimeMillis admits.
+	q2 := NewLockFreeQueue()
+	q2.clock = fixedClock{t: preSnapshot}
+	q2.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("boundary")), Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	_, found := q2.dequeueBatchUntil(preSnapshot.UnixMilli())
+	require.True(t, found, "batch.time == maxTimeMillis must admit (inclusive-until)")
+
+	// Empty queue returns false without touching state.
+	_, found = q2.dequeueBatchUntil(preSnapshot.UnixMilli())
+	require.False(t, found, "empty queue returns false")
+}
+
 func Test_queue2Threads(t *testing.T) {
 	q := NewLockFreeQueue()
 
