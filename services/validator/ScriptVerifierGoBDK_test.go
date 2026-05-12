@@ -202,7 +202,7 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 		{code: bdkscript.DOS_ERR_P2SH_OUTPUT_POST_GENESIS},
 		{code: bdkscript.DOS_ERR_SIGOPS_CONSENSUS},
 		{code: bdkscript.DOS_ERR_SIGOPS_POLICY, wantPolicy: true},
-		{code: bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION},
+		{code: bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION, wantPolicy: true},
 		{code: bdkscript.DOS_ERR_NOT_STANDARD, wantPolicy: true},
 		{code: bdkscript.DOS_ERR_VIN_EMPTY},
 		{code: bdkscript.DOS_ERR_VOUT_EMPTY},

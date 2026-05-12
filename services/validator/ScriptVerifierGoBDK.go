@@ -211,7 +211,7 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	var dosErr bdkscript.DoSError
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
-		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY:
+		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
 			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
