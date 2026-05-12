@@ -60,18 +60,36 @@ func (u *Server) startTxmetaCacheWorkers(ctx context.Context) {
 
 // txmetaCacheWorker consumes parsed batches and applies them to the cache.
 //
-// Shutdown is driven by closing the work channel — NOT by ctx cancellation. This is
-// deliberate: a select on both ctx.Done() and the channel can pick the cancellation
-// branch even when the channel still has buffered jobs, dropping work on the floor.
-// `for job := range ch` drains remaining items and then exits cleanly.
+// Shutdown is driven by closing u.txmetaCacheDone (NOT by closing the work channel).
+// Closing the work channel would race with the Kafka consumer goroutine that calls
+// txmetaHandler: if the consumer is mid-send when we close, the runtime panics with
+// "send on closed channel". The done-signal pattern lets both sides observe shutdown
+// safely without depending on the consumer being fully joined.
+//
+// When the done signal fires, each worker drains any remaining buffered jobs with a
+// non-blocking read loop, then exits. We do NOT use a single select over (done, ch)
+// at the outer level because Go's pseudorandom selection can pick the done branch
+// even when jobs are still buffered, dropping work on the floor.
 //
 // ctx is still passed through to the cache writes so that long-running ops can be
-// interrupted, but the loop's lifecycle is owned by the channel.
+// interrupted, but the loop's lifecycle is owned by the done signal.
 func (u *Server) txmetaCacheWorker(ctx context.Context) {
 	defer u.txmetaCacheWg.Done()
 
-	for job := range u.txmetaCacheJobCh {
-		u.applyTxmetaCacheJob(ctx, job)
+	for {
+		select {
+		case <-u.txmetaCacheDone:
+			for {
+				select {
+				case job := <-u.txmetaCacheJobCh:
+					u.applyTxmetaCacheJob(ctx, job)
+				default:
+					return
+				}
+			}
+		case job := <-u.txmetaCacheJobCh:
+			u.applyTxmetaCacheJob(ctx, job)
+		}
 	}
 }
 
@@ -144,8 +162,12 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	job.enqueued = time.Now()
 
 	// Blocking enqueue: applies backpressure to the Kafka consumer when workers are busy.
-	// ctx cancellation lets us drain cleanly on shutdown.
+	// Selecting on txmetaCacheDone makes shutdown safe — if Stop has been called we drop
+	// the job rather than block (or panic, which would happen if we instead closed the
+	// work channel from Stop while the Kafka consumer was mid-send).
 	select {
+	case <-u.txmetaCacheDone:
+		return nil
 	case <-ctx.Done():
 		return nil
 	case u.txmetaCacheJobCh <- job:
@@ -215,26 +237,30 @@ func parseTxmetaBatch(logger interface {
 	return job, true
 }
 
-// initTxmetaCacheWorkerPool sets up the channel and waitgroup used by the worker pool.
-// Called from Server.New so tests that don't run start() still get a usable (no-op-able)
-// channel; workers are not actually spawned until start() calls startTxmetaCacheWorkers.
+// initTxmetaCacheWorkerPool sets up the channel, done signal, and waitgroup used by the
+// worker pool. Called from Server.New so tests that don't run start() still get a usable
+// (no-op-able) channel; workers are not actually spawned until start() calls
+// startTxmetaCacheWorkers.
 func (u *Server) initTxmetaCacheWorkerPool() {
 	queueSize := u.settings.SubtreeValidation.TxmetaCacheKafkaQueueSize
 	if queueSize < 0 {
 		queueSize = 0
 	}
 	u.txmetaCacheJobCh = make(chan txmetaCacheJob, queueSize)
+	u.txmetaCacheDone = make(chan struct{})
 	u.txmetaCacheWg = &sync.WaitGroup{}
 	u.txmetaCacheCloseOnce = &sync.Once{}
 }
 
-// stopTxmetaCacheWorkers closes the work channel and waits for in-flight workers to drain.
-// Idempotent (sync.Once on the close) so callers can defer it without worrying about
-// double-close panics. Called from Server.Stop().
+// stopTxmetaCacheWorkers closes the done signal and waits for in-flight workers to drain.
+// The work channel itself is intentionally NOT closed — see the comment on
+// txmetaCacheDone in Server.go for the race that motivates this. Idempotent (sync.Once
+// on the close) so callers can defer it without worrying about double-close panics.
+// Called from Server.Stop().
 func (u *Server) stopTxmetaCacheWorkers() {
-	if u.txmetaCacheCloseOnce != nil && u.txmetaCacheJobCh != nil {
+	if u.txmetaCacheCloseOnce != nil && u.txmetaCacheDone != nil {
 		u.txmetaCacheCloseOnce.Do(func() {
-			close(u.txmetaCacheJobCh)
+			close(u.txmetaCacheDone)
 		})
 	}
 	if u.txmetaCacheWg != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -497,3 +498,55 @@ func TestParseTxmetaBatch(t *testing.T) {
 type silentLogger struct{}
 
 func (silentLogger) Errorf(format string, args ...interface{}) {}
+
+// TestServer_txmetaHandler_ShutdownDuringSendIsSafe is a regression test for the
+// "panic: send on closed channel" failure that the in-memory Kafka consumer triggered
+// on shutdown: txmetaConsumerClient.Close() returns without joining its claim-pump
+// goroutine, so subsequent close-of-work-channel from stopTxmetaCacheWorkers races
+// with txmetaHandler still calling send. Closing a done signal (rather than the work
+// channel) makes the send-vs-close race safe — this test exercises that scenario
+// concurrently many times. Pre-fix, this panics; post-fix, it completes cleanly.
+func TestServer_txmetaHandler_ShutdownDuringSendIsSafe(t *testing.T) {
+	const senders = 32
+	const messagesPerSender = 200
+
+	for trial := 0; trial < 20; trial++ {
+		ml := &mockLogger{}
+		ml.On("Infof", mock.Anything, mock.Anything).Maybe().Return()
+		ml.On("Debugf", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+		mc := &mockCache{}
+		mc.On("SetCacheMulti", mock.Anything, mock.Anything).Maybe().Return(nil)
+
+		// Tiny queue so senders block often enough to overlap shutdown.
+		tSettings := &settings.Settings{}
+		tSettings.SubtreeValidation.TxmetaCacheKafkaWorkers = 2
+		tSettings.SubtreeValidation.TxmetaCacheKafkaQueueSize = 2
+
+		server := &Server{
+			logger:    ml,
+			settings:  tSettings,
+			utxoStore: mc,
+		}
+		server.initTxmetaCacheWorkerPool()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		server.startTxmetaCacheWorkers(ctx)
+
+		var senderWg sync.WaitGroup
+		senderWg.Add(senders)
+		for i := 0; i < senders; i++ {
+			go func() {
+				defer senderWg.Done()
+				for j := 0; j < messagesPerSender; j++ {
+					_ = server.txmetaHandler(ctx, createKafkaMessage(t, false, []byte("data")))
+				}
+			}()
+		}
+
+		// Shut workers down while senders are still firing. With the buggy
+		// close-the-work-channel design, this is where the runtime panics.
+		server.stopTxmetaCacheWorkers()
+		senderWg.Wait()
+		cancel()
+	}
+}

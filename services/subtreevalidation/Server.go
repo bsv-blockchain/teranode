@@ -139,10 +139,20 @@ type Server struct {
 	// blocking enqueue applies backpressure to the Kafka consumer.
 	txmetaCacheJobCh chan txmetaCacheJob
 
+	// txmetaCacheDone is closed by stopTxmetaCacheWorkers to signal shutdown. Senders
+	// select on it to abort cleanly instead of blocking; workers select on it to drain
+	// any buffered jobs and exit. The work channel itself is never closed — closing it
+	// would race with the Kafka consumer goroutine, which can still call txmetaHandler
+	// after txmetaConsumerClient.Close() returns (the in-memory consumer's Close does
+	// not synchronously join its claim-loop). Sending on a closed channel panics; this
+	// done-signal pattern avoids that without depending on the in-memory consumer's
+	// shutdown semantics.
+	txmetaCacheDone chan struct{}
+
 	// txmetaCacheWg tracks the worker-pool goroutines so Stop() can wait for them to drain.
 	txmetaCacheWg *sync.WaitGroup
 
-	// txmetaCacheCloseOnce ensures the worker-pool channel is closed exactly once,
+	// txmetaCacheCloseOnce ensures the done signal is closed exactly once,
 	// even if Stop() is called multiple times (e.g. tests with deferred + explicit stops).
 	txmetaCacheCloseOnce *sync.Once
 }
