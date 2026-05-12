@@ -42,8 +42,8 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 		// Cover negative, zero, and positive validFromMillis around the
 		// batch time so the boundary cases are hit frequently.
 		validFromMillis := rapid.OneOf(
-			rapid.Int64Range(-1000, 0),                            // bypass region
-			rapid.Int64Range(batchTimeMs-10, batchTimeMs+10),      // boundary region
+			rapid.Int64Range(-1000, 0),                               // bypass region
+			rapid.Int64Range(batchTimeMs-10, batchTimeMs+10),         // boundary region
 			rapid.Int64Range(realisticMinMillis, realisticMaxMillis), // unrelated cutoffs
 		).Draw(t, "validFromMillis")
 
