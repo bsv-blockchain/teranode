@@ -325,28 +325,6 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
-	// Batch-coverage postcondition: for normal set-mined every submitted hash MUST
-	// appear in the returned map AND its slice MUST contain the current blockID.
-	// Without this check a silent batch outcome (filtered/empty/missing) could let
-	// a block reach SetBlockMinedSet without every tx being durably tagged.
-	if !minedBlockInfo.UnsetMined && errs == nil {
-		for _, h := range hashes {
-			ids, ok := blockIDs[*h]
-			if !ok {
-				errs = errors.Join(errs, errors.NewProcessingError(
-					"aerospike SetMinedMulti coverage gap: hash %s missing from result map", h.String()))
-				nrErrors++
-				continue
-			}
-			if !containsBlockID(ids, minedBlockInfo.BlockID) {
-				errs = errors.Join(errs, errors.NewProcessingError(
-					"aerospike SetMinedMulti coverage gap: hash %s does not contain blockID %d",
-					h.String(), minedBlockInfo.BlockID))
-				nrErrors++
-			}
-		}
-	}
-
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
 		return blockIDs, errors.NewError("aerospike batchRecord errors", errs)
@@ -415,16 +393,6 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	}
 
 	return true, res, nil
-}
-
-// containsBlockID reports whether ids contains want.
-func containsBlockID(ids []uint32, want uint32) bool {
-	for _, id := range ids {
-		if id == want {
-			return true
-		}
-	}
-	return false
 }
 
 // handleBatchRecordError handles errors from batch records.

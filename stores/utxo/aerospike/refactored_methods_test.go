@@ -74,15 +74,6 @@ func TestHandleBatchRecordError_KeyNotFound(t *testing.T) {
 	})
 }
 
-// TestContainsBlockID covers the small helper used by the batch-coverage postcondition.
-func TestContainsBlockID(t *testing.T) {
-	assert.True(t, containsBlockID([]uint32{1, 2, 3}, 2))
-	assert.True(t, containsBlockID([]uint32{42}, 42))
-	assert.False(t, containsBlockID([]uint32{1, 2, 3}, 4))
-	assert.False(t, containsBlockID(nil, 1))
-	assert.False(t, containsBlockID([]uint32{}, 1))
-}
-
 // Test error creation functions
 func TestCreateSpendError_ErrorMessages(t *testing.T) {
 	// Test that error messages are formatted correctly

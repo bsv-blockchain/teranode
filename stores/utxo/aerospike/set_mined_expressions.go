@@ -440,27 +440,6 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
-	// Batch-coverage postcondition. The expressions path is only entered for normal
-	// set-mined (see SetMinedMulti dispatch), so UnsetMined is always false here, but
-	// the guard is left explicit for safety.
-	if !minedBlockInfo.UnsetMined && errs == nil {
-		for _, h := range hashes {
-			ids, ok := blockIDs[*h]
-			if !ok {
-				errs = errors.Join(errs, errors.NewProcessingError(
-					"aerospike SetMinedMulti coverage gap: hash %s missing from result map", h.String()))
-				nrErrors++
-				continue
-			}
-			if !containsBlockID(ids, minedBlockInfo.BlockID) {
-				errs = errors.Join(errs, errors.NewProcessingError(
-					"aerospike SetMinedMulti coverage gap: hash %s does not contain blockID %d",
-					h.String(), minedBlockInfo.BlockID))
-				nrErrors++
-			}
-		}
-	}
-
 	if nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
 		if errs != nil {

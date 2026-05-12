@@ -516,8 +516,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return txMeta, nil
 }
 
-// setMinedInCache updates the cache with information about a transaction that has been mined in a block.
-// This internal helper method is used by both SetMined and SetMinedMulti to maintain cache consistency.
+// SetMined marks a transaction as mined in the underlying store and evicts it
+// from the cache. The cache is populated on read only for txs with no block IDs
+// and not flagged conflicting (see GetMeta), so a newly mined tx must not stay
+// in the cache; subsequent reads will go through to the store.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -525,64 +527,23 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // - minedBlockInfo: Information about the block where the transaction was mined
 //
 // Returns:
-// - Error if updating the transaction metadata fails
-func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (blockIDs []uint32, err error) {
-	var txMeta *meta.Data
-
-	txMeta, err = t.Get(ctx, hash)
-	if err != nil {
-		txMeta, err = t.utxoStore.Get(ctx, hash)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	if txMeta.BlockIDs == nil {
-		txMeta.BlockIDs = []uint32{
-			minedBlockInfo.BlockID,
-		}
-	} else {
-		txMeta.BlockIDs = append(txMeta.BlockIDs, minedBlockInfo.BlockID)
-	}
-
-	// if the blockID is not set, then we need to set it
-	if len(txMeta.BlockIDs) == 0 {
-		// don't return errors from SetCache, as it is not critical if the cache fails to set
-		_ = t.SetCache(hash, txMeta)
-	}
-
-	return txMeta.BlockIDs, nil
-}
-
-// SetMined marks a transaction as mined in a specific block, updating both the
-// underlying store and the cache to maintain consistency.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - hash: Hash of the transaction to mark as mined
-// - minedBlockInfo: Information about the block where the transaction was mined
-//
-// Returns:
-// - Error if updating either the underlying store or cache fails
+// - The block IDs returned by the underlying store for this tx
+// - Error if the underlying store fails
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) ([]uint32, error) {
 	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = t.setMinedInCache(ctx, hash, minedBlockInfo)
-	if err != nil {
-		return nil, err
-	}
+	_ = t.Delete(ctx, hash)
 
 	return blockIDsMap[*hash], nil
 }
 
-// SetMinedMulti marks multiple transactions as mined in a specific block.
-// The durable store is updated first; the cache is updated only on store success.
-// A cache failure after a successful store write returns an error so the caller
-// retries — stale cache can mislead validation reads and the store carries truth.
+// SetMinedMulti marks transactions as mined in the underlying store and evicts
+// them from the cache. The cache read path skips entries with block IDs (see
+// GetMeta), so mined txs must not remain in the cache; subsequent reads go to
+// the store. Eviction is best-effort: Delete never errors.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -591,7 +552,7 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 //
 // Returns:
 // - The store's blockIDsMap on success
-// - Error if the underlying store fails, or if the cache update fails afterwards
+// - Error if the underlying store fails
 func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, hashes, minedBlockInfo)
 	if err != nil {
@@ -599,11 +560,7 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	}
 
 	for _, hash := range hashes {
-		if _, cacheErr := t.setMinedInCache(ctx, hash, minedBlockInfo); cacheErr != nil {
-			return nil, errors.NewProcessingError(
-				"txmetacache SetMinedMulti cache update failed after store success for %s",
-				hash.String(), cacheErr)
-		}
+		_ = t.Delete(ctx, hash)
 	}
 
 	return blockIDsMap, nil
