@@ -133,28 +133,6 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
-
-	// txmetaCacheJobCh feeds parsed txmeta Kafka batches into the bounded worker pool
-	// that writes them to the txMetaCache. Sized by SubtreeValidation.TxmetaCacheKafkaQueueSize;
-	// blocking enqueue applies backpressure to the Kafka consumer.
-	txmetaCacheJobCh chan txmetaCacheJob
-
-	// txmetaCacheDone is closed by stopTxmetaCacheWorkers to signal shutdown. Senders
-	// select on it to abort cleanly instead of blocking; workers select on it to drain
-	// any buffered jobs and exit. The work channel itself is never closed — closing it
-	// would race with the Kafka consumer goroutine, which can still call txmetaHandler
-	// after txmetaConsumerClient.Close() returns (the in-memory consumer's Close does
-	// not synchronously join its claim-loop). Sending on a closed channel panics; this
-	// done-signal pattern avoids that without depending on the in-memory consumer's
-	// shutdown semantics.
-	txmetaCacheDone chan struct{}
-
-	// txmetaCacheWg tracks the worker-pool goroutines so Stop() can wait for them to drain.
-	txmetaCacheWg *sync.WaitGroup
-
-	// txmetaCacheCloseOnce ensures the done signal is closed exactly once,
-	// even if Stop() is called multiple times (e.g. tests with deferred + explicit stops).
-	txmetaCacheCloseOnce *sync.Once
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -212,11 +190,6 @@ func New(
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
 		p2pClient:                         p2pClient,
 	}
-
-	// Initialize the txmeta-cache worker-pool plumbing (channel + waitgroup). Workers
-	// themselves are spawned later from start() so that tests constructing a Server
-	// without calling start() don't leak goroutines.
-	u.initTxmetaCacheWorkerPool()
 
 	var err error
 
@@ -536,11 +509,6 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	// Spin up the bounded worker pool that drains txmetaCacheJobCh. Must be running
-	// before the txmeta Kafka consumer is started below — otherwise the handler's
-	// blocking enqueue would deadlock.
-	u.startTxmetaCacheWorkers(ctx)
-
 	// start kafka consumers
 	u.subtreeConsumerClient.Start(ctx, u.subtreeMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	u.txmetaConsumerClient.Start(ctx, u.txmetaMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
@@ -586,10 +554,6 @@ func (u *Server) Stop(_ context.Context) error {
 			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 		}
 	}
-
-	// Drain the cache-write worker pool. Order matters: close the Kafka consumer first
-	// (above) so no new jobs are enqueued, then close the channel and wait for workers.
-	u.stopTxmetaCacheWorkers()
 
 	if u.invalidSubtreeDeDuplicateMap != nil {
 		u.invalidSubtreeDeDuplicateMap.Stop()

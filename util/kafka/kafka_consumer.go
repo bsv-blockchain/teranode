@@ -442,17 +442,29 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	go func() {
 		defer cancel()
 
-		// Main consume loop
+		// Main consume loop — fire-and-forget per-partition fan-out, no barrier.
 		//
-		// Records are processed per-partition in parallel goroutines spawned per fetch:
-		//   * Within a partition: records run sequentially through consumerFn — preserves
-		//     Kafka's per-partition ordering guarantee.
-		//   * Across partitions: parallel — restores the partition-level concurrency that
-		//     used to come for free with sarama-style per-partition consumer goroutines.
+		//   [franz-go background fetcher → local record buffer]
+		//             ↓
+		//   [puller goroutine: tight PollFetches loop]
+		//             ↓                ↓                ↓
+		//   [partition 0 goroutine] [partition 1 goroutine] [partition N goroutine]
+		//             ↓                ↓                ↓
+		//                consumerFn (sequential within each goroutine)
 		//
-		// We wait for all partitions in the current fetch to finish before the next
-		// PollFetches. This bounds the in-flight goroutine count to (assigned partitions)
-		// regardless of fetch rate, and keeps commits aligned with completed work.
+		// franz-go's EachPartition is dumb-serial — three nested for-loops
+		// calling fn synchronously. To recover the cross-partition parallelism
+		// that c2402191f intended, we spawn a goroutine per partition per
+		// fetch. The puller does NOT wait for those goroutines (no
+		// partitionWg.Wait), so PollFetches is called again immediately and
+		// franz-go's local buffer keeps draining.
+		//
+		// Trade-off: per-partition ordering is preserved within a single
+		// fetch's batch, but NOT across fetches — two consecutive fetches for
+		// the same partition can dispatch two goroutines that run concurrently.
+		// Handlers that depend on strict cross-fetch ordering must enforce it
+		// themselves. txmeta entries are independent (and DELETE is sync inside
+		// txmetaHandler) so the txmeta hot path is fine.
 		go func() {
 			k.Config.Logger.Debugf("[kafka] starting consumer for group %s on topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 
@@ -465,82 +477,80 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			for {
 				select {
 				case <-internalCtx.Done():
+					uncommittedMu.Lock()
 					k.commitRecords(uncommittedRecords)
+					uncommittedMu.Unlock()
 					return
 				default:
-					fetches := k.client.PollFetches(internalCtx)
+				}
 
-					if errs := fetches.Errors(); len(errs) > 0 {
-						for _, err := range errs {
-							if errors.Is(err.Err, context.Canceled) || errors.Is(err.Err, kgo.ErrClientClosed) {
-								k.Config.Logger.Debugf("Kafka consumer shutdown: %v", err.Err)
-								return
-							}
-							k.Config.Logger.Errorf("Kafka consumer error on topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
-						}
-						continue
-					}
+				fetches := k.client.PollFetches(internalCtx)
 
-					var partitionWg sync.WaitGroup
-					fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-						if len(p.Records) == 0 {
+				if errs := fetches.Errors(); len(errs) > 0 {
+					for _, err := range errs {
+						if errors.Is(err.Err, context.Canceled) || errors.Is(err.Err, kgo.ErrClientClosed) {
+							k.Config.Logger.Debugf("Kafka consumer shutdown: %v", err.Err)
 							return
 						}
-
-						partitionWg.Add(1)
-						go func(records []*kgo.Record) {
-							defer partitionWg.Done()
-
-							for _, record := range records {
-								// Stop draining this partition if we're shutting down — let
-								// the next partition goroutine see the same signal and exit.
-								select {
-								case <-internalCtx.Done():
-									return
-								default:
-								}
-
-								kafkaMsg := &KafkaMessage{
-									Key:       record.Key,
-									Value:     record.Value,
-									Topic:     record.Topic,
-									Partition: record.Partition,
-									Offset:    record.Offset,
-									Timestamp: record.Timestamp,
-								}
-
-								if err := consumerFn(kafkaMsg); err != nil {
-									k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
-										record.Topic, record.Partition, record.Offset, err)
-									// Don't mark this or any later record on this partition for commit
-									// — the next consume of this partition will re-read from here.
-									return
-								}
-
-								if k.Config.AutoCommitEnabled {
-									// MarkCommitRecords is safe to call concurrently across partitions
-									// (franz-go uses an internal lock on the consumer group state).
-									k.client.MarkCommitRecords(record)
-								} else {
-									uncommittedMu.Lock()
-									uncommittedRecords = append(uncommittedRecords, record)
-									uncommittedMu.Unlock()
-								}
-							}
-						}(p.Records)
-					})
-					partitionWg.Wait()
-
-					select {
-					case <-commitTicker.C:
-						uncommittedMu.Lock()
-						if len(uncommittedRecords) > 0 {
-							k.commitRecords(uncommittedRecords)
-							uncommittedRecords = uncommittedRecords[:0]
-						}
-						uncommittedMu.Unlock()
-					default:
+						k.Config.Logger.Errorf("Kafka consumer error on topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
 					}
+					continue
+				}
+
+				fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+					if len(p.Records) == 0 {
+						return
+					}
+
+					go func(records []*kgo.Record) {
+						for _, record := range records {
+							select {
+							case <-internalCtx.Done():
+								return
+							default:
+							}
+
+							kafkaMsg := &KafkaMessage{
+								Key:       record.Key,
+								Value:     record.Value,
+								Topic:     record.Topic,
+								Partition: record.Partition,
+								Offset:    record.Offset,
+								Timestamp: record.Timestamp,
+							}
+
+							if err := consumerFn(kafkaMsg); err != nil {
+								k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
+									record.Topic, record.Partition, record.Offset, err)
+								// Don't mark this or any later record in this
+								// batch — leave them uncommitted so rebalance/
+								// restart re-delivers.
+								return
+							}
+
+							if k.Config.AutoCommitEnabled {
+								// MarkCommitRecords locks internal commit state
+								// in franz-go, so concurrent calls from many
+								// per-partition goroutines are safe.
+								k.client.MarkCommitRecords(record)
+							} else {
+								uncommittedMu.Lock()
+								uncommittedRecords = append(uncommittedRecords, record)
+								uncommittedMu.Unlock()
+							}
+						}
+					}(p.Records)
+				})
+
+				select {
+				case <-commitTicker.C:
+					uncommittedMu.Lock()
+					if len(uncommittedRecords) > 0 {
+						k.commitRecords(uncommittedRecords)
+						uncommittedRecords = uncommittedRecords[:0]
+					}
+					uncommittedMu.Unlock()
+				default:
 				}
 			}
 		}()

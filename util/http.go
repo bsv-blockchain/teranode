@@ -226,11 +226,17 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
 	}
 
-	// If there is a request body assume we want a POST and write request body
+	// If there is a request body assume we want a POST and write request body.
+	// Content-Type is application/octet-stream because every internal POST that
+	// goes through this helper sends raw bytes (e.g. /api/v1/subtree/{hash}/txs
+	// streams packed 32-byte tx hashes). Tagging it as application/json caused a
+	// WAF in front of asset (ModSecurity) to run the JSON body parser, fail on
+	// the binary payload, and reject the request with HTTP 400 — degrading peer
+	// catchup reputation across the network.
 	if len(requestBody) > 0 && requestBody[0] != nil {
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 		req.Method = http.MethodPost
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 
 	var resp *http.Response
