@@ -12,7 +12,14 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.8
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
-	github.com/bitcoin-sv/bdk/module/gobdk v1.2.3
+	// Pinned to a hot-fix on top of v1.2.3 (bitcoin-sv/bdk PR #40) that adds a
+	// per-CheckSig signature-cache to the script verifier. Without it the
+	// validator stalls for hours on consensus-valid scripts that perform the
+	// same ECDSA verification many times (e.g. testnet block 1,451,505).
+	//
+	// DO NOT bump to gobdk v1.2.4 (or later) until bitcoin-sv/bdk PR #41 has
+	// merged — that PR ports the same hot-fix forward to master / v1.2.4.
+	github.com/bitcoin-sv/bdk/module/gobdk v1.2.4-0.20260511121643-5ab3fd5b627d
 	github.com/bsv-blockchain/go-bt/v2 v2.6.2
 	github.com/bsv-blockchain/go-chaincfg v1.5.5
 	github.com/bsv-blockchain/go-sdk v1.2.19

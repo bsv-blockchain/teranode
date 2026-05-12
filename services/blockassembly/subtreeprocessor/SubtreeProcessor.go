@@ -311,6 +311,10 @@ type SubtreeProcessor struct {
 
 	// diskTxMap is the disk-backed tx map (non-nil when txMapDirs is set).
 	diskTxMap *DiskTxMap
+
+	// clock is the source of wall time for codepaths that need a deterministic
+	// substitute in tests (validFromMillis calculations). Replaced in tests.
+	clock clock
 }
 
 type State uint32
@@ -449,6 +453,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		stats:                        gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:          atomic.Value{},
 		announcementTicker:           time.NewTicker(tSettings.BlockAssembly.SubtreeAnnouncementInterval),
+		clock:                        realClock{},
 	}
 	stp.currentSubtree.Store(firstSubtree)
 	stp.setCurrentRunningState(StateStarting)
@@ -804,7 +809,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// Calculate validFromMillis based on DoubleSpendWindow
 					validFromMillis := int64(0)
 					if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-						validFromMillis = time.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+						validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 					}
 
 					for batchNum := 0; batchNum < maxBatchesPerIteration; batchNum++ {
@@ -1384,6 +1389,10 @@ func (stp *SubtreeProcessor) getConflictingNodes(ctx context.Context, block *mod
 					return errors.NewProcessingError("[moveForwardBlock][%s] error getting subtree %s from store", block.String(), subtreeHash.String(), err)
 				}
 			}
+
+			defer func() {
+				_ = subtreeReader.Close()
+			}()
 
 			subtreeConflictingNodes, err := subtreepkg.DeserializeSubtreeConflictingFromReader(subtreeReader)
 			if err != nil {
@@ -3186,6 +3195,10 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 					return errors.NewServiceError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
 				}
 
+				defer func() {
+					_ = subtreeMetaReader.Close()
+				}()
+
 				subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 				if err != nil {
 					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
@@ -3773,7 +3786,15 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrBatchesProcessed := int64(0)
-		validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+		// Match the Start-loop zero-guard at the default-case dequeue
+		// (line 810-813): a zero DoubleSpendWindow disables the queue
+		// filter entirely. Without this guard, the drain computes
+		// Now().UnixMilli() and the queue filter at queue.go:96 holds
+		// back same-millisecond batches under the default config.
+		validFromMillis := int64(0)
+		if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
+			validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+		}
 
 		for {
 			batch, found := stp.queue.dequeueBatch(validFromMillis)
@@ -4380,6 +4401,10 @@ func (stp *SubtreeProcessor) getSubtreeAndConflictingTransactionsMap(ctx context
 			return nil, nil, errors.NewServiceError("error getting subtree %s", subtreeHash.String())
 		}
 	}
+
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
 
 	subtree := &subtreepkg.Subtree{}
 	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {

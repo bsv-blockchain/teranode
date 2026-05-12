@@ -2001,6 +2001,45 @@ func TestBlock_CheckMerkleRoot_MoreCases(t *testing.T) {
 	})
 }
 
+func TestBlock_CheckMerkleRoot_DuplicateSubtreeRoots(t *testing.T) {
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(t, err)
+
+	subtree1, err := subtreepkg.NewTreeByLeafCount(1)
+	require.NoError(t, err)
+	err = subtree1.AddCoinbaseNode()
+	require.NoError(t, err)
+
+	subtree2, err := subtreepkg.NewTreeByLeafCount(1)
+	require.NoError(t, err)
+	err = subtree2.AddNode(*coinbase.TxIDChainHash(), 1, uint64(coinbase.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	rootHash1, err := subtree1.RootHashWithReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	rootHash2 := subtree2.RootHash()
+	require.NotNil(t, rootHash2)
+
+	require.Equal(t, *rootHash1, *rootHash2, "test setup must produce colliding subtree root hashes")
+
+	subtreeHashes := []*chainhash.Hash{subtree1.RootHash(), subtree2.RootHash()}
+	block, err := NewBlock(blockHeader, coinbase, subtreeHashes, 2, 123, 0, 0)
+	require.NoError(t, err)
+
+	block.SubtreeSlices = []*subtreepkg.Subtree{subtree1, subtree2}
+
+	err = block.CheckMerkleRoot(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.Contains(t, err.Error(), "duplicate")
+	require.Contains(t, err.Error(), rootHash1.String())
+}
+
 func TestBlock_NewFromMsgBlock_ErrorCases(t *testing.T) {
 	t.Run("nil msgBlock", func(t *testing.T) {
 		_, err := NewBlockFromMsgBlock(nil, nil)

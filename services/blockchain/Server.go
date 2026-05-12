@@ -28,6 +28,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -107,6 +108,12 @@ type Blockchain struct {
 	// Blob deletion batch token management
 	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
 	batchTokensMu sync.RWMutex                       // Mutex for batch tokens map
+
+	// In-process Median Time Past cache. Avoids re-fetching MTP values from the
+	// store on every block validation and validator MTP refresh — the store-level
+	// responseCache is wiped per StoreBlock, so committed-block MTPs there have
+	// near-zero hit rate during sync.
+	mtpCache *mtpCache
 }
 
 // blobDeletionBatchToken represents an acquired batch of deletions with a lock.
@@ -163,6 +170,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
 		batchTokens:                   make(map[string]*blobDeletionBatchToken),
+		mtpCache:                      newMTPCache(),
 	}
 
 	// Initialize subscription manager as not ready
@@ -846,6 +854,11 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	// Clear difficulty cache when chain state changes to prevent stale cached values
 	// from causing incorrect difficulty calculations during rapid block processing
 	b.difficulty.ResetCache()
+
+	// Drop any speculative MTP cache entries at or above the new block's height
+	// so the next GetMedianTimePastRange/ForHeights call repopulates them from the
+	// store. Heights below the new block remain valid.
+	b.mtpCache.truncate(height)
 
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
@@ -2067,6 +2080,17 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
+	// Reorg-style invalidation: MTP for heights at and above the invalidated block
+	// is no longer authoritative. Truncate from that height so ancestors below it
+	// remain cached. Fall back to a full reset if the header lookup fails — that
+	// is the safe behaviour and should not happen under normal operation.
+	if _, invalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(invalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[InvalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
+
 	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
 	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
@@ -2169,6 +2193,16 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
+
+	// Revalidation can change which block is considered canonical at heights from
+	// the revalidated block forward. Truncate from that height so ancestors below
+	// it remain cached. Fall back to a full reset if the header lookup fails.
+	if _, revalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(revalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[RevalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
 
 	return &emptypb.Empty{}, nil
 }
@@ -2556,6 +2590,21 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		}
 	}
 
+	// Refuse to transition to RUNNING while the local chain tip is still below
+	// the network's highest hard-coded checkpoint. Pre-checkpoint heights are
+	// guaranteed to be deep history (mainnet's highest is block 938000), so a
+	// node sitting below them is mid-IBD even if a catchup worker thinks it
+	// has finished its current chunk. Going to RUNNING in that state lets the
+	// mempool/validator operate under pre-Genesis output rules and the legacy
+	// service relay tx invs that post-Genesis peers ban on sight
+	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
+	if eventReq.Event == blockchain_api.FSMEventType_RUN {
+		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
@@ -2596,6 +2645,57 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.stateChangeTimestamp = time.Now()
 
 	return resp, nil
+}
+
+// guardRunBelowHighestCheckpoint blocks the RUN transition when the local
+// chain tip has not yet reached the highest hard-coded checkpoint for the
+// active network. Returns nil when the chain has reached the checkpoint, the
+// network defines no checkpoints (regtest, brand-new networks), or the store
+// has no chain tip yet (returns a state error so the caller retries later).
+func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return nil
+	}
+
+	highest := HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
+	if highest == 0 {
+		return nil
+	}
+
+	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
+	}
+	if meta == nil {
+		return errors.NewStateError("best block header meta unavailable; refusing RUN")
+	}
+
+	if meta.Height < highest {
+		return errors.NewStateError(
+			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s",
+			meta.Height, highest, b.settings.ChainCfgParams.Name,
+		)
+	}
+
+	return nil
+}
+
+// HighestCheckpointHeight returns the largest Height in the supplied
+// checkpoint list, or 0 if the list is empty. Exported so callers in
+// other packages (e.g. blockvalidation) can share the same definition
+// rather than maintaining a parallel copy.
+func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	var highest uint32
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+		h := uint32(cp.Height)
+		if h > highest {
+			highest = h
+		}
+	}
+	return highest
 }
 
 // Run transitions the blockchain service to the running state.

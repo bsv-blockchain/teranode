@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -67,6 +68,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -232,6 +234,28 @@ type batchDAH struct {
 	errCh          chan error      // Error Result channel
 }
 
+// handleSpendPanic processes a recovered value from Spend's deferred recover
+// and propagates it as an error. Without this, a panic during Spend would be
+// logged but the caller would observe (nil, nil) — a silent failure that can
+// mask UTXO state corruption.
+//
+// Uses ERR_UNKNOWN rather than ERR_PROCESSING so the block-validation retry
+// classifier (services/blockvalidation/BlockValidation.go) does not treat a
+// recovered panic as a transient infrastructure error and retry indefinitely
+// against a broken path.
+func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
+	if recovered == nil {
+		return
+	}
+
+	prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
+	logger.Errorf("ERROR panic in aerospike Spend: %v\n%s", recovered, debug.Stack())
+
+	if *err == nil {
+		*err = errors.NewUnknownError("panic in Spend: %v", recovered)
+	}
+}
+
 // Spend marks UTXOs as spent in a batch operation.
 // The function:
 //  1. Validates inputs
@@ -264,12 +288,9 @@ type batchDAH struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
 	defer func() {
-		if recoverErr := recover(); recoverErr != nil {
-			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
-		}
+		handleSpendPanic(recover(), &err, s.logger)
 	}()
 
 	if blockHeight == 0 {
@@ -279,7 +300,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
-	spends, err := utxo.GetSpends(tx)
+	spends, err = utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +322,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
+			// Per-worker panic recovery. The parent's defer only catches panics in the
+			// parent goroutine — errgroup propagates errors but does not recover panics
+			// inside g.Go bodies, so without this a worker panic would crash the process.
+			defer func() {
+				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
+			}()
+
 			// Fast-fail check: if circuit breaker is already open, reject immediately
 			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
 				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")

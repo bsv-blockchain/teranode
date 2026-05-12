@@ -1336,7 +1336,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Skip difficulty validation for blocks at or below the highest checkpoint
 		// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-		highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
 		if skipDifficultyCheck {
@@ -1761,7 +1761,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	// Skip difficulty validation for blocks at or below the highest checkpoint
 	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 	skipDifficultyCheck := blockData.block.Height <= highestCheckpointHeight
 
 	if skipDifficultyCheck {

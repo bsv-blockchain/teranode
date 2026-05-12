@@ -3,7 +3,6 @@ package subtreeprocessor
 
 import (
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/go-subtree"
 )
@@ -24,6 +23,7 @@ type LockFreeQueue struct {
 	head        *TxBatch                // Points to the head of the queue (sentinel node)
 	tail        atomic.Pointer[TxBatch] // Atomic pointer to the tail
 	queueLength atomic.Int64            // Tracks the current number of batches in the queue
+	clock       clock                   // Source of batch timestamps; replaced in tests
 }
 
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
@@ -35,6 +35,7 @@ func NewLockFreeQueue() *LockFreeQueue {
 		head:        &TxBatch{},
 		tail:        atomic.Pointer[TxBatch]{},
 		queueLength: atomic.Int64{},
+		clock:       realClock{},
 	}
 }
 
@@ -59,7 +60,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	batch := &TxBatch{
 		nodes:      nodes,
 		txInpoints: txInpoints,
-		time:       time.Now().UnixMilli(),
+		time:       q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
 

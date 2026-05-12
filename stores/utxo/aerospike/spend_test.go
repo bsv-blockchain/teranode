@@ -514,3 +514,20 @@ func TestStore_Unspend(t *testing.T) {
 		require.Len(t, spends, 1)
 	})
 }
+
+// TestStore_SpendNilTxPanicRecovery exercises the real Spend function with a nil
+// *bt.Tx, which triggers a nil pointer dereference inside utxo.GetSpends. This
+// covers the defer/named-return/&err plumbing in Spend itself rather than just
+// the helper unit-tested in spend_panic_test.go.
+func TestStore_SpendNilTxPanicRecovery(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	spends, err := store.Spend(ctx, nil, store.GetBlockHeight()+1)
+	require.Error(t, err, "Spend must surface panic as error, not return (nil, nil)")
+	require.Nil(t, spends)
+	require.Contains(t, err.Error(), "panic")
+}
