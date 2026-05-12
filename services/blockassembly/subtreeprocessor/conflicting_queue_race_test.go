@@ -63,16 +63,19 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 		Idxs:           [][]uint32{{0}},
 	}
 
+	// Pin both clocks to the same instant so this test is deterministic
+	// (no wall-time waits). With DoubleSpendWindow=0 the queue filter is
+	// disabled at both call sites, so dequeueDuringBlockMovement admits
+	// same-millisecond batches and the test exercises the conflicting-
+	// parent rejection path directly.
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = fixedClock{t: fixed}
+	stp.queue.clock = fixedClock{t: fixed}
+
 	stp.queue.enqueueBatch(
 		[]subtreepkg.Node{childNode, otherNode},
 		[]*subtreepkg.TxInpoints{childInpoints, otherInpoints},
 	)
-
-	// dequeueDuringBlockMovement holds back batches enqueued at-or-after
-	// (now - DoubleSpendWindow). Default window is 0, so it holds batches
-	// with time == now. A short sleep moves batch.time strictly into the
-	// past so the drain releases it.
-	time.Sleep(5 * time.Millisecond)
 
 	conflictingHashes := map[chainhash.Hash]struct{}{
 		parentHash: {},
@@ -95,33 +98,24 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 		"so its own descendants are caught later in the same drain")
 }
 
-// TestDequeueDuringBlockMovement_ZeroWindowAsymmetry pins, at the real call
-// site, the divergence between the two validFromMillis formulas inside
-// SubtreeProcessor:
+// TestDequeueDuringBlockMovement_ZeroWindowAdmitsSameMillisecond pins,
+// at the real call site, that dequeueDuringBlockMovement admits
+// same-millisecond batches when DoubleSpendWindow=0 (the documented
+// default - see settings/blockassembly_settings.go:29). Both the Start
+// loop (SubtreeProcessor.go:807-813) and the drain
+// (SubtreeProcessor.go:3789-3796) zero-guard the calculation, so
+// neither activates the queue filter at queue.go:96 and a batch
+// enqueued in the same millisecond as the drain is included.
 //
-//	Start loop (SubtreeProcessor.go:807-813) zero-guards the calculation:
-//	  if DoubleSpendWindow == 0 → validFromMillis = 0 → queue filter off.
-//
-//	dequeueDuringBlockMovement (SubtreeProcessor.go:3789) does not:
-//	  validFromMillis = clock.Now().Add(-1 * window).UnixMilli() always.
-//
-// With DoubleSpendWindow == 0 (the documented default - see
-// settings/blockassembly_settings.go:29) and the SubtreeProcessor clock
-// equal to the queue clock at enqueue time, the drain formula produces
-// validFromMillis = batch.time, the queue filter at queue.go:96 fires
-// (validFromMillis > 0 && time >= validFromMillis), and the batch is
-// held back.
-//
-// The "+1ms" subtest is the control: advancing only the
-// SubtreeProcessor clock by 1 millisecond is enough to move batch.time
-// strictly below validFromMillis, after which the drain admits it.
-// That is the deterministic equivalent of the time.Sleep(5ms) workaround
-// at conflicting_queue_race_test.go:75.
-func TestDequeueDuringBlockMovement_ZeroWindowAsymmetry(t *testing.T) {
-	t.Run("same_millisecond_batch_is_held_back", func(t *testing.T) {
+// The "+1ms" subtest exercises a different scenario where the
+// SubtreeProcessor clock has advanced past the enqueue clock; in
+// that case the drain admits via the (now - window) cutoff rather than
+// via the zero-guard.
+func TestDequeueDuringBlockMovement_ZeroWindowAdmitsSameMillisecond(t *testing.T) {
+	t.Run("same_millisecond_batch_admits", func(t *testing.T) {
 		stp := newTestProcessorNoStart(t)
 		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow,
-			"default window is 0; the asymmetry only manifests at 0")
+			"default window is 0; zero-guard parity is the property being asserted")
 
 		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 		stp.clock = fixedClock{t: fixed}
@@ -136,11 +130,10 @@ func TestDequeueDuringBlockMovement_ZeroWindowAsymmetry(t *testing.T) {
 
 		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
 
-		require.Equal(t, int64(1), stp.queue.length(),
-			"drain held back a same-millisecond batch at window=0; the Start "+
-				"loop's zero-guard would have admitted it")
-		require.NotContains(t, collectSubtreeHashes(stp), txHash,
-			"the held-back batch must not appear in chainedSubtrees / currentSubtree")
+		require.Equal(t, int64(0), stp.queue.length(),
+			"drain must admit same-ms batch at window=0 via zero-guard parity")
+		require.Contains(t, collectSubtreeHashes(stp), txHash,
+			"the admitted batch must appear in chainedSubtrees / currentSubtree")
 	})
 
 	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {

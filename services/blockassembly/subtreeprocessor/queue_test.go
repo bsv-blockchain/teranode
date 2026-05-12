@@ -145,28 +145,26 @@ func Test_queueClockOverride(t *testing.T) {
 	require.Equal(t, fixed.UnixMilli(), batch.time)
 }
 
-// Test_zeroWindowAsymmetry pins a behavioural divergence between the two
-// validFromMillis formulas used inside SubtreeProcessor.
+// Test_zeroWindowFormulasAgree asserts parity between the two
+// validFromMillis formulas inside SubtreeProcessor at DoubleSpendWindow=0
+// (the documented default - see settings/blockassembly_settings.go:29).
+// Both call sites now zero-guard the calculation, so neither activates
+// the queue filter at queue.go:96 and both admit same-millisecond
+// batches.
 //
 //	Start loop (SubtreeProcessor.go:807-813):
 //	  validFromMillis = 0                              if DoubleSpendWindow == 0
 //	  validFromMillis = (now - window).UnixMilli()     otherwise
 //
-//	dequeueDuringBlockMovement (SubtreeProcessor.go:3789):
-//	  validFromMillis = (now - window).UnixMilli()     unconditionally
+//	dequeueDuringBlockMovement (SubtreeProcessor.go:3789-3796):
+//	  validFromMillis = 0                              if DoubleSpendWindow == 0
+//	  validFromMillis = (now - window).UnixMilli()     otherwise
 //
-// With DoubleSpendWindow == 0 (the documented default - see
-// settings/blockassembly_settings.go:29), the two formulas diverge:
-//   - Start passes 0, the queue's "validFromMillis > 0" guard at
-//     queue.go:96 short-circuits, and same-millisecond batches admit.
-//   - drain passes now.UnixMilli(), the guard does not short-circuit,
-//     and same-millisecond batches are held back.
-//
-// conflicting_queue_race_test.go:71-75 papers over this with a
-// time.Sleep(5*time.Millisecond) before calling
-// dequeueDuringBlockMovement. This test pins the underlying behaviour
-// deterministically via the clock seam, with no real-time waits.
-func Test_zeroWindowAsymmetry(t *testing.T) {
+// Before the fix, the drain formula was unconditional, which held back
+// same-millisecond batches under the default config. This test pins the
+// post-fix parity. If a future change removes either zero-guard, the
+// corresponding subtest will fail.
+func Test_zeroWindowFormulasAgree(t *testing.T) {
 	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	window := time.Duration(0)
 
@@ -193,16 +191,18 @@ func Test_zeroWindowAsymmetry(t *testing.T) {
 		require.Equal(t, fixed.UnixMilli(), batch.time)
 	})
 
-	t.Run("drain_formula_rejects_same_millisecond_batch", func(t *testing.T) {
-		// Mirror of the formula at SubtreeProcessor.go:3789.
-		drainValidFromMillis := fixed.Add(-1 * window).UnixMilli()
+	t.Run("drain_formula_admits_same_millisecond_batch", func(t *testing.T) {
+		// Mirror of the formula at SubtreeProcessor.go:3789-3796.
+		drainValidFromMillis := int64(0)
+		if window > 0 {
+			drainValidFromMillis = fixed.Add(-window).UnixMilli()
+		}
 
 		q := enqueueAtFixed()
-		_, found := q.dequeueBatch(drainValidFromMillis)
-		require.False(t, found,
-			"drain currently rejects same-ms batch at window=0; if this assertion "+
-				"flips, the Start/drain asymmetry has been resolved and the "+
-				"workaround in conflicting_queue_race_test.go:75 can likely be removed")
+		batch, found := q.dequeueBatch(drainValidFromMillis)
+		require.True(t, found, "drain must admit same-ms batch at window=0 "+
+			"(zero-guard parity with the Start loop)")
+		require.Equal(t, fixed.UnixMilli(), batch.time)
 	})
 }
 

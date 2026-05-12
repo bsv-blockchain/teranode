@@ -3786,7 +3786,15 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrBatchesProcessed := int64(0)
-		validFromMillis := stp.clock.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+		// Match the Start-loop zero-guard at the default-case dequeue
+		// (line 810-813): a zero DoubleSpendWindow disables the queue
+		// filter entirely. Without this guard, the drain computes
+		// Now().UnixMilli() and the queue filter at queue.go:96 holds
+		// back same-millisecond batches under the default config.
+		validFromMillis := int64(0)
+		if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
+			validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+		}
 
 		for {
 			batch, found := stp.queue.dequeueBatch(validFromMillis)
