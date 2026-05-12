@@ -325,6 +325,28 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
+	// Batch-coverage postcondition: for normal set-mined every submitted hash MUST
+	// appear in the returned map AND its slice MUST contain the current blockID.
+	// Without this check a silent batch outcome (filtered/empty/missing) could let
+	// a block reach SetBlockMinedSet without every tx being durably tagged.
+	if !minedBlockInfo.UnsetMined && errs == nil {
+		for _, h := range hashes {
+			ids, ok := blockIDs[*h]
+			if !ok {
+				errs = errors.Join(errs, errors.NewProcessingError(
+					"aerospike SetMinedMulti coverage gap: hash %s missing from result map", h.String()))
+				nrErrors++
+				continue
+			}
+			if !containsBlockID(ids, minedBlockInfo.BlockID) {
+				errs = errors.Join(errs, errors.NewProcessingError(
+					"aerospike SetMinedMulti coverage gap: hash %s does not contain blockID %d",
+					h.String(), minedBlockInfo.BlockID))
+				nrErrors++
+			}
+		}
+	}
+
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
 		return blockIDs, errors.NewError("aerospike batchRecord errors", errs)
@@ -366,7 +388,7 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (bool, *LuaMapResponse, error) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
-		return false, nil, s.handleBatchRecordError(batchErr, hash)
+		return false, nil, s.handleBatchRecordError(batchErr, hash, minedBlockInfo.UnsetMined)
 	}
 
 	response := batchRecord.BatchRec().Record
@@ -395,12 +417,27 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	return true, res, nil
 }
 
-// handleBatchRecordError handles errors from batch records
-func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash) error {
+// containsBlockID reports whether ids contains want.
+func containsBlockID(ids []uint32, want uint32) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+// handleBatchRecordError handles errors from batch records.
+// For unset-mined operations a missing record is a no-op (the tx is already gone).
+// For normal set-mined a missing record is a hard error: the txmeta must exist and
+// be tagged with the block ID, otherwise the mined-invariant is violated.
+func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash, unsetMined bool) error {
 	var aErr *aerospike.AerospikeError
 	if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-		// the tx Meta does not exist anymore, so we do not have to set the mined status
-		return nil
+		if unsetMined {
+			return nil
+		}
+		return errors.NewTxNotFoundError("transaction not found: %s", hash.String())
 	}
 	return errors.NewStorageError("aerospike batchRecord error", hash.String(), err)
 }

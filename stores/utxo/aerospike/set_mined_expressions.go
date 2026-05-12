@@ -365,8 +365,12 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 				}
 
 				if aErr.ResultCode == types.FILTERED_OUT {
-					// BlockID already exists in the list - this transaction was already
-					// marked as mined in this block, nothing to do
+					// Filter condition: count(blockID in blockIDs) == 0 -> operation runs.
+					// FILTERED_OUT therefore proves the current blockID is already present
+					// in the durable list. Synthesize the map entry so the batch-coverage
+					// postcondition below can see that this hash is covered.
+					blockIDs[*hash] = []uint32{minedBlockInfo.BlockID}
+					okUpdates++
 					continue
 				}
 			}
@@ -435,6 +439,27 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	}
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
+
+	// Batch-coverage postcondition. The expressions path is only entered for normal
+	// set-mined (see SetMinedMulti dispatch), so UnsetMined is always false here, but
+	// the guard is left explicit for safety.
+	if !minedBlockInfo.UnsetMined && errs == nil {
+		for _, h := range hashes {
+			ids, ok := blockIDs[*h]
+			if !ok {
+				errs = errors.Join(errs, errors.NewProcessingError(
+					"aerospike SetMinedMulti coverage gap: hash %s missing from result map", h.String()))
+				nrErrors++
+				continue
+			}
+			if !containsBlockID(ids, minedBlockInfo.BlockID) {
+				errs = errors.Join(errs, errors.NewProcessingError(
+					"aerospike SetMinedMulti coverage gap: hash %s does not contain blockID %d",
+					h.String(), minedBlockInfo.BlockID))
+				nrErrors++
+			}
+		}
+	}
 
 	if nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))

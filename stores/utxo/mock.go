@@ -100,10 +100,14 @@ func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLock
 }
 
 // SetMinedMulti mocks the batch setting of mined status for multiple transactions.
-// Returns the configured mock response for batch mined status operations.
+// Accepts either a static map or a func that computes one from the call args (useful
+// for tests that need a realistic blockIDsMap matching the submitted hashes).
 func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 
+	if fn, ok := args.Get(0).(func(context.Context, []*chainhash.Hash, MinedBlockInfo) map[chainhash.Hash][]uint32); ok {
+		return fn(ctx, hashes, minedBlockInfo), args.Error(1)
+	}
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 

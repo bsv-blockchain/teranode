@@ -580,7 +580,9 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 }
 
 // SetMinedMulti marks multiple transactions as mined in a specific block.
-// This batch operation is more efficient than calling SetMined multiple times.
+// The durable store is updated first; the cache is updated only on store success.
+// A cache failure after a successful store write returns an error so the caller
+// retries — stale cache can mislead validation reads and the store carries truth.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -588,17 +590,20 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 // - minedBlockInfo: Information about the block where the transactions were mined
 //
 // Returns:
-// - Error if updating the cache for any transaction fails
+// - The store's blockIDsMap on success
+// - Error if the underlying store fails, or if the cache update fails afterwards
 func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
-	blockIDsMap := make(map[chainhash.Hash][]uint32, len(hashes))
+	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, hashes, minedBlockInfo)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, hash := range hashes {
-		blockIDs, err := t.setMinedInCache(ctx, hash, minedBlockInfo)
-		if err != nil {
-			return nil, err
+		if _, cacheErr := t.setMinedInCache(ctx, hash, minedBlockInfo); cacheErr != nil {
+			return nil, errors.NewProcessingError(
+				"txmetacache SetMinedMulti cache update failed after store success for %s",
+				hash.String(), cacheErr)
 		}
-
-		blockIDsMap[*hash] = blockIDs
 	}
 
 	return blockIDsMap, nil

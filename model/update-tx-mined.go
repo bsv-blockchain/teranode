@@ -222,6 +222,24 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		oldBlockIDsMu       sync.Mutex
 	)
 
+	// verifyMinedBatchCoverage is a defensive caller-level postcondition that mirrors
+	// the store-level invariant: for normal set-mined every submitted hash MUST appear
+	// in blockIDsMap and its slice MUST contain the current blockID. Any gap bumps
+	// setMinedErrorCount, which fails the block at the existing check below.
+	verifyMinedBatchCoverage := func(hashes []*chainhash.Hash, blockIDsMap map[chainhash.Hash][]uint32) {
+		if unsetMined {
+			return
+		}
+		for _, h := range hashes {
+			ids, ok := blockIDsMap[*h]
+			if !ok || !containsBlockID(ids, blockID) {
+				logger.Warnf("[UpdateTxMinedStatus][%s] coverage gap for tx %s blockID %d after SetMinedMulti",
+					block.Hash().String(), h.String(), blockID)
+				setMinedErrorCount.Add(1)
+			}
+		}
+	}
+
 	for subtreeIdx, subtree := range block.SubtreeSlices {
 		subtreeIdx := subtreeIdx
 		subtree := subtree
@@ -285,6 +303,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx for batch %d/%d: %v", block.Hash().String(), batchNr, batchTotal, err)
 						setMinedErrorCount.Add(1)
 					} else {
+						verifyMinedBatchCoverage(hashes, blockIDsMap)
 						if !minedBlockInfo.UnsetMined {
 							// Phase 1 (Fast Path): Check against recent block IDs in memory
 							// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
@@ -331,6 +350,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx for remainder batch: %v", block.Hash().String(), err)
 					setMinedErrorCount.Add(1)
 				} else {
+					verifyMinedBatchCoverage(hashes, blockIDsMap)
 					if !minedBlockInfo.UnsetMined {
 						// Phase 1 (Fast Path): Check against recent block IDs in memory
 						// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
@@ -427,4 +447,14 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	}
 
 	return nil
+}
+
+// containsBlockID reports whether ids contains want.
+func containsBlockID(ids []uint32, want uint32) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }

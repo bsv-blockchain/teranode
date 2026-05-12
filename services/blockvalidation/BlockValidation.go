@@ -677,6 +677,7 @@ func (u *BlockValidation) processBlockMinedNotSet(ctx context.Context, g *errgro
 							u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						}
 						u.setMinedChan <- blockHash
+						return nil
 					}
 
 					u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())

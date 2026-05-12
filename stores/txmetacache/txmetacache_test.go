@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -977,3 +978,64 @@ func Test_TxMetaCache_AdditionalUTXOOperations(t *testing.T) {
 
 // Note: Additional complex UTXO operations tests would go here
 // but are skipped due to complex type requirements for this coverage run
+
+// TestTxMetaCacheSetMinedMulti_DelegatesToStore verifies that SetMinedMulti calls
+// the underlying utxo.Store first, returns its blockIDsMap, and only then touches
+// the cache. This is the invariant that prevents the cache from silently masking a
+// missing durable write.
+func TestTxMetaCacheSetMinedMulti_DelegatesToStore(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+	expectedMap := map[chainhash.Hash][]uint32{*hash: {42}}
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(expectedMap, nil).Once()
+	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
+		Return(&meta.Data{Tx: coinbaseTx}, nil)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 42})
+	require.NoError(t, err)
+	require.Equal(t, expectedMap, got)
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestTxMetaCacheSetMinedMulti_PropagatesStoreError verifies that a store error
+// short-circuits the call before any cache mutation. Without this, a cache-only
+// path could silently satisfy SetMinedMulti while the durable store remained out
+// of sync — exactly the bug fixed in Layer 4.
+func TestTxMetaCacheSetMinedMulti_PropagatesStoreError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+	storeErr := assertErr("store unavailable")
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[chainhash.Hash][]uint32(nil), storeErr).Once()
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 7})
+	require.ErrorIs(t, err, storeErr)
+	require.Nil(t, got)
+
+	// Cache must NOT have been queried for these hashes.
+	mockStore.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertExpectations(t)
+}
+
+// assertErr is a tiny sentinel error so the test can check propagation via errors.Is.
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }

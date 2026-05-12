@@ -256,7 +256,15 @@ type Store interface {
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
-	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
+	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
+	//
+	// Postcondition (when minedBlockInfo.UnsetMined is false and a nil error is returned):
+	//   - Every hash in `hashes` MUST appear as a key in the returned map.
+	//   - Every returned slice MUST contain minedBlockInfo.BlockID.
+	// Implementations that cannot prove this MUST return a non-nil error.
+	//
+	// When minedBlockInfo.UnsetMined is true, missing or empty entries are tolerated:
+	// the call may no-op for transactions that no longer exist.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
 	// GetUnminedTxIterator returns an iterator for unmined transactions in the store.
