@@ -1008,6 +1008,45 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
+	t.Run("should error when SetMinedMulti partially omits hashes (expression path empty BlockIDs)", func(t *testing.T) {
+		// Simulates the Aerospike expression path returning an empty state.BlockIDs
+		// for one record: that hash gets dropped from blockIDsMap entirely while
+		// other hashes in the same batch are returned correctly. The model-layer
+		// coverage check must flag the missing hash as a postcondition violation.
+		mockStore := &utxo.MockUtxostore{}
+
+		tx1 := newTx(201)
+		tx2 := newTx(202) // expression path returns empty BlockIDs → omitted from map
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *tx1.TxIDChainHash()},
+					{Hash: *tx2.TxIDChainHash()},
+				},
+			},
+		}
+
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*tx1.TxIDChainHash(): {15},
+			// tx2 absent — simulates state.BlockIDs == 0 in the expression path
+			// where `if len(state.BlockIDs) > 0 { blockIDs[*hash] = ... }` skips
+			// the assignment.
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status")
+
+		mockStore.AssertExpectations(t)
+	})
+
 	t.Run("should tolerate empty blockIDsMap when unsetMined is true", func(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 

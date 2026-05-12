@@ -65,3 +65,22 @@ func TestParseSetMinedState_IntSlice(t *testing.T) {
 
 	require.Equal(t, []uint32{100, 101, 102}, state.BlockIDs)
 }
+
+// TestParseSetMinedState_ExplicitEmptyList covers the input that
+// processBatchResultsForSetMinedExpressions would see if the Aerospike record
+// returned the blockIDs bin as an empty list. The caller gates entry into the
+// returned map on `len(state.BlockIDs) > 0`, so an empty list here means the
+// hash is silently dropped from the result map — and the model-layer coverage
+// check is the only remaining guard (see Test_updateTxMinedStatus_Internal/
+// "should error when SetMinedMulti partially omits hashes").
+func TestParseSetMinedState_ExplicitEmptyList(t *testing.T) {
+	store := &Store{}
+
+	bins := map[string]interface{}{
+		"blockIDs": []interface{}{},
+	}
+
+	state, err := store.parseSetMinedState(bins)
+	require.NoError(t, err)
+	require.Empty(t, state.BlockIDs, "empty bin list must produce zero-length BlockIDs so the caller omits the hash from the result map")
+}
