@@ -19,7 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
@@ -282,10 +282,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	subtrees = make([]*chainhash.Hash, 0)
 
-	var (
-		subtree    *subtreepkg.Subtree
-		legacyMode bool
-	)
+	var subtree *subtreepkg.Subtree
 
 	// create 1 subtree + subtree.subtreeData
 	// then validate the subtree through the subtreeValidation service
@@ -320,25 +317,29 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, 0, err
 		}
 
-		if legacyMode, err = sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_LEGACYSYNCING); err != nil {
-			sm.logger.Errorf("[prepareSubtrees] Failed to get current state: %s", err)
+		blockHeight32, convErr := safeconversion.Int32ToUint32(block.Height())
+		if convErr != nil {
+			return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to convert block height", convErr)
 		}
 
-		// quick validation mode is used when we are in legacy mode
-		// we can skip some of the processing since we assume the block is valid
-		quickValidationMode := legacyMode
+		// Quick validation is safe whenever the block sits at/below the highest hard-coded
+		// checkpoint for the active network. POW (verified upstream by HasMetTargetDifficulty)
+		// plus checkpoint-anchored chain linkage make the block canonical regardless of which
+		// FSM state drove the catch-up. The checkpoint list is owned by go-chaincfg — see PR
+		// #844 for the matching FSM-RUN gate that relies on the same invariant.
+		quickValidationMode := sm.quickValidationAllowed(blockHeight32)
 
 		if quickValidationMode {
-			// Only in LEGACYSYNCING (LEGACY_SYNC mode) — fetch block ID upfront so UTXOs carry
-			// mined info from creation. This ID is threaded through to blockvalidation via
-			// ProcessBlock so it can call AddBlock(WithID, WithMinedSet(true)) and cause the
-			// setMinedChan worker to skip setTxMinedStatus (MinedSet guard in BlockValidation.go).
+			// Fetch block ID upfront so UTXOs carry mined info from creation. This ID is
+			// threaded through to blockvalidation via ProcessBlock so it can call
+			// AddBlock(WithID, WithMinedSet(true)) and cause the setMinedChan worker to
+			// skip setTxMinedStatus (MinedSet guard in BlockValidation.go).
 			//
-			// Note on ID gaps: GetNextBlockID advances the sequence atomically. If anything fails
-			// after this point (createUtxos error, network error, context cancellation), the ID
-			// is consumed and a gap appears in block IDs. This is acceptable — the blockchain
-			// store tolerates non-contiguous IDs; the sequence is used only as a monotonic counter,
-			// not a contiguous index.
+			// Note on ID gaps: GetNextBlockID advances the sequence atomically. If anything
+			// fails after this point (createUtxos error, network error, context cancellation),
+			// the ID is consumed and a gap appears in block IDs. This is acceptable — the
+			// blockchain store tolerates non-contiguous IDs; the sequence is used only as a
+			// monotonic counter, not a contiguous index.
 			id, idErr := sm.blockchainClient.GetNextBlockID(ctx)
 			if idErr != nil {
 				return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to get next block ID", idErr)
@@ -357,8 +358,8 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, 0, err
 		}
 
-		// we don't need to check the subtree in the subtree validation in legacy or catching blocks mode,
-		// since we already validated the transactions and created all the subtree files needed
+		// In quickValidationMode the transactions and subtree files have already been
+		// produced locally, so we can skip the round-trip through subtreeValidation.
 		if !quickValidationMode {
 			if err = sm.checkSubtreeFromBlock(ctx, block, subtree); err != nil {
 				return nil, 0, err
@@ -369,6 +370,27 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, blockID, nil
+}
+
+// quickValidationAllowed reports whether the given block height is covered by a
+// hard-coded checkpoint for the active network. Checkpoint-anchored chain linkage
+// combined with the upstream PoW check makes the block canonical, so we can skip
+// subtree re-validation and the per-UTXO setTxMined cross-check.
+//
+// Returns false when the network defines no checkpoints (regtest) or when the
+// block height is above the highest checkpoint — those blocks must follow the
+// regular validation path.
+func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
+	if sm.chainParams == nil {
+		return false
+	}
+
+	highest := blockchain.HighestCheckpointHeight(sm.chainParams.Checkpoints)
+	if highest == 0 {
+		return false
+	}
+
+	return blockHeight <= highest
 }
 
 func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree) error {

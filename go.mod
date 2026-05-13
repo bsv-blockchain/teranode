@@ -20,9 +20,9 @@ require (
 	// DO NOT bump to gobdk v1.2.4 (or later) until bitcoin-sv/bdk PR #41 has
 	// merged — that PR ports the same hot-fix forward to master / v1.2.4.
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.4-0.20260511121643-5ab3fd5b627d
-	github.com/bsv-blockchain/go-bt/v2 v2.6.2
-	github.com/bsv-blockchain/go-chaincfg v1.5.5
-	github.com/bsv-blockchain/go-sdk v1.2.19
+	github.com/bsv-blockchain/go-bt/v2 v2.6.3
+	github.com/bsv-blockchain/go-chaincfg v1.5.8
+	github.com/bsv-blockchain/go-sdk v1.2.23
 	github.com/bsv-blockchain/go-subtree v1.2.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
@@ -195,7 +195,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.1.2
 	github.com/bsv-blockchain/go-tx-map v1.3.4
-	github.com/bsv-blockchain/go-wire v1.2.1
+	github.com/bsv-blockchain/go-wire v1.2.3
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

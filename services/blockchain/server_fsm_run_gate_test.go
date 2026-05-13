@@ -38,7 +38,7 @@ func TestHighestCheckpointHeight(t *testing.T) {
 			},
 			want: 938000,
 		},
-		{name: "mainnet params", in: chaincfg.MainNetParams.Checkpoints, want: 938000},
+		{name: "mainnet params", in: chaincfg.MainNetParams.Checkpoints, want: 945000},
 		{name: "regtest has no checkpoints", in: chaincfg.RegressionNetParams.Checkpoints, want: 0},
 	}
 

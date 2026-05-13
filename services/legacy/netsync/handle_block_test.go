@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
@@ -785,4 +786,53 @@ func TestPreValidateTransactions_ParentContextCancelled(t *testing.T) {
 	err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context cancelled")
+}
+
+func TestSyncManager_quickValidationAllowed(t *testing.T) {
+	mainnetHighest := uint32(chaincfg.MainNetParams.Checkpoints[len(chaincfg.MainNetParams.Checkpoints)-1].Height)
+
+	tests := []struct {
+		name        string
+		chainParams *chaincfg.Params
+		height      uint32
+		want        bool
+	}{
+		{
+			name:        "nil chain params",
+			chainParams: nil,
+			height:      100,
+			want:        false,
+		},
+		{
+			name:        "regtest has no checkpoints",
+			chainParams: &chaincfg.RegressionNetParams,
+			height:      0,
+			want:        false,
+		},
+		{
+			name:        "mainnet height 0 is covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      0,
+			want:        true,
+		},
+		{
+			name:        "mainnet height equal to highest checkpoint is covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      mainnetHighest,
+			want:        true,
+		},
+		{
+			name:        "mainnet height one above highest checkpoint is not covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      mainnetHighest + 1,
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := &SyncManager{chainParams: tt.chainParams}
+			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+		})
+	}
 }
