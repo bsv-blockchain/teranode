@@ -9,6 +9,7 @@ package utxo
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -20,6 +21,15 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
+
+// step5RetryDelays controls the bounded back-off when SetLocked(false) fails at the very
+// last step of ProcessConflicting. The slice length is the number of attempts; the value
+// at index i is the delay BEFORE attempt i (so index 0 is always zero — the first attempt
+// is immediate). Rolling back at step 5 would create more inconsistency than retrying a
+// simple state update — see ProcessConflicting for rationale.
+//
+// Declared as a package-level var so tests can shrink the delays.
+var step5RetryDelays = []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond}
 
 // ProcessConflicting is a method to process conflicting transactions
 // We got a txp (parent), txa and txb. txa and txb are both spending txp[5].
@@ -62,6 +72,45 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
+
+	// State for the deferred compensating rollback. Each commit phase flips a flag; the
+	// deferred block reads them on the way out and undoes whatever happened — see #4561.
+	// allMarkedHashes mirrors the allMarkedConflicting named return but is read by the
+	// deferred block; a `return nil, nil, err` in the error paths clobbers the named
+	// return before the deferred runs, so we keep a parallel copy that survives.
+	var (
+		step1Committed        bool
+		step2Committed        bool
+		step4Committed        bool
+		step5Failed           bool // distinct from "not committed" — rollback is intentionally skipped
+		affectedParentSpends  []*Spend
+		markedAsNotSpendable  []chainhash.Hash
+		step3SuccessfulSpends []*Spend
+		allMarkedHashes       []chainhash.Hash
+	)
+
+	defer func() {
+		if err == nil || !step1Committed {
+			return
+		}
+
+		// Step 5 (SetLocked false) is the last simple state update. Steps 1-4 are correct
+		// at this point; rolling back would re-introduce conflicting flags and unspend the
+		// winner — strictly worse. Surface the error and let the operator unlock manually.
+		if step5Failed {
+			return
+		}
+
+		rollbackErr := rollbackProcessConflicting(ctx, s, conflictingTxHashes,
+			allMarkedHashes, markedAsNotSpendable, step3SuccessfulSpends, blockHeight,
+			step2Committed, step4Committed)
+		if rollbackErr != nil {
+			err = errors.NewProcessingError("[ProcessConflicting] MANUAL INTERVENTION REQUIRED: original=%v rollback=%v", err, rollbackErr)
+		}
+
+		losingTxHashesMap = nil
+		allMarkedConflicting = nil
+	}()
 
 	// 0. Get the transactions, check they are conflicting
 	winningTxs := make([]*bt.Tx, len(conflictingTxHashes))
@@ -128,18 +177,22 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 	losingTxHashes := losingTxHashesMap.Keys()
 
 	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
-	//   markedOrder is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
+	//   allMarkedConflicting is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
 	//   the block-assembly conflictingMap can include the cascaded descendants (not just the immediate losers).
-	affectedParentSpends, markedOrder, err := MarkConflictingRecursively(ctx, s, losingTxHashes)
+	affectedParentSpends, allMarkedHashes, err = MarkConflictingRecursively(ctx, s, losingTxHashes)
 	if err != nil {
 		return nil, nil, err
 	}
-	allMarkedConflicting = markedOrder
+
+	allMarkedConflicting = allMarkedHashes
+	step1Committed = true
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
 		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
+
+	step2Committed = true
 
 	// get the unique hashes of the transactions that were marked as not spendable
 	markedAsNotSpendableHashesUnique := make(map[chainhash.Hash]struct{})
@@ -147,22 +200,30 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 		markedAsNotSpendableHashesUnique[*spend.TxID] = struct{}{}
 	}
 
-	markedAsNotSpendableHashes := make([]chainhash.Hash, 0, len(markedAsNotSpendableHashesUnique))
+	markedAsNotSpendable = make([]chainhash.Hash, 0, len(markedAsNotSpendableHashesUnique))
 	for hash := range markedAsNotSpendableHashesUnique {
-		markedAsNotSpendableHashes = append(markedAsNotSpendableHashes, hash)
+		markedAsNotSpendable = append(markedAsNotSpendable, hash)
 	}
 
 	// - 3: spend tx_double_spend as normal (ignoring the not spendable flag)
 	var tErr *errors.Error
 
 	for _, tx := range winningTxs {
-		spends, err := s.Spend(ctx, tx, blockHeight, IgnoreFlags{
+		spends, spendErr := s.Spend(ctx, tx, blockHeight, IgnoreFlags{
 			IgnoreConflicting: true,
 			IgnoreLocked:      true,
 		})
-		if err != nil {
-			if errors.As(err, &tErr) {
-				// add all the spend errors to the error chain
+		// Capture per-input partial successes regardless of overall outcome so the rollback
+		// can undo them via Unspend(false) (parents at step 3 entry were unlocked-by-us, so
+		// the unspend MUST NOT relock).
+		for _, sp := range spends {
+			if sp != nil && sp.Err == nil {
+				step3SuccessfulSpends = append(step3SuccessfulSpends, sp)
+			}
+		}
+
+		if spendErr != nil {
+			if errors.As(spendErr, &tErr) {
 				for _, spend := range spends {
 					if spend.Err != nil {
 						tErr.SetWrappedErr(spend.Err)
@@ -170,6 +231,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 				}
 			}
 
+			err = spendErr
 			return nil, nil, err
 		}
 	}
@@ -179,12 +241,122 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 		return nil, nil, err
 	}
 
-	// - 5: mark txp & txq as spendable again
-	if err = s.SetLocked(ctx, markedAsNotSpendableHashes, false); err != nil {
+	step4Committed = true
+
+	// - 5: mark txp & txq as spendable again. Step 5 is a near-final state update; rolling
+	// the entire commit back now would re-introduce the very inconsistencies we just fixed.
+	// Retry with bounded back-off and surface any persistent failure for operator action.
+	if err = setLockedWithRetry(ctx, s, markedAsNotSpendable, false); err != nil {
+		step5Failed = true
 		return nil, nil, err
 	}
 
 	return losingTxHashesMap, allMarkedConflicting, nil
+}
+
+// rollbackProcessConflicting reverses the committed phases of ProcessConflicting in
+// reverse-of-forward order. It is best-effort: each sub-step's error is collected via
+// errors.Join so subsequent sub-steps still run. If the caller sees a non-nil return
+// the UTXO store may be in an inconsistent state — see ProcessConflicting deferred
+// block which tags this as MANUAL INTERVENTION REQUIRED.
+func rollbackProcessConflicting(ctx context.Context, s Store, conflictingTxHashes,
+	allMarkedHashes, markedAsNotSpendable []chainhash.Hash,
+	step3SuccessfulSpends []*Spend, blockHeight uint32, step2Committed, step4Committed bool) error {
+	var rollbackErr error
+
+	// 1. Undo step 4 first (re-mark winners as conflicting) so the system briefly observes
+	// "everything is conflicting" rather than "winner accepted but parents still missing
+	// their spend record".
+	if step4Committed {
+		if _, _, e := s.SetConflicting(ctx, conflictingTxHashes, true); e != nil {
+			rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 4 (re-mark winners conflicting) failed", e))
+		}
+	}
+
+	// 2. Undo step 3 partial spends. Pass flagAsLocked=false: step 3 used IgnoreLocked, so
+	// re-locking here is meaningless — the parents are still locked from step 2 and that
+	// lock will be cleared together at step 5 of the rollback (SetLocked false below).
+	if len(step3SuccessfulSpends) > 0 {
+		if e := s.Unspend(ctx, step3SuccessfulSpends, false); e != nil {
+			rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 3 (unspend partial winning spends) failed", e))
+		}
+	}
+
+	// 3. Undo step 2: re-spend every tx the cascade marked conflicting so the original
+	// spending_data is restored on affectedParentSpends. We iterate allMarkedHashes — not
+	// just losingTxHashes — because MarkConflictingRecursively does a BFS that reaches
+	// spending descendants of the counter-conflicting set, and step 2's Unspend covered
+	// the parents of that whole cascade. Skipping descendants would leave their parent
+	// UTXOs unspent and the store in a torn state. Parents are still locked here, so we
+	// MUST set IgnoreLocked; the cascade is still flagged conflicting, so IgnoreConflicting.
+	// A descendant's body may be unfetchable (pruned, frozen placeholder, or missing) —
+	// log via rollbackErr and continue rather than abort the rest of the unwind.
+	if step2Committed {
+		for _, h := range allMarkedHashes {
+			h := h
+
+			if h.Equal(subtree.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
+			txMeta, e := s.Get(ctx, &h, fields.Tx)
+			if e != nil {
+				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (fetch tx %s) failed", h.String(), e))
+				continue
+			}
+
+			if txMeta == nil || txMeta.Tx == nil {
+				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (tx %s has no body)", h.String()))
+				continue
+			}
+
+			if _, e := s.Spend(ctx, txMeta.Tx, blockHeight, IgnoreFlags{IgnoreConflicting: true, IgnoreLocked: true}); e != nil {
+				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (re-spend tx %s) failed", h.String(), e))
+			}
+		}
+	}
+
+	// 4. Undo step 1: clear the conflicting flag on every hash MarkConflictingRecursively
+	// added (cascaded children included).
+	if len(allMarkedHashes) > 0 {
+		if _, _, e := s.SetConflicting(ctx, allMarkedHashes, false); e != nil {
+			rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 1 (clear conflicting flag) failed", e))
+		}
+	}
+
+	// 5. Undo the lock applied at step 2 (only attempted if step 2 actually committed).
+	if step2Committed && len(markedAsNotSpendable) > 0 {
+		if e := s.SetLocked(ctx, markedAsNotSpendable, false); e != nil {
+			rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 lock (SetLocked false) failed", e))
+		}
+	}
+
+	return rollbackErr
+}
+
+// setLockedWithRetry retries SetLocked with a bounded back-off — a deliberate exception
+// to "always roll back". By the time we reach step 5 every other phase is committed and
+// correct; the only inconsistency a SetLocked failure introduces is parents that are
+// still locked. Rolling back here would re-introduce conflicting markers and unspend the
+// winner — strictly worse than retrying a simple state update.
+func setLockedWithRetry(ctx context.Context, s Store, hashes []chainhash.Hash, value bool) error {
+	var err error
+
+	for _, delay := range step5RetryDelays {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return errors.NewProcessingError("setLockedWithRetry aborted by context", ctx.Err())
+			case <-time.After(delay):
+			}
+		}
+
+		if err = s.SetLocked(ctx, hashes, value); err == nil {
+			return nil
+		}
+	}
+
+	return err
 }
 
 // MarkConflictingRecursively marks the given transactions as conflicting, and iteratively marks all their spending

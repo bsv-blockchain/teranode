@@ -28,6 +28,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -2589,6 +2590,21 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		}
 	}
 
+	// Refuse to transition to RUNNING while the local chain tip is still below
+	// the network's highest hard-coded checkpoint. Pre-checkpoint heights are
+	// guaranteed to be deep history (mainnet's highest is block 938000), so a
+	// node sitting below them is mid-IBD even if a catchup worker thinks it
+	// has finished its current chunk. Going to RUNNING in that state lets the
+	// mempool/validator operate under pre-Genesis output rules and the legacy
+	// service relay tx invs that post-Genesis peers ban on sight
+	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
+	if eventReq.Event == blockchain_api.FSMEventType_RUN {
+		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
@@ -2629,6 +2645,57 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.stateChangeTimestamp = time.Now()
 
 	return resp, nil
+}
+
+// guardRunBelowHighestCheckpoint blocks the RUN transition when the local
+// chain tip has not yet reached the highest hard-coded checkpoint for the
+// active network. Returns nil when the chain has reached the checkpoint, the
+// network defines no checkpoints (regtest, brand-new networks), or the store
+// has no chain tip yet (returns a state error so the caller retries later).
+func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return nil
+	}
+
+	highest := HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
+	if highest == 0 {
+		return nil
+	}
+
+	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
+	}
+	if meta == nil {
+		return errors.NewStateError("best block header meta unavailable; refusing RUN")
+	}
+
+	if meta.Height < highest {
+		return errors.NewStateError(
+			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s",
+			meta.Height, highest, b.settings.ChainCfgParams.Name,
+		)
+	}
+
+	return nil
+}
+
+// HighestCheckpointHeight returns the largest Height in the supplied
+// checkpoint list, or 0 if the list is empty. Exported so callers in
+// other packages (e.g. blockvalidation) can share the same definition
+// rather than maintaining a parallel copy.
+func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	var highest uint32
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+		h := uint32(cp.Height)
+		if h > highest {
+			highest = h
+		}
+	}
+	return highest
 }
 
 // Run transitions the blockchain service to the running state.

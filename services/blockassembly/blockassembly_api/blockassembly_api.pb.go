@@ -852,11 +852,12 @@ func (x *StateMessage) GetSubtrees() []string {
 	return nil
 }
 
-// Response containing the current difficulty of the blockchain.
+// Response containing the difficulty required for the next block (not the
+// current tip's difficulty).
 type GetCurrentDifficultyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Difficulty    float64                `protobuf:"fixed64,1,opt,name=difficulty,proto3" json:"difficulty,omitempty"` // the current difficulty of the blockchain
-	BlockHash     []byte                 `protobuf:"bytes,2,opt,name=blockHash,proto3" json:"blockHash,omitempty"`     // the hash of the block at which the difficulty is measured
+	Difficulty    float64                `protobuf:"fixed64,1,opt,name=difficulty,proto3" json:"difficulty,omitempty"` // the difficulty the NEXT block must satisfy
+	BlockHash     []byte                 `protobuf:"bytes,2,opt,name=blockHash,proto3" json:"blockHash,omitempty"`     // the hash of the current chain tip, provided as context
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

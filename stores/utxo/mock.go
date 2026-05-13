@@ -71,10 +71,16 @@ func (m *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendRespo
 
 // GetMeta mocks the retrieval of complete transaction metadata from the UTXO store.
 // Returns the configured mock response for full metadata lookup operations.
+//
+// Accepts either Return(*meta.Data) for the success path (data populated, no error),
+// Return(nil) for an empty metadata result, or Return(error) to surface a lookup failure.
 func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	args := m.Called(ctx, hash, data)
 	if result := args.Get(0); result != nil {
-		*data = *result.(*meta.Data)
+		if md, ok := result.(*meta.Data); ok {
+			*data = *md
+			return nil
+		}
 	}
 	return args.Error(0)
 }

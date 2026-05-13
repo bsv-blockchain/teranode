@@ -82,7 +82,7 @@ message ValidateTransactionBatchRequest {
 // ValidateTransactionBatchResponse provides batch validation results
 // swagger:model ValidateTransactionBatchResponse
 message ValidateTransactionBatchResponse {
-  bool valid = 1;                    // Overall batch validation status
+  bool valid = 1;                    // Always true; callers must inspect per-item errors below.
   repeated errors.TError errors = 2;        // Array of error messages, one per transaction
   repeated bytes metadata = 3;       // Array of metadata for each transaction
 }

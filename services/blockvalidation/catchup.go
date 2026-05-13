@@ -679,7 +679,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 //   - error: If checkpoint verification fails (hash mismatch)
 func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
 	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
+	highestCheckpointHeight := blockchain.HighestCheckpointHeight(catchupCtx.checkpoints)
 	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
 
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
@@ -1143,21 +1143,6 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
-}
-
-// getHighestCheckpointHeight returns the height of the highest checkpoint
-func getHighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	if len(checkpoints) == 0 {
-		return 0
-	}
-
-	var highestHeight uint32
-	for _, checkpoint := range checkpoints {
-		if uint32(checkpoint.Height) > highestHeight {
-			highestHeight = uint32(checkpoint.Height)
-		}
-	}
-	return highestHeight
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint

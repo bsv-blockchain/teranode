@@ -179,6 +179,10 @@ func TestProcessConflicting_UnspendError(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.NewProcessingError("unspend failed"))
 
+	// step 2 failed → rollback only undoes step 1 (clear conflicting flag).
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+		Return([]*Spend{}, []chainhash.Hash{}, nil)
+
 	// Execute test
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
 
@@ -197,12 +201,15 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 	conflictingTxHashes := []chainhash.Hash{conflictingTxHash}
 	losingTxHash := createTestHash("losing-tx")
 	testTx := createTestTransaction()
+	// Use a distinct fixture for the losing tx so the mock can differentiate the
+	// step-3 Spend(winning) failure from the rollback Spend(losing) call.
+	losingTx := createTestTransactionWithInputs(losingTxHash, 1)
 
 	// Mock successful setup calls
 	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(&meta.Data{
 		Tx:          testTx,
 		Conflicting: true,
-	}, nil)
+	}, nil).Once()
 
 	mockStore.On("GetCounterConflicting", mock.Anything, conflictingTxHash).
 		Return([]chainhash.Hash{losingTxHash}, nil)
@@ -221,6 +228,17 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 	}
 	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).
 		Return([]*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
+
+	// step-3 failure rollback path: re-fetch losing tx body, re-spend it, clear conflicting,
+	// unlock parents. (No partial successful step-3 spends — the only spend has Err != nil.)
+	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
+		Tx: losingTx,
+	}, nil).Once()
+	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return([]*Spend{}, nil).Once()
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+		Return([]*Spend{}, []chainhash.Hash{}, nil)
+	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
