@@ -8,8 +8,10 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -65,14 +67,32 @@ func (s *fsmGateStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHead
 }
 
 // newTestBlockchainForGate returns a *Blockchain with just enough state for
-// guardRunBelowHighestCheckpoint to run: store + settings + logger.
+// guardRunBelowHighestCheckpoint and SendFSMEvent to run: store, settings,
+// logger, stats (for the tracing decorator), and a buffered notifications
+// channel that gets drained so the FSM enter_state callback can publish
+// without blocking.
 func newTestBlockchainForGate(t *testing.T, params *chaincfg.Params, store *fsmGateStore) *Blockchain {
 	t.Helper()
-	return &Blockchain{
-		logger:   ulogger.TestLogger{},
-		store:    store,
-		settings: &settings.Settings{ChainCfgParams: params},
+	initPrometheusMetrics()
+	b := &Blockchain{
+		logger:        ulogger.TestLogger{},
+		store:         store,
+		settings:      &settings.Settings{ChainCfgParams: params},
+		notifications: make(chan *blockchain_api.Notification, 10),
+		stats:         gocore.NewStat("blockchain-test"),
 	}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-b.notifications:
+			}
+		}
+	}()
+	return b
 }
 
 // TestGuardRunBelowHighestCheckpoint is the regression test for the FSM
@@ -177,4 +197,105 @@ func TestGuardRunBelowHighestCheckpoint_NilSettings(t *testing.T) {
 		b := &Blockchain{logger: ulogger.TestLogger{}, settings: &settings.Settings{}}
 		require.NoError(t, b.guardRunBelowHighestCheckpoint(context.Background()))
 	})
+}
+
+// TestSendFSMEvent_RunGate_SourceState pins the source-state semantics of
+// the RUN gate added in PR #844 and fixed here: IDLE → RUNNING is the boot
+// path and must succeed even when the local tip sits below the highest
+// checkpoint (a fresh node has tip 0 and nothing else can move the FSM
+// forward), while LEGACYSYNCING → RUNNING and CATCHINGBLOCKS → RUNNING
+// claim "I'm caught up" and must still be rejected when the tip is below
+// the checkpoint.
+func TestSendFSMEvent_RunGate_SourceState(t *testing.T) {
+	ctx := context.Background()
+	highest := HighestCheckpointHeight(chaincfg.MainNetParams.Checkpoints)
+	require.Greater(t, highest, uint32(0))
+
+	tests := []struct {
+		name       string
+		startState blockchain_api.FSMStateType
+		tipHeight  uint32
+		wantErr    bool
+		wantState  blockchain_api.FSMStateType
+		wantSubstr string
+	}{
+		{
+			name:       "fresh boot IDLE with tip 0 below checkpoint succeeds",
+			startState: blockchain_api.FSMStateType_IDLE,
+			tipHeight:  0,
+			wantErr:    false,
+			wantState:  blockchain_api.FSMStateType_RUNNING,
+		},
+		{
+			name:       "IDLE with tip 100 still below checkpoint succeeds",
+			startState: blockchain_api.FSMStateType_IDLE,
+			tipHeight:  100,
+			wantErr:    false,
+			wantState:  blockchain_api.FSMStateType_RUNNING,
+		},
+		{
+			name:       "LEGACYSYNCING below checkpoint rejects",
+			startState: blockchain_api.FSMStateType_LEGACYSYNCING,
+			tipHeight:  highest - 1,
+			wantErr:    true,
+			wantState:  blockchain_api.FSMStateType_LEGACYSYNCING,
+			wantSubstr: "refusing RUN",
+		},
+		{
+			name:       "LEGACYSYNCING at checkpoint succeeds",
+			startState: blockchain_api.FSMStateType_LEGACYSYNCING,
+			tipHeight:  highest,
+			wantErr:    false,
+			wantState:  blockchain_api.FSMStateType_RUNNING,
+		},
+		{
+			name:       "CATCHINGBLOCKS below checkpoint rejects",
+			startState: blockchain_api.FSMStateType_CATCHINGBLOCKS,
+			tipHeight:  highest - 1,
+			wantErr:    true,
+			wantState:  blockchain_api.FSMStateType_CATCHINGBLOCKS,
+			wantSubstr: "refusing RUN",
+		},
+		{
+			name:       "CATCHINGBLOCKS above checkpoint succeeds",
+			startState: blockchain_api.FSMStateType_CATCHINGBLOCKS,
+			tipHeight:  highest + 50,
+			wantErr:    false,
+			wantState:  blockchain_api.FSMStateType_RUNNING,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fsmGateStore{}
+			hdr := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+			meta := &model.BlockHeaderMeta{Height: tt.tipHeight}
+			// GetBestBlockHeader is only consulted when the gate runs (non-IDLE
+			// sources). Always-on Maybe lets IDLE tests skip the call without
+			// failing strict expectations.
+			store.On("GetBestBlockHeader", mock.Anything).Return(hdr, meta, nil).Maybe()
+
+			b := newTestBlockchainForGate(t, &chaincfg.MainNetParams, store)
+			b.settings.BlockChain.FSMStateChangeDelay = 0
+			b.finiteStateMachine = b.NewFiniteStateMachine()
+			b.finiteStateMachine.SetState(tt.startState.String())
+
+			req := &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN}
+			resp, err := b.SendFSMEvent(ctx, req)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantSubstr != "" {
+					require.Contains(t, err.Error(), tt.wantSubstr)
+				}
+				require.Equal(t, tt.wantState.String(), b.finiteStateMachine.Current(),
+					"FSM must remain in source state when gate rejects")
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				require.Equal(t, tt.wantState, resp.State)
+				require.Equal(t, tt.wantState.String(), b.finiteStateMachine.Current())
+			}
+		})
+	}
 }
