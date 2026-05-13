@@ -642,9 +642,13 @@ type bucketNative struct {
 	// gen is the generation of chunks.
 	gen uint64
 
+	// freeChunksLock guards freeChunks for the Native bucket type.
+	// Native intentionally keeps a dedicated lock for chunk-pool access
+	// instead of relying on b.mu.
 	freeChunksLock sync.Mutex
 
-	// free chunks per bucket
+	// freeChunks contains reusable chunk slabs for this bucket.
+	// Access must be guarded by freeChunksLock.
 	freeChunks []*[ChunkSize]byte
 
 	// currentGenCount tracks the number of entries written in current generation.
@@ -989,10 +993,31 @@ func (b *bucketNative) putChunk(chunk []byte) {
 	b.freeChunksLock.Unlock()
 }
 
+// deleteFromNativeSplitMapShard rebuilds the target shard without h.
+// We do this because go-tx-map's lock-free split map does not currently
+// expose a delete API that keeps the shard length counter in sync.
+func deleteFromNativeSplitMapShard(m *swiss.NativeSplitLockFreeMapUint64, h uint64) {
+	shardIdx := h % uint64(BucketsCount)
+	shards := m.Map()
+	shard, ok := shards[shardIdx]
+	if !ok || shard == nil || !shard.Exists(h) {
+		return
+	}
+
+	rebuiltShard := swiss.NewNativeLockFreeMapUint64(shard.Length())
+	shard.Iter(func(k, v uint64) (stop bool) {
+		if k == h {
+			return false
+		}
+		_ = rebuiltShard.Put(k, v)
+		return false
+	})
+	shards[shardIdx] = rebuiltShard
+}
+
 func (b *bucketNative) Del(h uint64) {
 	b.mu.Lock()
-	shardIdx := h % uint64(BucketsCount)
-	delete(b.m.Map()[shardIdx].Map(), h)
+	deleteFromNativeSplitMapShard(b.m, h)
 	b.mu.Unlock()
 }
 
@@ -1031,7 +1056,9 @@ type bucketTrimmed struct {
 	// gen is the generation of chunks.
 	gen uint64
 
-	// free chunks per bucket.
+	// freeChunks contains reusable chunk slabs for this bucket.
+	// Locking invariant: access is protected by b.mu (write lock), and
+	// getChunk/putChunk must only be called while b.mu is held.
 	freeChunks []*[ChunkSize]byte
 
 	// allocatedChunks is the total number of chunks allocated for the bucket via mmap.
@@ -1386,6 +1413,7 @@ func (b *bucketTrimmed) SetMultiKeysSingleValue(keys [][]byte, value []byte) { /
 	}
 }
 
+// getChunk assumes b.mu is write-locked by the caller.
 func (b *bucketTrimmed) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		maxChunks := uint64(len(b.chunks))
@@ -1449,6 +1477,7 @@ func (b *bucketTrimmed) getChunk() ([]byte, error) {
 	return p[:], nil
 }
 
+// putChunk assumes b.mu is write-locked by the caller.
 func (b *bucketTrimmed) putChunk(chunk []byte) {
 	if chunk == nil {
 		return
@@ -1460,10 +1489,31 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 	b.freeChunks = append(b.freeChunks, p)
 }
 
-// Check if this del strategy for Native current makes more sense?
+// deleteFromSwissSplitMapShard rebuilds the target shard without h.
+// We do this because go-tx-map's lock-free split map does not currently
+// expose a delete API that keeps the shard length counter in sync.
+func deleteFromSwissSplitMapShard(m *swiss.SplitSwissLockFreeMapUint64, h uint64) {
+	shardIdx := h % uint64(BucketsCount)
+	shards := m.Map()
+	shard, ok := shards[shardIdx]
+	if !ok || shard == nil || !shard.Exists(h) {
+		return
+	}
+
+	rebuiltShard := swiss.NewSwissLockFreeMapUint64(shard.Length())
+	shard.Iter(func(k, v uint64) (stop bool) {
+		if k == h {
+			return false
+		}
+		_ = rebuiltShard.Put(k, v)
+		return false
+	})
+	shards[shardIdx] = rebuiltShard
+}
+
 func (b *bucketTrimmed) Del(h uint64) {
 	b.mu.Lock()
-	delete(b.m.Map(), h)
+	deleteFromSwissSplitMapShard(b.m, h)
 	b.mu.Unlock()
 }
 
@@ -1813,7 +1863,9 @@ type bucketUnallocated struct {
 	// gen is the generation of chunks.
 	gen uint64
 
-	// free chunks per bucket
+	// freeChunks contains reusable chunk slabs for this bucket.
+	// Locking invariant: access is protected by b.mu (write lock), and
+	// getChunk/putChunk must only be called while b.mu is held.
 	freeChunks []*[ChunkSize]byte
 
 	// allocatedChunks is the total number of chunks allocated for the bucket
@@ -2139,6 +2191,7 @@ func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte)
 	}
 }
 
+// getChunk assumes b.mu is write-locked by the caller.
 func (b *bucketUnallocated) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		maxChunks := uint64(len(b.chunks))
@@ -2210,6 +2263,7 @@ func (b *bucketUnallocated) getChunk() ([]byte, error) {
 	return p[:], nil
 }
 
+// putChunk assumes b.mu is write-locked by the caller.
 func (b *bucketUnallocated) putChunk(chunk []byte) {
 	if chunk == nil {
 		return

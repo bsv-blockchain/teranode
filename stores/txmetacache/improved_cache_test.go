@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -592,28 +593,25 @@ func TestImprovedCache_DifferentBucketTypes(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, value, dst)
 
-			// Del - some implementations might not immediately remove items from their maps
-			// but they should at least not crash
+			// Capture map size before deleting the key.
+			var statsBeforeDel Stats
+			cache.UpdateStats(&statsBeforeDel)
+
 			cache.Del(key)
-			// For trimmed cache, the item might still appear to exist due to implementation details
-			// but Get should fail
+
+			// Del must remove the key from all bucket implementations.
+			require.False(t, cache.Has(key), "deleted key should not exist in %s", bt.name)
+
 			var delDst []byte
-			getErr := cache.Get(&delDst, key)
-			// Either the key shouldn't exist or we should get an error
-			if cache.Has(key) {
-				// If Has returns true, Get should still work or return specific behavior
-				// This is implementation-dependent for trimmed caches
-				t.Logf("%s bucket type may keep deleted keys in map temporarily", bt.name)
-			} else if getErr != nil {
-				// This is expected behavior after deletion
-				t.Logf("%s bucket type correctly removed deleted key", bt.name)
-			}
+			require.Error(t, cache.Get(&delDst, key), "Get on deleted key should fail in %s", bt.name)
 
 			// UpdateStats
 			var stats Stats
 			cache.UpdateStats(&stats)
 			// Stats should work for all bucket types
 			require.GreaterOrEqual(t, stats.TotalMapSize, uint64(0))
+			require.Less(t, stats.TotalMapSize, statsBeforeDel.TotalMapSize,
+				"map size should shrink after deletion in %s", bt.name)
 		})
 	}
 }
@@ -1339,16 +1337,87 @@ func TestImprovedCache_BucketDelFunctions(t *testing.T) {
 				require.True(t, exists, "Key should exist before deletion in %s", tt.name)
 			}
 
+			var statsBeforeDel Stats
+			cache.UpdateStats(&statsBeforeDel)
+			require.GreaterOrEqual(t, statsBeforeDel.TotalMapSize, uint64(len(testKeys)),
+				"expected map size to include inserted keys in %s", tt.name)
+
 			// Delete keys using cache.Del which calls bucket Del functions
 			for _, key := range testKeys {
 				cache.Del(key)
-				// Don't verify deletion success as some bucket types may not fully support deletion
-				// The goal is to exercise the Del function code paths for coverage
+				require.False(t, cache.Has(key), "deleted key should not exist in %s", tt.name)
+
+				var dst []byte
+				require.Error(t, cache.Get(&dst, key), "Get on deleted key should fail in %s", tt.name)
 			}
 
-			var stats Stats
-			cache.UpdateStats(&stats)
-			t.Logf("%s Del test - ValidEntriesCount: %d", tt.name, stats.ValidEntriesCount)
+			var statsAfterDel Stats
+			cache.UpdateStats(&statsAfterDel)
+			require.Equal(t, uint64(0), statsAfterDel.TotalMapSize,
+				"all inserted keys were deleted in %s", tt.name)
+		})
+	}
+}
+
+func TestImprovedCache_ConcurrentSetGetDelResetAllBucketTypes(t *testing.T) {
+	bucketTypes := []struct {
+		name string
+		typ  BucketType
+	}{
+		{"Native", Native},
+		{"Unallocated", Unallocated},
+		{"Preallocated", Preallocated},
+		{"Trimmed", Trimmed},
+	}
+
+	for _, bt := range bucketTypes {
+		t.Run(bt.name, func(t *testing.T) {
+			cache, err := New(64*1024, bt.typ)
+			require.NoError(t, err)
+			defer cache.Reset()
+
+			const goroutines = 8
+			const operationsPerGoroutine = 200
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+
+			for worker := 0; worker < goroutines; worker++ {
+				wg.Add(1)
+				go func(workerID int) {
+					defer wg.Done()
+					<-start
+
+					for i := 0; i < operationsPerGoroutine; i++ {
+						key := []byte(fmt.Sprintf("race_key_%d_%d", workerID, i%32))
+						value := []byte(fmt.Sprintf("race_value_%d_%d", workerID, i))
+
+						_ = cache.Set(key, value)
+						_ = cache.Has(key)
+
+						var dst []byte
+						_ = cache.Get(&dst, key)
+
+						cache.Del(key)
+
+						if i%40 == 0 {
+							cache.Reset()
+						}
+					}
+				}(worker)
+			}
+
+			close(start)
+			wg.Wait()
+
+			// Ensure cache remains usable after the concurrent mixed workload.
+			finalKey := []byte("post_race_key")
+			finalValue := []byte("post_race_value")
+			require.NoError(t, cache.Set(finalKey, finalValue))
+
+			var dst []byte
+			require.NoError(t, cache.Get(&dst, finalKey))
+			require.Equal(t, finalValue, dst)
 		})
 	}
 }
