@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -581,6 +582,212 @@ func TestSetFromReader_RemovesBlobWhenChecksumPublicationFails(t *testing.T) {
 	require.NoError(t, err)
 	for _, entry := range entries {
 		require.False(t, strings.HasSuffix(entry.Name(), ".tmp"), "temporary file should be cleaned up: %s", entry.Name())
+	}
+}
+
+func TestSetFromReader_ConcurrentWritersNeverExposePartialFinal(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("concurrent-atomic-publication")
+
+	// Build the expected complete file payload (header + body) once so the reader can
+	// match against it. Every successful read of the final file must be byte-identical
+	// to this payload — never a truncated prefix.
+	body := bytes.Repeat([]byte("XYZ"), 4096)
+	header := fileformat.NewHeader(fileformat.FileTypeTesting)
+
+	var expected bytes.Buffer
+	require.NoError(t, header.Write(&expected))
+	expected.Write(body)
+	expectedBytes := expected.Bytes()
+
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	const writers = 8
+	stop := make(chan struct{})
+	writerErrs := make(chan error, writers)
+	writerWG := sync.WaitGroup{}
+
+	for i := 0; i < writers; i++ {
+		writerWG.Add(1)
+		go func() {
+			defer writerWG.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				if err := f.Set(context.Background(), key, fileformat.FileTypeTesting, body, options.WithAllowOverwrite(true)); err != nil {
+					writerErrs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	// Reader loop: every successful read must be byte-identical to expectedBytes. A
+	// partial read here would mean the atomic-publication invariant was violated.
+	readerDone := make(chan struct{})
+	var readerErr error
+
+	go func() {
+		defer close(readerDone)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			data, err := os.ReadFile(filename)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				readerErr = err
+				return
+			}
+
+			if !bytes.Equal(data, expectedBytes) {
+				readerErr = errors.NewStorageError("observed partial final file: got %d bytes, expected %d", len(data), len(expectedBytes))
+				return
+			}
+		}
+	}()
+
+	<-readerDone
+	close(stop)
+	writerWG.Wait()
+	close(writerErrs)
+
+	for err := range writerErrs {
+		require.NoError(t, err)
+	}
+	require.NoError(t, readerErr)
+}
+
+func TestRenameTempFile_OverwriteAndRejectSemantics(t *testing.T) {
+	// renameTempFile's cross-platform contract: on POSIX, rename atomically replaces an
+	// existing destination regardless of allowOverwrite; on non-POSIX, allowOverwrite
+	// controls whether an existing destination is replaced or whether ErrBlobAlreadyExists
+	// is returned. This test documents the observable POSIX behaviour and exercises both
+	// allowOverwrite values so a regression on either branch shows up.
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("rename-temp-file-semantics")
+
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("first")))
+
+	// allowOverwrite=true: the second publication should replace the first cleanly.
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("second"), options.WithAllowOverwrite(true)))
+
+	got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+
+	// allowOverwrite=false: errorOnOverwrite stops the call before renameTempFile is
+	// reached, so the existing value must remain intact.
+	err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("third"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlobAlreadyExists), "expected ErrBlobAlreadyExists, got %v", err)
+
+	got, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+}
+
+func TestParseFsyncMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want fsyncMode
+		ok   bool
+	}{
+		{"", fsyncModeFull, true},
+		{"full", fsyncModeFull, true},
+		{"FULL", fsyncModeFull, true},
+		{"data", fsyncModeData, true},
+		{"none", fsyncModeNone, true},
+		{"bogus", fsyncModeFull, false},
+	} {
+		got, err := parseFsyncMode(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "input=%q", tc.in)
+			require.Equal(t, tc.want, got, "input=%q", tc.in)
+		} else {
+			require.Error(t, err, "input=%q", tc.in)
+		}
+	}
+}
+
+func TestNewWithFsyncMode(t *testing.T) {
+	tempDir := t.TempDir()
+
+	for _, mode := range []string{"full", "data", "none"} {
+		t.Run(mode, func(t *testing.T) {
+			u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+			require.NoError(t, err)
+
+			f, err := New(ulogger.TestLogger{}, u)
+			require.NoError(t, err)
+
+			key := []byte("fsync-mode-" + mode)
+			require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("value")))
+
+			got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+			require.NoError(t, err)
+			require.Equal(t, []byte("value"), got)
+		})
+	}
+
+	t.Run("invalid", func(t *testing.T) {
+		u, err := url.Parse("file://" + tempDir + "?fsyncMode=bogus")
+		require.NoError(t, err)
+
+		_, err = New(ulogger.TestLogger{}, u)
+		require.Error(t, err)
+	})
+}
+
+// BenchmarkSetFromReader_FsyncModes measures the cost of the atomic-publication path
+// across the three fsyncMode levels. fsync overhead dominates the small-payload case
+// on local filesystems and is intended to make any regression in the fsync schedule
+// visible in CI. Operators sizing for NFS-backed deployments can compare the gap
+// between fsyncModeFull and fsyncModeNone here against measurements on their target
+// filesystem to decide whether to opt out of the directory fsync.
+func BenchmarkSetFromReader_FsyncModes(b *testing.B) {
+	for _, payloadSize := range []int{256, 4 * 1024, 64 * 1024} {
+		for _, mode := range []string{"full", "data", "none"} {
+			b.Run(fmt.Sprintf("payload=%dB/mode=%s", payloadSize, mode), func(b *testing.B) {
+				tempDir := b.TempDir()
+
+				u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+				require.NoError(b, err)
+
+				f, err := New(ulogger.TestLogger{}, u)
+				require.NoError(b, err)
+
+				payload := bytes.Repeat([]byte("x"), payloadSize)
+				ctx := context.Background()
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					key := []byte(fmt.Sprintf("bench-%d", i))
+					if err := f.Set(ctx, key, fileformat.FileTypeTesting, payload); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -50,6 +51,43 @@ import (
 )
 
 const checksumExtension = ".sha256"
+
+// fsyncMode controls how aggressively the file store flushes data to stable storage
+// during atomic publication. Set via the `fsyncMode` URL parameter.
+//
+//   - fsyncModeFull (default): fsync the temp file, then fsync the parent directory
+//     after rename. Correct on ext4/xfs/btrfs even across a crash; required for the
+//     atomic-publication guarantee on those filesystems.
+//   - fsyncModeData: fsync the temp file only; skip the parent-directory fsync. Final
+//     file content is durable but the directory entry of the freshly renamed name can
+//     be lost across a crash on Linux. Useful on filesystems where directory fsync is
+//     expensive or unsupported (notably NFS-backed paths) while still preserving the
+//     content of already-published files.
+//   - fsyncModeNone: skip both fsyncs. The rename remains atomic from the perspective
+//     of concurrent readers, but neither the file content nor its directory entry is
+//     guaranteed durable across a crash. Operators who choose this opt out of crash
+//     safety in exchange for throughput; only appropriate when the host filesystem
+//     provides its own durability guarantees or when the data is regenerable.
+type fsyncMode uint8
+
+const (
+	fsyncModeFull fsyncMode = iota
+	fsyncModeData
+	fsyncModeNone
+)
+
+func parseFsyncMode(s string) (fsyncMode, error) {
+	switch strings.ToLower(s) {
+	case "", "full":
+		return fsyncModeFull, nil
+	case "data":
+		return fsyncModeData, nil
+	case "none":
+		return fsyncModeNone, nil
+	default:
+		return fsyncModeFull, errors.NewConfigurationError("[File] invalid fsyncMode %q (must be full|data|none)", s)
+	}
+}
 
 // File implements the blob.Store interface using the local filesystem for storage.
 // It provides a robust, persistent blob storage solution with features like automatic
@@ -85,6 +123,8 @@ type File struct {
 	blobDeletionScheduler options.BlobDeletionScheduler
 	// storeType identifies which blob store this is
 	storeType storetypes.BlobStoreType
+	// fsyncMode controls fsync behaviour during atomic publication; see fsyncMode docs.
+	fsyncMode fsyncMode
 }
 
 func (s *File) debugEnabled() bool {
@@ -413,6 +453,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		storeOpts.DisableDAH = disableDAH == "true"
 	}
 
+	parsedFsyncMode, err := parseFsyncMode(storeURL.Query().Get("fsyncMode"))
+	if err != nil {
+		return nil, err
+	}
+
 	if len(storeOpts.SubDirectory) > 0 {
 		if err := os.MkdirAll(filepath.Join(path, storeOpts.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
@@ -426,6 +471,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		persistSubDir:         storeOpts.PersistSubDir,
 		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
 		storeType:             storeOpts.StoreType,
+		fsyncMode:             parsedFsyncMode,
 	}
 
 	// Check if longterm storage options are provided
@@ -694,7 +740,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	file = nil
 
 	// rename the file to remove the .tmp extension
-	if err = s.renameTempFile(tmpFilename, filename); err != nil {
+	if err = s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite); err != nil {
 		return err
 	}
 	cleanupTmpFile = false
@@ -727,7 +773,9 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 
 	hashFilename := filename + checksumExtension
 
-	if err := s.writeFileAtomically(hashFilename, []byte(hashStr), 0644); err != nil {
+	// Allow overwrite for the checksum sidecar: it always corresponds to the most recent
+	// blob publication, mirroring the pre-PR behaviour that used os.WriteFile.
+	if err := s.writeFileAtomically(hashFilename, []byte(hashStr), 0644, true); err != nil {
 		return errors.NewStorageError("[File][%s] failed to write hash file atomically", hashFilename, err)
 	}
 
@@ -1153,10 +1201,17 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 	}
 
 	// Try to remove the hash prefix directory if now empty (best-effort, ignore errors).
-	// os.Remove on a non-empty directory returns an error, so this is safe.
-	// Only attempt if the parent is a subdirectory of the store root (i.e. a hash prefix dir).
+	// root.Remove on a non-empty directory returns an error, so this is safe. Routing through
+	// the store root keeps the operation inside the os.Root sandbox so it cannot follow a
+	// symlink out of the store, and is consistent with the rest of the path handling in this
+	// file (CodeQL #119).
 	if dir := filepath.Dir(fileName); dir != s.path && len(filepath.Base(dir)) <= 2 {
-		_ = os.Remove(dir)
+		if rel, relErr := s.storeRelPath(dir); relErr == nil {
+			if root, rootErr := s.openStoreRoot(); rootErr == nil {
+				_ = root.Remove(rel)
+				_ = root.Close()
+			}
+		}
 	}
 
 	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)
@@ -1199,7 +1254,7 @@ func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, s
 	base := filepath.Base(finalRel)
 
 	for i := 0; i < maxAttempts; i++ {
-		randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+		randNum, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 		if err != nil {
 			return nil, "", errors.NewStorageError("[File][%s] failed to generate temporary filename", filename, err)
 		}
@@ -1234,12 +1289,14 @@ func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, s
 // an error. If Sync fails, this function still attempts to close the descriptor and logs
 // a close failure without replacing the original sync error.
 func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
-	if err := file.Sync(); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			s.logger.Warnf("[File][%s] failed to close temporary file after sync error: %v", tmpFilename, closeErr)
-		}
+	if s.fsyncMode != fsyncModeNone {
+		if err := file.Sync(); err != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][%s] failed to close temporary file after sync error: %v", tmpFilename, closeErr)
+			}
 
-		return errors.NewStorageError("[File][%s] failed to sync temporary file", tmpFilename, err)
+			return errors.NewStorageError("[File][%s] failed to sync temporary file", tmpFilename, err)
+		}
 	}
 
 	if err := file.Close(); err != nil {
@@ -1251,16 +1308,25 @@ func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
 
 // syncParentDirBestEffort attempts to persist the directory entry for filename.
 //
-// After os.Rename succeeds, readers will observe the final filename atomically. A crash
-// immediately after rename can still lose the directory update on some filesystems unless
-// the parent directory is synced. This helper performs that extra durability step where
-// the platform and filesystem allow it.
+// On ext4, xfs, and btrfs — the dominant production Linux filesystems — this directory
+// sync is correctness-critical for crash safety, not a "nice to have". After os.Rename
+// succeeds, readers will observe the final filename atomically, but the directory entry
+// is held in cache until the parent directory itself is synced. A crash between rename
+// and the next checkpoint can therefore lose the freshly published file's name even when
+// the file's data has been fsynced. Removing this call regresses crash safety on those
+// filesystems; future maintainers should not delete it under the assumption that "best
+// effort" implies optional.
 //
-// Directory sync support is not consistent across all operating systems, mounted volumes,
-// and network filesystems. For that reason this helper is best-effort: failures are logged
-// at debug level and do not turn an already-successful rename into a failed blob write.
-// Callers should rely on it as a durability improvement, not as a portable hard guarantee.
+// The "best-effort" framing applies only to failure handling: directory sync is not
+// supported uniformly across platforms (notably some Windows and network-attached
+// filesystems), so a failure to open or sync the parent directory is logged at debug
+// level rather than turning an already-successful rename into a failed blob write.
+// Where the platform supports it, this call is a correctness step and must run.
 func (s *File) syncParentDirBestEffort(filename string) {
+	if s.fsyncMode != fsyncModeFull {
+		return
+	}
+
 	rel, err := s.storeRelPath(filename)
 	if err != nil {
 		s.debugf("[File][%s] failed to calculate parent directory for sync: %v", filename, err)
@@ -1293,15 +1359,23 @@ func (s *File) syncParentDirBestEffort(filename string) {
 // appear atomically, so readers either see the previous complete file or the new complete
 // file, never a partially written final file.
 //
-// If rename fails and a regular file already exists at the final path, the error is
-// normalized to ErrBlobAlreadyExists. That preserves the blob store's no-overwrite
-// contract for races where another writer published the same blob between the initial
-// existence check and this rename. Other rename failures are reported as storage errors.
+// Cross-platform rename semantics differ when the destination already exists:
+//
+//   - POSIX (Linux, macOS, *BSD): rename(2) atomically replaces an existing regular file
+//     with the same name. The "destination exists" branch below is therefore unreachable
+//     on those platforms; an existing final file is silently overwritten on rename. The
+//     blob store's no-overwrite contract is enforced by SetFromReader's earlier call to
+//     errorOnOverwrite, not here. There is a small TOCTOU window between that check and
+//     this rename in which two concurrent writers can both pass the check and then race
+//     on rename — that race is out of scope for this helper.
+//   - Windows / some non-POSIX targets: rename can fail when the destination exists. The
+//     fallback handles that case: if allowOverwrite is true we remove the destination and
+//     retry the rename; otherwise we normalize the error to ErrBlobAlreadyExists.
 //
 // On success this helper also attempts to sync the parent directory so the newly published
-// name is more likely to survive a crash. That directory sync is best-effort; see
-// syncParentDirBestEffort for the portability caveat.
-func (s *File) renameTempFile(tmpFilename, filename string) error {
+// name is more likely to survive a crash. That directory sync is correctness-critical on
+// ext4/xfs/btrfs and best-effort everywhere else; see syncParentDirBestEffort.
+func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite bool) error {
 	tmpRel, err := s.storeRelPath(tmpFilename)
 	if err != nil {
 		return err
@@ -1320,7 +1394,22 @@ func (s *File) renameTempFile(tmpFilename, filename string) error {
 
 	if err := root.Rename(tmpRel, finalRel); err != nil {
 		if fileInfo, statErr := root.Stat(finalRel); statErr == nil && !fileInfo.IsDir() {
-			return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
+			if !allowOverwrite {
+				return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
+			}
+
+			// Non-POSIX path: rename refused to replace an existing destination but the caller
+			// asked for overwrite semantics. Remove the destination and retry.
+			if removeErr := root.Remove(finalRel); removeErr != nil {
+				return errors.NewStorageError("[File][%s] failed to remove existing file before overwrite", filename, removeErr)
+			}
+
+			if retryErr := root.Rename(tmpRel, finalRel); retryErr != nil {
+				return errors.NewStorageError("[File][%s] failed to rename temporary file %s after overwrite cleanup", filename, tmpFilename, retryErr)
+			}
+
+			s.syncParentDirBestEffort(filename)
+			return nil
 		}
 
 		return errors.NewStorageError("[File][%s] failed to rename temporary file %s", filename, tmpFilename, err)
@@ -1346,7 +1435,10 @@ func (s *File) renameTempFile(tmpFilename, filename string) error {
 //
 // Callers should use this only for bounded in-memory data. Large blob bodies should continue
 // to use SetFromReader so they can be streamed without loading the full content into memory.
-func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMode) error {
+//
+// allowOverwrite is forwarded to renameTempFile; see that function for the cross-platform
+// behaviour when the final filename already exists.
+func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMode, allowOverwrite bool) error {
 	file, tmpFilename, err := s.createTempSibling(filename, perm)
 	if err != nil {
 		return err
@@ -1377,7 +1469,7 @@ func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMod
 	}
 	file = nil
 
-	if err = s.renameTempFile(tmpFilename, filename); err != nil {
+	if err = s.renameTempFile(tmpFilename, filename, allowOverwrite); err != nil {
 		return err
 	}
 	cleanupTmpFile = false
