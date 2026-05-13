@@ -395,7 +395,7 @@ func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
 
 	producerCh := make(chan *kafka.Message, 100)
 	producer.Start(ctx, producerCh)
-	defer producer.Stop()
+	defer func() { require.NoError(t, producer.Stop()) }()
 
 	consumer := setupMemoryKafkaConsumer(t, "invalid-subtrees-topic")
 	defer consumer.Close()
