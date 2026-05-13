@@ -143,6 +143,9 @@ func (u *Server) ensureTxmetaWorkers(ctx context.Context) error {
 func (u *Server) runTxmetaWorker(ctx context.Context, workQueue <-chan txmetaWorkItem) {
 	defer u.txmetaWorkerWg.Done()
 
+	// Workers exit immediately on context cancellation without draining remaining
+	// queue items. This is intentional: in-flight txmeta updates are best-effort
+	// and the cache will be repopulated from Kafka on restart.
 	for {
 		select {
 		case <-ctx.Done():

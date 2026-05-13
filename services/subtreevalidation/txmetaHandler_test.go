@@ -273,7 +273,7 @@ func createKafkaMessageForHash(t *testing.T, hash chainhash.Hash, action byte, c
 }
 
 func TestServer_txmetaHandler(t *testing.T) {
-	// Note: The handler processes messages asynchronously (in a goroutine) and always returns nil.
+	// Note: The handler dispatches work to bounded shard workers and may return an error if a queue is full.
 	// Tests verify proper parsing of the binary batch format.
 	tests := []struct {
 		name       string

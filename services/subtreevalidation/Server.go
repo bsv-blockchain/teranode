@@ -108,9 +108,6 @@ type Server struct {
 
 	// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
 	invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
-	// invalidSubtreeProducerChannel is the dedicated producer channel used by invalidSubtreeKafkaProducer.
-	// Keeping this on the server ensures Start and Publish operate on the same channel lifecycle.
-	invalidSubtreeProducerChannel chan *kafka.Message
 
 	// invalidSubtreeLock is used to synchronize access to the invalid subtree producer
 	invalidSubtreeLock sync.Mutex
@@ -249,9 +246,7 @@ func New(
 		if err != nil {
 			logger.Errorf("Failed to create Kafka producer for invalid subtrees: %v", err)
 		} else {
-			// Start the producer with a dedicated server-owned channel so producer start/publish share one lifecycle.
-			u.invalidSubtreeProducerChannel = make(chan *kafka.Message, 100)
-			u.invalidSubtreeKafkaProducer.Start(ctx, u.invalidSubtreeProducerChannel)
+			u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
 		}
 	} else {
 		logger.Infof("No Kafka topic configured for invalid subtrees")

@@ -416,11 +416,10 @@ func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	server := &Server{
-		logger:                        ulogger.TestLogger{},
-		settings:                      tSettings,
-		invalidSubtreeKafkaProducer:   producer,
-		invalidSubtreeProducerChannel: producerCh,
-		invalidSubtreeDeDuplicateMap:  expiringmap.New[string, struct{}](time.Minute),
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		invalidSubtreeKafkaProducer:  producer,
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 	}
 	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
