@@ -89,6 +89,12 @@ const (
 	minSlabBytesPerMmap = minSlabChunks * ChunkSize // keep in sync with minSlabChunks
 )
 
+const smallSetMultiBatchThreshold = 32
+
+func mapCapacityPerBucket() int {
+	return max(1, MapInitialCapacity/BucketsCount)
+}
+
 func calcMaxSlabChunks(maxBucketBytes uint64, maxChunks uint64) uint64 {
 	// Target slab size:
 	// - at most 4MB to avoid huge single mmaps per bucket
@@ -380,8 +386,20 @@ func (c *ImprovedCache) Set(k, v []byte) error {
 // - Appends new value bytes to existing values rather than overwriting
 // - Optimized for scenarios like associating multiple transactions with a block ID
 func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, keySize int) error {
+	if keySize <= 0 {
+		return errors.NewProcessingError("keySize must be greater than zero; got %d", keySize)
+	}
+
 	if len(keys)%keySize != 0 {
 		return errors.NewProcessingError("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+	}
+
+	if len(keys)/keySize <= smallSetMultiBatchThreshold {
+		for i := 0; i < len(keys); i += keySize {
+			c.setSingleKeySharedValue(keys[i], value)
+		}
+
+		return nil
 	}
 
 	batchedKeys := make([][][]byte, BucketsCount)
@@ -431,8 +449,20 @@ func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, key
 // Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
 // Value bytes are appended to the end of the previous value bytes.
 func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byte, keySize int) error {
+	if keySize <= 0 {
+		return errors.NewProcessingError("keySize must be greater than zero; got %d", keySize)
+	}
+
 	if len(keys)%keySize != 0 {
 		return errors.NewProcessingError("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+	}
+
+	if len(keys)/keySize <= smallSetMultiBatchThreshold {
+		for i := 0; i < len(keys); i += keySize {
+			c.setSingleKeySharedValue(keys[i:i+keySize], value)
+		}
+
+		return nil
 	}
 
 	batchedKeys := make([][][]byte, BucketsCount)
@@ -476,6 +506,18 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 
 // SetMulti stores multiple (k, v) entries in the cache, for different values.
 func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
+	if len(keys) != len(values) {
+		return errors.NewProcessingError("keys and values length mismatch; got %d keys and %d values", len(keys), len(values))
+	}
+
+	if len(keys) <= smallSetMultiBatchThreshold {
+		for i, key := range keys {
+			_ = c.Set(key, values[i])
+		}
+
+		return nil
+	}
+
 	batchedKeys := make([][][]byte, BucketsCount)
 	batchedValues := make([][][]byte, BucketsCount)
 
@@ -513,6 +555,14 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 	}
 
 	return nil
+}
+
+func (c *ImprovedCache) setSingleKeySharedValue(key []byte, value []byte) {
+	h := xxhash.Sum64(key)
+	bucketIdx := h % BucketsCount
+	var singleKey [1][]byte
+	singleKey[0] = key
+	c.buckets[bucketIdx].SetMultiKeysSingleValue(singleKey[:], value)
 }
 
 // Get appends value by the key k to the given dst.
@@ -625,7 +675,7 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 }
 
 // bucketNative implements a cache bucket with on-demand memory allocation.
-// Uses NativeSplitLockFreeMapUint64 (Go-native Swiss Tables, Go 1.24+) with shard count equal to BucketsCount.
+// Uses NativeSplitLockFreeMapUint64 (Go-native Swiss Tables, Go 1.24+).
 type bucketNative struct {
 	mu sync.RWMutex
 
@@ -633,7 +683,7 @@ type bucketNative struct {
 	// It consists of maxValueSizeKB chunks.
 	chunks [][]byte
 
-	// m maps hash(k) to idx of (k, v) pair in chunks. Shard count equals BucketsCount.
+	// m maps hash(k) to idx of (k, v) pair in chunks.
 	m *swiss.NativeSplitLockFreeMapUint64
 
 	// idx points to chunks for writing the next (k, v) pair.
@@ -671,9 +721,7 @@ func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
-	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
-	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
 
 	b.Reset()
 
@@ -689,9 +737,7 @@ func (b *bucketNative) Reset() {
 		chunks[i] = nil
 	}
 
-	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
-	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -1082,9 +1128,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 		return errors.NewProcessingError("failed converting maxChunks", err)
 	}
 	b.chunks = make([][]byte, maxChunksInt)
-	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
-	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
 	b.overWriting = false
 	b.Reset()
 
@@ -1100,9 +1144,7 @@ func (b *bucketTrimmed) Reset() {
 		chunks[i] = nil
 	}
 
-	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
-	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -1529,7 +1571,7 @@ func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
 		return err
 	}
 
-	for len(data) > 0 {
+	for len(data) >= ChunkSize {
 		p := (*[ChunkSize]byte)(unsafe.Pointer(&data[0]))
 		b.chunks = append(b.chunks, p[:])
 		data = data[ChunkSize:]

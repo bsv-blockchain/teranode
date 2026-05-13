@@ -119,6 +119,28 @@ func Test_InitTimes(t *testing.T) {
 	}
 }
 
+func BenchmarkImprovedCache_SetMulti_Small(b *testing.B) {
+	cache, err := New(64*1024, Unallocated)
+	require.NoError(b, err)
+	defer cache.Reset()
+
+	keys := make([][]byte, 8)
+	values := make([][]byte, 8)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("small-key-%d", i))
+		values[i] = []byte("small-value")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err := cache.SetMulti(keys, values); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestImprovedCache_New tests the New function with various configurations
 func TestImprovedCache_New(t *testing.T) {
 	tests := []struct {

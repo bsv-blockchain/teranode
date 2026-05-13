@@ -19,8 +19,8 @@ package txmetacache
 import (
 	"context"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -48,7 +48,36 @@ type metrics struct {
 	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
 	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
 	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
+	getOrigin  atomic.Uint64 // Tracks origin-store metadata retrievals
 	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
+}
+
+const (
+	txMetaCacheReadBufferInitialCapacity = 1024
+	txMetaCacheReadBufferMaxRetain       = 64 * 1024
+)
+
+var txMetaCacheReadBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+		return &buf
+	},
+}
+
+func getTxMetaCacheReadBuffer() *[]byte {
+	buf := txMetaCacheReadBufferPool.Get().(*[]byte)
+	*buf = (*buf)[:0]
+	return buf
+}
+
+func putTxMetaCacheReadBuffer(buf *[]byte) {
+	if cap(*buf) > txMetaCacheReadBufferMaxRetain {
+		*buf = make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+	} else {
+		*buf = (*buf)[:0]
+	}
+
+	txMetaCacheReadBufferPool.Put(buf)
 }
 
 // TxMetaCache wraps a utxo.Store implementation and adds caching capabilities for transaction metadata.
@@ -143,8 +172,8 @@ const (
 // - A utxo.Store interface that can be used in place of the original store
 // - Error if initialization fails
 //
-// The function starts a background goroutine that updates Prometheus metrics every 5 seconds
-// to provide operational visibility into cache performance.
+// The function registers the cache with the package-level Prometheus updater, which publishes
+// aggregate metrics for all active TxMetaCache instances in the process.
 func NewTxMetaCache(
 	ctx context.Context,
 	tSettings *settings.Settings,
@@ -190,31 +219,10 @@ func NewTxMetaCache(
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 	}
 
+	unregisterMetrics := registerTxMetaCacheMetrics(m)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				cacheStats := m.GetCacheStats()
-				if prometheusBlockValidationTxMetaCacheInsertions != nil {
-					// prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
-					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
-					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
-					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
-					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
-					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
-					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
-					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
-					prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(cacheStats.ValidEntriesCount))
-					prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(cacheStats.CurrentGenEntries))
-					prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(cacheStats.PreviousGenEntries))
-					prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(m.metrics.hitOldTx.Load()))
-				}
-			}
-		}
+		<-ctx.Done()
+		unregisterMetrics()
 	}()
 
 	return m, nil
@@ -314,29 +322,44 @@ func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) err
 // 2. Validates that the data is not empty
 // 3. Checks if the data has expired based on block height
 // All these conditions have corresponding metrics incremented for monitoring.
-func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
-	cachedBytes := make([]byte, 0, 64)
+func (t *TxMetaCache) GetMetaCached(ctx context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
+	cachedBytes := getTxMetaCacheReadBuffer()
+	defer putTxMetaCacheReadBuffer(cachedBytes)
+
+	var (
+		found bool
+		err   error
+	)
+
+	*cachedBytes, found, err = t.GetMetaCachedWithBuffer(ctx, hash, txmetaData, *cachedBytes)
+	return found, err
+}
+
+// GetMetaCachedWithBuffer retrieves transaction metadata from the cache using a caller-owned
+// scratch buffer. The returned buffer should be reused by the caller on subsequent calls.
+func (t *TxMetaCache) GetMetaCachedWithBuffer(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data, cachedBytes []byte) ([]byte, bool, error) {
+	cachedBytes = cachedBytes[:0]
 
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
 
-		return false, err
+		return cachedBytes, false, err
 	}
 
 	if len(cachedBytes) == 0 {
 		t.metrics.misses.Add(1)
 		t.logger.Warnf("txMetaCache empty for %s", hash.String())
 
-		return false, nil
+		return cachedBytes, false, nil
 	}
 
 	t.metrics.hits.Add(1)
 
 	if err := meta.NewMetaDataFromBytes(cachedBytes, txmetaData); err != nil {
-		return false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
+		return cachedBytes, false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
 	}
 
-	return true, nil
+	return cachedBytes, true, nil
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
@@ -353,17 +376,18 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash, txme
 // This is one of the primary interface methods that proxies calls to the underlying store
 // with a caching layer in between for improved performance.
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	cachedBytes := make([]byte, 0)
+	cachedBytes := getTxMetaCacheReadBuffer()
+	defer putTxMetaCacheReadBuffer(cachedBytes)
 
-	err := t.cache.Get(&cachedBytes, hash[:])
+	err := t.cache.Get(cachedBytes, hash[:])
 	if err != nil && !errors.Is(err, errors.ErrNotFound) {
 		return err
 	}
 
-	if len(cachedBytes) > 0 {
+	if len(*cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
 
-		if err = meta.NewMetaDataFromBytes(cachedBytes, data); err != nil {
+		if err = meta.NewMetaDataFromBytes(*cachedBytes, data); err != nil {
 			return err
 		}
 
@@ -379,7 +403,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *m
 		return err
 	}
 
-	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
+	t.metrics.getOrigin.Add(1)
 
 	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
 	if len(data.BlockIDs) == 0 && !data.Conflicting {
@@ -424,7 +448,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		return err
 	}
 
-	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
+	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and call SetCacheMulti.
 	// Note: values are serialized the same way SetCache() does (MetaBytes + height appended inside SetCacheMulti).
