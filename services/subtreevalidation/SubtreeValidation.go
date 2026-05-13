@@ -798,7 +798,7 @@ func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string,
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context canceled while waiting to retry", subtreeHash, ctx.Err())
+			return errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context canceled while waiting to retry: %v", subtreeHash, ctx.Err())
 		case <-timer.C:
 			return nil
 		case <-ticker.C:
