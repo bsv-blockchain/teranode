@@ -217,7 +217,8 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	var (
 		blockInvalidError   error
 		blockInvalidErrorMu = sync.Mutex{}
-		setMinedErrorCount  = atomic.Uint64{}
+		setMinedErrorCount  = atomic.Uint64{} // SetMinedMulti returned an error (I/O / store failure)
+		coverageGapCount    = atomic.Uint64{} // SetMinedMulti returned success but a submitted tx was not durably tagged
 		oldBlockIDs         = make([]uint32, 0) // Collect old block IDs for slow-path
 		oldBlockIDsMu       sync.Mutex
 	)
@@ -291,7 +292,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					if !covered[*h] {
 						logger.Warnf("[UpdateTxMinedStatus][%s] coverage gap for tx %s blockID %d after SetMinedMulti",
 							block.Hash().String(), h.String(), blockID)
-						setMinedErrorCount.Add(1)
+						coverageGapCount.Add(1)
 					}
 				}
 			}
@@ -404,14 +405,25 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not ancestors of this block", block.Hash().String(), len(oldBlockIDsSlice))
 	}
 
-	// Check if there were any SetMinedMulti errors
-	if setMinedErrorCount.Load() > 0 {
+	// Check if there were any SetMinedMulti errors or coverage gaps. We track these
+	// separately so operators can distinguish a store I/O failure from a postcondition
+	// violation (the store returned nil error but didn't durably tag every submitted tx).
+	ioErrs := setMinedErrorCount.Load()
+	covGaps := coverageGapCount.Load()
+	if ioErrs > 0 || covGaps > 0 {
 		if unsetMined {
 			// For invalid blocks, we've already logged the errors - continue without error
-			logger.Warnf("[UpdateTxMinedStatus][%s] completed with %d SetMinedMulti errors for invalid block (already logged)", block.Hash().String(), setMinedErrorCount.Load())
+			logger.Warnf("[UpdateTxMinedStatus][%s] completed with %d SetMinedMulti errors and %d coverage gaps for invalid block (already logged)", block.Hash().String(), ioErrs, covGaps)
 		} else {
 			// For valid blocks, SetMinedMulti errors are critical - return error
-			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), setMinedErrorCount.Load())
+			switch {
+			case ioErrs > 0 && covGaps > 0:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches and %d coverage gap(s) detected", block.Hash().String(), ioErrs, covGaps)
+			case ioErrs > 0:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), ioErrs)
+			default:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status: %d coverage gap(s) from SetMinedMulti", block.Hash().String(), covGaps)
+			}
 		}
 	}
 

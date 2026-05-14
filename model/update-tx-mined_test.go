@@ -1071,6 +1071,117 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("coverage-only failure reports a coverage-specific error", func(t *testing.T) {
+		// Pure coverage-gap scenario: SetMinedMulti returns nil error but omits the
+		// current blockID for one hash. The final error must identify this as a
+		// coverage gap, not as a batch I/O failure.
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(301)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{{Hash: *testTx.TxIDChainHash()}},
+			},
+		}
+
+		// Hash present, but slice does not contain current blockID 15.
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {7},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "coverage gap(s) from SetMinedMulti")
+		assert.NotContains(t, err.Error(), "batches", "pure coverage-gap error must not mention batches")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("I/O-only failure reports a batch-specific error", func(t *testing.T) {
+		// Pure I/O scenario: SetMinedMulti returns an error. The model layer logs
+		// and counts it, then surfaces a batches-failed error.
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(302)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{{Hash: *testTx.TxIDChainHash()}},
+			},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32(nil), errors.NewNetworkTimeoutError("simulated timeout")).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status for")
+		assert.Contains(t, err.Error(), "1 batches")
+		assert.NotContains(t, err.Error(), "coverage gap", "pure I/O error must not mention coverage gaps")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("mixed I/O and coverage failures report a combined error", func(t *testing.T) {
+		// Two SetMinedMulti calls: one returns success with a coverage gap, the
+		// other returns an I/O error. The final error must mention both counts
+		// so operators can tell them apart.
+		//
+		// With MaxMinedBatchSize=1 and 3 nodes the batching code flushes at
+		// idx==1 (2 hashes) and again at idx==2 (1 hash). See the comment in
+		// updateTxMinedStatus describing the idx > 0 && idx%MaxMinedBatchSize==0
+		// trigger.
+		freshSettings := test.CreateBaseTestSettings(t)
+		freshSettings.UtxoStore = settings.UtxoStoreSettings{
+			UpdateTxMinedStatus: true,
+			MaxMinedBatchSize:   1,
+			MaxMinedRoutines:    1,
+		}
+		setWorkerSettings(freshSettings)
+
+		mockStore := &utxo.MockUtxostore{}
+
+		tx1 := newTx(401)
+		tx2 := newTx(402)
+		tx3 := newTx(403)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *tx1.TxIDChainHash()},
+					{Hash: *tx2.TxIDChainHash()},
+					{Hash: *tx3.TxIDChainHash()},
+				},
+			},
+		}
+
+		// First batch ([tx1, tx2]): success but tx1's slice omits blockID 15 -> 1 coverage gap.
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{
+				*tx1.TxIDChainHash(): {7},  // coverage gap: 15 missing
+				*tx2.TxIDChainHash(): {15}, // covered
+			}, nil).Once()
+		// Second batch ([tx3]): I/O failure -> 1 batch error.
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32(nil), errors.NewNetworkTimeoutError("simulated timeout")).Once()
+
+		err := updateTxMinedStatus(ctx, logger, freshSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status for 1 batches and 1 coverage gap(s) detected")
+		mockStore.AssertExpectations(t)
+	})
 }
 
 // Test_updateTxMinedStatus_EdgeCases tests additional edge cases and boundary conditions
