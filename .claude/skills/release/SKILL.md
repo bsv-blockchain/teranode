@@ -11,7 +11,6 @@ Drives the release lifecycle: hotfix triage, cherry-picks, beta tags, prod-gated
 
 - `main` — development tip. Every PR lands here first.
 - `release/vX.Y` — long-lived release branch, cut from `main` at minor bumps. Hotfixes arrive as squash-merge cherry-picks.
-- **No `release/beta` branch.** Numbered beta tags only.
 
 Tag scheme:
 - Beta: `vX.Y.Z-beta-N` (e.g. `v0.15.0-beta-1`). Tagged on `release/vX.Y`. Immutable.
