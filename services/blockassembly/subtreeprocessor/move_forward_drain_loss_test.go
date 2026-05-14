@@ -49,21 +49,21 @@ func (e *errOnCreateUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeigh
 //
 // Reproduction shape:
 //
-//   1. SubtreeProcessor with utxoStore wrapped to fail on Create.
-//   2. Enqueue N batches via stp.queue.enqueueBatch with a clock that
-//      makes them old enough to drain (DoubleSpendWindow=0 default).
-//   3. Snapshot pre-call state: queue.length, chainedSubtrees,
-//      currentSubtree, currentTxMap.
-//   4. Call stp.moveForwardBlock directly (bypassing the event-loop chan
-//      to avoid a race against a concurrent Start-loop drain).
-//   5. Apply the exact production rollback inline (mirrors
-//      SubtreeProcessor.go:711-717).
-//   6. Assert:
-//        - moveForwardBlock returned an error
-//        - queue is empty (proves the drain happened)
-//        - in-memory snapshot fields are restored
-//        - the drained batch's tx hash is in neither the queue nor any
-//          subtree -> the batch is lost.
+//  1. SubtreeProcessor with utxoStore wrapped to fail on Create.
+//  2. Enqueue N batches via stp.queue.enqueueBatch with a clock that
+//     makes them old enough to drain (DoubleSpendWindow=0 default).
+//  3. Snapshot pre-call state: queue.length, chainedSubtrees,
+//     currentSubtree, currentTxMap.
+//  4. Call stp.moveForwardBlock directly (bypassing the event-loop chan
+//     to avoid a race against a concurrent Start-loop drain).
+//  5. Apply the exact production rollback inline (mirrors
+//     SubtreeProcessor.go:711-717).
+//  6. Assert:
+//     - moveForwardBlock returned an error
+//     - queue is empty (proves the drain happened)
+//     - in-memory snapshot fields are restored
+//     - the drained batch's tx hash is in neither the queue nor any
+//     subtree -> the batch is lost.
 //
 // This test PINS the current buggy behaviour. When the underlying fix
 // in #852 lands (e.g. reorder side effects, queue snapshot/restore, or
