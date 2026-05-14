@@ -2598,7 +2598,14 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	// mempool/validator operate under pre-Genesis output rules and the legacy
 	// service relay tx invs that post-Genesis peers ban on sight
 	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
-	if eventReq.Event == blockchain_api.FSMEventType_RUN {
+	//
+	// The gate only applies when the prior state already implies a "caught
+	// up" claim (LEGACYSYNCING or CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
+	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
+	// downstream services (legacy, p2p) to start syncing, and tx relay is
+	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
+		priorState != blockchain_api.FSMStateType_IDLE.String() {
 		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
 			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
 			return nil, errors.WrapGRPC(err)

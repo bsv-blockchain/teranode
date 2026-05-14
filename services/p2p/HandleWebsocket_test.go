@@ -654,3 +654,61 @@ broadcastComplete:
 		// Don't fail the test - the important part is demonstrating the DoS vulnerability is fixed
 	}
 }
+
+// TestHandleWebSocket_PerConnectionContext is a regression test for issue #4573.
+// A single failed WebSocket upgrade must not cancel the shared notification
+// processor and starve all other connected clients.
+func TestHandleWebSocket_PerConnectionContext(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+				EnableNAT:  false,
+			},
+		},
+	}
+
+	notificationCh := make(chan *notificationMsg, 1)
+	handler := s.HandleWebSocket(notificationCh)
+
+	e := echo.New()
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := e.NewContext(r, w)
+		_ = handler(c)
+	}))
+	defer httpServer.Close()
+
+	resp, err := http.Get(httpServer.URL)
+	require.NoError(t, err, "Plain HTTP GET should fail upgrade but not error at the HTTP layer")
+	require.NotNil(t, resp)
+	_ = resp.Body.Close()
+	require.NotEqual(t, http.StatusSwitchingProtocols, resp.StatusCode, "Upgrade should have failed")
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Second connection should still upgrade after the first one's upgrade failed")
+	defer ws.Close()
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, initialMessage, err := ws.ReadMessage()
+	require.NoError(t, err, "Should receive initial node_status; processor must still be alive")
+
+	var initial notificationMsg
+	require.NoError(t, json.Unmarshal(initialMessage, &initial))
+	require.Equal(t, "node_status", initial.Type)
+
+	notificationCh <- &notificationMsg{Type: "post_failed_upgrade", BaseURL: baseURL}
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, message, err := ws.ReadMessage()
+	require.NoError(t, err, "Notification must still be delivered after the prior upgrade failure")
+
+	var received notificationMsg
+	require.NoError(t, json.Unmarshal(message, &received))
+	require.Equal(t, "post_failed_upgrade", received.Type)
+	require.Equal(t, baseURL, received.BaseURL)
+}

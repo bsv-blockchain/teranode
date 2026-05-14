@@ -272,35 +272,33 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	serverCtx := s.gCtx
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, serverCtx)
 
 	return func(c echo.Context) error {
-		ch := make(chan []byte, 100) // Add buffer to help prevent blocking
+		connCtx, connCancel := context.WithCancel(serverCtx)
+		defer connCancel()
+
+		ch := make(chan []byte, 100)
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
-			cancel() // Cancel context if upgrade fails
 			return err
 		}
 
-		// Start message handling goroutine FIRST
-		// This needs to be ready to process messages from the channel
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			s.handleClientMessages(ws, ch, deadClientCh)
 		}()
 
-		// Add client channel to the notification processor
 		newClientCh <- ch
 
-		// Wait for either context cancellation or message handling to complete
 		select {
-		case <-ctx.Done():
+		case <-connCtx.Done():
 			ws.Close()
-		case <-done: // Message handling completed normally
+		case <-done:
 		}
 
 		return nil

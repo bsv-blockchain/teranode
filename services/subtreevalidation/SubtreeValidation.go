@@ -617,7 +617,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	txMetaSlice := make([]metaSliceItem, len(txHashes))
 
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
-		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		if attempt > 1 {
+			prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		}
 
 		var logMsg string
 
@@ -641,16 +643,8 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if err != nil {
 			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
-				select {
-				case <-ctx.Done():
-					break
-				case <-time.After(retrySleepDuration):
-					break
-				case <-time.After(10 * time.Millisecond):
-					if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
-						// break early - this is now a priority request. what the hell are we doing waiting around?
-						break
-					}
+				if waitErr := u.waitForRetryOrPriority(ctx, v.SubtreeHash.String(), retrySleepDuration); waitErr != nil {
+					return nil, waitErr
 				}
 
 				continue
@@ -788,6 +782,31 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	}
 
 	return subtree, nil
+}
+
+func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string, retrySleepDuration time.Duration) error {
+	if retrySleepDuration <= 0 || u.isPrioritySubtreeCheckActive(subtreeHash) {
+		return nil
+	}
+
+	timer := time.NewTimer(retrySleepDuration)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context canceled while waiting to retry: %v", subtreeHash, ctx.Err())
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			if u.isPrioritySubtreeCheckActive(subtreeHash) {
+				return nil
+			}
+		}
+	}
 }
 
 func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta) error {

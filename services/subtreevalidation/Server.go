@@ -133,6 +133,12 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
+
+	// txmeta worker pool state.
+	txmetaWorkerInitOnce sync.Once
+	txmetaWorkerCancel   context.CancelFunc
+	txmetaWorkerQueues   []chan txmetaWorkItem
+	txmetaWorkerWg       sync.WaitGroup
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -240,8 +246,7 @@ func New(
 		if err != nil {
 			logger.Errorf("Failed to create Kafka producer for invalid subtrees: %v", err)
 		} else {
-			// Start the producer with a message channel
-			go u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
+			u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
 		}
 	} else {
 		logger.Infof("No Kafka topic configured for invalid subtrees")
@@ -552,6 +557,17 @@ func (u *Server) Stop(_ context.Context) error {
 	if u.txmetaConsumerClient != nil {
 		if err := u.txmetaConsumerClient.Close(); err != nil {
 			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+		}
+	}
+
+	if u.txmetaWorkerCancel != nil {
+		u.txmetaWorkerCancel()
+	}
+	u.txmetaWorkerWg.Wait()
+
+	if u.invalidSubtreeKafkaProducer != nil {
+		if err := u.invalidSubtreeKafkaProducer.Stop(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to stop invalid subtree kafka producer gracefully: %v", err)
 		}
 	}
 
