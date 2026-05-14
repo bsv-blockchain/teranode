@@ -624,6 +624,11 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 // classified by their actual cause.
 func httpStatusForTxError(err error) int {
 	switch {
+	case errors.Is(err, errors.ErrTxExists):
+		// Duplicate submission of a tx Teranode has already accepted. The
+		// resource is already in the desired state — surface as success so
+		// clients don't treat idempotent resubmits as failures.
+		return http.StatusOK
 	case errors.Is(err, errors.ErrFrozen):
 		return http.StatusForbidden
 	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
@@ -631,6 +636,8 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrSpent),
 		errors.Is(err, errors.ErrTxLocked):
 		return http.StatusConflict
+	case errors.Is(err, errors.ErrTxMissingParent):
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, errors.ErrInvalidArgument),
 		errors.Is(err, errors.ErrTxInvalid),
 		errors.Is(err, errors.ErrTxLockTime),
