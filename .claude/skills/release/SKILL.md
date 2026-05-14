@@ -77,7 +77,10 @@ Steps:
    - **Anchor-drift type** (HEAD-side empty in `<<<<<<<` blocks, new code wrapped in markers): identify prerequisite PRs via `git log <release-branch>..origin/main -- <conflicting-file>`. Each listed commit is a candidate prerequisite. Show them, recommend layering the standalone-backport-worthy ones first.
    - **Real content overlap**: show conflict hunks, propose strategy, wait for user OK.
    - Abort cleanly: `git cherry-pick --abort`.
-7. **Probe-only variant**: when uncertain, `git cherry-pick -n <merge-sha>` dry-runs without committing. Cleanup if discarding: `git reset HEAD && git stash push --include-untracked -m discard && git stash drop` (the `-n` variant doesn't leave a cherry-pick session for `--abort`). Do **not** use `git reset --hard`, `git checkout HEAD -- <path>`, or `git clean -f` — all blocked by dcg hook.
+7. **Probe-only variant**: when uncertain, `git cherry-pick -n <merge-sha>` dry-runs without committing.
+   - **Precondition: working tree must be clean.** Verify with `git status --porcelain` returning empty. If dirty, stash user changes first (`git stash push -m user-state-before-probe`) and pop them back **after** the probe is done. Never run a blanket discard while user state is mixed in.
+   - Cleanup after a clean-precondition probe: `git reset HEAD && git stash push --include-untracked -m probe-discard && git stash drop` (the `-n` variant doesn't leave a cherry-pick session for `--abort`).
+   - Do **not** use `git reset --hard`, `git checkout HEAD -- <path>`, or `git clean -f` — all blocked by dcg hook.
 
 ### `beta <X.Y.Z>` — cut a numbered beta tag
 
@@ -102,10 +105,12 @@ Steps:
 **If ANY answer is "no", "not yet", "not sure", or "skip": refuse to tag.** Tell the user exactly which gate failed and what evidence is needed. Suggest waiting, running the missing test, or downgrading the request to another beta cut.
 
 If all pass:
-1. Build release notes (same manual format as `beta` mode, but range = `<prev-stable-tag>..HEAD`).
-2. `gh release create vX.Y.Z --target release/vX.Y --title vX.Y.Z --notes-file <path>`.
-3. Return tag URL.
-4. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
+1. **Resolve the beta SHA**: `git rev-parse vX.Y.Z-beta-N`. This is what gets tagged — never the branch tip.
+2. **Verify nothing has landed on top of the beta**: `git rev-parse release/vX.Y` must equal the beta SHA. If they differ, **refuse to tag**: a hotfix landed after the beta soak and that commit hasn't been validated. Tell the user; require a fresh beta cut.
+3. Build release notes from the range `<prev-stable-tag>..<beta-tag>` (never `..HEAD`).
+4. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
+5. Return tag URL.
+6. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
 
 ### `minor` — propose a minor version bump
 
@@ -113,9 +118,13 @@ Trigger a conversation, don't act unilaterally:
 - "main has accumulated N commits since `release/vX.Y` was cut on <date>. Notable changes: <top 3-5 features/breaking>."
 - "Cut a new `release/vX.(Y+1)`?"
 
-If yes:
+If yes, discover which remote tracks the canonical main:
 ```bash
-git checkout main && git fetch upstream && git rebase upstream/main
+# Most clones of this repo only have `origin` pointing at bsv-blockchain/teranode.
+# Forked workflows have `upstream` for the canonical and `origin` for the fork.
+# Pick whichever is configured; verify with `git remote -v` first.
+REMOTE=$(git remote | grep -E '^upstream$' || echo origin)
+git checkout main && git fetch "$REMOTE" main && git rebase "$REMOTE/main"
 git checkout -b release/vX.(Y+1)
 git push -u origin release/vX.(Y+1)
 ```
