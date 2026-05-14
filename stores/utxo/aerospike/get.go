@@ -810,6 +810,16 @@ NEXT_BATCH_RECORD:
 
 					items[idx].Data.UnminedSince = unminedSinceUint32
 				}
+
+			case fields.CreatedAt:
+				if v := bins[key.String()]; v != nil {
+					switch t := v.(type) {
+					case int:
+						items[idx].Data.CreatedAt = int64(t)
+					case int64:
+						items[idx].Data.CreatedAt = t
+					}
+				}
 			}
 		}
 	}

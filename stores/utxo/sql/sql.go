@@ -1366,6 +1366,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		,conflicting
 		,locked
 		,unmined_since
+		,inserted_at
 		FROM transactions
 		WHERE hash = $1
 	`
@@ -1378,9 +1379,13 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		lockTime          uint32
 		spendingDataBytes []byte
 		unminedSince      sql.NullInt64
+		// inserted_at is TIMESTAMPTZ on postgres but TEXT on sqlite (see schema
+		// in transactions table init). Postgres driver returns time.Time;
+		// sqlite returns string. Scan into interface{} and branch on type.
+		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1396,6 +1401,12 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
 	}
+
+	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
+	// Always populate so callers like selectCountersForDemotedTx have it without
+	// having to add fields.CreatedAt to every Get callsite that already passes
+	// other field selectors.
+	data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 	tx := bt.Tx{
 		Version:  version,
@@ -1594,6 +1605,42 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 	}
 
 	return false
+}
+
+// parseInsertedAtMillis converts the inserted_at column value into Unix
+// milliseconds. Postgres' driver returns time.Time; the sqlite driver
+// returns a string (the layout depends on whether DEFAULT CURRENT_TIMESTAMP
+// produced a "YYYY-MM-DD HH:MM:SS[.fff]" form). Returns 0 when the value is
+// nil, an unrecognised type, or unparseable — callers treat 0 as "no
+// CreatedAt hint available" (see isOlderCounter's missing-timestamp branch).
+func parseInsertedAtMillis(v any) int64 {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case time.Time:
+		return t.UnixMilli()
+	case []byte:
+		return parseInsertedAtMillis(string(t))
+	case string:
+		// Sqlite CURRENT_TIMESTAMP emits SQL-style "YYYY-MM-DD HH:MM:SS" by
+		// default; tolerate fractional seconds and trailing 'Z' for safety.
+		layouts := []string{
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+			time.RFC3339Nano,
+			time.RFC3339,
+		}
+
+		for _, l := range layouts {
+			if ts, err := time.Parse(l, t); err == nil {
+				return ts.UnixMilli()
+			}
+		}
+
+		return 0
+	default:
+		return 0
+	}
 }
 
 // handleSpendPanic processes a recovered value from Spend's deferred recover
@@ -3290,7 +3337,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since FROM transactions WHERE hash IN ` + inClause
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -3306,10 +3353,11 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		var (
 			hashBytes    []byte
 			unminedSince sql.NullInt64
+			insertedAt   any
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince); err != nil {
+		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -3322,6 +3370,8 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 				row.data.UnminedSince = uint32(unminedSince.Int64)
 			}
 		}
+
+		row.data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 		idToTx[row.id] = row
 		hashToTx[row.hash] = row
