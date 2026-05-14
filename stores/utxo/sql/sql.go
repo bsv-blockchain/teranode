@@ -2967,6 +2967,19 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 	}
 	rows.Close()
 
+	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
+	// !UnsetMined every submitted hash MUST exist in the transactions table.
+	// A missing hash means the tx was never persisted (or was pruned) — mirrors
+	// the Aerospike KEY_NOT_FOUND handling so all backends fail closed identically.
+	// UnsetMined tolerates missing rows (the tx is already gone).
+	if !minedBlockInfo.UnsetMined && len(existingHashes) != len(hashes) {
+		for _, h := range hashes {
+			if !existingHashes[*h] {
+				return nil, errors.NewTxNotFoundError("transaction not found: %s", h.String())
+			}
+		}
+	}
+
 	if len(existingHashes) == 0 {
 		if err = txn.Commit(); err != nil {
 			return nil, errors.NewStorageError("SQL error committing empty transaction: %v", err)
