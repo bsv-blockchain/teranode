@@ -611,7 +611,11 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(httpStatusForTxError(err), "Failed to process transaction: "+errors.UserMessage(err))
+			status := httpStatusForTxError(err)
+			if status >= 200 && status < 300 {
+				return c.String(status, "OK")
+			}
+			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
 		}
 
 		return c.String(http.StatusOK, "OK")

@@ -310,7 +310,7 @@ func TestHandleSingleTx(t *testing.T) {
 			name:                "Tx already exists",
 			requestBody:         txBytes,
 			expectedStatusCode:  http.StatusOK,
-			expectedResponse:    "Failed to process transaction",
+			expectedResponse:    "OK",
 			mockValidationError: errors.NewTxExistsError("duplicate submission"),
 		},
 		{
