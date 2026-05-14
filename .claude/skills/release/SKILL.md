@@ -13,9 +13,8 @@ Drives the release lifecycle: hotfix triage, cherry-picks, beta tags, prod-gated
 - `release/vX.Y` — long-lived release branch, cut from `main` at minor bumps. Hotfixes arrive as squash-merge cherry-picks.
 
 Tag scheme:
-- Beta: `vX.Y.Z-beta-N` (e.g. `v0.15.0-beta-1`). Tagged on `release/vX.Y`. Immutable.
-- Stable patch: `vX.Y.Z`. Tagged on `release/vX.Y` only after the **production gate** passes.
-- Minor: `vX.(Y+1).0`. New `release/vX.(Y+1)` branch cut from `main`; first tag typically `vX.(Y+1).0-beta-1`.
+- Beta: `vX.Y.Z-beta-N` (e.g. `v0.15.0-beta-1`). Tagged on `release/vX.Y`. Immutable. The `release/vX.Y` branch is cut from `main` at the start of the minor's beta phase so all betas of that minor live on the same branch.
+- Stable: `vX.Y.Z`. Targets the SHA of the validated beta (never the branch tip — a hotfix landing after soak would otherwise get silently promoted).
 
 Canonical state source: **GitHub Releases page**. Don't maintain a separate doc — the `status` mode below renders it live.
 
@@ -80,7 +79,7 @@ Steps:
 7. **Probe-only variant**: when uncertain, `git cherry-pick -n <merge-sha>` dry-runs without committing.
    - **Precondition: working tree must be clean.** Verify with `git status --porcelain` returning empty. If dirty, stash user changes first (`git stash push -m user-state-before-probe`) and pop them back **after** the probe is done. Never run a blanket discard while user state is mixed in.
    - Cleanup after a clean-precondition probe: `git reset HEAD && git stash push --include-untracked -m probe-discard && git stash drop` (the `-n` variant doesn't leave a cherry-pick session for `--abort`).
-   - Do **not** use `git reset --hard`, `git checkout HEAD -- <path>`, or `git clean -f` — all blocked by dcg hook.
+   - Avoid `git reset --hard`, `git checkout HEAD -- <path>`, and `git clean -f` (per `.claude/rules/git-workflow.md`). Developer-local safety tooling (e.g. dcg, pre-commit guards) may also block these — fall back to stash-based recovery.
 
 ### `beta <X.Y.Z>` — cut a numbered beta tag
 
@@ -191,10 +190,10 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 
 These apply to every git operation in this skill:
 
-- **NEVER** `git reset --hard`, `git checkout HEAD -- <path>`, `git restore .`, or `git clean -f`. The dcg hook blocks them. Alternatives:
+- **NEVER** `git reset --hard`, `git checkout HEAD -- <path>`, `git restore .`, or `git clean -f` — per `.claude/rules/git-workflow.md`. Developer-local safety tooling (e.g. dcg) may also block them. Alternatives:
   - Rewind a branch: switch off it first, then `git branch -f <branch> <ref>`, then switch back.
-  - Discard dirty state: `git stash push --include-untracked -m discard && git stash drop`.
-  - Restore one file: `git stash` first, then `git checkout <ref> -- <file>` (hook permits when WT is clean).
+  - Discard dirty state: `git stash push --include-untracked -m discard && git stash drop` (only when working tree changes are known-safe to lose).
+  - Restore one file: `git stash` first, then `git checkout <ref> -- <file>` (safe when WT is clean for that path).
 - **NEVER** auto-resolve merge conflicts (per repo rule). Show hunks, propose strategy, wait.
 - `gh pr edit --body` / `--title` silently fails on bsv-blockchain repos (GraphQL projects-classic deprecation). Use REST: `gh api -X PATCH repos/bsv-blockchain/teranode/pulls/<n> -f body=...`. Verify with `gh pr view <n> --json body -q .body | head -3` after every edit.
 - Force-push to release branches: prefer `--force-with-lease=<branch>:<expected-sha>` (explicit anchor) over bare `--force`. Bare `--force-with-lease` weakens if you fetched right before pushing.
