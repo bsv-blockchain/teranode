@@ -48,6 +48,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// splitMapBuckets is the fallback bucket count for SplitTxInpointsMap when
+// the BlockAssembly.SplitMapBuckets setting is unset (0). Production
+// dev-scale-2 profile showed 4096 buckets exhibited measurable per-bucket lock
+// contention with 375 workers; 16K is the new setting default. The constant
+// is retained for test ergonomics — tests construct fresh maps directly.
 const splitMapBuckets = 4 * 1024
 const maxBatchesPerIteration = 64
 
@@ -323,6 +328,34 @@ type SubtreeProcessor struct {
 	// diskTxMap is the disk-backed tx map (non-nil when txMapDirs is set).
 	diskTxMap *DiskTxMap
 
+	// txMapPool is a reusable transactionMap built in CreateTransactionMap.
+	// Allocated lazily on the first call (sized for that block) and Clear()ed
+	// between calls to avoid per-block ~600M-entry allocations that dominate
+	// GC in profiling. Owned exclusively by the Start() goroutine — no
+	// concurrent access, no locking beyond what SplitSwissMap already provides.
+	txMapPool *SplitSwissMap
+
+	// currentTxMapShadow is the inactive half of a double-buffered currentTxMap
+	// used to avoid per-block 4096-shard SyncedMap allocations in
+	// resetSubtreeState. nil when diskTxMap is in use (that path reuses
+	// in place via Clear).
+	currentTxMapShadow *SplitTxInpointsMap
+
+	// splitMapBuckets is the bucket count used for the in-memory
+	// SplitTxInpointsMap, plumbed from BlockAssembly.SplitMapBuckets at
+	// constructor time. Retained so the fresh-allocation fallback path
+	// (used during multi-block reorgs where rollback must restore the
+	// captured pre-loop pointer) can build new maps of the same shape.
+	splitMapBuckets uint16
+
+	// disableCurrentTxMapPool disables the double-buffer swap pattern for
+	// currentTxMap, falling back to per-call fresh allocation. Used by
+	// reorgBlocks for the duration of a multi-block reorg so that
+	// captured originalCurrentTxMap pointers continue to reference the
+	// pre-reorg data unchanged. Only mutated by the single Start()
+	// goroutine; no synchronisation required.
+	disableCurrentTxMapPool bool
+
 	// clock is the source of wall time for codepaths that need a deterministic
 	// substitute in tests (validFromMillis calculations). Replaced in tests.
 	clock clock
@@ -432,6 +465,11 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// - Small memory footprint (18 * sizeof(int) = 144 bytes)
 	const subtreeSampleSize = 18
 
+	splitBuckets := uint16(tSettings.BlockAssembly.SplitMapBuckets) //nolint:gosec // bounded by setting validation
+	if splitBuckets == 0 {
+		splitBuckets = splitMapBuckets
+	}
+
 	stp := &SubtreeProcessor{
 		settings:                     tSettings,
 		blockStartTime:               time.Time{},
@@ -454,7 +492,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		chainedSubtrees:              make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:          atomic.Int32{},
 		queue:                        queue,
-		currentTxMap:                 NewSplitTxInpointsMap(splitMapBuckets),
+		currentTxMap:                 NewSplitTxInpointsMap(splitBuckets),
+		splitMapBuckets:              splitBuckets,
 		deletedTxs:                   txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](),
 		removeMap:                    txmap.NewSplitSwissMap(256, 16),
 		blockchainClient:             blockchainClient,
@@ -508,6 +547,14 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 			stp.diskTxMap = diskMap
 			reportDiskMapStats(diskMap.Stats())
 		}
+	}
+
+	// Pre-allocate the shadow half of the double-buffered currentTxMap so that
+	// resetSubtreeState can swap pointers instead of allocating a fresh
+	// 4096-shard SyncedMap structure on every block. Only applicable to the
+	// in-memory path — DiskTxMap already reuses storage in place via Clear().
+	if stp.diskTxMap == nil {
+		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
 	}
 
 	// Goroutine does not start automatically - Start(ctx) must be called explicitly
@@ -2691,6 +2738,15 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 // Returns:
 //   - error: Any error encountered during reorg (triggers fallback to reset())
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) (err error) {
+	// reorgBlocks captures originalCurrentTxMap once and expects the pointer
+	// to remain valid (pointing at unchanged pre-reorg data) for the entire
+	// loop so that rollback can restore it. The double-buffer swap pattern
+	// breaks that contract across multiple moveForward iterations, so disable
+	// pooling for the duration of this call. Single-goroutine — no
+	// synchronisation needed.
+	stp.disableCurrentTxMapPool = true
+	defer func() { stp.disableCurrentTxMapPool = false }()
+
 	if moveBackBlocks == nil {
 		return errors.NewProcessingError("you must pass in blocks to move down the chain")
 	}
@@ -3328,27 +3384,168 @@ func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context,
 
 	// run through the nodes of the subtrees in order and add to the new subtrees
 	if len(subtreesNodes) > 0 {
-		for idx, subtreeNodes := range subtreesNodes {
-			subtreeHash := block.Subtrees[idx]
-
-			if idx == 0 {
-				// skip the first transaction of the first subtree (coinbase)
-				for i := 1; i < len(subtreeNodes); i++ {
-					if err = stp.addNode(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], true); err != nil {
-						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
-					}
-				}
-			} else {
-				for i, node := range subtreeNodes {
-					if err = stp.addNode(node, &subtreeMetaTxInpoints[idx][i], true); err != nil {
-						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
-					}
-				}
-			}
+		if err = stp.addMoveBackBlockNodesToSubtrees(block, subtreesNodes, subtreeMetaTxInpoints); err != nil {
+			return nil, nil, err
 		}
 	}
 
 	return subtreesNodes, conflictingHashes, nil
+}
+
+// addMoveBackBlockNodesToSubtrees inserts every tx from a moved-back block
+// into the currentTxMap and rebuilds the subtree chain. For large blocks the
+// map inserts are parallelised in chunks; the subtree fill remains
+// sequential because subtree ordering is canonical and AddSubtreeNode is not
+// safe for concurrent writes on a single currentSubtree.
+//
+// Splits work into two stages when the input is over
+// ParallelSetIfNotExistsThreshold:
+//
+//	Stage A — parallel chunked SetIfNotExists into currentTxMap; wasInserted
+//	tracked per-node.
+//	Stage B — serial walk in canonical order calling addNodePreValidated
+//	(which skips the map insert). Duplicate nodes (wasInserted == false) are
+//	skipped, matching the original addNode semantics.
+//
+// Falls back to the original serial path for small blocks or when the
+// configured currentTxMap is not the in-memory SplitTxInpointsMap (DiskTxMap
+// path).
+func (stp *SubtreeProcessor) addMoveBackBlockNodesToSubtrees(block *model.Block,
+	subtreesNodes [][]subtreepkg.Node, subtreeMetaTxInpoints [][]subtreepkg.TxInpoints) error {
+	totalNodes := 0
+	for _, ss := range subtreesNodes {
+		totalNodes += len(ss)
+	}
+
+	threshold := stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold
+	_, splitMapPath := stp.currentTxMap.(*SplitTxInpointsMap)
+
+	if !splitMapPath || totalNodes < threshold {
+		// Serial path: matches the historical behaviour exactly.
+		for idx, subtreeNodes := range subtreesNodes {
+			subtreeHash := block.Subtrees[idx]
+
+			startI := 0
+			if idx == 0 {
+				// skip the first transaction of the first subtree (coinbase)
+				startI = 1
+			}
+
+			for i := startI; i < len(subtreeNodes); i++ {
+				if err := stp.addNode(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], true); err != nil {
+					return errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// Stage A — parallel chunked map insert.
+	// One []bool per outer subtree avoids per-node allocations during fill.
+	wasInserted := make([][]bool, len(subtreesNodes))
+	for i := range subtreesNodes {
+		wasInserted[i] = make([]bool, len(subtreesNodes[i]))
+	}
+
+	concurrencyLimit := stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency
+	if concurrencyLimit <= 0 {
+		concurrencyLimit = runtime.NumCPU()
+	}
+
+	numWorkers := min(runtime.NumCPU(), concurrencyLimit)
+	if numWorkers > totalNodes {
+		numWorkers = totalNodes
+	}
+
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	chunkSize := (totalNodes + numWorkers - 1) / numWorkers
+
+	g, _ := errgroup.WithContext(context.Background())
+
+	for w := 0; w < numWorkers; w++ {
+		flatStart := w * chunkSize
+
+		flatEnd := flatStart + chunkSize
+		if flatEnd > totalNodes {
+			flatEnd = totalNodes
+		}
+
+		if flatStart >= flatEnd {
+			continue
+		}
+
+		g.Go(func() error {
+			sIdx, i := flatIndexToSubtreeNode(subtreesNodes, flatStart)
+
+			for flatIdx := flatStart; flatIdx < flatEnd; flatIdx++ {
+				// Skip the coinbase placeholder at (0, 0).
+				if !(sIdx == 0 && i == 0) {
+					// Pointer aliases the input slice element (no per-node
+					// allocation); subtreeMetaTxInpoints outlives the map
+					// because Stage B retains both via closure.
+					_, wasSet := stp.currentTxMap.SetIfNotExists(subtreesNodes[sIdx][i].Hash, &subtreeMetaTxInpoints[sIdx][i])
+					wasInserted[sIdx][i] = wasSet
+				}
+
+				i++
+				if i >= len(subtreesNodes[sIdx]) {
+					sIdx++
+					i = 0
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Stage B — serial subtree fill in canonical order.
+	for idx, subtreeNodes := range subtreesNodes {
+		subtreeHash := block.Subtrees[idx]
+
+		startI := 0
+		if idx == 0 {
+			startI = 1
+		}
+
+		for i := startI; i < len(subtreeNodes); i++ {
+			if !wasInserted[idx][i] {
+				// duplicate transaction ignored (matches addNode's wasSet==false branch)
+				continue
+			}
+
+			if err := stp.addNodePreValidated(subtreeNodes[i], true); err != nil {
+				return errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// flatIndexToSubtreeNode translates a flat node index across all subtreesNodes
+// into (sIdx, i). Used by parallel workers to locate their starting position.
+// Linear in len(subtreesNodes), which is bounded (~1024 at scale-2).
+func flatIndexToSubtreeNode(subtreesNodes [][]subtreepkg.Node, flat int) (sIdx int, i int) {
+	remaining := flat
+
+	for s, nodes := range subtreesNodes {
+		if remaining < len(nodes) {
+			return s, remaining
+		}
+
+		remaining -= len(nodes)
+	}
+
+	// flat == totalNodes: position just past the end.
+	return len(subtreesNodes), 0
 }
 
 // removeCoinbaseUtxos removes the coinbase UTXO and its child spends from the UTXO store.
@@ -3644,19 +3841,31 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 	return losingTxHashesMap, conflictingSet, nil
 }
 
-// resetSubtreeState resets the current subtree state and returns the old state
+// resetSubtreeState resets the current subtree state and returns the old state.
+//
+// For the in-memory currentTxMap path, we swap the active map with a
+// pre-allocated shadow rather than allocating a fresh one. The newly-active
+// (freshly-current) map is empty because moveForwardBlock's commit path
+// Clear()ed it after the previous block was processed (or it was empty since
+// constructor time). The just-deactivated map (now in currentTxMapShadow)
+// still holds the previous block's contents, which is exactly what callers
+// who captured a pointer before reset need to read from. The shadow is
+// Clear()ed at moveForwardBlock commit, after readers are guaranteed to have
+// finished — see swapCurrentTxMapBack for the rollback inverse.
 func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool) (err error) {
-	// Replace the current tx map with a fresh instance.
-	// We must create a NEW object (not Clear) because other code may hold references to the old map
-	// that are still being read (e.g., processOwnBlockNodes captures currentTxMap before reset).
 	if stp.diskTxMap != nil {
 		reportDiskMapStats(stp.diskTxMap.Stats())
 		stp.diskTxMap.Clear()
 		clearDiskMapStats()
 		// DiskTxMap.Clear() recreates internal state but keeps the same object.
 		// This is safe because DiskTxMap is only assigned once in the constructor.
+	} else if stp.disableCurrentTxMapPool {
+		// Multi-block reorg in progress: fall back to fresh allocation so the
+		// pre-loop captured pointer in reorgBlocks continues to reference the
+		// unchanged original data, preserving the existing rollback contract.
+		stp.currentTxMap = NewSplitTxInpointsMap(stp.splitMapBuckets)
 	} else {
-		stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+		stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
 	}
 
 	subtreeSize := int(stp.currentItemsPerFile.Load())
@@ -3918,10 +4127,22 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	originalCurrentSubtree := stp.currentSubtree.Load()
 	originalCurrentTxMap := stp.currentTxMap
 
-	// Reset subtree state
+	// Reset subtree state. After this, stp.currentTxMap is the freshly-empty
+	// shadow and the previous content is in stp.currentTxMapShadow (== the
+	// originalCurrentTxMap captured just above). If any subsequent step
+	// fails, we must swap them back so callers see the pre-reset state and
+	// the double-buffer invariant (current=active, shadow=empty) is restored.
 	if err = stp.resetSubtreeState(createProperlySizedSubtrees); err != nil {
 		return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error resetting subtree state", block.String(), err)
 	}
+
+	// From this point the double-buffer swap has happened. Any error return
+	// before commit must swap back so the caller sees pre-reset state.
+	defer func() {
+		if err != nil {
+			stp.swapCurrentTxMapBack()
+		}
+	}()
 
 	// Process remainder transactions and dequeueDuringBlockMovement
 	err = stp.processRemainderTransactionsAndDequeue(ctx, &RemainderTransactionParams{
@@ -3944,6 +4165,12 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 	}
 
+	// Commit point of moveForwardBlock: any captured pointer to the old
+	// currentTxMap (now in currentTxMapShadow) is guaranteed unused. Empty
+	// the shadow in place so the next resetSubtreeState swap exposes a
+	// clean slate.
+	stp.clearCurrentTxMapShadow()
+
 	// Log memory stats after block processing if debug logging is enabled
 	if stp.logger.LogLevel() <= 0 { // 0 is DEBUG level
 		var memStats runtime.MemStats
@@ -3963,6 +4190,29 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	return transactionMap, losingTxHashesMap, nil
+}
+
+// swapCurrentTxMapBack restores currentTxMap to the value it held before
+// resetSubtreeState was called (used on rollback paths). Only meaningful for
+// the pooled in-memory path; no-op when DiskTxMap is in use or when the pool
+// is disabled (multi-block reorg).
+func (stp *SubtreeProcessor) swapCurrentTxMapBack() {
+	if stp.diskTxMap != nil || stp.disableCurrentTxMapPool {
+		return
+	}
+
+	stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
+}
+
+// clearCurrentTxMapShadow empties the inactive half of the double-buffered
+// currentTxMap, leaving it ready to become "current" on the next reset.
+// No-op when DiskTxMap is in use or when the pool is disabled.
+func (stp *SubtreeProcessor) clearCurrentTxMapShadow() {
+	if stp.diskTxMap != nil || stp.disableCurrentTxMapPool {
+		return
+	}
+
+	stp.currentTxMapShadow.Clear()
 }
 
 func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
@@ -4281,7 +4531,13 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 			)
 			nodeFlags := make([]byte, n)
 
-			numWorkers := min(runtime.NumCPU(), n/100, 16)
+			// Phase 1 of processRemainderTxHashes scales linearly with input
+			// size; the previous literal 16-worker cap left ~170-core pods
+			// massively idle on 30M-tx remainders. Cap only at NumCPU so the
+			// kernel scheduler can make the call, with a floor of 2 workers and
+			// a minimum chunk of 1024 nodes per worker to keep coordination
+			// overhead down on small inputs.
+			numWorkers := min(runtime.NumCPU(), n/1024)
 			if numWorkers < 2 {
 				numWorkers = 2
 			}
@@ -4420,6 +4676,140 @@ func (stp *SubtreeProcessor) parallelGetAndSetIfNotExists(
 		return nil
 	}
 
+	// Fast path: write target is the in-memory SplitTxInpointsMap. Use
+	// bucket-affinity sharding so every destination bucket is touched by at
+	// most one worker, eliminating cross-worker mutex contention on the
+	// underlying per-bucket SyncedMap. Profiling showed that contention
+	// previously cost ~17 % of every SetIfNotExists call.
+	if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
+		return stp.bucketShardedGetAndSetIfNotExists(splitMap, nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted)
+	}
+
+	// Fallback (e.g. DiskTxMap path): original per-node parallel scheme.
+	return stp.legacyParallelGetAndSetIfNotExists(nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted)
+}
+
+// bucketShardedGetAndSetIfNotExists partitions nodes by destination bucket and
+// dispatches one worker per non-empty bucket (subject to concurrencyLimit).
+// Because each bucket has exactly one writer, the per-bucket RWMutex in the
+// underlying SyncedMap is never contended across workers.
+func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
+	splitMap *SplitTxInpointsMap,
+	nodes []subtreepkg.Node,
+	currentTxMap TxInpointsMap,
+	removeMapLength int,
+	concurrencyLimit int,
+	wasInserted []bool,
+) error {
+	nrOfBuckets := splitMap.Buckets()
+
+	// Phase 1 (sequential pre-filter): handle coinbase placeholder + removeMap
+	// skips in a single pass. Cheap relative to the rest of the work.
+	keep := make([]bool, len(nodes))
+	bucket := make([]uint16, len(nodes))
+	kept := 0
+
+	for i := range nodes {
+		hash := nodes[i].Hash
+
+		if hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+			wasInserted[i] = false
+			continue
+		}
+
+		if removeMapLength > 0 && stp.removeMap.Exists(hash) {
+			if err := stp.removeMap.Delete(hash); err != nil {
+				stp.logger.Errorf("error removing tx from remove map: %s", err.Error())
+			}
+
+			wasInserted[i] = false
+
+			continue
+		}
+
+		keep[i] = true
+		bucket[i] = splitMap.BucketFor(hash)
+		kept++
+	}
+
+	if kept == 0 {
+		return nil
+	}
+
+	// Phase 2 (sequential bucket-partition): allocate per-bucket index slices
+	// and place each kept node's original index in its bucket. Counting first
+	// avoids slice growth during fill.
+	counts := make([]int, nrOfBuckets)
+	for i := range nodes {
+		if keep[i] {
+			counts[bucket[i]]++
+		}
+	}
+
+	perBucket := make([][]int, nrOfBuckets)
+	for b, c := range counts {
+		if c > 0 {
+			perBucket[b] = make([]int, 0, c)
+		}
+	}
+
+	for i := range nodes {
+		if keep[i] {
+			perBucket[bucket[i]] = append(perBucket[bucket[i]], i)
+		}
+	}
+
+	// Phase 3 (parallel per-bucket): each goroutine owns one bucket end-to-end:
+	// gather parents from the old map, bulk-insert into the new map. No two
+	// goroutines ever touch the same destination bucket.
+	g, _ := errgroup.WithContext(context.Background())
+	util.SafeSetLimit(g, concurrencyLimit)
+
+	for b := uint16(0); b < nrOfBuckets; b++ {
+		indices := perBucket[b]
+		if len(indices) == 0 {
+			continue
+		}
+
+		bucketIdx := b
+
+		g.Go(func() error {
+			entries := make([]TxInpointsEntry, len(indices))
+
+			for j, origIdx := range indices {
+				hash := nodes[origIdx].Hash
+
+				parents, found := currentTxMap.Get(hash)
+				if !found {
+					return errors.NewProcessingError("node %s not found in currentTxMap", hash.String())
+				}
+
+				entries[j] = TxInpointsEntry{Hash: hash, Inpoints: parents}
+			}
+
+			results := splitMap.PutMultiBucketTxInpoints(bucketIdx, entries)
+
+			for j, origIdx := range indices {
+				wasInserted[origIdx] = results[j]
+			}
+
+			return nil
+		})
+	}
+
+	return g.Wait()
+}
+
+// legacyParallelGetAndSetIfNotExists is the original per-node parallel scheme,
+// retained for the DiskTxMap path where bucket-affinity sharding is not
+// available.
+func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
+	nodes []subtreepkg.Node,
+	currentTxMap TxInpointsMap,
+	removeMapLength int,
+	concurrencyLimit int,
+	wasInserted []bool,
+) error {
 	batchSize := (len(nodes) + concurrencyLimit - 1) / concurrencyLimit
 	if batchSize < 1 {
 		batchSize = 1
@@ -4438,28 +4828,26 @@ func (stp *SubtreeProcessor) parallelGetAndSetIfNotExists(
 			for idx := start; idx < end; idx++ {
 				node := nodes[idx]
 
-				// Skip coinbase placeholder
 				if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 					wasInserted[idx] = false
 					continue
 				}
 
-				// Check and remove from removeMap if present
 				if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 					if err := stp.removeMap.Delete(node.Hash); err != nil {
 						stp.logger.Errorf("error removing tx from remove map: %s", err.Error())
 					}
+
 					wasInserted[idx] = false
+
 					continue
 				}
 
-				// Get parents from old currentTxMap (thread-safe read with RLock)
 				nodeParents, found := currentTxMap.Get(node.Hash)
 				if !found {
 					return errors.NewProcessingError("node %s not found in currentTxMap", node.Hash.String())
 				}
 
-				// SetIfNotExists on new stp.currentTxMap (thread-safe write with Lock)
 				_, wasSet := stp.currentTxMap.SetIfNotExists(node.Hash, nodeParents)
 				wasInserted[idx] = wasSet
 
@@ -4467,6 +4855,7 @@ func (stp *SubtreeProcessor) parallelGetAndSetIfNotExists(
 					stp.logger.Debugf("duplicate transaction ignored: %s", node.Hash.String())
 				}
 			}
+
 			return nil
 		})
 	}
@@ -4515,8 +4904,22 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		mapSize = len(blockSubtreesMap) * avgTxPerSubtree
 	}
 
-	stp.logger.Debugf("Allocating transaction map with size: %d", mapSize)
-	transactionMap := NewSplitSwissMap(1024, mapSize) // 4K buckets
+	// Reuse a pooled transactionMap across blocks to eliminate the per-block
+	// ~600M-entry allocation that dominated GC in profiling. The pool is owned
+	// by the single Start() goroutine, so no locking beyond what SplitSwissMap
+	// already provides. swiss.Map.Clear is in-place and retains capacity.
+	// On the first call the pool is sized for this block; subsequent larger
+	// blocks trigger swiss.Map's own auto-rehash (rare and cheaper than a fresh
+	// allocation of the full structure).
+	if stp.txMapPool == nil {
+		stp.logger.Debugf("Allocating pooled transaction map with size: %d", mapSize)
+		stp.txMapPool = NewSplitSwissMap(1024, mapSize) // 1024 buckets
+	} else {
+		stp.logger.Debugf("Reusing pooled transaction map (clearing prior contents, size: %d)", mapSize)
+		stp.txMapPool.Clear()
+	}
+
+	transactionMap := stp.txMapPool
 
 	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
 

@@ -60,6 +60,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UTXOStore: getBool("debug_utxostore", false, alternativeContext...),
 		},
 		ProfilerAddr:                 getString("profilerAddr", "", alternativeContext...),
+		BlockProfileRate:             getInt("profiler_blockProfileRate", 0, alternativeContext...),
+		MutexProfileFraction:         getInt("profiler_mutexProfileFraction", 0, alternativeContext...),
 		StatsPrefix:                  getString("stats_prefix", "gocore", alternativeContext...),
 		PrometheusEndpoint:           getString("prometheusEndpoint", "", alternativeContext...),
 		HealthCheckHTTPListenAddress: getString("health_check_httpListenAddress", ":8000", alternativeContext...),
@@ -277,6 +279,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UnminedLoadingBatchSize:              getInt("blockassembly_unminedLoadingBatchSize", 1024*1024*10, alternativeContext...), // 10 million
 			SubtreeAnnouncementInterval:          getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
 			ParallelSetIfNotExistsThreshold:      getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
+			SplitMapBuckets:                      getInt("blockassembly_splitMapBuckets", 16*1024, alternativeContext...),
 			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", true, alternativeContext...),
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 		},

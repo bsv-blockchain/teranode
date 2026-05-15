@@ -89,6 +89,18 @@ func (s *SplitSwissMap) Iter(f func(hash chainhash.Hash, v struct{}) bool) {
 	}
 }
 
+// Clear empties every bucket in place without reallocating bucket arrays or
+// the per-bucket swiss.Map. The underlying swiss.Map.Clear walks its existing
+// control + group arrays and zeroes them, so capacity is retained for reuse.
+// Used to recycle a pooled SplitSwissMap across blocks.
+func (s *SplitSwissMap) Clear() {
+	for bucket := uint16(0); bucket < s.nrOfBuckets; bucket++ {
+		s.mu[bucket].Lock()
+		s.m[bucket].Clear()
+		s.mu[bucket].Unlock()
+	}
+}
+
 type SplitTxInpointsMap struct {
 	m           map[uint16]*txmap.SyncedMap[chainhash.Hash, *subtreepkg.TxInpoints]
 	nrOfBuckets uint16
@@ -140,4 +152,42 @@ func (s *SplitTxInpointsMap) Clear() {
 	for _, syncedMap := range s.m {
 		syncedMap.Clear()
 	}
+}
+
+// Buckets returns the configured bucket count.
+func (s *SplitTxInpointsMap) Buckets() uint16 {
+	return s.nrOfBuckets
+}
+
+// BucketFor returns the destination bucket index for a given hash, matching the
+// scheme used by Get/Set/SetIfNotExists.
+func (s *SplitTxInpointsMap) BucketFor(hash chainhash.Hash) uint16 {
+	return txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)
+}
+
+// TxInpointsEntry is a (hash, inpoints) pair used by PutMultiBucketTxInpoints.
+type TxInpointsEntry struct {
+	Hash     chainhash.Hash
+	Inpoints *subtreepkg.TxInpoints
+}
+
+// PutMultiBucketTxInpoints inserts a batch of entries that all hash to the same
+// bucket, calling SetIfNotExists on the underlying SyncedMap once per entry.
+// All entries MUST belong to the named bucket; callers are expected to have
+// partitioned by BucketFor beforehand. The returned slice has the same length
+// as entries; wasInserted[i] is true if the i-th entry's key was newly added
+// and false if it already existed.
+//
+// Designed to be called from bucket-affinity worker pools where each worker
+// owns one or more buckets exclusively, so the per-bucket RWMutex is
+// uncontended across worker calls.
+func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, entries []TxInpointsEntry) []bool {
+	syncedMap := s.m[bucket]
+	wasInserted := make([]bool, len(entries))
+
+	for i, entry := range entries {
+		_, wasInserted[i] = syncedMap.SetIfNotExists(entry.Hash, entry.Inpoints)
+	}
+
+	return wasInserted
 }
