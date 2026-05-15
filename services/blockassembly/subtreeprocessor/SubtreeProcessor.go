@@ -49,11 +49,20 @@ import (
 )
 
 // splitMapBuckets is the fallback bucket count for SplitTxInpointsMap when
-// the BlockAssembly.SplitMapBuckets setting is unset (0). Production
-// dev-scale-2 profile showed 4096 buckets exhibited measurable per-bucket lock
-// contention with 375 workers; 16K is the new setting default. The constant
-// is retained for test ergonomics — tests construct fresh maps directly.
-const splitMapBuckets = 4 * 1024
+// the BlockAssembly.SplitMapBuckets setting is unset, zero, or out of range.
+// Matches the documented setting default in
+// settings/blockassembly_settings.go. Production dev-scale-2 profile showed
+// 4096 buckets exhibited measurable per-bucket lock contention with 375
+// workers; 16K buckets at roughly the same total footprint reduces collision
+// probability ~4×. Exported to package-internal callers (tests) so they can
+// construct fresh maps without re-deriving the value.
+const splitMapBuckets = 16 * 1024
+
+// splitMapBucketsMax is the inclusive upper bound for
+// BlockAssembly.SplitMapBuckets — driven by the uint16 internal
+// representation in SplitTxInpointsMap. Settings above this are clamped
+// (with a warning log) in NewSubtreeProcessor.
+const splitMapBucketsMax = 65535
 const maxBatchesPerIteration = 64
 
 type cancelHolder struct {
@@ -465,9 +474,21 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// - Small memory footprint (18 * sizeof(int) = 144 bytes)
 	const subtreeSampleSize = 18
 
-	splitBuckets := uint16(tSettings.BlockAssembly.SplitMapBuckets) //nolint:gosec // bounded by setting validation
-	if splitBuckets == 0 {
+	// Validate and clamp the SplitMapBuckets setting. Out-of-range values
+	// (zero/negative or larger than uint16) would otherwise wrap silently
+	// when cast to uint16.
+	splitBucketsCfg := tSettings.BlockAssembly.SplitMapBuckets
+
+	var splitBuckets uint16
+
+	switch {
+	case splitBucketsCfg <= 0:
 		splitBuckets = splitMapBuckets
+	case splitBucketsCfg > splitMapBucketsMax:
+		logger.Warnf("BlockAssembly.SplitMapBuckets=%d exceeds max %d; clamping to %d", splitBucketsCfg, splitMapBucketsMax, splitMapBucketsMax)
+		splitBuckets = splitMapBucketsMax
+	default:
+		splitBuckets = uint16(splitBucketsCfg)
 	}
 
 	stp := &SubtreeProcessor{
@@ -4196,10 +4217,22 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 // resetSubtreeState was called (used on rollback paths). Only meaningful for
 // the pooled in-memory path; no-op when DiskTxMap is in use or when the pool
 // is disabled (multi-block reorg).
+//
+// IMPORTANT: the freshly-current map may have been partially populated by a
+// failed moveForwardBlock attempt before the error was returned. If we simply
+// swapped pointers, that partial data would survive as the shadow and re-
+// emerge as "current" on the next reset — violating the
+// "freshly-current map is always empty" invariant and silently dropping
+// any tx whose hash happens to collide with a leftover entry (SetIfNotExists
+// would report wasSet=false). Clear the partial-data map before the swap so
+// the shadow ends up empty for the next cycle. Clearing on the error path
+// adds work, but errors are rare and the alternative is corrupt state.
 func (stp *SubtreeProcessor) swapCurrentTxMapBack() {
 	if stp.diskTxMap != nil || stp.disableCurrentTxMapPool {
 		return
 	}
+
+	stp.currentTxMap.(*SplitTxInpointsMap).Clear()
 
 	stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
 }

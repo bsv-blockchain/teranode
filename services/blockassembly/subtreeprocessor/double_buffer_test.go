@@ -55,6 +55,88 @@ func TestDoubleBuffer_SwapAndClearLifecycle(t *testing.T) {
 	require.Equal(t, 0, stp.currentTxMapShadow.Length(), "commit must leave shadow empty")
 }
 
+// TestDoubleBuffer_SwapBackWipesPartialFailedWrite reproduces the rollback
+// corruption hazard surfaced in code review: after resetSubtreeState swaps,
+// workers may partially populate the new "current" map before
+// moveForwardBlock returns an error. swapCurrentTxMapBack must wipe that
+// partial data, otherwise it would survive as the shadow and re-emerge as
+// "current" on the next reset, breaking the "freshly-current is always
+// empty" invariant and silently dropping colliding hashes via SetIfNotExists
+// returning wasSet=false.
+func TestDoubleBuffer_SwapBackWipesPartialFailedWrite(t *testing.T) {
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.SplitMapBuckets = 16
+
+	stp, err := NewSubtreeProcessor(
+		context.Background(), ulogger.TestLogger{}, settings,
+		nil, nil, nil, make(chan NewSubtreeRequest, 1),
+	)
+	require.NoError(t, err)
+
+	preReset := stp.currentTxMap
+	preResetShadow := stp.currentTxMapShadow
+
+	// Seed "current" with the prior block's data — equivalent to
+	// post-commit steady state.
+	priorHash := makeHash(0xC1)
+	_, ok := preReset.(*SplitTxInpointsMap).SetIfNotExists(priorHash, &subtreepkg.TxInpoints{})
+	require.True(t, ok)
+
+	// Simulate resetSubtreeState swap.
+	stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
+
+	// Simulate workers partially populating the new "current" before the
+	// outer moveForwardBlock decides to error.
+	partialHash := makeHash(0xC2)
+	stp.currentTxMap.(*SplitTxInpointsMap).SetIfNotExists(partialHash, &subtreepkg.TxInpoints{})
+	require.Equal(t, 1, stp.currentTxMap.(*SplitTxInpointsMap).Length())
+
+	// Rollback path.
+	stp.swapCurrentTxMapBack()
+
+	require.Same(t, preReset.(*SplitTxInpointsMap), stp.currentTxMap, "rollback must restore the pre-reset current pointer")
+	require.Same(t, preResetShadow, stp.currentTxMapShadow, "shadow pointer must round-trip")
+
+	// Pre-reset data is intact (the rollback restored the original map verbatim).
+	require.True(t, stp.currentTxMap.(*SplitTxInpointsMap).Exists(priorHash), "prior block's data must survive rollback")
+
+	// The critical invariant: shadow is wiped, NOT carrying the partial-failed write.
+	require.Equal(t, 0, stp.currentTxMapShadow.Length(), "shadow must be empty after rollback to avoid contaminating the next swap")
+	require.False(t, stp.currentTxMapShadow.Exists(partialHash), "no partial-failed write must survive in the shadow")
+}
+
+// TestSplitMapBuckets_ConfigClampingAndDefault verifies the SplitMapBuckets
+// setting is sanitised in the constructor: zero/negative falls back to the
+// documented default, values above the uint16 ceiling are clamped (not
+// silently wrapped via the cast), and in-range values pass through as-is.
+func TestSplitMapBuckets_ConfigClampingAndDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		setting  int
+		expected uint16
+	}{
+		{"zero_falls_back_to_default", 0, splitMapBuckets},
+		{"negative_falls_back_to_default", -1, splitMapBuckets},
+		{"in_range_passes_through", 1024, 1024},
+		{"max_value_passes_through", 65535, 65535},
+		{"above_max_clamps_not_wraps", 70000, splitMapBucketsMax},
+		{"way_above_max_clamps_not_wraps", 1 << 20, splitMapBucketsMax},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := test.CreateBaseTestSettings(t)
+			settings.BlockAssembly.SplitMapBuckets = tc.setting
+
+			stp, err := NewSubtreeProcessor(
+				context.Background(), ulogger.TestLogger{}, settings,
+				nil, nil, nil, make(chan NewSubtreeRequest, 1),
+			)
+			require.NoError(t, err)
+
+			require.Equal(t, tc.expected, stp.splitMapBuckets, "constructor must sanitise SplitMapBuckets")
+		})
+	}
+}
+
 // TestDoubleBuffer_DisableViaFlag verifies that setting
 // disableCurrentTxMapPool causes swapCurrentTxMapBack and
 // clearCurrentTxMapShadow to no-op, matching the reorgBlocks rollback
