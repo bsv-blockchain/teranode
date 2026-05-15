@@ -293,6 +293,27 @@ func TestHandleSingleTx(t *testing.T) {
 			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxInvalidError("inner reason")),
 		},
 		{
+			name:                "Missing parent tx",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxMissingParentError("parent not in utxo store"),
+		},
+		{
+			name:                "Wrapped missing parent through processing error",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxMissingParentError("inner missing parent")),
+		},
+		{
+			name:                "Tx already exists",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusOK,
+			expectedResponse:    "OK",
+			mockValidationError: errors.NewTxExistsError("duplicate submission"),
+		},
+		{
 			name:               "Store error",
 			requestBody:        txBytes,
 			expectedStatusCode: http.StatusInternalServerError,

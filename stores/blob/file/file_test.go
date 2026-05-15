@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -521,6 +522,293 @@ func TestSetFromReader_CleansUpTempFileOnPipeClose(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, exists, "File should not exist after aborted SetFromReader")
 	})
+}
+
+func TestSetFromReader_DoesNotExposeFinalFileUntilReaderCompletes(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("streaming-atomic-publication")
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+
+	go func() {
+		done <- f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, reader)
+	}()
+
+	_, err = writer.Write([]byte("partial payload"))
+	require.NoError(t, err)
+
+	_, err = os.Stat(filename)
+	require.True(t, os.IsNotExist(err), "final filename must not be visible while the reader is still open")
+
+	require.NoError(t, writer.Close())
+	require.NoError(t, <-done)
+
+	_, err = os.Stat(filename)
+	require.NoError(t, err, "final filename should be visible after the reader completes")
+}
+
+func TestSetFromReader_RemovesBlobWhenChecksumPublicationFails(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("checksum-publication-fails")
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filename+checksumExtension, 0755))
+
+	err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("value"))
+	require.Error(t, err)
+
+	_, statErr := os.Stat(filename)
+	require.True(t, os.IsNotExist(statErr), "blob final filename should not remain after checksum publication fails")
+
+	entries, err := os.ReadDir(tempDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.False(t, strings.HasSuffix(entry.Name(), ".tmp"), "temporary file should be cleaned up: %s", entry.Name())
+	}
+}
+
+func TestSetFromReader_ConcurrentWritersNeverExposePartialFinal(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("concurrent-atomic-publication")
+
+	// Build the expected complete file payload (header + body) once so the reader can
+	// match against it. Every successful read of the final file must be byte-identical
+	// to this payload — never a truncated prefix.
+	body := bytes.Repeat([]byte("XYZ"), 4096)
+	header := fileformat.NewHeader(fileformat.FileTypeTesting)
+
+	var expected bytes.Buffer
+	require.NoError(t, header.Write(&expected))
+	expected.Write(body)
+	expectedBytes := expected.Bytes()
+
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	const writers = 8
+	stop := make(chan struct{})
+	writerErrs := make(chan error, writers)
+	writerWG := sync.WaitGroup{}
+
+	for i := 0; i < writers; i++ {
+		writerWG.Add(1)
+		go func() {
+			defer writerWG.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				if err := f.Set(context.Background(), key, fileformat.FileTypeTesting, body, options.WithAllowOverwrite(true)); err != nil {
+					writerErrs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	// Reader loop: every successful read must be byte-identical to expectedBytes. A
+	// partial read here would mean the atomic-publication invariant was violated.
+	readerDone := make(chan struct{})
+	var readerErr error
+
+	go func() {
+		defer close(readerDone)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			data, err := os.ReadFile(filename)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				readerErr = err
+				return
+			}
+
+			if !bytes.Equal(data, expectedBytes) {
+				readerErr = errors.NewStorageError("observed partial final file: got %d bytes, expected %d", len(data), len(expectedBytes))
+				return
+			}
+		}
+	}()
+
+	<-readerDone
+	close(stop)
+	writerWG.Wait()
+	close(writerErrs)
+
+	for err := range writerErrs {
+		require.NoError(t, err)
+	}
+	require.NoError(t, readerErr)
+}
+
+func TestRenameTempFile_OverwriteAndRejectSemantics(t *testing.T) {
+	// renameTempFile's cross-platform contract: on POSIX, rename atomically replaces an
+	// existing destination regardless of allowOverwrite; on non-POSIX, allowOverwrite
+	// controls whether an existing destination is replaced or whether ErrBlobAlreadyExists
+	// is returned. This test documents the observable POSIX behaviour and exercises both
+	// allowOverwrite values so a regression on either branch shows up.
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("rename-temp-file-semantics")
+
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("first")))
+
+	// allowOverwrite=true: the second publication should replace the first cleanly.
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("second"), options.WithAllowOverwrite(true)))
+
+	got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+
+	// allowOverwrite=false: errorOnOverwrite stops the call before renameTempFile is
+	// reached, so the existing value must remain intact.
+	err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("third"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlobAlreadyExists), "expected ErrBlobAlreadyExists, got %v", err)
+
+	got, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+}
+
+func TestParseFsyncMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want fsyncMode
+		ok   bool
+	}{
+		{"", fsyncModeFull, true},
+		{"full", fsyncModeFull, true},
+		{"FULL", fsyncModeFull, true},
+		{"data", fsyncModeData, true},
+		{"none", fsyncModeNone, true},
+		{"bogus", fsyncModeFull, false},
+	} {
+		got, err := parseFsyncMode(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "input=%q", tc.in)
+			require.Equal(t, tc.want, got, "input=%q", tc.in)
+		} else {
+			require.Error(t, err, "input=%q", tc.in)
+		}
+	}
+}
+
+func TestNewWithFsyncMode(t *testing.T) {
+	tempDir := t.TempDir()
+
+	for _, mode := range []string{"full", "data", "none"} {
+		t.Run(mode, func(t *testing.T) {
+			u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+			require.NoError(t, err)
+
+			f, err := New(ulogger.TestLogger{}, u)
+			require.NoError(t, err)
+
+			key := []byte("fsync-mode-" + mode)
+			require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("value")))
+
+			got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+			require.NoError(t, err)
+			require.Equal(t, []byte("value"), got)
+		})
+	}
+
+	t.Run("invalid", func(t *testing.T) {
+		u, err := url.Parse("file://" + tempDir + "?fsyncMode=bogus")
+		require.NoError(t, err)
+
+		_, err = New(ulogger.TestLogger{}, u)
+		require.Error(t, err)
+	})
+}
+
+// BenchmarkSetFromReader_FsyncModes measures the cost of the atomic-publication path
+// across the three fsyncMode levels. fsync overhead dominates the small-payload case
+// on local filesystems and is intended to make any regression in the fsync schedule
+// visible in CI. Operators sizing for NFS-backed deployments can compare the gap
+// between fsyncModeFull and fsyncModeNone here against measurements on their target
+// filesystem to decide whether to opt out of the directory fsync.
+func BenchmarkSetFromReader_FsyncModes(b *testing.B) {
+	for _, payloadSize := range []int{256, 4 * 1024, 64 * 1024} {
+		for _, mode := range []string{"full", "data", "none"} {
+			b.Run(fmt.Sprintf("payload=%dB/mode=%s", payloadSize, mode), func(b *testing.B) {
+				tempDir := b.TempDir()
+
+				u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+				require.NoError(b, err)
+
+				f, err := New(ulogger.TestLogger{}, u)
+				require.NoError(b, err)
+
+				payload := bytes.Repeat([]byte("x"), payloadSize)
+				ctx := context.Background()
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					key := []byte(fmt.Sprintf("bench-%d", i))
+					if err := f.Set(ctx, key, fileformat.FileTypeTesting, payload); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestFileStoreRelPath(t *testing.T) {
+	tempDir := t.TempDir()
+	f := &File{path: tempDir}
+
+	rel, err := f.storeRelPath(filepath.Join(tempDir, "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
+
+	_, err = f.storeRelPath(filepath.Join(tempDir, "..", "outside.testing"))
+	require.Error(t, err)
+
+	_, err = f.storeRelPath(tempDir + "-sibling/blob.testing")
+	require.Error(t, err)
+
+	f = &File{path: filepath.Join("relative", "store")}
+	rel, err = f.storeRelPath(filepath.Join("relative", "store", "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
 }
 
 func TestFileGetHead(t *testing.T) {
@@ -1244,175 +1532,4 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	// Check if checksum file still exists - this is the bug
 	_, err = os.Stat(filename)
 	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file is deleted")
-}
-
-func TestDAHZeroHandling(t *testing.T) {
-	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
-	t.Run("readDAHFromFile with DAH 0 returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create a DAH file with value 0
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("0"), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for DAH 0")
-		require.Contains(t, err.Error(), "invalid DAH value 0")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("readDAHFromFile with empty file returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-empty")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create an empty DAH file
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte(""), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for empty DAH file")
-		require.Contains(t, err.Error(), "DAH file")
-		require.Contains(t, err.Error(), "is empty")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("readDAHFromFile with whitespace only returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-whitespace")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create a DAH file with only whitespace
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("  \n\t  "), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for whitespace-only DAH file")
-		require.Contains(t, err.Error(), "DAH file")
-		require.Contains(t, err.Error(), "is empty")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("SetDAH with 0 removes DAH file", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-setdah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := "test-key"
-		content := []byte("test content")
-
-		// Put a file
-		err = f.Set(context.Background(), []byte(key), fileformat.FileTypeTesting, content)
-		require.NoError(t, err)
-
-		// Set DAH to a valid value first
-		err = f.SetDAH(context.Background(), []byte(key), fileformat.FileTypeTesting, 100)
-		require.NoError(t, err)
-
-		// Verify DAH file exists
-		merged := options.MergeOptions(f.options, []options.FileOption{})
-		filename, err := merged.ConstructFilename(tempDir, []byte(key), fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		dahFile := filename + ".dah"
-		_, err = os.Stat(dahFile)
-		require.NoError(t, err, "DAH file should exist")
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), []byte(key), fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Verify DAH file is removed
-		_, err = os.Stat(dahFile)
-		require.True(t, os.IsNotExist(err), "DAH file should be removed when DAH is set to 0")
-
-		// Verify blob file still exists
-		_, err = os.Stat(filename)
-		require.NoError(t, err, "Blob file should still exist")
-	})
-
-	t.Run("writeDAHToFile validation prevents DAH 0", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-write-dah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		dahFile := filepath.Join(tempDir, "test.dah")
-
-		// Attempt to write DAH 0
-		err = f.writeDAHToFile(dahFile, 0)
-		require.Error(t, err, "Should error when attempting to write DAH 0")
-		require.Contains(t, err.Error(), "invalid DAH value 0")
-
-		// Verify no file was created
-		_, err = os.Stat(dahFile)
-		require.True(t, os.IsNotExist(err), "DAH file should not exist")
-
-		// Verify no temp file was left behind
-		_, err = os.Stat(dahFile + ".tmp")
-		require.True(t, os.IsNotExist(err), "Temp file should not exist")
-	})
-
-	t.Run("writeDAHToFile uses fsync", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-write-dah-fsync")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		dahFile := filepath.Join(tempDir, "test.dah")
-
-		// Write a valid DAH
-		err = f.writeDAHToFile(dahFile, 12345)
-		require.NoError(t, err)
-
-		// Verify file exists and contains correct value
-		content, err := os.ReadFile(dahFile)
-		require.NoError(t, err)
-		require.Equal(t, "12345", string(content))
-
-		// Verify no temp file was left behind
-		_, err = os.Stat(dahFile + ".tmp")
-		require.True(t, os.IsNotExist(err), "Temp file should be cleaned up")
-	})
 }

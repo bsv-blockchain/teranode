@@ -10,7 +10,6 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
@@ -140,9 +139,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
-			// get subtreepkg is much less efficient than get subtreepkg reader and then only deserializing the nodes
-			// this is only needed for the json response
-			subtree, err := h.repository.GetSubtree(ctx, hash)
+			nodes, totalRecords, err := h.repository.GetSubtreeNodesPage(ctx, hash, offset, limit)
 			if err != nil {
 				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -151,21 +148,10 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 				}
 			}
 
-			// check whether we have a subtreeData file and use that for the data instead of the utxo store
-			subtreeData, err := h.repository.GetSubtreeData(ctx, hash)
-			if err != nil {
-				h.logger.Warnf("[GetSubtreeTxs][%s] subtreeData not found, proceeding without subtreeData", hash.String())
-			}
+			data := make([]SubtreeTx, 0, len(nodes))
 
-			data := make([]SubtreeTx, 0, limit)
-
-			for i := offset; i < offset+limit; i++ {
-				if i >= subtree.Length() {
-					break
-				}
-
-				node := subtree.Nodes[i]
-
+			for pageIndex, node := range nodes {
+				i := offset + pageIndex
 				subtreeTx := SubtreeTx{
 					Index: i,
 					TxID:  node.Hash.String(),
@@ -182,31 +168,13 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					}
 					txMeta.Tx.SetTxHash(subtreepkg.CoinbasePlaceholderHash)
 				} else {
-					if subtreeData != nil && subtreeData.Txs[i] != nil {
-						// Use subtreeData to get the transaction metadata
-						txMeta, err = util.TxMetaDataFromTx(subtreeData.Txs[i])
-						if err != nil {
-							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta from subtreeData: %s", node.Hash.String(), err.Error())
-						}
-
-						// Ensure Fee and SizeInBytes are set from the subtree node, the subtreeData.Txs[i] may not be extended
-						if txMeta != nil {
-							txMeta.Fee = node.Fee
-							txMeta.SizeInBytes = node.SizeInBytes
-						}
-					}
-
-					if txMeta == nil {
-						// If subtreeData is not available or txMeta is nil,
-						// Fallback to the repository to get the transaction metadata
-						txMeta, err = h.repository.GetTransactionMeta(ctx, &node.Hash)
-						if err != nil {
-							// NewTxNotFoundError
-							if errors.Is(err, errors.ErrTxNotFound) {
-								h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
-							} else {
-								h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
-							}
+					txMeta, err = h.repository.GetTransactionMeta(ctx, &node.Hash)
+					if err != nil {
+						// NewTxNotFoundError
+						if errors.Is(err, errors.ErrTxNotFound) {
+							h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
+						} else {
+							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
 						}
 					}
 
@@ -230,7 +198,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 				Pagination: Pagination{
 					Offset:       offset,
 					Limit:        limit,
-					TotalRecords: subtree.Length(),
+					TotalRecords: totalRecords,
 				},
 			}
 
