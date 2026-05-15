@@ -611,11 +611,11 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			status, desc := describeTxError(err)
+			status, codeMsg := describeTxError(err)
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
 			}
-			return c.String(status, fmt.Sprintf("%d %s", status, desc))
+			return c.String(status, codeMsg)
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -623,49 +623,58 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 }
 
 // describeTxError maps a transaction processing error to the appropriate
-// HTTP status code and a short, machine-friendly description of the root
-// cause. Walks the error chain via errors.Is so wrapped inner errors are
+// HTTP status code and the Teranode error code that best classifies the
+// root cause, formatted as "NAME (num)" (matches UserMessage's existing
+// shape). Walks the error chain via errors.Is so wrapped inner errors are
 // classified by their actual cause rather than the outer wrapper.
 //
-// The description is a fixed, short string per branch — callers consuming
-// the propagation API surface this string directly (single-tx body, batch
-// per-slot line) and downstream consumers may switch on it. Keep it stable.
+// The HTTP status is consumed by single-tx /tx as the response status. The
+// code string is consumed as the response body (single-tx) and as the per-
+// slot line in /txs.
 func describeTxError(err error) (int, string) {
 	switch {
 	case errors.Is(err, errors.ErrTxExists):
 		// Duplicate submission of a tx Teranode has already accepted. The
 		// resource is already in the desired state — surface as success so
 		// clients don't treat idempotent resubmits as failures.
-		return http.StatusOK, "transaction already accepted"
+		return http.StatusOK, formatErrCode(errors.ERR_TX_EXISTS)
 	case errors.Is(err, errors.ErrFrozen):
-		return http.StatusForbidden, "utxo frozen"
+		return http.StatusForbidden, formatErrCode(errors.ERR_UTXO_FROZEN)
 	case errors.Is(err, errors.ErrTxInvalidDoubleSpend):
-		return http.StatusConflict, "double spend"
+		return http.StatusConflict, formatErrCode(errors.ERR_TX_INVALID_DOUBLE_SPEND)
 	case errors.Is(err, errors.ErrTxConflicting):
-		return http.StatusConflict, "transaction conflicting"
+		return http.StatusConflict, formatErrCode(errors.ERR_TX_CONFLICTING)
 	case errors.Is(err, errors.ErrSpent):
-		return http.StatusConflict, "utxo already spent"
+		return http.StatusConflict, formatErrCode(errors.ERR_UTXO_SPENT)
 	case errors.Is(err, errors.ErrTxLocked):
-		return http.StatusConflict, "transaction locked"
+		return http.StatusConflict, formatErrCode(errors.ERR_TX_LOCKED)
 	case errors.Is(err, errors.ErrTxMissingParent):
-		return http.StatusUnprocessableEntity, "transaction missing parent"
+		return http.StatusUnprocessableEntity, formatErrCode(errors.ERR_TX_MISSING_PARENT)
 	case errors.Is(err, errors.ErrInvalidArgument):
-		return http.StatusBadRequest, "invalid argument"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_INVALID_ARGUMENT)
 	case errors.Is(err, errors.ErrTxInvalid):
-		return http.StatusBadRequest, "transaction invalid"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_TX_INVALID)
 	case errors.Is(err, errors.ErrTxLockTime):
-		return http.StatusBadRequest, "transaction lock time"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_TX_LOCK_TIME)
 	case errors.Is(err, errors.ErrNonFinal):
-		return http.StatusBadRequest, "transaction not final"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_UTXO_NON_FINAL)
 	case errors.Is(err, errors.ErrTxPolicy):
-		return http.StatusBadRequest, "transaction policy rejection"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_TX_POLICY)
 	case errors.Is(err, errors.ErrTxCoinbaseImmature):
-		return http.StatusBadRequest, "coinbase immature"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_TX_COINBASE_IMMATURE)
 	case errors.Is(err, errors.ErrUtxoInvalidSize):
-		return http.StatusBadRequest, "utxo invalid size"
+		return http.StatusBadRequest, formatErrCode(errors.ERR_UTXO_INVALID_SIZE)
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return http.StatusInternalServerError, formatErrCode(errors.ERR_PROCESSING)
 	}
+}
+
+// formatErrCode renders a Teranode error code as "NAME (num)", e.g.
+// "TX_MISSING_PARENT (34)". Matches the shape errors.UserMessage produces
+// for the code+number prefix so callers that already parse that prefix can
+// reuse the same logic.
+func formatErrCode(code errors.ERR) string {
+	return fmt.Sprintf("%s (%d)", code.String(), code)
 }
 
 // handleMultipleTx handles multiple transactions on the /txs endpoint.
@@ -837,11 +846,11 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		processingWg.Wait()
 
 		// Append a per-slot status string in submission order: "OK" for
-		// successful slots, "<HTTP_status> <description>" for failed slots.
+		// successful slots, "<TERANODE_CODE> (<num>)" for failed slots.
 		// Including "OK" entries for the successful slots preserves the
 		// submission-index ↔ response-line mapping in the error response so
 		// a caller can attribute each result back to a specific txid. The
-		// per-line HTTP status prefix mirrors the single-tx /tx response so
+		// per-slot Teranode code mirrors the single-tx /tx response body so
 		// callers can classify each tx the same way regardless of which
 		// endpoint they posted to.
 		slotLines := make([]string, 0, nextSlot)
@@ -853,8 +862,8 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 				continue
 			}
 
-			status, desc := describeTxError(err)
-			slotLines = append(slotLines, fmt.Sprintf("%d %s", status, desc))
+			_, codeMsg := describeTxError(err)
+			slotLines = append(slotLines, codeMsg)
 			anyError = true
 		}
 

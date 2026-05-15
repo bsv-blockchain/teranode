@@ -106,8 +106,8 @@ func Test_handleMultipleTx_PanicDuringRead(t *testing.T) {
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
 	// Panic recovery on a request-body read produces a parse error that falls
-	// through describeTxError's default branch — "500 internal error".
-	assert.Contains(t, string(body), "500 internal error")
+	// through describeTxError's default branch — "PROCESSING (4)".
+	assert.Contains(t, string(body), "PROCESSING (4)")
 }
 
 // Test_handleSingleTx_InvalidBody ensures single-tx HTTP path reports 500 for invalid bytes
@@ -139,8 +139,8 @@ func Test_handleSingleTx_InvalidBody(t *testing.T) {
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
 	// Parse failure on invalid tx bytes falls through describeTxError's
-	// default branch — "500 internal error".
-	assert.Contains(t, string(body), "500 internal error")
+	// default branch — "PROCESSING (4)".
+	assert.Contains(t, string(body), "PROCESSING (4)")
 }
 
 // TestProcessTransaction_InvalidBytes validates gRPC method error path on invalid bytes
@@ -827,7 +827,7 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	require.NoError(t, err)
 
 	// Every tx fails with a TxInvalidError, so the response should contain
-	// numSiblings lines, each rendered as "400 transaction invalid" by
+	// numSiblings lines, each rendered as "TX_INVALID (31)" by
 	// describeTxError. The submission ordering is preserved by line
 	// position regardless of which worker finishes first.
 	_ = expectedTxids
@@ -836,7 +836,7 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	require.Lenf(t, lines, numSiblings, "expected one line per submission slot; body=%q", string(responseBody))
 
 	for i, line := range lines {
-		require.Equalf(t, "400 transaction invalid", line, "slot %d expected '400 transaction invalid'; got %q", i, line)
+		require.Equalf(t, "TX_INVALID (31)", line, "slot %d expected 'TX_INVALID (31)'; got %q", i, line)
 	}
 }
 
@@ -932,11 +932,11 @@ func Test_handleMultipleTx_PerSlotResponseLines(t *testing.T) {
 			require.Equalf(t, "OK", line, "slot %d expected OK; got %q", i, line)
 			continue
 		}
-		// orderedErrValidator returns TxInvalidError so describeTxError
-		// emits "400 transaction invalid". The HTTP-code prefix lets the
-		// caller classify per-slot the same way they would a single-tx
-		// /tx response.
-		require.Equalf(t, "400 transaction invalid", line, "slot %d expected '400 transaction invalid'; got %q", i, line)
+		// failByTxidValidator returns TxInvalidError so describeTxError
+		// emits "TX_INVALID (31)". Matching the single-tx /tx response
+		// body lets callers classify per-slot the same way regardless of
+		// which endpoint they posted to.
+		require.Equalf(t, "TX_INVALID (31)", line, "slot %d expected 'TX_INVALID (31)'; got %q", i, line)
 	}
 }
 
