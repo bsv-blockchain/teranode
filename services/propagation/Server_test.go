@@ -105,7 +105,7 @@ func Test_handleMultipleTx_PanicDuringRead(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
-	assert.Contains(t, string(body), "Failed to process transactions")
+	assert.Contains(t, string(body), "panic")
 }
 
 // Test_handleSingleTx_InvalidBody ensures single-tx HTTP path reports 500 for invalid bytes
@@ -831,6 +831,102 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 		idx := strings.Index(body[prev:], txid)
 		require.GreaterOrEqualf(t, idx, 0, "txid for submission %d (%s) not found in response after position %d; body=%q", i, txid, prev, body)
 		prev += idx + len(txid)
+	}
+}
+
+// failByTxidValidator fails Validate for any tx whose txid is in the failTxids
+// set and succeeds otherwise. Lets a test deterministically target specific
+// submission slots regardless of the concurrent order workers call Validate.
+type failByTxidValidator struct {
+	validator.MockValidatorClient
+	failTxids map[string]struct{}
+}
+
+func (m *failByTxidValidator) Validate(_ context.Context, tx *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	txid := tx.TxIDChainHash().String()
+	if _, fail := m.failTxids[txid]; fail {
+		return nil, errors.NewTxInvalidError("validator rejected tx %s", txid)
+	}
+	return &meta.Data{Tx: tx}, nil
+}
+
+// Test_handleMultipleTx_PerSlotResponseLines verifies that on a partially-
+// failing batch the response body emits one line per submission slot: "OK"
+// for successful slots and an error message for failed slots, with the line
+// index in the response mapping 1:1 to the submission index. Without per-slot
+// lines, the previous response (errors only, joined by newlines) collapsed
+// the submission ordering and prevented callers from attributing failures
+// back to specific txids.
+func Test_handleMultipleTx_PerSlotResponseLines(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	const numSiblings = 8
+
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(numSiblings, 50e6, pubKey),
+	)
+
+	expectedTxids := make([]string, 0, numSiblings)
+	failTxids := make(map[string]struct{}, numSiblings/2)
+	txBytes := make([]byte, 0, 1024)
+
+	for i := uint32(0); i < numSiblings; i++ {
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privKey),
+			transactions.WithInput(coinbaseTx, i),
+			transactions.WithP2PKHOutputs(1, 1000),
+		)
+		txid := tx.TxIDChainHash().String()
+		expectedTxids = append(expectedTxids, txid)
+		if i%2 == 1 {
+			failTxids[txid] = struct{}{}
+		}
+		txBytes = append(txBytes, tx.ExtendedBytes()...)
+	}
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &failByTxidValidator{failTxids: failTxids},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	responseBody, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+
+	body := strings.TrimSuffix(string(responseBody), "\n")
+	lines := strings.Split(body, "\n")
+	require.Lenf(t, lines, numSiblings, "expected one line per submission slot; body=%q", string(responseBody))
+
+	for i, line := range lines {
+		if i%2 == 0 {
+			require.Equalf(t, "OK", line, "slot %d expected OK; got %q", i, line)
+			continue
+		}
+		require.Containsf(t, line, expectedTxids[i], "slot %d expected to contain txid %s; got %q", i, expectedTxids[i], line)
 	}
 }
 

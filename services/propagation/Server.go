@@ -823,25 +823,37 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// edge for the writes.
 		processingWg.Wait()
 
-		var errMsgs []string
-
-		for _, err := range errSlots[:nextSlot] {
-			if err == nil {
-				continue
-			}
-
-			errMsgs = append(errMsgs, errors.UserMessage(err))
-		}
-
 		if earlyExitMsg != "" {
 			return c.String(http.StatusBadRequest, earlyExitMsg)
 		}
 
-		if len(errMsgs) > 0 {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
+		// Build one status line per submission slot so the line index in the
+		// response body maps 1:1 to the submission index. Successful slots emit
+		// "OK"; failed slots emit the user-facing error message. Without the
+		// per-slot lines, a caller could not attribute an error in the body
+		// back to a specific txid in their submission stream — the slot
+		// machinery inside the handler preserves submission order, but the
+		// previous response shape (errors only, joined with newlines)
+		// collapsed that ordering at the API boundary.
+		//
+		// All-success batches retain the historical short "OK" body so the
+		// common-case response stays compact on the wire.
+		lines := make([]string, nextSlot)
+		anyError := false
+		for i, err := range errSlots[:nextSlot] {
+			if err == nil {
+				lines[i] = "OK"
+				continue
+			}
+			lines[i] = errors.UserMessage(err)
+			anyError = true
 		}
 
-		return c.String(http.StatusOK, "OK")
+		if !anyError {
+			return c.String(http.StatusOK, "OK")
+		}
+
+		return c.String(http.StatusInternalServerError, strings.Join(lines, "\n")+"\n")
 	}
 }
 
