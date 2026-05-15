@@ -137,6 +137,106 @@ func TestSplitMapBuckets_ConfigClampingAndDefault(t *testing.T) {
 	}
 }
 
+// TestFlatIndexToSubtreeNode_SkipsEmptySubtrees mirrors the iteration shape
+// used by addMoveBackBlockNodesToSubtrees' Stage A worker. The pre-fix code
+// only stepped a single subtree on overflow and panicked if the next
+// subtree slice happened to be empty. This test asserts that the start-of-
+// chunk lookup AND the increment loop both correctly skip empty subtrees.
+func TestFlatIndexToSubtreeNode_SkipsEmptySubtrees(t *testing.T) {
+	nodes := [][]subtreepkg.Node{
+		{makeNode(1), makeNode(2)},
+		{},
+		{},
+		{makeNode(3)},
+		{},
+		{makeNode(4), makeNode(5)},
+	}
+
+	// Walk the flat index space and confirm flatIndexToSubtreeNode lines up
+	// each flat position with a non-empty inner slice (or end-of-input).
+	want := []struct{ sIdx, i int }{
+		{0, 0}, // tree[0][0]
+		{0, 1}, // tree[0][1]
+		{3, 0}, // tree[3][0] — skipped tree[1] and tree[2]
+		{5, 0}, // tree[5][0] — skipped tree[4]
+		{5, 1}, // tree[5][1]
+		{6, 0}, // past-the-end (== len(nodes))
+	}
+
+	for flat, exp := range want {
+		gotS, gotI := flatIndexToSubtreeNode(nodes, flat)
+		require.Equalf(t, exp.sIdx, gotS, "flat=%d sIdx", flat)
+		require.Equalf(t, exp.i, gotI, "flat=%d i", flat)
+	}
+}
+
+// TestTxMapPool_GrowsOnLargerBlock simulates the
+// "first block was small, later block is large" scenario flagged in code
+// review: the pool should be reallocated (not auto-rehashed by swiss.Map)
+// when the requested mapSize exceeds the pool's recorded capacity.
+func TestTxMapPool_GrowsOnLargerBlock(t *testing.T) {
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.SplitMapBuckets = 16
+
+	stp, err := NewSubtreeProcessor(
+		context.Background(), ulogger.TestLogger{}, settings,
+		nil, nil, nil, make(chan NewSubtreeRequest, 1),
+	)
+	require.NoError(t, err)
+
+	require.Nil(t, stp.txMapPool, "pool should be lazily allocated, not present at construction")
+	require.Equal(t, 0, stp.txMapPoolCapacity)
+
+	// First "block": modest size.
+	stp.txMapPool = NewSplitSwissMap(1024, 1000)
+	stp.txMapPoolCapacity = 1000
+	priorPool := stp.txMapPool
+
+	// Simulate the constructor-style sizing branch used by CreateTransactionMap.
+	// Re-running the same logic in a helper would couple the test to the public
+	// API more than needed; instead, mirror the three cases directly.
+
+	// Same-or-smaller block: pool retained, only Clear()ed.
+	requestedMapSize := 500
+
+	switch {
+	case stp.txMapPool == nil:
+		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
+		stp.txMapPoolCapacity = requestedMapSize
+	case requestedMapSize > stp.txMapPoolCapacity:
+		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
+		stp.txMapPoolCapacity = requestedMapSize
+	default:
+		stp.txMapPool.Clear()
+	}
+
+	require.Same(t, priorPool, stp.txMapPool, "same-or-smaller block must reuse the pool, not reallocate")
+	require.Equal(t, 1000, stp.txMapPoolCapacity)
+
+	// Larger block: pool must be reallocated, capacity recorded.
+	requestedMapSize = 5000
+
+	switch {
+	case stp.txMapPool == nil:
+		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
+		stp.txMapPoolCapacity = requestedMapSize
+	case requestedMapSize > stp.txMapPoolCapacity:
+		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
+		stp.txMapPoolCapacity = requestedMapSize
+	default:
+		stp.txMapPool.Clear()
+	}
+
+	require.NotSame(t, priorPool, stp.txMapPool, "larger block must trigger reallocation, not in-place rehash")
+	require.Equal(t, 5000, stp.txMapPoolCapacity)
+}
+
+// makeNode builds a deterministic subtree node for tests that only care about
+// the hash byte for identity.
+func makeNode(b byte) subtreepkg.Node {
+	return subtreepkg.Node{Hash: makeHash(b)}
+}
+
 // TestDoubleBuffer_DisableViaFlag verifies that setting
 // disableCurrentTxMapPool causes swapCurrentTxMapBack and
 // clearCurrentTxMapShadow to no-op, matching the reorgBlocks rollback

@@ -344,6 +344,13 @@ type SubtreeProcessor struct {
 	// concurrent access, no locking beyond what SplitSwissMap already provides.
 	txMapPool *SplitSwissMap
 
+	// txMapPoolCapacity tracks the (per-bucket × buckets) sizing the pool was
+	// last allocated for. When a block's estimated map size exceeds this,
+	// the pool is reallocated at the new high-water mark rather than
+	// suffering swiss.Map's internal auto-rehash mid-fill — which would
+	// allocate inside the hot path and defeat much of the pooling win.
+	txMapPoolCapacity int
+
 	// currentTxMapShadow is the inactive half of a double-buffered currentTxMap
 	// used to avoid per-block 4096-shard SyncedMap allocations in
 	// resetSubtreeState. nil when diskTxMap is in use (that path reuses
@@ -3512,8 +3519,12 @@ func (stp *SubtreeProcessor) addMoveBackBlockNodesToSubtrees(block *model.Block,
 					wasInserted[sIdx][i] = wasSet
 				}
 
+				// Advance to the next entry, skipping any zero-length subtree
+				// slices in between. A single if-step would panic on the very
+				// next iteration if subtreesNodes[sIdx+1] (or any subsequent
+				// slice up to flatEnd) were empty.
 				i++
-				if i >= len(subtreesNodes[sIdx]) {
+				for sIdx < len(subtreesNodes) && i >= len(subtreesNodes[sIdx]) {
 					sIdx++
 					i = 0
 				}
@@ -4943,14 +4954,25 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	// ~600M-entry allocation that dominated GC in profiling. The pool is owned
 	// by the single Start() goroutine, so no locking beyond what SplitSwissMap
 	// already provides. swiss.Map.Clear is in-place and retains capacity.
-	// On the first call the pool is sized for this block; subsequent larger
-	// blocks trigger swiss.Map's own auto-rehash (rare and cheaper than a fresh
-	// allocation of the full structure).
-	if stp.txMapPool == nil {
+	//
+	// Sizing policy: high-water mark. The pool is reallocated when a block
+	// requests more capacity than the pool was last sized for, otherwise the
+	// existing buckets are Clear()ed and reused in place. Reallocating on
+	// growth avoids swiss.Map's internal auto-rehash firing mid-fill — that
+	// would allocate inside the hot path and defeat most of the pooling win
+	// when the first observed block is smaller than later ones (e.g. node
+	// started during a low-traffic window).
+	switch {
+	case stp.txMapPool == nil:
 		stp.logger.Debugf("Allocating pooled transaction map with size: %d", mapSize)
 		stp.txMapPool = NewSplitSwissMap(1024, mapSize) // 1024 buckets
-	} else {
-		stp.logger.Debugf("Reusing pooled transaction map (clearing prior contents, size: %d)", mapSize)
+		stp.txMapPoolCapacity = mapSize
+	case mapSize > stp.txMapPoolCapacity:
+		stp.logger.Debugf("Growing pooled transaction map from %d to %d", stp.txMapPoolCapacity, mapSize)
+		stp.txMapPool = NewSplitSwissMap(1024, mapSize)
+		stp.txMapPoolCapacity = mapSize
+	default:
+		stp.logger.Debugf("Reusing pooled transaction map (clearing prior contents, requested size: %d, pool capacity: %d)", mapSize, stp.txMapPoolCapacity)
 		stp.txMapPool.Clear()
 	}
 
