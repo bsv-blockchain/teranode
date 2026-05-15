@@ -554,12 +554,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // - The block IDs returned by the underlying store for this tx
 // - Error if the underlying store fails
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) ([]uint32, error) {
-	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
+	blockIDsMap, err := t.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
 		return nil, err
 	}
-
-	_ = t.Delete(ctx, hash)
 
 	return blockIDsMap[*hash], nil
 }
@@ -581,6 +579,31 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, hashes, minedBlockInfo)
 	if err != nil {
 		return nil, err
+	}
+
+	// Defensive postcondition (see stores/utxo/Interface.go SetMinedMulti
+	// docstring): as an implementation of utxo.Store, re-verify coverage even
+	// when the wrapped store says success. Catches regressions in any backend
+	// before the cache layer hides them.
+	if !minedBlockInfo.UnsetMined {
+		for _, h := range hashes {
+			bIDs, ok := blockIDsMap[*h]
+			if !ok {
+				return nil, errors.NewTxNotFoundError("setMinedMulti coverage gap: tx absent from store result", h.String())
+			}
+
+			found := false
+			for _, bID := range bIDs {
+				if bID == minedBlockInfo.BlockID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return nil, errors.NewProcessingError("setMinedMulti coverage gap: tx present but missing current blockID", h.String())
+			}
+		}
 	}
 
 	for _, hash := range hashes {
