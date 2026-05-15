@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -63,17 +64,22 @@ func (m *MockValidatorForTxTest) WasValidateCalled() bool {
 	return m.validateCalled.Load()
 }
 
-// MockTxStore is a simple mock transaction store for testing
+// MockTxStore is a simple mock transaction store for testing.
+// Real blob stores are concurrency-safe; the mock must be too because the
+// batch HTTP/gRPC handlers fan out parallel writes.
 type MockTxStore struct {
 	storeCalled atomic.Bool
 	storeErr    error
+	mu          sync.Mutex
 	txIDs       [][]byte
 }
 
 // Store implements a mock Store method
 func (s *MockTxStore) Store(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	s.storeCalled.Store(true)
+	s.mu.Lock()
 	s.txIDs = append(s.txIDs, key)
+	s.mu.Unlock()
 
 	return s.storeErr
 }
@@ -85,6 +91,9 @@ func (s *MockTxStore) Get(ctx context.Context, key []byte, fileType fileformat.F
 
 // Exists implements a mock Exists method matching blob.Store interface
 func (s *MockTxStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for _, id := range s.txIDs {
 		if bytes.Equal(id, key) {
 			return true, nil
@@ -138,6 +147,9 @@ func (s *MockTxStore) Del(ctx context.Context, key []byte, fileType fileformat.F
 
 // Size implements a mock Size method
 func (s *MockTxStore) Size() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return uint64(len(s.txIDs))
 }
 

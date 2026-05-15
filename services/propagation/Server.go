@@ -684,34 +684,47 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		)
 		defer deferFn()
 
-		processTxs := make(chan *bt.Tx, maxTransactionsPerRequest)
-		processErrors := make(chan error, maxTransactionsPerRequest)
+		// Errors are reported in stream submission order. Each parse attempt and
+		// each dispatched transaction is assigned a monotonically increasing
+		// submission index; workers write into a pre-allocated slot at that
+		// index. After all workers finish, the slots are walked in order to
+		// produce a deterministic ordered error list — independent of the order
+		// in which concurrent workers complete.
+		//
+		// errSlots has len == cap and is never resized, so the slice header is
+		// never written by the producer after workers start. Workers write to
+		// distinct indices, the producer writes to its own indices, and reads
+		// happen only after processingWg.Wait() establishes happens-before.
+		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
+		errSlots := make([]error, maxSubmissions)
+		nextSlot := 0
 		processingWg := sync.WaitGroup{}
-		processingErrorWg := sync.WaitGroup{}
 		totalNrTransactions := 0
 		totalBytesRead := int64(0)
 
-		go func() {
-			// Process transactions in a separate goroutine
-			for tx := range processTxs {
-				if err := ps.processTransactionInternal(ctx, tx); err != nil {
-					processingErrorWg.Add(1)
-					processErrors <- err
+		// Caller contract: a batch must NOT contain both a parent and any of
+		// its children. The server does not enforce this — violating it will
+		// surface as missing-parent errors because txs in a batch are processed
+		// concurrently here with no in-batch ordering. See ProcessTransactionBatch
+		// for the gRPC equivalent of this pattern.
+		processOne := func(tx *bt.Tx, slot int) {
+			defer processingWg.Done()
+
+			if ps.batchWorkerPool != nil {
+				defer func() { <-ps.batchWorkerPool }()
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					ps.logger.Errorf("Recovered from panic in processTransactionInternal: %v", r)
+					errSlots[slot] = errors.NewProcessingError("transaction processing panic: %v", r)
 				}
+			}()
 
-				processingWg.Done()
+			if err := ps.processTransactionInternal(ctx, tx); err != nil {
+				errSlots[slot] = err
 			}
-		}()
-
-		// Collect errors in a slice - single goroutine writes, WaitGroup provides synchronization
-		var errMsgs []string
-
-		go func() {
-			for err := range processErrors {
-				errMsgs = append(errMsgs, errors.UserMessage(err))
-				processingErrorWg.Done()
-			}
-		}()
+		}
 
 		// Track early-exit error to return after cleanup
 		var earlyExitMsg string
@@ -726,6 +739,14 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 			if totalBytesRead >= maxDataPerRequest {
 				earlyExitMsg = "Invalid request body: too much data"
+				break
+			}
+
+			// All submission slots consumed (parse errors + successful txs).
+			// Cut off the stream to prevent unbounded parse-error accumulation
+			// from outgrowing the pre-allocated slot budget.
+			if nextSlot >= maxSubmissions {
+				earlyExitMsg = "Invalid request body: too many submissions"
 				break
 			}
 
@@ -750,8 +771,9 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 					break
 				}
 
-				processingErrorWg.Add(1)
-				processErrors <- err
+				// Record the parse error in submission order.
+				errSlots[nextSlot] = err
+				nextSlot++
 
 				// if the error came from panic recovery, the stream is likely corrupted
 				if terr, ok := err.(*errors.Error); ok && terr.Code() == errors.ERR_PROCESSING {
@@ -766,17 +788,50 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			totalNrTransactions++
 			totalBytesRead += bytesRead
 
-			// Send transaction to processing channel
+			// Acquire the server-wide batch semaphore before spawning a goroutine,
+			// so total concurrent tx-processing goroutines stay bounded across all
+			// HTTP and gRPC batch calls. If the limit is disabled (nil), spawn
+			// immediately. Respect context cancellation so a disconnected client
+			// can drain the handler.
+			cancelled := false
+
+			if ps.batchWorkerPool != nil {
+				select {
+				case ps.batchWorkerPool <- struct{}{}:
+				case <-ctx.Done():
+					errSlots[nextSlot] = errors.WrapPublic(ctx.Err())
+					nextSlot++
+					earlyExitMsg = "request context cancelled"
+					cancelled = true
+				}
+			}
+
+			if cancelled {
+				break
+			}
+
+			// Reserve a submission slot for this tx and dispatch the worker.
+			slot := nextSlot
+			nextSlot++
 			processingWg.Add(1)
-			processTxs <- tx
+
+			go processOne(tx, slot)
 		}
 
-		// Close processTxs to signal the processing goroutine to exit,
-		// then wait for all in-flight work and errors to drain
-		close(processTxs)
+		// Wait for all worker goroutines to finish writing their slots before
+		// reading errSlots. The Done/Wait pair establishes the happens-before
+		// edge for the writes.
 		processingWg.Wait()
-		close(processErrors)
-		processingErrorWg.Wait()
+
+		var errMsgs []string
+
+		for _, err := range errSlots[:nextSlot] {
+			if err == nil {
+				continue
+			}
+
+			errMsgs = append(errMsgs, errors.UserMessage(err))
+		}
 
 		if earlyExitMsg != "" {
 			return c.String(http.StatusBadRequest, earlyExitMsg)
