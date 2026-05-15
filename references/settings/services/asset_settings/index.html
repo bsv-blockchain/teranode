@@ -7102,7 +7102,7 @@
 <tr>
 <td>HTTPAddress</td>
 <td>string</td>
-<td>"http://localhost:8090/api/v1"</td>
+<td>"<code>http://localhost:8090/api/v1</code>"</td>
 <td>asset_httpAddress</td>
 <td><strong>Required when Centrifuge enabled</strong> - Must be non-empty and valid URL format</td>
 </tr>
@@ -7179,21 +7179,21 @@
 <tr>
 <td>ConcurrencyGetSubtreeData</td>
 <td>int</td>
-<td>0</td>
+<td>2</td>
 <td>asset_concurrency_get_subtree_data</td>
 <td>Rate limit for GetSubtreeData</td>
 </tr>
 <tr>
 <td>ConcurrencyGetSubtreeDataReader</td>
 <td>int</td>
-<td>0</td>
+<td>4</td>
 <td>asset_concurrency_get_subtree_data_reader</td>
 <td>Rate limit for GetSubtreeDataReader</td>
 </tr>
 <tr>
 <td>ConcurrencyGetSubtreeTransactions</td>
 <td>int</td>
-<td>0</td>
+<td>2</td>
 <td>asset_concurrency_get_subtree_transactions</td>
 <td>Rate limit for GetSubtreeTransactions</td>
 </tr>
@@ -7235,7 +7235,7 @@
 <tr>
 <td>SubtreeDataStreamingConcurrency</td>
 <td>int</td>
-<td>4</td>
+<td>2</td>
 <td>asset_subtreeDataStreamingConcurrency</td>
 <td>Parallel workers for subtree data streaming</td>
 </tr>
