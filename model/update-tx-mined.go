@@ -217,8 +217,8 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	var (
 		blockInvalidError   error
 		blockInvalidErrorMu = sync.Mutex{}
-		setMinedErrorCount  = atomic.Uint64{} // SetMinedMulti returned an error (I/O / store failure)
-		coverageGapCount    = atomic.Uint64{} // SetMinedMulti returned success but a submitted tx was not durably tagged
+		setMinedErrorCount  = atomic.Uint64{}   // SetMinedMulti returned an error (I/O / store failure)
+		coverageGapCount    = atomic.Uint64{}   // SetMinedMulti returned success but a submitted tx was not durably tagged
 		oldBlockIDs         = make([]uint32, 0) // Collect old block IDs for slow-path
 		oldBlockIDsMu       sync.Mutex
 	)
