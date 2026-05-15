@@ -611,47 +611,60 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			status := httpStatusForTxError(err)
+			status, desc := describeTxError(err)
 			if status >= 200 && status < 300 {
 				return c.String(status, "OK")
 			}
-			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
+			return c.String(status, fmt.Sprintf("%d %s", status, desc))
 		}
 
 		return c.String(http.StatusOK, "OK")
 	}
 }
 
-// httpStatusForTxError maps a transaction processing error to the appropriate
-// HTTP status code so clients can distinguish tx rejections from system
-// failures. Walks the error chain via errors.Is so wrapped inner errors are
-// classified by their actual cause.
-func httpStatusForTxError(err error) int {
+// describeTxError maps a transaction processing error to the appropriate
+// HTTP status code and a short, machine-friendly description of the root
+// cause. Walks the error chain via errors.Is so wrapped inner errors are
+// classified by their actual cause rather than the outer wrapper.
+//
+// The description is a fixed, short string per branch — callers consuming
+// the propagation API surface this string directly (single-tx body, batch
+// per-slot line) and downstream consumers may switch on it. Keep it stable.
+func describeTxError(err error) (int, string) {
 	switch {
 	case errors.Is(err, errors.ErrTxExists):
 		// Duplicate submission of a tx Teranode has already accepted. The
 		// resource is already in the desired state — surface as success so
 		// clients don't treat idempotent resubmits as failures.
-		return http.StatusOK
+		return http.StatusOK, "transaction already accepted"
 	case errors.Is(err, errors.ErrFrozen):
-		return http.StatusForbidden
-	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
-		errors.Is(err, errors.ErrTxConflicting),
-		errors.Is(err, errors.ErrSpent),
-		errors.Is(err, errors.ErrTxLocked):
-		return http.StatusConflict
+		return http.StatusForbidden, "utxo frozen"
+	case errors.Is(err, errors.ErrTxInvalidDoubleSpend):
+		return http.StatusConflict, "double spend"
+	case errors.Is(err, errors.ErrTxConflicting):
+		return http.StatusConflict, "transaction conflicting"
+	case errors.Is(err, errors.ErrSpent):
+		return http.StatusConflict, "utxo already spent"
+	case errors.Is(err, errors.ErrTxLocked):
+		return http.StatusConflict, "transaction locked"
 	case errors.Is(err, errors.ErrTxMissingParent):
-		return http.StatusUnprocessableEntity
-	case errors.Is(err, errors.ErrInvalidArgument),
-		errors.Is(err, errors.ErrTxInvalid),
-		errors.Is(err, errors.ErrTxLockTime),
-		errors.Is(err, errors.ErrNonFinal),
-		errors.Is(err, errors.ErrTxPolicy),
-		errors.Is(err, errors.ErrTxCoinbaseImmature),
-		errors.Is(err, errors.ErrUtxoInvalidSize):
-		return http.StatusBadRequest
+		return http.StatusUnprocessableEntity, "transaction missing parent"
+	case errors.Is(err, errors.ErrInvalidArgument):
+		return http.StatusBadRequest, "invalid argument"
+	case errors.Is(err, errors.ErrTxInvalid):
+		return http.StatusBadRequest, "transaction invalid"
+	case errors.Is(err, errors.ErrTxLockTime):
+		return http.StatusBadRequest, "transaction lock time"
+	case errors.Is(err, errors.ErrNonFinal):
+		return http.StatusBadRequest, "transaction not final"
+	case errors.Is(err, errors.ErrTxPolicy):
+		return http.StatusBadRequest, "transaction policy rejection"
+	case errors.Is(err, errors.ErrTxCoinbaseImmature):
+		return http.StatusBadRequest, "coinbase immature"
+	case errors.Is(err, errors.ErrUtxoInvalidSize):
+		return http.StatusBadRequest, "utxo invalid size"
 	default:
-		return http.StatusInternalServerError
+		return http.StatusInternalServerError, "internal error"
 	}
 }
 
@@ -824,20 +837,24 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		processingWg.Wait()
 
 		// Append a per-slot status string in submission order: "OK" for
-		// successful slots, the user-facing error message for failed slots.
+		// successful slots, "<HTTP_status> <description>" for failed slots.
 		// Including "OK" entries for the successful slots preserves the
 		// submission-index ↔ response-line mapping in the error response so
-		// a caller can attribute each error back to a specific txid.
-		var errMsgs []string
+		// a caller can attribute each result back to a specific txid. The
+		// per-line HTTP status prefix mirrors the single-tx /tx response so
+		// callers can classify each tx the same way regardless of which
+		// endpoint they posted to.
+		var slotLines []string
 		anyError := false
 
 		for _, err := range errSlots[:nextSlot] {
 			if err == nil {
-				errMsgs = append(errMsgs, "OK")
+				slotLines = append(slotLines, "OK")
 				continue
 			}
 
-			errMsgs = append(errMsgs, errors.UserMessage(err))
+			status, desc := describeTxError(err)
+			slotLines = append(slotLines, fmt.Sprintf("%d %s", status, desc))
 			anyError = true
 		}
 
@@ -846,7 +863,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		}
 
 		if anyError {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
+			return c.String(http.StatusInternalServerError, strings.Join(slotLines, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")

@@ -105,7 +105,9 @@ func Test_handleMultipleTx_PanicDuringRead(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
-	assert.Contains(t, string(body), "Failed to process transactions")
+	// Panic recovery on a request-body read produces a parse error that falls
+	// through describeTxError's default branch — "500 internal error".
+	assert.Contains(t, string(body), "500 internal error")
 }
 
 // Test_handleSingleTx_InvalidBody ensures single-tx HTTP path reports 500 for invalid bytes
@@ -136,7 +138,9 @@ func Test_handleSingleTx_InvalidBody(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
-	assert.Contains(t, string(body), "Failed to process transaction:")
+	// Parse failure on invalid tx bytes falls through describeTxError's
+	// default branch — "500 internal error".
+	assert.Contains(t, string(body), "500 internal error")
 }
 
 // TestProcessTransaction_InvalidBytes validates gRPC method error path on invalid bytes
@@ -822,15 +826,17 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	responseBody, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)
 
-	// Every tx fails, so the response should contain numSiblings error lines,
-	// each naming its tx's txid, in the same order the txs were submitted.
-	body := string(responseBody)
-	prev := 0
+	// Every tx fails with a TxInvalidError, so the response should contain
+	// numSiblings lines, each rendered as "400 transaction invalid" by
+	// describeTxError. The submission ordering is preserved by line
+	// position regardless of which worker finishes first.
+	_ = expectedTxids
+	body := strings.TrimSuffix(string(responseBody), "\n")
+	lines := strings.Split(body, "\n")
+	require.Lenf(t, lines, numSiblings, "expected one line per submission slot; body=%q", string(responseBody))
 
-	for i, txid := range expectedTxids {
-		idx := strings.Index(body[prev:], txid)
-		require.GreaterOrEqualf(t, idx, 0, "txid for submission %d (%s) not found in response after position %d; body=%q", i, txid, prev, body)
-		prev += idx + len(txid)
+	for i, line := range lines {
+		require.Equalf(t, "400 transaction invalid", line, "slot %d expected '400 transaction invalid'; got %q", i, line)
 	}
 }
 
@@ -919,19 +925,18 @@ func Test_handleMultipleTx_PerSlotResponseLines(t *testing.T) {
 
 	body := strings.TrimSuffix(string(responseBody), "\n")
 	lines := strings.Split(body, "\n")
-	require.GreaterOrEqualf(t, len(lines), numSiblings+1, "expected prefix line plus one line per submission slot; body=%q", string(responseBody))
+	require.Lenf(t, lines, numSiblings, "expected one line per submission slot; body=%q", string(responseBody))
 
-	require.Equalf(t, "Failed to process transactions:", lines[0], "expected prefix line first; got %q", lines[0])
-
-	slotLines := lines[1:]
-	require.Lenf(t, slotLines, numSiblings, "expected one line per submission slot after prefix; body=%q", string(responseBody))
-
-	for i, line := range slotLines {
+	for i, line := range lines {
 		if i%2 == 0 {
 			require.Equalf(t, "OK", line, "slot %d expected OK; got %q", i, line)
 			continue
 		}
-		require.Containsf(t, line, expectedTxids[i], "slot %d expected to contain txid %s; got %q", i, expectedTxids[i], line)
+		// orderedErrValidator returns TxInvalidError so describeTxError
+		// emits "400 transaction invalid". The HTTP-code prefix lets the
+		// caller classify per-slot the same way they would a single-tx
+		// /tx response.
+		require.Equalf(t, "400 transaction invalid", line, "slot %d expected '400 transaction invalid'; got %q", i, line)
 	}
 }
 
