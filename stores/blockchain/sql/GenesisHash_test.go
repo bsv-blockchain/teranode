@@ -3,6 +3,7 @@ package sql
 import (
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -105,6 +106,13 @@ func TestGenesisHashWrongParams(t *testing.T) {
 			store, err := New(logger, dbURL, s)
 			require.NoError(t, err)
 			defer store.Close()
+
+			// Wait for the background rebuild goroutine started in New() to finish
+			// before mutating chainParams — otherwise the test write races with the
+			// goroutine's read of s.chainParams.CoinbaseMaturity.
+			require.Eventually(t, func() bool {
+				return store.mainChainRebuilding.Load() == 0
+			}, 5*time.Second, 10*time.Millisecond, "background rebuild did not finish")
 
 			// Now try to insert the wrong genesis block
 			store.chainParams = tc.wrongParams
