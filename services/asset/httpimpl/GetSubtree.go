@@ -182,17 +182,14 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		}
 		defer subtreeReader.Close()
 
-		switch mode {
-		case BINARY_STREAM:
+		if mode == BINARY_STREAM {
 			return c.Stream(http.StatusOK, echo.MIMEOctetStream, subtreeReader)
-
-		case HEX:
-			c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlainCharsetUTF8)
-			c.Response().WriteHeader(http.StatusOK)
-			_, err = io.Copy(hex.NewEncoder(c.Response()), subtreeReader)
-			return err
 		}
 
-		return nil
+		// mode == HEX (validated above)
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlainCharsetUTF8)
+		c.Response().WriteHeader(http.StatusOK)
+		_, err = io.Copy(hex.NewEncoder(c.Response()), subtreeReader)
+		return err
 	}
 }

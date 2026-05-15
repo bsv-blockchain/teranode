@@ -358,6 +358,13 @@ func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtree
 	}
 
 	waitErr := g.Wait()
+	// When a worker fails, the errgroup cancels gCtx, which makes the next
+	// loop iteration observe context.Canceled and store it in readErr. The
+	// real failure is the worker's error returned by g.Wait(); prefer it so
+	// callers see the cause rather than the cancellation signal it triggered.
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		return waitErr
+	}
 	if readErr != nil {
 		return readErr
 	}

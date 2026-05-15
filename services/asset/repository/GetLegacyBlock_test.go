@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -1674,4 +1675,50 @@ func buildMerkleRootFromHashes(txHashes []*chainhash.Hash) *chainhash.Hash {
 	}
 
 	return txHashes[0]
+}
+
+func TestDrainChunkResults(t *testing.T) {
+	ch := make(chan chunkResult, 3)
+	ch <- chunkResult{chunkIdx: 0}
+	ch <- chunkResult{chunkIdx: 1}
+	ch <- chunkResult{chunkIdx: 2}
+	close(ch)
+
+	done := make(chan struct{})
+	go func() {
+		drainChunkResults(ch)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("drainChunkResults did not return")
+	}
+}
+
+func TestSendChunkResult_DeliversWhenChannelHasCapacity(t *testing.T) {
+	ch := make(chan chunkResult, 1)
+	sentinel := errors.NewProcessingError("kept")
+
+	got := sendChunkResult(context.Background(), ch, chunkResult{chunkIdx: 7}, sentinel)
+	require.ErrorIs(t, got, sentinel)
+
+	select {
+	case received := <-ch:
+		require.Equal(t, 7, received.chunkIdx)
+	default:
+		t.Fatal("result was not delivered to channel")
+	}
+}
+
+func TestSendChunkResult_ReturnsCtxErrWhenBlocked(t *testing.T) {
+	ch := make(chan chunkResult) // unbuffered, no reader -> send blocks
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sendChunkResult(ctx, ch, chunkResult{chunkIdx: 1}, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }

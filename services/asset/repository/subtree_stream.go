@@ -154,16 +154,24 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		return nil, 0, 0, errors.NewProcessingError("unable to convert subtree node count", err)
 	}
 
-	if offset >= totalNodes {
-		offset = 0
+	height := 0
+	if totalNodes > 0 {
+		height = int(math.Ceil(math.Log2(float64(totalNodes))))
 	}
 
-	pageSize := 0
-	if limit > 0 && offset < totalNodes {
-		pageSize = limit
-		if pageSize > totalNodes-offset {
-			pageSize = totalNodes - offset
-		}
+	if limit == 0 || offset >= totalNodes {
+		return &subtreepkg.Subtree{
+			Height:           height,
+			Fees:             header.fees,
+			SizeInBytes:      header.sizeInBytes,
+			Nodes:            []subtreepkg.Node{},
+			ConflictingNodes: []chainhash.Hash{},
+		}, offset, totalNodes, nil
+	}
+
+	pageSize := limit
+	if pageSize > totalNodes-offset {
+		pageSize = totalNodes - offset
 	}
 
 	for i := 0; i < offset; i++ {
@@ -189,7 +197,7 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		nodes = append(nodes, subtreeNodeFromRecord(byteBuffer))
 	}
 
-	pageCoversFullSubtree := totalNodes == 0 || (offset == 0 && pageSize == totalNodes)
+	pageCoversFullSubtree := offset == 0 && pageSize == totalNodes
 	conflictingNodes := []chainhash.Hash{}
 	// Conflicting nodes are serialized after all node records, so reading them
 	// for partial pages would scan the rest of large subtrees.
@@ -198,11 +206,6 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		if err != nil {
 			return nil, 0, 0, err
 		}
-	}
-
-	height := 0
-	if totalNodes > 0 {
-		height = int(math.Ceil(math.Log2(float64(totalNodes))))
 	}
 
 	return &subtreepkg.Subtree{

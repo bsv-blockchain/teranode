@@ -234,16 +234,16 @@ func TestGetSubtreePage(t *testing.T) {
 	assert.Empty(t, subtreePage.ConflictingNodes)
 }
 
-func TestGetSubtreePage_ResetsOffsetPastEnd(t *testing.T) {
+func TestGetSubtreePage_OffsetPastEndReturnsEmptyPage(t *testing.T) {
 	txns, key, repo := setupSubtreeData(t)
 
 	subtreePage, offset, totalNodes, err := repo.GetSubtreePage(context.Background(), key, 99, 1)
 	require.NoError(t, err)
 
-	assert.Equal(t, 0, offset)
+	assert.Equal(t, 99, offset)
 	assert.Equal(t, len(txns), totalNodes)
-	require.Len(t, subtreePage.Nodes, 1)
-	assert.Equal(t, txns[0], subtreePage.Nodes[0].Hash)
+	assert.Empty(t, subtreePage.Nodes)
+	assert.Empty(t, subtreePage.ConflictingNodes)
 }
 
 func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *repository.Repository) {
