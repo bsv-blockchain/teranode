@@ -418,7 +418,7 @@ func TestHandleMultipleTx(t *testing.T) {
 				return &buf
 			},
 			expectedStatusCode:  http.StatusInternalServerError,
-			expectedResponse:    "failed to validate transaction",
+			expectedResponse:    "Failed to process transaction",
 			mockValidationError: errors.NewTxInvalidError("test validation error"),
 		},
 		{
@@ -429,7 +429,7 @@ func TestHandleMultipleTx(t *testing.T) {
 				return &buf
 			},
 			expectedStatusCode: http.StatusInternalServerError,
-			expectedResponse:   "failed to save transaction",
+			expectedResponse:   "Failed to process transaction",
 			storeError:         errors.NewStorageError("test store error"),
 		},
 	}

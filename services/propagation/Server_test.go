@@ -105,7 +105,7 @@ func Test_handleMultipleTx_PanicDuringRead(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
-	assert.Contains(t, string(body), "panic")
+	assert.Contains(t, string(body), "Failed to process transactions")
 }
 
 // Test_handleSingleTx_InvalidBody ensures single-tx HTTP path reports 500 for invalid bytes
@@ -919,9 +919,14 @@ func Test_handleMultipleTx_PerSlotResponseLines(t *testing.T) {
 
 	body := strings.TrimSuffix(string(responseBody), "\n")
 	lines := strings.Split(body, "\n")
-	require.Lenf(t, lines, numSiblings, "expected one line per submission slot; body=%q", string(responseBody))
+	require.GreaterOrEqualf(t, len(lines), numSiblings+1, "expected prefix line plus one line per submission slot; body=%q", string(responseBody))
 
-	for i, line := range lines {
+	require.Equalf(t, "Failed to process transactions:", lines[0], "expected prefix line first; got %q", lines[0])
+
+	slotLines := lines[1:]
+	require.Lenf(t, slotLines, numSiblings, "expected one line per submission slot after prefix; body=%q", string(responseBody))
+
+	for i, line := range slotLines {
 		if i%2 == 0 {
 			require.Equalf(t, "OK", line, "slot %d expected OK; got %q", i, line)
 			continue
