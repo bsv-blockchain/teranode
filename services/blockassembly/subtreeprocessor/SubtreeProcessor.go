@@ -4774,7 +4774,8 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 		bucketIdx := b
 
 		g.Go(func() error {
-			entries := make([]TxInpointsEntry, len(indices))
+			keys := make([]chainhash.Hash, len(indices))
+			vals := make([]*subtreepkg.TxInpoints, len(indices))
 
 			for j, origIdx := range indices {
 				hash := nodes[origIdx].Hash
@@ -4784,10 +4785,11 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 					return errors.NewProcessingError("node %s not found in currentTxMap", hash.String())
 				}
 
-				entries[j] = TxInpointsEntry{Hash: hash, Inpoints: parents}
+				keys[j] = hash
+				vals[j] = parents
 			}
 
-			results := splitMap.PutMultiBucketTxInpoints(bucketIdx, entries)
+			results := splitMap.PutMultiBucketTxInpoints(bucketIdx, keys, vals)
 
 			for j, origIdx := range indices {
 				wasInserted[origIdx] = results[j]

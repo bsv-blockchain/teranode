@@ -8,6 +8,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testInpointPair is a (hash, inpoints) pair only used to keep the bulk-insert
+// tests below readable; the production API now takes parallel slices.
+type testInpointPair struct {
+	Hash     chainhash.Hash
+	Inpoints *subtreepkg.TxInpoints
+}
+
+// inpointSlicesFor builds the parallel (keys, values) slices accepted by
+// PutMultiBucketTxInpoints from a list of (hash, inpoints) pairs.
+func inpointSlicesFor(pairs ...testInpointPair) ([]chainhash.Hash, []*subtreepkg.TxInpoints) {
+	keys := make([]chainhash.Hash, len(pairs))
+	vals := make([]*subtreepkg.TxInpoints, len(pairs))
+
+	for i, p := range pairs {
+		keys[i] = p.Hash
+		vals[i] = p.Inpoints
+	}
+
+	return keys, vals
+}
+
 func makeHash(b byte) chainhash.Hash {
 	var h chainhash.Hash
 	for i := range h {
@@ -56,18 +77,21 @@ func TestSplitTxInpointsMap_PutMultiBucketTxInpointsRespectsExistingEntries(t *t
 	bucketB := m.BucketFor(hashB)
 
 	// Drive both through the bulk path even if they land in different buckets.
-	resA := m.PutMultiBucketTxInpoints(bucketA, []TxInpointsEntry{{Hash: hashA, Inpoints: inpointsA}})
+	keysA, valsA := inpointSlicesFor(testInpointPair{hashA, inpointsA})
+	resA := m.PutMultiBucketTxInpoints(bucketA, keysA, valsA)
 	require.Equal(t, []bool{false}, resA, "duplicate insert via bulk must report wasInserted=false")
 
 	if bucketA == bucketB {
 		// Combined batch into one bucket: order must be preserved.
-		res := m.PutMultiBucketTxInpoints(bucketA, []TxInpointsEntry{
-			{Hash: hashA, Inpoints: inpointsA},
-			{Hash: hashB, Inpoints: inpointsB},
-		})
+		keys, vals := inpointSlicesFor(
+			testInpointPair{hashA, inpointsA},
+			testInpointPair{hashB, inpointsB},
+		)
+		res := m.PutMultiBucketTxInpoints(bucketA, keys, vals)
 		require.Equal(t, []bool{false, true}, res, "duplicate then new in one bucket")
 	} else {
-		resB := m.PutMultiBucketTxInpoints(bucketB, []TxInpointsEntry{{Hash: hashB, Inpoints: inpointsB}})
+		keysB, valsB := inpointSlicesFor(testInpointPair{hashB, inpointsB})
+		resB := m.PutMultiBucketTxInpoints(bucketB, keysB, valsB)
 		require.Equal(t, []bool{true}, resB, "new insert via bulk must report wasInserted=true")
 	}
 

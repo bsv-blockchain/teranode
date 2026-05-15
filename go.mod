@@ -194,7 +194,13 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.1.2
-	github.com/bsv-blockchain/go-tx-map v1.3.4
+	// Pseudo-version pins the un-released feat(synced): add SetIfNotExistsMulti
+	// commit (bsv-blockchain/go-tx-map#114). PutMultiBucketTxInpoints in
+	// services/blockassembly/subtreeprocessor relies on this bulk method to
+	// take a single per-bucket lock instead of one Lock/Unlock pair per entry,
+	// which materially reduces moveForwardBlock CPU on the hot path. Replace
+	// with the next tagged release (>= v1.3.6) once go-tx-map#114 ships.
+	github.com/bsv-blockchain/go-tx-map v1.3.6-0.20260515143932-e509e98caded
 	github.com/bsv-blockchain/go-wire v1.2.3
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10

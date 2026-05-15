@@ -207,29 +207,22 @@ func (s *SplitTxInpointsMap) BucketFor(hash chainhash.Hash) uint16 {
 	return txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)
 }
 
-// TxInpointsEntry is a (hash, inpoints) pair used by PutMultiBucketTxInpoints.
-type TxInpointsEntry struct {
-	Hash     chainhash.Hash
-	Inpoints *subtreepkg.TxInpoints
-}
-
-// PutMultiBucketTxInpoints inserts a batch of entries that all hash to the same
-// bucket, calling SetIfNotExists on the underlying SyncedMap once per entry.
+// PutMultiBucketTxInpoints inserts a batch of (hash, inpoints) pairs that all
+// belong to the same bucket. Delegates to the underlying SyncedMap's
+// SetIfNotExistsMulti, which takes the per-bucket lock exactly once for the
+// whole batch instead of once per entry — eliminating the per-call
+// Lock/Unlock overhead that profiling showed at ~17 % of every
+// SetIfNotExists call in the hot path.
+//
 // All entries MUST belong to the named bucket; callers are expected to have
-// partitioned by BucketFor beforehand. The returned slice has the same length
-// as entries; wasInserted[i] is true if the i-th entry's key was newly added
-// and false if it already existed.
+// partitioned by BucketFor beforehand. keys and values are walked in
+// parallel up to min(len(keys), len(values)); the returned slice has that
+// length. wasInserted[i] is true if keys[i] was newly added, false if it
+// already existed.
 //
 // Designed to be called from bucket-affinity worker pools where each worker
 // owns one or more buckets exclusively, so the per-bucket RWMutex is
 // uncontended across worker calls.
-func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, entries []TxInpointsEntry) []bool {
-	syncedMap := s.m[bucket]
-	wasInserted := make([]bool, len(entries))
-
-	for i, entry := range entries {
-		_, wasInserted[i] = syncedMap.SetIfNotExists(entry.Hash, entry.Inpoints)
-	}
-
-	return wasInserted
+func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, keys []chainhash.Hash, values []*subtreepkg.TxInpoints) []bool {
+	return s.m[bucket].SetIfNotExistsMulti(keys, values)
 }
