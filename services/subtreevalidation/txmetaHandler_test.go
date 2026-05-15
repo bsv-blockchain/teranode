@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,8 +241,39 @@ func createKafkaMessage(t *testing.T, delete bool, content []byte) *kafka.KafkaM
 	}
 }
 
+func createKafkaMessageForHash(t *testing.T, hash chainhash.Hash, action byte, content []byte) *kafka.KafkaMessage {
+	t.Helper()
+
+	contentLen := uint32(len(content))
+	if action == txmetaActionDELETE {
+		contentLen = 0
+	}
+
+	dataSize := 4 + 32 + 1 + 4 + int(contentLen)
+	data := make([]byte, dataSize)
+	offset := 0
+
+	binary.LittleEndian.PutUint32(data[offset:], 1)
+	offset += 4
+
+	copy(data[offset:], hash[:])
+	offset += 32
+
+	data[offset] = action
+	offset++
+
+	binary.LittleEndian.PutUint32(data[offset:], contentLen)
+	offset += 4
+
+	if contentLen > 0 {
+		copy(data[offset:], content[:int(contentLen)])
+	}
+
+	return &kafka.KafkaMessage{Value: data}
+}
+
 func TestServer_txmetaHandler(t *testing.T) {
-	// Note: The handler processes messages asynchronously (in a goroutine) and always returns nil.
+	// Note: The handler dispatches work to bounded shard workers and may return an error if a queue is full.
 	// Tests verify proper parsing of the binary batch format.
 	tests := []struct {
 		name       string
@@ -312,4 +344,70 @@ func TestServer_txmetaHandler(t *testing.T) {
 			mockCache.AssertExpectations(t)
 		})
 	}
+}
+
+func TestServer_txmetaHandler_PreservesPerKeyOrdering(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+
+	var (
+		operationMu sync.Mutex
+		operations  []string
+	)
+
+	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		operationMu.Lock()
+		defer operationMu.Unlock()
+		operations = append(operations, "add")
+	})
+
+	mockCache.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(nil).Run(func(args mock.Arguments) {
+		operationMu.Lock()
+		defer operationMu.Unlock()
+		operations = append(operations, "delete")
+	})
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	hash := chainhash.Hash{42}
+	addMessage := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+	deleteMessage := createKafkaMessageForHash(t, hash, txmetaActionDELETE, nil)
+
+	err := server.txmetaHandler(context.Background(), addMessage)
+	assert.NoError(t, err)
+
+	err = server.txmetaHandler(context.Background(), deleteMessage)
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		operationMu.Lock()
+		defer operationMu.Unlock()
+		return len(operations) == 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	assert.Equal(t, []string{"add", "delete"}, operations)
+}
+
+func TestServer_txmetaHandler_ReturnsErrorWhenQueueFull(t *testing.T) {
+	server := &Server{
+		logger: ulogger.TestLogger{},
+	}
+
+	// Pretend workers are already initialized with a permanently full shard queue.
+	server.txmetaWorkerInitOnce.Do(func() {})
+	server.txmetaWorkerQueues = []chan txmetaWorkItem{
+		make(chan txmetaWorkItem),
+	}
+
+	hash := chainhash.Hash{0}
+	message := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+
+	err := server.txmetaHandler(context.Background(), message)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrProcessing))
 }

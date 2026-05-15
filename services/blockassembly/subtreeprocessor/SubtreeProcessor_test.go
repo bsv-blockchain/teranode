@@ -218,6 +218,25 @@ func TestRotate(t *testing.T) {
 	assert.Equal(t, 1, chainedSubtreesLen)
 }
 
+// Test_subtreeProcessorClockOverride verifies the clock seam on
+// SubtreeProcessor. NewSubtreeProcessor must wire a real clock by default,
+// and tests must be able to substitute a fake. The validFromMillis
+// calculation in the Start loop and dequeueDuringBlockMovement reads through
+// stp.clock, so installing a fake here makes those paths deterministic.
+func Test_subtreeProcessorClockOverride(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newSubtreeChan := make(chan NewSubtreeRequest, 1)
+
+	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+	require.NoError(t, err)
+	require.NotNil(t, stp.clock, "default clock must be wired in NewSubtreeProcessor")
+
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = fixedClock{t: fixed}
+
+	require.Equal(t, fixed, stp.clock.Now())
+}
+
 func Test_RemoveTxFromSubtrees(t *testing.T) {
 	t.Run("remove transaction from subtrees", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)

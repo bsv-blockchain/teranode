@@ -814,15 +814,140 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	// Mock spendUtxos to return TxNotFound error
 	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 
-	// Mock GetMeta to return existing tx (blessed scenario)
-	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// Mock GetMeta to return existing tx already mined and not flagged — legitimate DAH-evicted-parent case.
+	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			data := args.Get(2).(*meta.Data)
+			*data = *existingMeta
+		}).
+		Return(nil)
 
 	options := &Options{}
 	txMetaData, err := v.validateInternal(ctx, tx, 100, options)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, txMetaData)
+	assert.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
 	mockStore.AssertExpectations(t)
+}
+
+// TestValidate_TxNotFoundShortcut verifies that when spendUtxos returns ErrTxNotFound (parent missing),
+// the validator only short-circuits with (meta, nil) when the stored metadata genuinely confirms prior
+// full validation: tx has been mined (BlockIDs non-empty), is not Conflicting, and is not Locked.
+// In all other cases the original ErrTxNotFound must surface to the caller. This guards against a reorg
+// or DAH-eviction window where a stale or mid-flight record could otherwise be accepted as "blessed".
+func TestValidate_TxNotFoundShortcut(t *testing.T) {
+	makeTxAndParent := func(t *testing.T) (*bt.Tx, *bt.Tx) {
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+		coinbaseTx := transactions.Create(t,
+			transactions.WithCoinbaseData(100, "/Test miner/"),
+			transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+		)
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(coinbaseTx, 0),
+			transactions.WithP2PKHOutputs(1, 1000),
+			transactions.WithChangeOutput(),
+		)
+		return tx, coinbaseTx
+	}
+
+	setupValidator := func(t *testing.T, tx *bt.Tx, coinbaseTx *bt.Tx, getMetaResult *meta.Data, getMetaErr error) (*Validator, *utxo.MockUtxostore) {
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
+		mockStore := &utxo.MockUtxostore{}
+		settings := test.CreateBaseTestSettings(t)
+
+		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+		require.NoError(t, err)
+		v := validator.(*Validator)
+
+		parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
+		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+		mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+		mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+		if getMetaErr != nil {
+			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(getMetaErr)
+		} else {
+			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					data := args.Get(2).(*meta.Data)
+					*data = *getMetaResult
+				}).
+				Return(nil)
+		}
+
+		return v, mockStore
+	}
+
+	t.Run("shortcut allowed when mined and not flagged", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}, Conflicting: false, Locked: false}
+		v, mockStore := setupValidator(t, tx, coinbaseTx, existingMeta, nil)
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.NoError(t, err)
+		require.NotNil(t, txMetaData)
+		require.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("shortcut denied when not yet mined (BlockIDs empty)", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		notYetMined := &meta.Data{Tx: tx, BlockIDs: nil, Conflicting: false, Locked: false}
+		v, mockStore := setupValidator(t, tx, coinbaseTx, notYetMined, nil)
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.Nil(t, txMetaData)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
+		require.Contains(t, err.Error(), "error spending utxos")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("shortcut denied when conflicting", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		conflicting := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: true, Locked: false}
+		v, mockStore := setupValidator(t, tx, coinbaseTx, conflicting, nil)
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.Nil(t, txMetaData)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
+		require.Contains(t, err.Error(), "error spending utxos")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("shortcut denied when locked", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		locked := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: false, Locked: true}
+		v, mockStore := setupValidator(t, tx, coinbaseTx, locked, nil)
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.Nil(t, txMetaData)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
+		require.Contains(t, err.Error(), "error spending utxos")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("shortcut denied when GetMeta itself fails", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		v, mockStore := setupValidator(t, tx, coinbaseTx, nil, errors.NewTxNotFoundError("meta not found"))
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.Nil(t, txMetaData)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
+		require.Contains(t, err.Error(), "error spending utxos")
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {

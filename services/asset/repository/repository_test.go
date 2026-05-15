@@ -174,6 +174,78 @@ func TestSubtreeReader(t *testing.T) {
 	assert.Equal(t, txns[1], subtree2.Nodes[1].Hash)
 }
 
+func TestSubtreeNodeHashesReader(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	reader, err := repo.GetSubtreeNodeHashesReader(context.Background(), key)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	b, err := io.ReadAll(reader)
+	require.NoError(t, err)
+
+	require.Len(t, b, len(txns)*chainhash.HashSize)
+	for i, txHash := range txns {
+		assert.Equal(t, txHash, chainhash.Hash(b[i*chainhash.HashSize:(i+1)*chainhash.HashSize]))
+	}
+}
+
+func TestSubtreeNodeHashesReader_InvalidHeader(t *testing.T) {
+	ctx := context.Background()
+	subtreeStore := getMemoryStore(t)
+	key := chainhash.HashH([]byte("short-subtree"))
+
+	err := subtreeStore.Set(ctx, key.CloneBytes(), fileformat.FileTypeSubtree, []byte{0x01, 0x02, 0x03})
+	require.NoError(t, err)
+
+	repo := &repository.Repository{SubtreeStore: subtreeStore}
+
+	reader, err := repo.GetSubtreeNodeHashesReader(ctx, &key)
+	require.Error(t, err)
+	assert.Nil(t, reader)
+	assert.Contains(t, err.Error(), "unable to read subtree root information")
+}
+
+func TestGetSubtreeNodesPage(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	nodes, totalNodes, err := repo.GetSubtreeNodesPage(context.Background(), key, 1, 1)
+	require.NoError(t, err)
+
+	require.Len(t, nodes, 1)
+	assert.Equal(t, len(txns), totalNodes)
+	assert.Equal(t, txns[1], nodes[0].Hash)
+	assert.Equal(t, uint64(1), nodes[0].Fee)
+	assert.Equal(t, uint64(0), nodes[0].SizeInBytes)
+}
+
+func TestGetSubtreePage(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	subtreePage, offset, totalNodes, err := repo.GetSubtreePage(context.Background(), key, 1, 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, offset)
+	assert.Equal(t, len(txns), totalNodes)
+	assert.Equal(t, 1, subtreePage.Length())
+	assert.Equal(t, 1, subtreePage.Height)
+	assert.Equal(t, uint64(2), subtreePage.Fees)
+	assert.Equal(t, txns[1], subtreePage.Nodes[0].Hash)
+	assert.Empty(t, subtreePage.ConflictingNodes)
+}
+
+func TestGetSubtreePage_ResetsOffsetPastEnd(t *testing.T) {
+	txns, key, repo := setupSubtreeData(t)
+
+	subtreePage, offset, totalNodes, err := repo.GetSubtreePage(context.Background(), key, 99, 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, offset)
+	assert.Equal(t, len(txns), totalNodes)
+	require.Len(t, subtreePage.Nodes, 1)
+	assert.Equal(t, txns[0], subtreePage.Nodes[0].Hash)
+}
+
 func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *repository.Repository) {
 	itemsPerSubtree := 2
 

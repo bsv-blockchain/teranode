@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -38,6 +39,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -298,6 +300,45 @@ func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), hash1.String())
+}
+
+func TestValidateSubtreeInternal_RetryBackoffAndMetrics(t *testing.T) {
+	InitPrometheusMetrics()
+
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
+	defer deferFunc()
+
+	retrySleep := 40 * time.Millisecond
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Block.FailFastValidation = true
+	tSettings.BlockValidation.ValidationWarmupCount = 0
+	tSettings.BlockValidation.ValidationMaxRetries = 2
+	tSettings.BlockValidation.RetrySleep = retrySleep
+	tSettings.BlockValidation.ValidationRetrySleep = retrySleep
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1
+
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	require.NoError(t, err)
+
+	retryCounterStart := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry)
+
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseURL:       "not-a-url",
+		TxHashes:      []chainhash.Hash{*hash1, *hash2},
+		AllowFailFast: true,
+	}
+
+	start := time.Now()
+	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+
+	retryCounterDelta := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry) - retryCounterStart
+	assert.Equal(t, float64(2), retryCounterDelta, "maxRetries=2 should produce exactly 2 retries (3 total attempts)")
+	assert.GreaterOrEqual(t, elapsed, 2*retrySleep, "retry loop should wait retrySleepDuration between retry attempts")
 }
 
 func TestServer_prepareTxsPerLevel(t *testing.T) {

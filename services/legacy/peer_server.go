@@ -1506,6 +1506,11 @@ func (s *server) AnnounceNewTransactions(txns []*netsync.TxHashAndFee) {
 		return
 	}
 
+	// Suppress tx relay while the node is not in RUNNING state. See canRelayTx.
+	if !s.canRelayTx() {
+		return
+	}
+
 	// Generate and relay inventory vectors for all newly accepted
 	// transactions.
 	s.relayTransactions(txns)
@@ -2590,11 +2595,38 @@ func (s *server) BanPeer(sp *serverPeer) {
 	s.banPeers <- sp
 }
 
+// canRelayTx reports whether the legacy server may emit transaction inventory
+// to its peers. Transactions must only be relayed once the node is fully
+// synced (FSM RUNNING). While syncing (LEGACYSYNCING/CATCHINGBLOCKS) the local
+// chain tip may sit below the Genesis activation height, in which case the
+// validator accepts pre-Genesis-only outputs such as P2SH. Re-broadcasting
+// those to post-Genesis peers earns an instant ban for `bad-txns-vout-p2sh`.
+//
+// The check is cheap: blockchain.Client serves GetFSMCurrentState from a
+// locally-cached atomic, so callers may invoke this per-inv without RPC cost.
+// Fails closed: any error reading the state suppresses relay.
+func (s *server) canRelayTx() bool {
+	if s.blockchainClient == nil {
+		return true
+	}
+	running, err := s.blockchainClient.IsFSMCurrentState(s.ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return false
+	}
+	return running
+}
+
 // RelayInventory relays the passed inventory vector to all connected peers
 // that are not already known to have it.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	// check listen mode - if listen_only or silent, don't relay inventory
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return
+	}
+
+	// Suppress tx invs while the node is not in RUNNING state. Block invs
+	// are still relayed (block sync is gated separately in netsync.manager).
+	if invVect != nil && invVect.Type == wire.InvTypeTx && !s.canRelayTx() {
 		return
 	}
 

@@ -1335,7 +1335,15 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.String(), err)
 		}
 
+		seen := make(map[chainhash.Hash]struct{}, len(hashes))
+
 		for _, hash := range hashes {
+			if _, dup := seen[hash]; dup {
+				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
+			}
+
+			seen[hash] = struct{}{}
+
 			err = st.AddNode(hash, 1, 0)
 			if err != nil {
 				return errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", b.String(), err)

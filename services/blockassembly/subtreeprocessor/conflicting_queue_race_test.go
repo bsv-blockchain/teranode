@@ -63,16 +63,19 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 		Idxs:           [][]uint32{{0}},
 	}
 
+	// Pin both clocks to the same instant so this test is deterministic
+	// (no wall-time waits). With DoubleSpendWindow=0 the queue filter is
+	// disabled at both call sites, so dequeueDuringBlockMovement admits
+	// same-millisecond batches and the test exercises the conflicting-
+	// parent rejection path directly.
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = fixedClock{t: fixed}
+	stp.queue.clock = fixedClock{t: fixed}
+
 	stp.queue.enqueueBatch(
 		[]subtreepkg.Node{childNode, otherNode},
 		[]*subtreepkg.TxInpoints{childInpoints, otherInpoints},
 	)
-
-	// dequeueDuringBlockMovement holds back batches enqueued at-or-after
-	// (now - DoubleSpendWindow). Default window is 0, so it holds batches
-	// with time == now. A short sleep moves batch.time strictly into the
-	// past so the drain releases it.
-	time.Sleep(5 * time.Millisecond)
 
 	conflictingHashes := map[chainhash.Hash]struct{}{
 		parentHash: {},
@@ -93,6 +96,70 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 	_, marked := conflictingHashes[childHash]
 	assert.True(t, marked, "rejected child must be added to the transient set "+
 		"so its own descendants are caught later in the same drain")
+}
+
+// TestDequeueDuringBlockMovement_ZeroWindowAdmitsSameMillisecond pins,
+// at the real call site, that dequeueDuringBlockMovement admits
+// same-millisecond batches when DoubleSpendWindow=0 (the documented
+// default - see settings/blockassembly_settings.go:29). Both the Start
+// loop (SubtreeProcessor.go:807-813) and the drain
+// (SubtreeProcessor.go:3789-3796) zero-guard the calculation, so
+// neither activates the queue filter at queue.go:96 and a batch
+// enqueued in the same millisecond as the drain is included.
+//
+// The "+1ms" subtest exercises a different scenario where the
+// SubtreeProcessor clock has advanced past the enqueue clock; in
+// that case the drain admits via the (now - window) cutoff rather than
+// via the zero-guard.
+func TestDequeueDuringBlockMovement_ZeroWindowAdmitsSameMillisecond(t *testing.T) {
+	t.Run("same_millisecond_batch_admits", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow,
+			"default window is 0; zero-guard parity is the property being asserted")
+
+		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		stp.clock = fixedClock{t: fixed}
+		stp.queue.clock = fixedClock{t: fixed}
+
+		txHash := chainhash.HashH([]byte("zero-window-same-ms"))
+		stp.queue.enqueueBatch(
+			[]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}},
+			[]*subtreepkg.TxInpoints{{}},
+		)
+		require.Equal(t, int64(1), stp.queue.length())
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(0), stp.queue.length(),
+			"drain must admit same-ms batch at window=0 via zero-guard parity")
+		require.Contains(t, collectSubtreeHashes(stp), txHash,
+			"the admitted batch must appear in chainedSubtrees / currentSubtree")
+	})
+
+	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow)
+
+		enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		drainAt := enqueueAt.Add(1 * time.Millisecond)
+
+		stp.queue.clock = fixedClock{t: enqueueAt}
+		stp.clock = fixedClock{t: drainAt}
+
+		txHash := chainhash.HashH([]byte("zero-window-advance"))
+		stp.queue.enqueueBatch(
+			[]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}},
+			[]*subtreepkg.TxInpoints{{}},
+		)
+		require.Equal(t, int64(1), stp.queue.length())
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(0), stp.queue.length(),
+			"1ms advance must let the batch drain")
+		assert.Contains(t, collectSubtreeHashes(stp), txHash,
+			"drained batch must be admitted into the subtree")
+	})
 }
 
 // newTestProcessorNoStart builds a SubtreeProcessor without starting the

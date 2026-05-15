@@ -869,8 +869,6 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var completeWg sync.WaitGroup
-		completeWg.Add(1)
 		var seenComplete int
 		done := make(chan struct{})
 		go func() {
@@ -886,7 +884,6 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 						assert.Len(t, subtree.Nodes, 4)
 						assert.Equal(t, uint64(999), subtree.Fees)
 						seenComplete++
-						completeWg.Done()
 					}
 
 					if subtreeRequest.ErrChan != nil {
@@ -910,7 +907,13 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
-		completeWg.Wait()
+		// Wait until the assembler has committed all 3 txs into the mining candidate.
+		// completeWg.Done() previously fired before the assembler acked the subtree
+		// via ErrChan, so GetMiningCandidate could see NumTxs < 3.
+		require.Eventually(t, func() bool {
+			mc, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+			return err == nil && mc != nil && mc.NumTxs == 3
+		}, 5*time.Second, 20*time.Millisecond)
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)

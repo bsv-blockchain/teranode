@@ -574,6 +574,14 @@ func (m *MockRepositoryForMerkleProof) GetSubtreeTxIDsReader(ctx context.Context
 	return nil, nil
 }
 
+func (m *MockRepositoryForMerkleProof) GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error) {
+	return nil, 0, nil
+}
+
 func (m *MockRepositoryForMerkleProof) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return nil, nil
 }
@@ -588,6 +596,10 @@ func (m *MockRepositoryForMerkleProof) GetSubtree(ctx context.Context, hash *cha
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*subtree.Subtree), args.Error(1)
+}
+
+func (m *MockRepositoryForMerkleProof) GetSubtreePage(ctx context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error) {
+	return nil, 0, 0, nil
 }
 
 func (m *MockRepositoryForMerkleProof) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {

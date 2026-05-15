@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -1571,4 +1573,311 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 	err = realStore.GetMeta(ctx, txs[1].TxIDChainHash(), storedMeta)
 	require.NoError(t, err)
 	assert.False(t, storedMeta.Locked, "tx should be unlocked after 2PC completes despite txmeta serialization failure")
+}
+
+// TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces verifies that two concurrent
+// EnsureMTPLoaded callers at the same blockHeight do not race on mtpStore.
+//
+// Prior to the mutex fix, the race detector reported a data race here because both
+// goroutines simultaneously read len(v.mtpStore)==0 and then both appended to it.
+// The test must be run with -race to catch the regression.
+func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
+	const blockHeight = uint32(1_000_000) // well above RegressionNet CSVHeight=576
+
+	// Build a dense MTP slice that GetMedianTimePastRange would return.
+	// The range fetched is [0, blockHeight], so length = blockHeight+1.
+	mtpValues := make([]uint32, blockHeight+1)
+	for i := range mtpValues {
+		mtpValues[i] = uint32(1_700_000_000 + i) // plausible unix timestamps
+	}
+
+	// slowBlockchainClient introduces a brief pause so that both goroutines are
+	// likely inside EnsureMTPLoaded concurrently when the race would occur.
+	// Once() asserts that exactly one fetch is issued: the second concurrent
+	// caller must fast-path out under the mutex without re-fetching, which is
+	// the production failure mode this test guards against.
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), blockHeight).
+		After(5*time.Millisecond).
+		Return(mtpValues, nil).Once()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: mockClient,
+		stats:            gocore.NewStat("validator_test"),
+	}
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+
+	// Launch two concurrent EnsureMTPLoaded calls, mirroring the production scenario
+	// where two CheckSubtreeFromBlock RPCs arrive before the first has populated mtpStore.
+	for i := range 2 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = v.EnsureMTPLoaded(ctx, blockHeight)
+		}(i)
+	}
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	// After both calls complete the store must be fully populated.
+	require.Equal(t, int(blockHeight+1), len(v.mtpStore),
+		"mtpStore must have exactly blockHeight+1 entries after concurrent load")
+
+	// Spot-check a few values to confirm correct data (not a corrupted merge).
+	require.Equal(t, uint32(1_700_000_000), v.mtpStore[0])
+	require.Equal(t, uint32(1_700_000_000+blockHeight), v.mtpStore[blockHeight])
+
+	// Asserts exactly-one fetch (Once() above). Without the mutex both callers
+	// would each issue a 1.45 M-entry fetch — the production CPU peg.
+	mockClient.AssertExpectations(t)
+}
+
+// TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace verifies that
+// readers using the same pattern as validateTransaction (RLock + indexing)
+// can run concurrently with an EnsureMTPLoaded extension for a later block
+// without the race detector firing. The append in EnsureMTPLoaded may
+// re-allocate the backing array and the overlap patch mutates entries
+// in-place, so unsynchronised readers would race on slice-header / cell
+// reads.
+//
+// This guards the cross-block scenario raised in PR review: block N's
+// per-transaction goroutines are still reading mtpStore when block N+1's
+// EnsureMTPLoaded runs.
+func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
+	const (
+		initialHeight  = uint32(1_000_000)
+		extendedHeight = uint32(1_000_500)
+	)
+
+	initialMTPs := make([]uint32, initialHeight+1)
+	for i := range initialMTPs {
+		initialMTPs[i] = uint32(1_700_000_000 + i)
+	}
+
+	// Second call refetches an mtpReorgOverlap-deep tail and the new heights:
+	//   fromHeight = (initialHeight+1) - mtpReorgOverlap
+	//   range     = [fromHeight, extendedHeight], so length = extendedHeight - fromHeight + 1.
+	extendFrom := (initialHeight + 1) - mtpReorgOverlap
+	extendedLen := extendedHeight - extendFrom + 1
+	extendedMTPs := make([]uint32, extendedLen)
+	for i := range extendedMTPs {
+		extendedMTPs[i] = uint32(1_700_000_000) + extendFrom + uint32(i)
+	}
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), initialHeight).
+		Return(initialMTPs, nil).Once()
+	mockClient.On("GetMedianTimePastRange", mock.Anything, extendFrom, extendedHeight).
+		After(2*time.Millisecond).
+		Return(extendedMTPs, nil).Once()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: mockClient,
+		stats:            gocore.NewStat("validator_test"),
+	}
+
+	ctx := context.Background()
+
+	// Prime the store at the initial height so the second EnsureMTPLoaded
+	// hits the extension path (overlap patch + append).
+	require.NoError(t, v.EnsureMTPLoaded(ctx, initialHeight))
+
+	const readers = 8
+	const readsPerGoroutine = 200
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < readsPerGoroutine; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Mimic validateTransaction's read pattern: take RLock,
+				// snapshot len, index a few entries.
+				v.mtpMu.RLock()
+				storeLen := uint32(len(v.mtpStore))
+				if storeLen > 0 {
+					_ = v.mtpStore[0]
+					_ = v.mtpStore[storeLen-1]
+					_ = v.mtpStore[storeLen/2]
+				}
+				v.mtpMu.RUnlock()
+			}
+		}()
+	}
+
+	// Concurrently extend the store to a later block height. Without the
+	// reader-side RLock this append/patch races with the readers.
+	var extendErr error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// require.* uses runtime.Goexit which only stops the goroutine it runs
+		// in; capture and assert from the main test goroutine after wg.Wait.
+		extendErr = v.EnsureMTPLoaded(ctx, extendedHeight)
+	}()
+
+	wg.Wait()
+	close(stop)
+
+	require.NoError(t, extendErr)
+	require.GreaterOrEqual(t, len(v.mtpStore), int(extendedHeight+1))
+
+	// Asserts the initial-load + extension pair both fired exactly once
+	// (each .Once() above) — defends against accidental over-fetch.
+	mockClient.AssertExpectations(t)
+}
+
+// TestReadMTPsLocked_HappyPath verifies the reader helper returns the per-input
+// MTP values and the block MTP correctly when mtpStore is fully populated.
+func TestReadMTPsLocked_HappyPath(t *testing.T) {
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		mtpStore: []uint32{
+			1_700_000_000, // height 0
+			1_700_000_010, // height 1
+			1_700_000_020, // height 2
+			1_700_000_030, // height 3
+			1_700_000_040, // height 4
+		},
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(4, []uint32{0, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
+	require.Equal(t, uint32(1_700_000_040), blockMTP)
+}
+
+// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that utxoHeights at or above
+// the store length fall back to the blockMTP value (matches the production
+// behaviour for unconfirmed parents whose effective height is blockState.Height+1
+// and may exceed blockMTPHeight).
+func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		mtpStore: []uint32{
+			1_700_000_000,
+			1_700_000_010,
+			1_700_000_020,
+		},
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(2, []uint32{0, 99, 1})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_010}, utxoMTPs)
+	require.Equal(t, uint32(1_700_000_020), blockMTP)
+}
+
+// TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
+// through the SkipPolicyChecks BIP68 branch with a populated mtpStore. The
+// goal is coverage on the MTP-reading code path (`readMTPsLocked` call,
+// error wiring, ValidateBIP68 invocation) — the actual BIP68 lock-time
+// arithmetic is exercised by the dedicated TxValidator_bip68 tests.
+func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
+	initPrometheusMetrics()
+
+	// Mainnet sets CSVHeight = 419328; choose a height comfortably above so
+	// the BIP68 gate at the top of validateTransaction lets us through.
+	const blockHeight = uint32(500_000)
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+	require.True(t, tx.IsExtended())
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	// blockchainClient just needs to be non-nil for the gate at the top of
+	// validateTransaction; mtpStore is pre-populated so readMTPsLocked finds
+	// the values it needs without a fetch.
+	mtpStore := make([]uint32, blockHeight+1)
+	for i := range mtpStore {
+		mtpStore[i] = uint32(1_700_000_000 + i)
+	}
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
+		blockchainClient: &blockchain.Mock{},
+		stats:            gocore.NewStat("validator_test"),
+		mtpStore:         mtpStore,
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	// utxoHeight at blockHeight-1 is well within the populated range so the
+	// per-input MTP lookup uses mtpStore[h] (the in-range branch).
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+}
+
+// TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore drives
+// validateTransaction with SkipPolicyChecks=true and an empty mtpStore. The
+// readMTPsLocked guard must fire and surface a processing error to the
+// caller via span.RecordError + return.
+func TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore(t *testing.T) {
+	initPrometheusMetrics()
+
+	const blockHeight = uint32(500_000)
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
+		blockchainClient: &blockchain.Mock{},
+		stats:            gocore.NewStat("validator_test"),
+		// mtpStore intentionally empty
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "MTP store not loaded up to height")
+}
+
+// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the guard returns a
+// processing error when EnsureMTPLoaded has not populated the store up to the
+// requested blockMTPHeight (in normal operation this cannot happen because
+// Server.go calls EnsureMTPLoaded before per-tx goroutines start).
+func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
+	v := &Validator{
+		logger:   ulogger.TestLogger{},
+		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(5, []uint32{0})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
+	require.Nil(t, utxoMTPs)
+	require.Equal(t, uint32(0), blockMTP)
 }

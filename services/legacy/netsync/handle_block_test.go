@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
@@ -27,8 +29,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/testdata"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -510,6 +514,83 @@ func TestSyncManager_ExtendTransaction(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// buildOOBFixture constructs a parent (2 outputs) and a child whose only input
+// references PreviousTxOutIndex == 5, plus a txMap containing both. Shared by
+// the ExtendTransaction and extendFromTxMap regression tests for issue #4564.
+func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
+	t.Helper()
+
+	parentScript := &bscript.Script{}
+	parent := &bt.Tx{
+		Version: 1,
+		Inputs:  []*bt.Input{},
+		Outputs: []*bt.Output{
+			{Satoshis: 100, LockingScript: parentScript},
+			{Satoshis: 200, LockingScript: parentScript},
+		},
+	}
+	parent.SetExtended(true)
+	parentHash := parent.TxIDChainHash()
+
+	child := &bt.Tx{
+		Version: 1,
+		Inputs: []*bt.Input{
+			{
+				UnlockingScript:    &bscript.Script{},
+				PreviousTxOutIndex: 5,
+			},
+		},
+		Outputs: []*bt.Output{
+			{Satoshis: 50, LockingScript: &bscript.Script{}},
+		},
+	}
+	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
+	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
+
+	return parentHash, child, txMap
+}
+
+// TestSyncManager_ExtendTransaction_OOB verifies that ExtendTransaction returns
+// a TxInvalidError (rather than panicking) when a child input references a
+// parent output index that exceeds the parent's number of outputs. Regression
+// test for issue #4564.
+func TestSyncManager_ExtendTransaction_OOB(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildOOBFixture(t)
+
+	err := sm.ExtendTransaction(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), parentHash.String())
+}
+
+// TestSyncManager_extendFromTxMap_OOB verifies the same OOB guard on the
+// same-block phase-1 path. Regression test for issue #4564.
+func TestSyncManager_extendFromTxMap_OOB(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildOOBFixture(t)
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), parentHash.String())
+}
+
 // countingValidator tracks how many times Validate is called and optionally fails
 // the first N calls. It checks context cancellation to detect cascade behavior.
 type countingValidator struct {
@@ -785,4 +866,111 @@ func TestPreValidateTransactions_ParentContextCancelled(t *testing.T) {
 	err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context cancelled")
+}
+
+// TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs verifies that when a tx
+// already exists in the utxo store (e.g. created by an earlier crashed attempt or by
+// the propagation path) createUtxos merges the current block's ID into the existing
+// record's BlockIDs instead of silently dropping it. Without the merge, the next
+// block's validOrderAndBlessed check fails with "has no block IDs" in
+// model/Block.go getParentTxMetaBlockIDs.
+func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///test_create_utxos_merge")
+	require.NoError(t, err)
+
+	utxoStore, err := utxosql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	// Build a real, signable-shaped tx without inputs (parent placeholder).
+	tx := bt.NewTx()
+	tx.Version = 1
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	txHash := *tx.TxIDChainHash()
+
+	// Pre-create the tx in the store WITHOUT any MinedBlockInfo. This simulates
+	// the state after a slow-path subtreeValidation run (or propagation arrival
+	// before the block) that lands the tx with empty BlockIDs.
+	_, err = utxoStore.Create(ctx, tx, 100)
+	require.NoError(t, err)
+
+	pre, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs)
+	require.NoError(t, err)
+	require.Empty(t, pre.BlockIDs, "tx should start with empty BlockIDs to reproduce the bug")
+
+	// Wire up a SyncManager just enough for createUtxos. createUtxos only
+	// touches utxoStore, settings, logger and the txMap — no need for full DI.
+	sm := &SyncManager{
+		settings:  tSettings,
+		logger:    logger,
+		utxoStore: utxoStore,
+	}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](1)
+	txMap.Set(txHash, &TxMapWrapper{Tx: tx})
+
+	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1}})
+	block.SetHeight(100)
+
+	const expectedBlockID uint32 = 42
+	require.NoError(t, sm.createUtxos(ctx, txMap, block, expectedBlockID))
+
+	post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs)
+	require.NoError(t, err)
+	require.Contains(t, post.BlockIDs, expectedBlockID,
+		"createUtxos must merge blockID %d into the pre-existing tx", expectedBlockID)
+}
+
+func TestSyncManager_quickValidationAllowed(t *testing.T) {
+	mainnetHighest := uint32(chaincfg.MainNetParams.Checkpoints[len(chaincfg.MainNetParams.Checkpoints)-1].Height)
+
+	tests := []struct {
+		name        string
+		chainParams *chaincfg.Params
+		height      uint32
+		want        bool
+	}{
+		{
+			name:        "nil chain params",
+			chainParams: nil,
+			height:      100,
+			want:        false,
+		},
+		{
+			name:        "regtest has no checkpoints",
+			chainParams: &chaincfg.RegressionNetParams,
+			height:      0,
+			want:        false,
+		},
+		{
+			name:        "mainnet height 0 is covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      0,
+			want:        true,
+		},
+		{
+			name:        "mainnet height equal to highest checkpoint is covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      mainnetHighest,
+			want:        true,
+		},
+		{
+			name:        "mainnet height one above highest checkpoint is not covered",
+			chainParams: &chaincfg.MainNetParams,
+			height:      mainnetHighest + 1,
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := &SyncManager{chainParams: tt.chainParams}
+			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+		})
+	}
 }

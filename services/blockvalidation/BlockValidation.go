@@ -1104,16 +1104,18 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 
 // buildAddBlockOpts returns AddBlock options for the block.
 //
-// When block.ID is pre-assigned (set by legacy netsync in LEGACYSYNCING mode), it uses that ID
-// and sets mined_set=true upfront. This causes the setMinedChan worker to skip setTxMinedStatus
-// via its existing MinedSet guard (BlockValidation.go setMinedChan worker, MinedSet check),
-// eliminating redundant SetMinedMulti calls for every UTXO.
+// When block.ID is pre-assigned (set by legacy netsync for blocks at/below the highest
+// hard-coded checkpoint), it uses that ID and sets mined_set=true upfront. This causes
+// the setMinedChan worker to skip setTxMinedStatus via its existing MinedSet guard
+// (BlockValidation.go setMinedChan worker, MinedSet check), eliminating redundant
+// SetMinedMulti calls for every UTXO.
 //
 // Trade-off: skipping setTxMinedStatus also skips its post-storage double-spend cross-check
-// (UpdateTxMinedStatus → SetMinedMulti). This is safe for LEGACYSYNCING because:
+// (UpdateTxMinedStatus → SetMinedMulti). This is safe for checkpoint-covered blocks because:
 //  1. block.Valid() performs pre-storage double-spend detection via checkParentExistsOnChain
 //     before AddBlock is called.
-//  2. LEGACYSYNCING processes a canonical chain with trusted historical blocks.
+//  2. Checkpoint-anchored chain linkage plus PoW makes the block canonical regardless of
+//     the FSM state that drove the catch-up.
 //
 // For any block arriving without a pre-assigned ID (block.ID == 0), this function returns nil
 // and AddBlock behaves exactly as before — setTxMinedStatus runs normally.
@@ -1176,8 +1178,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// Block exists - check if it's invalid
 				_, blockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
 				if err != nil {
-					ctxLogger.Warnf("[ValidateBlock][%s] failed to get block metadata for existing block: %v, assuming valid", block.Header.Hash().String(), err)
-					return nil
+					return errors.NewServiceError("[ValidateBlock][%s] failed to get block metadata for existing block", block.Header.Hash().String(), err)
 				}
 
 				if blockMeta != nil && blockMeta.Invalid {
@@ -1336,7 +1337,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Skip difficulty validation for blocks at or below the highest checkpoint
 		// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-		highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
 		if skipDifficultyCheck {
@@ -1761,7 +1762,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	// Skip difficulty validation for blocks at or below the highest checkpoint
 	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 	skipDifficultyCheck := blockData.block.Height <= highestCheckpointHeight
 
 	if skipDifficultyCheck {

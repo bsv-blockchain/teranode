@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -146,7 +147,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		MaxAge:           86400,
 	}))
 
-	e.Use(middleware.Gzip())
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
+	}))
 
 	e.Use(securityHeadersMiddleware())
 
@@ -415,6 +418,31 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	return h, nil
+}
+
+func shouldSkipGzipForLargeBinaryAssetResponse(c echo.Context) bool {
+	path := c.Path()
+	if path == "" && c.Request() != nil && c.Request().URL != nil {
+		path = c.Request().URL.Path
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		switch part {
+		case "subtree_data":
+			return true
+		case "subtree":
+			tail := parts[i+1:]
+			if len(tail) == 1 {
+				return true
+			}
+			if len(tail) == 2 && tail[1] == "txs" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func AdaptStdHandler(handler func(w http.ResponseWriter, r *http.Request)) echo.HandlerFunc {

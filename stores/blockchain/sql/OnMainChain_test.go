@@ -93,7 +93,7 @@ func TestOnMainChain_GenesisOverrideWhenPreBestHashIsNil(t *testing.T) {
 	// Re-seed genesis. This goes through StoreBlock → storeBlock, where
 	// preBestHash is nil (empty DB) so the outer logic computes onMainChain=false.
 	// The override inside storeBlock must set it back to true.
-	require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}))
+	require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}, s.chainParams))
 
 	require.True(t, getOnMainChain(t, s, s.chainParams.GenesisHash[:]),
 		"genesis override must set on_main_chain=true even when preBestHash is nil")

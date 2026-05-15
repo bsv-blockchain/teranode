@@ -282,6 +282,44 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	}
 }
 
+func Benchmark_txMetaCache_GetMetaCached_WithBuffer(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, ns, Unallocated, 1)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	hash := chainhash.HashH([]byte("cached-meta-buffer-benchmark"))
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+	}
+	require.NoError(b, cache.SetCache(&hash, metaData))
+
+	txMetaData := &meta.Data{}
+	cachedBytes := make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		var found bool
+		cachedBytes, found, err = cache.GetMetaCachedWithBuffer(ctx, hash, txMetaData, cachedBytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !found {
+			b.Fatal("expected cached tx meta")
+		}
+	}
+}
+
 type decoratingNullStore struct {
 	*nullstore.NullStore
 	metaData *meta.Data
