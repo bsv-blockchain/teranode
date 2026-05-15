@@ -844,7 +844,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// per-line HTTP status prefix mirrors the single-tx /tx response so
 		// callers can classify each tx the same way regardless of which
 		// endpoint they posted to.
-		var slotLines []string
+		slotLines := make([]string, 0, nextSlot)
 		anyError := false
 
 		for _, err := range errSlots[:nextSlot] {
