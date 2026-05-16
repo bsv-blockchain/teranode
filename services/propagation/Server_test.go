@@ -102,7 +102,10 @@ func Test_handleMultipleTx_PanicDuringRead(t *testing.T) {
 	// handler should not panic. it should recover and aggregate an error
 	err := handler(c)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	// 207 Multi-Status: per-slot response body carries the recovered
+	// parse error. 500 is reserved for actual server-level failures
+	// (panics escaping the handler, etc.).
+	assert.Equal(t, http.StatusMultiStatus, rec.Code)
 	body, rbErr := io.ReadAll(rec.Body)
 	require.NoError(t, rbErr)
 	// Panic recovery on a request-body read produces a parse error that falls
@@ -821,7 +824,7 @@ func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
 	c.SetPath("/txs")
 
 	require.NoError(t, handler(c))
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, http.StatusMultiStatus, rec.Code)
 
 	responseBody, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)
@@ -918,7 +921,7 @@ func Test_handleMultipleTx_PerSlotResponseLines(t *testing.T) {
 	c.SetPath("/txs")
 
 	require.NoError(t, handler(c))
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, http.StatusMultiStatus, rec.Code)
 
 	responseBody, err := io.ReadAll(rec.Body)
 	require.NoError(t, err)

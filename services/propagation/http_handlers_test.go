@@ -417,7 +417,7 @@ func TestHandleMultipleTx(t *testing.T) {
 				buf.Write(tx1.ExtendedBytes())
 				return &buf
 			},
-			expectedStatusCode:  http.StatusInternalServerError,
+			expectedStatusCode:  http.StatusMultiStatus,
 			expectedResponse:    "TX_INVALID (31)",
 			mockValidationError: errors.NewTxInvalidError("test validation error"),
 		},
@@ -428,7 +428,7 @@ func TestHandleMultipleTx(t *testing.T) {
 				buf.Write(tx1.ExtendedBytes())
 				return &buf
 			},
-			expectedStatusCode: http.StatusInternalServerError,
+			expectedStatusCode: http.StatusMultiStatus,
 			expectedResponse:   "PROCESSING (4)",
 			storeError:         errors.NewStorageError("test store error"),
 		},

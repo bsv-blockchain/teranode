@@ -872,7 +872,14 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		}
 
 		if anyError {
-			return c.String(http.StatusInternalServerError, strings.Join(slotLines, "\n")+"\n")
+			// 207 Multi-Status is the HTTP-level signal that the
+			// response body contains a per-resource (per-tx) status
+			// list rather than a single overall outcome. Reserving
+			// 500 for actual server failures (panics caught by
+			// echo's recover middleware, etc.) lets a caller
+			// distinguish "the server fell over" from "each tx has
+			// its own status, parse the body to find out."
+			return c.String(http.StatusMultiStatus, strings.Join(slotLines, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")
