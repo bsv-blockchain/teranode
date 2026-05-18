@@ -3642,6 +3642,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#7251-deployment-upstream-rate-limiting-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2.5.1 Deployment: Upstream Rate Limiting Required
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#726-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7825,6 +7836,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#7251-deployment-upstream-rate-limiting-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2.5.1 Deployment: Upstream Rate Limiting Required
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#726-environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8852,6 +8874,20 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Error: &quot;server_keyFile is required for HTTPS&quot;
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 </span></code></pre></div>
+<h4 id="7251-deployment-upstream-rate-limiting-required">7.2.5.1 Deployment: Upstream Rate Limiting Required<a class="headerlink" href="#7251-deployment-upstream-rate-limiting-required" title="Permanent link">&para;</a></h4>
+<p>The subtree HTTP endpoints — <code>/subtree/:hash</code> (binary/hex), <code>/subtree/:hash/txs</code> (binary/hex), and <code>/subtree_data/:hash</code> — stream large payloads and <strong>deliberately skip gzip compression</strong>. Gzip on these endpoints would force the response to be fully buffered server-side and yield negligible compression on near-incompressible hash/transaction bytes. Streaming without compression preserves the memory-bound design of the asset service.</p>
+<p>Trade-off: these unauthenticated GET endpoints can emit hundreds of MB per request uncompressed, which is a bandwidth amplification surface if abused. The asset service mitigates with:</p>
+<ul>
+<li>the ban-list middleware;</li>
+<li>per-method concurrency semaphores (<code>asset_concurrency_get_subtree_data</code>, <code>asset_concurrency_get_subtree_data_reader</code>, <code>asset_concurrency_get_subtree_transactions</code>, <code>asset_subtreeDataStreamingConcurrency</code>) — bounded by default (<code>2 / 4 / 2 / 2</code>).</li>
+</ul>
+<p>These mitigations are <strong>not</strong> sufficient on their own for public-facing deployments. Operators MUST front the asset service with a reverse proxy (nginx, HAProxy, Envoy, CloudFront, Cloudflare, etc.) configured to enforce:</p>
+<ol>
+<li><strong>Per-IP request rate limiting</strong> on the <code>/subtree*</code> paths (e.g. nginx <code>limit_req_zone</code> keyed by <code>$binary_remote_addr</code>).</li>
+<li><strong>Per-IP concurrent connection limits</strong> (e.g. nginx <code>limit_conn_zone</code>).</li>
+<li><strong>An ACL</strong> restricting these endpoints to known peers/clients when public exposure is not required.</li>
+</ol>
+<p>Per-IP rate limiting inside the asset service itself is a planned defense-in-depth follow-up but is not currently implemented.</p>
 <h4 id="726-environment-variables">7.2.6 Environment Variables<a class="headerlink" href="#726-environment-variables" title="Permanent link">&para;</a></h4>
 <p><strong>Standard Environment Variables:</strong></p>
 <ul>
