@@ -5219,17 +5219,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#txscriptinterpreter-interface" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TxScriptInterpreter Interface
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -7045,17 +7034,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#txscriptinterpreter-interface" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TxScriptInterpreter Interface
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -7398,61 +7376,37 @@
 <h3 id="txvalidator">TxValidator<a class="headerlink" href="#txvalidator" title="Permanent link">&para;</a></h3>
 <p>The <code>TxValidator</code> implements transaction validation logic based on Bitcoin consensus rules and configurable policy settings.</p>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TxValidator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="nx">logger</span><span class="w">      </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nx">settings</span><span class="w">    </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nx">interpreter</span><span class="w"> </span><span class="nx">TxScriptInterpreter</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nx">options</span><span class="w">     </span><span class="o">*</span><span class="nx">TxValidatorOptions</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="nx">logger</span><span class="w">   </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nx">bdk</span><span class="w">      </span><span class="nx">bdkValidator</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nx">options</span><span class="w">  </span><span class="o">*</span><span class="nx">TxValidatorOptions</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>The validator package defines multiple interfaces for transaction validation:</p>
+<p>The validator package defines the transaction validation interface:</p>
 <h4 id="txvalidatori-interface">TxValidatorI Interface<a class="headerlink" href="#txvalidatori-interface" title="Permanent link">&para;</a></h4>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TxValidatorI</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="c1">// ValidateTransaction performs comprehensive validation of a transaction.</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="c1">// This method enforces all consensus and policy rules against the transaction,</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="c1">// including format, structure, inputs/outputs, signature verification, and fees.</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="c1">// ValidateTransactionScripts performs script validation for a transaction.</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="c1">// This method specifically handles the script execution and signature verification</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="c1">// portion of validation, which is typically the most computationally intensive part.</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="nx">ValidateTransactionScripts</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="c1">// ValidateTransaction performs Teranode-owned validation that needs node context</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="c1">// and BDK-side transaction validation.</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="c1">// ValidateBIP68 verifies relative lock-time constraints for block validation.</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nx">ValidateBIP68</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoMTPs</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">blockMTP</span><span class="w"> </span><span class="kt">uint32</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="p">}</span>
 </span></code></pre></div>
-<h4 id="txscriptinterpreter-interface">TxScriptInterpreter Interface<a class="headerlink" href="#txscriptinterpreter-interface" title="Permanent link">&para;</a></h4>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TxScriptInterpreter</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="c1">// VerifyScript implements script verification for a transaction</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nx">VerifyScript</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">consensus</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="c1">// Interpreter returns the interpreter being used</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nx">Interpreter</span><span class="p">()</span><span class="w"> </span><span class="nx">TxInterpreter</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
-</span></code></pre></div>
-<p>The validator supports multiple script interpreter implementations:</p>
-<ul>
-<li><strong>GoBT</strong>: Pure Go implementation from the libsv/go-bt library</li>
-<li><strong>GoSDK</strong>: BSV SDK implementation</li>
-<li><strong>GoBDK</strong>: Bitcoin Development Kit implementation</li>
-</ul>
-<blockquote>
-<p><strong>Note</strong>: The script interpreter is hardcoded to <strong>GoBDK</strong> (<code>TxInterpreterGoBDK</code>). Runtime selection via configuration is not supported.</p>
-</blockquote>
+<p><code>TxValidator</code> uses GoBDK directly through a private adapter. The old GoBT/GoSDK script-interpreter variants are no longer part of this validator package.</p>
 <h2 id="key-functions">Key Functions<a class="headerlink" href="#key-functions" title="Permanent link">&para;</a></h2>
 <h3 id="txvalidator-methods">TxValidator Methods<a class="headerlink" href="#txvalidator-methods" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Performs comprehensive validation checks on a transaction. This includes checking input and output presence, transaction size limits, input values and coinbase restrictions, output values and dust limits, lock time requirements, script operation limits, script validation, and fee requirements.</li>
-<li><code>ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Validates transaction scripts using the configured script interpreter.</li>
-<li><code>checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Validates transaction outputs, checking for dust values and other output-specific rules.</li>
-<li><code>checkInputs(tx *bt.Tx, blockHeight uint32) error</code>: Validates transaction inputs, checking for proper formatting and sequence values.</li>
-<li><code>checkTxSize(txSize int) error</code>: Checks if the transaction size is within the allowed policy limit.</li>
+<li><code>ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, <code>MaxCoinsViewCacheSize</code>, minimum-fee policy, and consolidation-fee exemption, then calls BDK <code>ValidateTransaction</code>.</li>
+<li><code>ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error</code>: Verifies BIP68 relative lock-time constraints for block validation.</li>
+<li><code>checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and <code>MaxCoinsViewCacheSize</code>.</li>
 <li><code>checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error</code>: Verifies if the transaction fee is sufficient according to the fee policy.</li>
-<li><code>sigOpsCheck(tx *bt.Tx, validationOptions *Options) error</code>: Checks the number of signature operations in the transaction against policy limits.</li>
 <li><code>pushDataCheck(tx *bt.Tx) error</code>: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.</li>
 </ul>
 <h3 id="validator-methods">Validator Methods<a class="headerlink" href="#validator-methods" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)</code>: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.</li>
-<li><code>validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Performs transaction-level validation checks. Ensures transaction is properly extended and meets all validation rules.</li>
-<li><code>validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error</code>: Performs script validation for a transaction. Returns error if validation fails.</li>
+<li><code>validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error</code>: Performs Teranode-owned transaction checks, BDK transaction validation, then optional BIP68 block-context validation.</li>
 <li><code>spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error)</code>: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.</li>
 <li><code>sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error</code>: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.</li>
 <li><code>extendTransaction(ctx context.Context, tx *bt.Tx) error</code>: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.</li>

@@ -3473,10 +3473,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#24-script-verification" class="md-nav__link">
+  <a href="#24-bdk-transaction-validation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.4. Script Verification
+        2.4. BDK Transaction Validation
       
     </span>
   </a>
@@ -7207,10 +7207,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#24-script-verification" class="md-nav__link">
+  <a href="#24-bdk-transaction-validation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.4. Script Verification
+        2.4. BDK Transaction Validation
       
     </span>
   </a>
@@ -7680,63 +7680,11 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ul>
 </li>
 </ol>
-<p>Transactions are validated by the <code>ValidateTransaction()</code> function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (<code>github.com/bsv-blockchain/go-bt</code>). The implementation uses the GoBDK script interpreter for script verification. GoBT and GoSDK implementations exist in the codebase for historical reasons but are not active.</p>
-<p>We can see the exact steps being executed as part of the validation process below:</p>
+<p>Transactions are validated through one <code>TxValidator.ValidateTransaction()</code> call plus the special BIP68 block-context check. <code>ValidateTransaction()</code> keeps Teranode-owned checks that need local node context, such as coinbase routing, the stricter all-zero previous-txid guard, <code>MaxCoinsViewCacheSize</code>, minimum-fee policy, and the local consolidation-fee exemption, then calls BDK <code>ValidateTransaction</code> for BDK-side transaction structure, value, standardness, sigops, and script validation.</p>
+<p>The current shape is:</p>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">tv</span><span class="w"> </span><span class="o">*</span><span class="nx">TxValidator</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w"> </span><span class="c1">//</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w"> </span><span class="c1">// Each node will verify every transaction against a long checklist of criteria:</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w"> </span><span class="c1">//</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w"> </span><span class="nx">txSize</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tx</span><span class="p">.</span><span class="nx">Size</span><span class="p">()</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w"> </span><span class="c1">// 1) Neither lists of inputs nor outputs are empty</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">tx</span><span class="p">.</span><span class="nx">Inputs</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">tx</span><span class="p">.</span><span class="nx">Outputs</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewTxInvalidError</span><span class="p">(</span><span class="s">&quot;transaction has no inputs or outputs&quot;</span><span class="p">)</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w"> </span><span class="c1">// 2) The transaction size in bytes is less than maxtxsizepolicy.</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">validationOptions</span><span class="p">.</span><span class="nx">SkipPolicyChecks</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkTxSize</span><span class="p">(</span><span class="nx">txSize</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w"> </span><span class="c1">// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w"> </span><span class="c1">// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkInputs</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w"> </span><span class="c1">// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w"> </span><span class="c1">//    more than the dust threshold if 1 unless it&#39;s OP_RETURN, which is allowed to be 0)</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkOutputs</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w"> </span><span class="c1">// The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w"> </span><span class="c1">// The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w"> </span><span class="c1">// Note: This may be disabled for unlimited operation counts</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="w"> </span><span class="c1">// The unlocking script (scriptSig) can only push numbers on the stack</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">interpreter</span><span class="p">.</span><span class="nx">Interpreter</span><span class="p">()</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">TxInterpreterGoBDK</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">settings</span><span class="p">.</span><span class="nx">ChainCfgParams</span><span class="p">.</span><span class="nx">UahfForkHeight</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">pushDataCheck</span><span class="p">(</span><span class="nx">tx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="w"> </span><span class="c1">// 10) Reject if the sum of input values is less than sum of output values</span>
-</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="w"> </span><span class="c1">// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.</span>
-</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">validationOptions</span><span class="p">.</span><span class="nx">SkipPolicyChecks</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkFees</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>
-</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="w"> </span><span class="c1">// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts</span>
-</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="w"> </span><span class="c1">// (Script verification is handled separately with multiple interpreter options)</span>
-</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>
-</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a><span class="p">}</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w"> </span><span class="c1">// Teranode-owned checks, then BDK ValidateTransaction.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The above represents an implementation of the core Teranode validation rules:</p>
 <ul>
@@ -7928,43 +7876,18 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li><strong>Storage Efficiency</strong>: All transactions stored in non-extended format regardless of ingress format</li>
 </ol>
 <p>For more details on transaction format handling across the system, see the <a href="../../datamodel/transaction_data_model/">Transaction Data Model documentation</a>.</p>
-<h3 id="24-script-verification">2.4. Script Verification<a class="headerlink" href="#24-script-verification" title="Permanent link">&para;</a></h3>
-<p>The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters exist in the codebase:</p>
-<ol>
-<li>
-<p><strong>GoBT Interpreter</strong> (<code>TxInterpreterGoBT</code>):</p>
-<ul>
-<li>Based on the Go-BT library</li>
-</ul>
-</li>
-<li>
-<p><strong>GoSDK Interpreter</strong> (<code>TxInterpreterGoSDK</code>):</p>
-<ul>
-<li>Based on the Go-SDK library</li>
-</ul>
-</li>
-<li>
-<p><strong>GoBDK Interpreter</strong> (<code>TxInterpreterGoBDK</code>):</p>
-<ul>
-<li>Based on the Go-BDK library</li>
-<li>Optimized for performance in high-throughput scenarios</li>
-<li>Includes specialized Bitcoin script validation features</li>
-</ul>
-</li>
-</ol>
-<blockquote>
-<p><strong>Note:</strong> The script interpreter is hardcoded to GoBDK (<code>TxInterpreterGoBDK</code>). There is no <code>validator_scriptVerificationLibrary</code> setting; the interpreter cannot be changed via configuration. GoBT and GoSDK exist in the codebase for historical reasons only.</p>
-</blockquote>
-<p>The script verification process:</p>
+<h3 id="24-bdk-transaction-validation">2.4. BDK Transaction Validation<a class="headerlink" href="#24-bdk-transaction-validation" title="Permanent link">&para;</a></h3>
+<p>The Validator uses GoBDK directly through a private adapter in the validator package. GoBT and GoSDK script-verifier variants are no longer part of this package's validation design.</p>
+<p>The BDK validation process:</p>
 <ol>
 <li>
 <p>Each transaction input's unlocking script is validated against its corresponding output's locking script</p>
 </li>
 <li>
-<p>The interpreter evaluates if the combined script executes successfully and leaves 'true' on the stack</p>
+<p>BDK validates transaction structure, values, standardness, sigops, and scripts</p>
 </li>
 <li>
-<p>The script verification is context-aware, considering current block height and network parameters</p>
+<p>Validation is context-aware, considering current block height, network parameters, and policy/consensus mode</p>
 </li>
 </ol>
 <h3 id="25-error-handling-and-transaction-rejection">2.5. Error Handling and Transaction Rejection<a class="headerlink" href="#25-error-handling-and-transaction-rejection" title="Permanent link">&para;</a></h3>
@@ -8186,19 +8109,17 @@ However, the Validator can also be started as a service, allowing to interact wi
 <div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>./services/validator
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>├── Client.go                    # Contains client-side logic for interacting with the Validator
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>├── Interface.go                 # Defines interfaces for the Validator
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>├── ScriptVerifierGoBDK.go       # Implements script verification using a Go Bitcoin Development Kit
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>├── ScriptVerifierGoBT.go        # Implements script verification using Go Bitcoin Tools
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── ScriptVerifierGoSDK.go       # Implements script verification using a Go Software Development Kit
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── Server.go                    # Implements the server-side logic of the Validator
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>├── TxValidator.go               # Contains specific logic for validating transactions
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>├── Validator.go                 # Contains the main logic for validator functionalities
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── metrics.go                   # Contains code for metrics collection within the Validator
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>├── Mock.go                      # Mock implementation of the Validator interface for use in tests
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>├── options.go                   # Defines configuration options or settings for the validator service
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>└── validator_api
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    ├── validator_api.pb.go          # Auto-generated Go code from validator_api.proto
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>    ├── validator_api.proto          # Protocol Buffers definition file for the validator API
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    └── validator_api_grpc.pb.go     # Auto-generated gRPC specific code from validator_api.proto
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>├── ScriptVerifierGoBDK.go       # Adapts Teranode validation data to GoBDK
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>├── Server.go                    # Implements the server-side logic of the Validator
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── TxValidator.go               # Contains specific logic for validating transactions
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── Validator.go                 # Contains the main logic for validator functionalities
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>├── metrics.go                   # Contains code for metrics collection within the Validator
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>├── Mock.go                      # Mock implementation of the Validator interface for use in tests
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── options.go                   # Defines configuration options or settings for the validator service
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>└── validator_api
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    ├── validator_api.pb.go          # Auto-generated Go code from validator_api.proto
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    ├── validator_api.proto          # Protocol Buffers definition file for the validator API
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    └── validator_api_grpc.pb.go     # Auto-generated gRPC specific code from validator_api.proto
 </span></code></pre></div>
 <h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Validator locally, you can execute the following command:</p>
