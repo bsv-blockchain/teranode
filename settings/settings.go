@@ -95,10 +95,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxTxSizePolicy: getInt("maxtxsizepolicy", 10485760, alternativeContext...), // 10MB
 			MinMiningTxFee:  getFloat64("minminingtxfee", 0.00000500, alternativeContext...),
 			// MaxOrphanTxSize:                 getInt("maxorphantxsize", 1000000, alternativeContext...),
-			// DataCarrierSize:                 int64(getInt("datacarriersize", 1000000, alternativeContext...)),
-			MaxScriptSizePolicy: getInt("maxscriptsizepolicy", 500000, alternativeContext...), // 500KB
-			// TODO: what should this be?
-			// MaxOpsPerScriptPolicy:           int64(getInt("maxopsperscriptpolicy", 1000000, alternativeContext...)),
+			DataCarrierSize:              int64(getInt("datacarriersize", 1000000, alternativeContext...)),
+			MaxScriptSizePolicy:          getInt("maxscriptsizepolicy", 500000, alternativeContext...), // 500KB
+			MaxOpsPerScriptPolicy:        int64(getInt("maxopsperscriptpolicy", 1000000, alternativeContext...)),
 			MaxScriptNumLengthPolicy:     getInt("maxscriptnumlengthpolicy", 10000, alternativeContext...),       // 10K
 			MaxPubKeysPerMultisigPolicy:  int64(getInt("maxpubkeyspermultisigpolicy", 0, alternativeContext...)), // 0 is unlimited
 			MaxTxSigopsCountsPolicy:      int64(getInt("maxtxsigopscountspolicy", 0, alternativeContext...)),     // 0 is unlimited
@@ -108,7 +107,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// LimitCPFPGroupMembersCount:      getInt("limitcpfpgroupmemberscount", 1000000, alternativeContext...),
 			AcceptNonStdOutputs: getBool("acceptnonstdoutputs", true, alternativeContext...),
 			RequireStandard:     getBool("requirestandard", false, alternativeContext...),
-			// DataCarrier:                     getBool("datacarrier", false, alternativeContext...),
+			DataCarrier:         getBool("datacarrier", false, alternativeContext...),
+			PermitBareMultisig:  getBool("permitbaremultisig", true, alternativeContext...),
 			// MaxStdTxValidationDuration:    getInt("maxstdtxvalidationduration", 3, alternativeContext...),       // 3ms
 			// MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000, alternativeContext...), // 1000ms
 			// MaxTxChainValidationBudget:    getInt("maxtxchainvalidationbudget", 50, alternativeContext...),      // 50ms
@@ -196,9 +196,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
 			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
 			ConcurrencyGetTransactionMeta:     getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
-			ConcurrencyGetSubtreeData:         getInt("asset_concurrency_get_subtree_data", 0, alternativeContext...),
-			ConcurrencyGetSubtreeDataReader:   getInt("asset_concurrency_get_subtree_data_reader", 0, alternativeContext...),
-			ConcurrencyGetSubtreeTransactions: getInt("asset_concurrency_get_subtree_transactions", 0, alternativeContext...),
+			ConcurrencyGetSubtreeData:         getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
+			ConcurrencyGetSubtreeDataReader:   getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
+			ConcurrencyGetSubtreeTransactions: getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
 			ConcurrencyGetSubtreeExists:       getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
 			ConcurrencyGetSubtreeHead:         getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
 			ConcurrencyGetUtxo:                getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
@@ -206,7 +206,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 
 			// Streaming configuration
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
-			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 4, alternativeContext...),
+			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),

@@ -6,19 +6,12 @@ Bitcoin transaction validation rules and policies. The TxValidator component is 
 for enforcing both consensus rules (which all nodes must follow) and policy rules
 (which can be configured per node).
 
-The implementation supports multiple script interpreters through a plugin architecture,
-allowing different script verification engines to be used based on configuration. Currently
-supported interpreters include:
-- Go-BT: Pure Go implementation from the libsv/go-bt library
-- Go-SDK: BSV SDK implementation
-- Go-BDK: Bitcoin Development Kit implementation
+The implementation uses GoBDK for BSV transaction validation and keeps only the
+Teranode-owned checks that need node context outside BDK.
 
 The validation process enforces rules including but not limited to:
-- Transaction size limits
-- Input and output structure verification
-- Non-dust output values
-- Script operation count limits
-- Signature verification
+- BDK transaction structure, standardness, sigops, and script validation
+- Teranode-specific input and node-context checks
 - Fee policy enforcement
 - Locktime and sequence number verification
 
@@ -32,26 +25,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-bt/v2/bscript/interpreter"
-	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
-)
-
-// TxInterpreter defines the type of script interpreter to be used
-// for transaction validation
-type TxInterpreter string
-
-const (
-	// TxInterpreterGoBT specifies the Go-BT library interpreter
-	TxInterpreterGoBT TxInterpreter = "GoBT"
-
-	// TxInterpreterGoSDK specifies the Go-SDK library interpreter
-	TxInterpreterGoSDK TxInterpreter = "GoSDK"
-
-	// TxInterpreterGoBDK specifies the Go-BDK library interpreter
-	TxInterpreterGoBDK TxInterpreter = "GoBDK"
 )
 
 // BIP68 sequence lock constants
@@ -81,19 +57,16 @@ const (
 // validation strategies to be used (including mocks for testing) while maintaining
 // a consistent API.
 //
-// The validator is responsible for enforcing Bitcoin consensus rules and configurable
-// policy rules across the full range of transaction properties. This includes
-// script verification, size limits, fee policies, and structure validation.
+// The validator is responsible for enforcing Teranode-owned checks that need
+// node context and then running BDK-side validation.
 type TxValidatorI interface {
-	// ValidateTransaction performs comprehensive validation of a transaction,
-	// excluding BIP68 sequence-lock checks. This method enforces all consensus
-	// and policy rules including format, structure, inputs/outputs, script
-	// verification, and fees. BIP68 validation is performed separately via
-	// ValidateBIP68 so that MTP lookups are skipped when the transaction fails
-	// normal validation first.
+	// ValidateTransaction performs Teranode-owned validation that needs node
+	// context and BDK-side transaction validation, excluding BIP68 sequence-lock
+	// checks. BIP68 validation is performed separately via ValidateBIP68 so that
+	// MTP lookups are skipped when the transaction fails normal validation first.
 	//
 	// Parameters:
-	//   - tx: The transaction to validate, must be properly initialized
+	//   - tx: The extended transaction to validate, with previous-output data populated
 	//   - blockHeight: The current block height for validation context
 	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
 	//   - validationOptions: Optional validation options to customize validation behavior
@@ -115,61 +88,15 @@ type TxValidatorI interface {
 	// Returns:
 	//   - error: Validation error if sequence locks are not satisfied, nil on success
 	ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
-
-	// ValidateTransactionScripts performs script validation for a transaction.
-	// This method specifically handles the script execution and signature verification
-	// portion of validation, which is typically the most computationally intensive part.
-	// It can be called independently from ValidateTransaction when only script
-	// validation is needed.
-	//
-	// Parameters:
-	//   - tx: The transaction containing the scripts to validate
-	//   - blockHeight: Current block height for validation context (affects script flags)
-	//   - utxoHeights: Heights of the UTXOs being spent, used for BIP68 relative locktime
-	//   - validationOptions: Optional validation options to customize validation behavior
-	// Returns:
-	//   - error: Specific script validation error if validation fails, nil on success
-	ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 }
 
 // TxValidator implements transaction validation logic
 type TxValidator struct {
-	logger      ulogger.Logger
-	settings    *settings.Settings
-	interpreter TxScriptInterpreter
-	options     *TxValidatorOptions
+	logger   ulogger.Logger
+	settings *settings.Settings
+	bdk      bdkValidator
+	options  *TxValidatorOptions
 }
-
-// TxScriptInterpreter defines the interface for script verification operations
-type TxScriptInterpreter interface {
-	// VerifyScript implements script verification for a transaction
-	// Parameters:
-	//   - tx: The transaction containing the scripts to verify
-	//   - blockHeight: Current block height for validation context
-	// Returns:
-	//   - error: Any script verification errors encountered
-	// Logger return the encapsulated logger
-
-	// VerifyScript implement the method to verify a script for a transaction
-	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
-
-	// Interpreter returns the interpreter being used
-	Interpreter() TxInterpreter
-}
-
-// TxScriptInterpreterCreator defines a function type for creating script interpreters
-// Parameters:
-//   - logger: Logger instance for the interpreter
-//   - policy: Policy settings for validation
-//   - params: Network parameters
-//
-// Returns:
-//   - TxScriptInterpreter: The created script interpreter
-type TxScriptInterpreterCreator func(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) TxScriptInterpreter
-
-// TxScriptInterpreterFactory stores registered TxValidator creator methods
-// The factory is populated at build time based on build tags
-var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreator)
 
 // NewTxValidator creates a new transaction validator with the specified configuration
 // Parameters:
@@ -183,40 +110,20 @@ var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreat
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) *TxValidator {
 	options := NewTxValidatorOptions(opts...)
 
-	var txScriptInterpreter TxScriptInterpreter
-
-	// If a creator was not registered to the factory, then return nil
-	if createTxScriptInterpreter, ok := TxScriptInterpreterFactory[TxInterpreterGoBDK]; ok {
-		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
-	}
-
-	// Make sure script interpreter is created
-	if txScriptInterpreter == nil {
-		panic("unable to create script interpreter")
-	}
-
 	return &TxValidator{
-		logger:      logger,
-		settings:    tSettings,
-		interpreter: txScriptInterpreter,
-		options:     options,
+		logger:   logger,
+		settings: tSettings,
+		bdk:      newScriptVerifierGoBDK(logger, tSettings.Policy, tSettings.ChainCfgParams),
+		options:  options,
 	}
 }
 
-// ValidateTransaction performs comprehensive validation of a transaction,
-// excluding BIP68 sequence-lock checks (use ValidateBIP68 for that).
-// This includes checking:
-//  1. Input and output presence
-//  2. Transaction size limits
-//  3. Input values and coinbase restrictions
-//  4. Output values and dust limits
-//  5. Lock time requirements
-//  6. Script operation limits
-//  7. Script validation
-//  8. Fee requirements
+// ValidateTransaction performs Teranode-owned transaction validation and BDK
+// transaction validation, excluding BIP68 sequence-lock checks (use
+// ValidateBIP68 for that).
 //
 // Parameters:
-//   - tx: The transaction to validate
+//   - tx: The extended transaction to validate, with previous-output data populated
 //   - blockHeight: Current block height for validation context
 //   - utxoHeights: Block heights where each input UTXO was created
 //   - validationOptions: Optional validation options
@@ -224,55 +131,29 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 // Returns:
 //   - error: Any validation errors encountered
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
-	//
-	// Each node will verify every transaction against a long checklist of criteria:
-	//
-	txSize := tx.Size()
-
-	// 1) Neither lists of inputs nor outputs are empty
-	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-		return errors.NewTxInvalidError("transaction has no inputs or outputs")
+	if validationOptions == nil {
+		validationOptions = NewDefaultOptions()
 	}
 
-	// 2) Check transaction size against both consensus and policy limits
-	// Consensus limits are ALWAYS checked, policy limits only for mempool transactions
-	if err := tv.checkTxSize(txSize, blockHeight, validationOptions.SkipPolicyChecks); err != nil {
-		return err
+	// BDK rejects coinbase transactions in both modes. Keep coinbase routing
+	// outside BDK so the adapter only sees regular transactions.
+	if tx.IsCoinbase() {
+		return errors.NewTxInvalidError("coinbase transactions are not supported")
 	}
 
-	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
-	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
 	if err := tv.checkInputs(tx, blockHeight, validationOptions); err != nil {
 		return err
 	}
 
-	// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
-	//    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
-	if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
-		return err
-	}
-
-	// 6) nLocktime is equal to INT_MAX, or nLocktime and nSequence values are satisfied according to MedianTimePast
-	//    => checked by the node, we do not want to have to know the current block height
-
-	// 7) The transaction size in bytes is greater than or equal to 100
-	//    => This is a BCH only check, not applicable to BSV
-
-	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	// --------- TURN OFF -> unlimited ---------------------
-	// if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
-	// 	return err
-	// }
-
-	// 10) Reject if the sum of input values is less than sum of output values
-	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
 	if !validationOptions.SkipPolicyChecks {
 		if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	// SkipPolicyChecks is equivalent to BDK consensus=true.
+	// https://github.com/bsv-blockchain/teranode/issues/2367
+	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
 }
 
 // ValidateBIP68 verifies that BIP68 relative lock-time constraints are satisfied.
@@ -281,32 +162,6 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 // when a transaction fails normal validation.
 func (tv *TxValidator) ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error {
 	return tv.sequenceLocks(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
-}
-
-// ValidateTransactionScripts performs script validation for all transaction inputs.
-func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
-	if tv == nil {
-		return errors.NewTxInvalidError("tx validator is nil")
-	}
-
-	if tv.interpreter == nil {
-		return errors.NewTxInvalidError("tx interpreter is nil, available interpreters: %v", TxScriptInterpreterFactory)
-	}
-
-	// SkipPolicy is equivalent to execute the script with consensus = true
-	// https://github.com/bsv-blockchain/teranode/issues/2367
-	consensus := true
-	if validationOptions != nil {
-		consensus = validationOptions.SkipPolicyChecks
-	}
-
-	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.interpreter.VerifyScript(tx, blockHeight, consensus, utxoHeights); err != nil {
-		return err
-	}
-
-	// everything checks out
-	return nil
 }
 
 // sequenceLocks verifies that relative lock-time constraints (BIP68) are satisfied for block validation.
@@ -340,15 +195,8 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	// a no-op. Mirror that here so blocks containing non-zero-sequence inputs are
 	// accepted post-Genesis.
 	//
-	// Note on >= vs >: This check uses >= to match BSV's IsGenesisEnabled()
-	// semantics (the activation block itself is considered post-Genesis). That
-	// differs from checkOutputs() below, which uses > because mainnet block
-	// 620538's outputs were created before Genesis rules existed and must not be
-	// retroactively rejected. The two predicates are intentionally different:
-	// checkOutputs gates a backward-incompatible output-shape rule (P2SH/dust)
-	// and exempts the activation block for continuity, whereas sequenceLocks
-	// disables a now-obsolete consensus rule and must match the reference
-	// implementation's boundary exactly.
+	// This check uses >= to match BSV's IsGenesisEnabled() semantics: the
+	// activation block itself is considered post-Genesis.
 	if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
 		return nil
 	}
@@ -449,73 +297,21 @@ func isUnspendableOutput(script *bscript.Script) bool {
 	return false
 }
 
-// checkOutputs validates transaction outputs according to consensus and policy rules.
-func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
-	total := uint64(0)
-
-	for index, output := range tx.Outputs {
-
-		if output.Satoshis > MaxSatoshis {
-			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
-		}
-		total += output.Satoshis
-	}
-
-	if total > MaxSatoshis {
-		return errors.NewTxInvalidError("transaction output total satoshis is too high")
-	}
-
-	return nil
-}
-
 // checkInputs validates transaction inputs according to consensus rules.
 func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
-	total := uint64(0)
 	accumulatedPrevUTXOSize := uint64(0)
 	maxCoinsViewCacheSize := tv.settings.Policy.GetMaxCoinsViewCacheSize()
 
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
 
-	// Use a map to track seen inputs with fixed-size 36-byte array key (32 bytes txid + 4 bytes output index)
-	seenInputs := make(map[[36]byte]struct{})
-
 	for index, input := range tx.Inputs {
-		// Check each input for duplicates
-		var key [36]byte
-
-		copy(key[:32], input.PreviousTxID())
-
-		// Convert uint32 output index to 4 bytes
-		outIdx := input.PreviousTxOutIndex
-		key[32] = byte(outIdx >> 24)
-		key[33] = byte(outIdx >> 16)
-		key[34] = byte(outIdx >> 8)
-		key[35] = byte(outIdx)
-
-		// Check if we've seen this input before
-		if _, exists := seenInputs[key]; exists {
-			return errors.NewTxInvalidError("duplicate input found at index %d", index)
-		}
-
-		// Mark this input as seen
-		seenInputs[key] = struct{}{}
-
+		// Teranode is stricter than svnode here: it rejects any all-zero previous
+		// txid, not only the canonical null prevout. Keep this pre-existing
+		// behaviour until the T14 parity decision is made.
 		if input.PreviousTxIDStr() == coinbaseTxID {
 			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
 		}
-		/* lots of our valid test transactions have this sequence number, is this not allowed?
-		if input.SequenceNumber == 0xffffffff {
-			fmt.Printf("input %d has sequence number 0xffffffff, txid = %s", index, tx.TxID())
-			return errors.NewTxInvalidError("transaction input %d sequence number is invalid", index)
-		}
-		*/
-
-		if input.PreviousTxSatoshis > MaxSatoshis {
-			return errors.NewTxInvalidError("transaction input %d satoshis is too high", index)
-		}
-
-		total += input.PreviousTxSatoshis
 
 		// Check accumulated previous utxo size if maxcoinsviewcachesize is enabled
 		// See BSV Node CCoinsViewCache::Shard::HaveInputsLimited
@@ -529,58 +325,6 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 			if accumulatedPrevUTXOSize > maxCoinsViewCacheSize {
 				return errors.NewTxPolicyError("bad-txns-inputs-too-large")
 			}
-		}
-	}
-
-	// if total == 0 && blockHeight >= tv.Params().GenesisActivationHeight {
-	// TODO there is a lot of shit transactions on-chain with 0 inputs and 0 outputs - WTF
-	// return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
-	// }
-
-	if total > MaxSatoshis {
-		return errors.NewTxInvalidError("transaction input total satoshis is too high")
-	}
-
-	return nil
-}
-
-// checkTxSize validates that the transaction size complies with consensus and policy limits.
-// This method enforces two types of checks:
-// 1. Consensus check (ALWAYS enforced): Ensures transaction doesn't exceed consensus size limit
-//   - Before Genesis: 1 MB (MaxTxSizeConsensusBeforeGenesis)
-//   - After Genesis: 1 GB (MaxTxSizeConsensusAfterGenesis)
-//   - Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:536
-//
-// 2. Policy check (only when skipPolicy=false): Ensures transaction doesn't exceed policy size limit
-//
-// Parameters:
-//   - txSize: The transaction size in bytes
-//   - blockHeight: Current block height to determine if Genesis is active
-//   - skipPolicy: If true, skip policy checks (used for block validation)
-func (tv *TxValidator) checkTxSize(txSize int, blockHeight uint32, skipPolicy bool) error {
-	// Consensus check: ALWAYS enforced regardless of skipPolicy
-	// Matches C++ bitcoin-sv implementation: CheckTransactionCommon in validation.cpp:536
-	// where it checks: if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION) > maxTxSizeConsensus)
-	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
-	isPostGenesis := blockHeight >= genesisActivationHeight
-	maxTxSizeConsensus := MaxTxSizeConsensusBeforeGenesis
-	if isPostGenesis {
-		maxTxSizeConsensus = MaxTxSizeConsensusAfterGenesis
-	}
-	if txSize > maxTxSizeConsensus {
-		return errors.NewTxInvalidError("bad-txns-oversize")
-	}
-
-	// Policy check: Only enforced for mempool transactions (when skipPolicy=false)
-	if !skipPolicy {
-		maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
-		if maxTxSizePolicy == 0 {
-			// no policy found for tx size, use max block size
-			maxTxSizePolicy = MaxBlockSize
-		}
-
-		if txSize > maxTxSizePolicy {
-			return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
 		}
 	}
 
@@ -774,35 +518,4 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 
 	// Transaction qualifies as a consolidation transaction
 	return true
-}
-
-// sigOpsCheck validates that the transaction's signature operations count complies with policy limits.
-func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {
-	maxSigOps := tv.settings.Policy.GetMaxTxSigopsCountsPolicy()
-
-	if maxSigOps == 0 || validationOptions.SkipPolicyChecks {
-		maxSigOps = int64(MaxTxSigopsCountPolicyAfterGenesis)
-	}
-
-	numSigOps := int64(0)
-
-	for _, input := range tx.Inputs {
-		parser := interpreter.DefaultOpcodeParser{}
-		parsedUnlockingScript, err := parser.Parse(input.PreviousTxScript)
-
-		if err != nil {
-			return err
-		}
-
-		for _, op := range parsedUnlockingScript {
-			if op.Value() == bscript.OpCHECKSIG || op.Value() == bscript.OpCHECKSIGVERIFY {
-				numSigOps++
-				if numSigOps > maxSigOps {
-					return errors.NewTxInvalidError("transaction unlocking scripts have too many sigops (%d)", numSigOps)
-				}
-			}
-		}
-	}
-
-	return nil
 }

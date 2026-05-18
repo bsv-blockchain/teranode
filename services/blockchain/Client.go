@@ -99,6 +99,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 // NewClientWithAddress creates a new blockchain client with a specified address.
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string, source string) (ClientI, error) {
+	initPrometheusMetrics()
 	var err error
 
 	var baConn *grpc.ClientConn
@@ -1269,13 +1270,26 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			close(done)
 		}()
 
+		// zombieTimeout is 2× the heartbeat interval. If no Recv returns within
+		// this window the watchdog cancels the stream context, forcing Recv to
+		// error and the reconnect path to fire. The watchdog ticks at a quarter
+		// of the timeout so worst-case detection latency is ~1.25× zombieTimeout
+		// (zombieTimeout + one tick at zombieTimeout/4).
+		zombieTimeout := 2 * c.settings.BlockChain.HeartbeatInterval
+
 		for c.running.Load() {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
-			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
+			// Per-stream cancellable context. The zombie watchdog cancels it when
+			// no Recv returns for zombieTimeout. Recv then returns context.Canceled
+			// and the outer reconnect loop handles it.
+			streamCtx, cancelStream := context.WithCancel(ctx)
+
+			stream, err := c.client.Subscribe(streamCtx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
 			if err != nil {
+				cancelStream()
 				if !c.running.Load() {
 					return
 				}
@@ -1305,9 +1319,48 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			// This ensures staleness detection works correctly: if connection breaks before
 			// first PING, lastHB will be 0 and we'll properly set FSM to IDLE.
 
+			// lastRecvAt tracks when Recv last returned. Initialised to now so a
+			// stream that never delivers anything is given the full zombieTimeout
+			// grace period before the watchdog fires.
+			var lastRecvAt atomic.Int64
+			lastRecvAt.Store(time.Now().UnixNano())
+
+			// Zombie watchdog: fires cancelStream if no Recv returns within
+			// zombieTimeout. Exits when the stream context is done (normal error
+			// path, normal shutdown, or the watchdog itself cancelling).
+			watchdogDone := make(chan struct{})
+			go func() {
+				defer close(watchdogDone)
+				ticker := time.NewTicker(zombieTimeout / 4)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-streamCtx.Done():
+						return
+					case <-ticker.C:
+						age := time.Since(time.Unix(0, lastRecvAt.Load()))
+						if age > zombieTimeout {
+							c.logger.Warnf("[Blockchain][SubscribeToServer] watchdog: no Recv for %s on source %s — forcing stream close", age, source)
+							prometheusBlockchainWatchdogFires.WithLabelValues(source).Inc()
+							cancelStream()
+							return
+						}
+					}
+				}
+			}()
+
+			// shutdown tears down the per-stream watchdog before returning.
+			// Must be called on every exit from the inner recv loop.
+			shutdown := func() {
+				cancelStream()
+				<-watchdogDone
+			}
+
+			reconnect := false
 			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
+					shutdown()
 					if !c.running.Load() || ctx.Err() != nil {
 						// Context cancelled or client stopped, exit gracefully
 						return
@@ -1335,8 +1388,11 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
 					time.Sleep(1 * time.Second)
+					reconnect = true
 					break
 				}
+
+				lastRecvAt.Store(time.Now().UnixNano())
 
 				if resp.Type == model.NotificationType_PING {
 					// Update heartbeat immediately on receipt to avoid staleness races.
@@ -1356,6 +1412,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 					case <-time.After(5 * time.Second):
 						c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
 					case <-ctx.Done():
+						shutdown()
 						return
 					}
 
@@ -1382,8 +1439,14 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				case <-time.After(5 * time.Second):
 					c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
 				case <-ctx.Done():
+					shutdown()
 					return
 				}
+			}
+			if !reconnect {
+				// Inner loop exited because c.running became false. Tear down the
+				// watchdog before the outer loop re-evaluates c.running.Load().
+				shutdown()
 			}
 		}
 	}()

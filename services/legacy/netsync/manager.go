@@ -1455,9 +1455,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
-	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
-	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
+	// describe. Size the InvList to maxBlocks rather than headerList.Len()
+	// because the loop below breaks at maxBlocks — sizing to headerList.Len()
+	// (often 2000) caused large repeated allocations (~16 KB) when only a
+	// handful of slots ever get used (maxBlocks shrinks to 1 for >2 GB blocks).
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(maxBlocks)) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {

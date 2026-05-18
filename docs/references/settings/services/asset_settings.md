@@ -9,7 +9,7 @@
 | APIPrefix | string | "/api/v1" | asset_apiPrefix | URL prefix for API endpoints |
 | CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | WebSocket server binding address |
 | CentrifugeDisable | bool | false | asset_centrifuge_disable | Disables WebSocket server |
-| HTTPAddress | string | "http://localhost:8090/api/v1" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
+| HTTPAddress | string | "`http://localhost:8090/api/v1`" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
 | HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails during Init() if empty) |
 | HTTPPort | int | 8090 | ASSET_HTTP_PORT | **UNUSED** - HTTPListenAddress is used instead |
 | HTTPPublicAddress | string | "" | asset_httpPublicAddress | **UNUSED** - Reserved for future use |
@@ -23,15 +23,15 @@
 |---------|------|---------|---------------------|-------|
 | ConcurrencyGetTransaction | int | 0 | asset_concurrency_get_transaction | Rate limit for GetTransaction (0=unlimited, -1=NumCPU, >0=exact) |
 | ConcurrencyGetTransactionMeta | int | 0 | asset_concurrency_get_transaction_meta | Rate limit for GetTransactionMeta |
-| ConcurrencyGetSubtreeData | int | 0 | asset_concurrency_get_subtree_data | Rate limit for GetSubtreeData |
-| ConcurrencyGetSubtreeDataReader | int | 0 | asset_concurrency_get_subtree_data_reader | Rate limit for GetSubtreeDataReader |
-| ConcurrencyGetSubtreeTransactions | int | 0 | asset_concurrency_get_subtree_transactions | Rate limit for GetSubtreeTransactions |
+| ConcurrencyGetSubtreeData | int | 2 | asset_concurrency_get_subtree_data | Rate limit for GetSubtreeData |
+| ConcurrencyGetSubtreeDataReader | int | 4 | asset_concurrency_get_subtree_data_reader | Rate limit for GetSubtreeDataReader |
+| ConcurrencyGetSubtreeTransactions | int | 2 | asset_concurrency_get_subtree_transactions | Rate limit for GetSubtreeTransactions |
 | ConcurrencyGetSubtreeExists | int | 0 | asset_concurrency_get_subtree_exists | Rate limit for GetSubtreeExists |
 | ConcurrencyGetSubtreeHead | int | 0 | asset_concurrency_get_subtree_head | Rate limit for GetSubtreeHead |
 | ConcurrencyGetUtxo | int | 0 | asset_concurrency_get_utxo | Rate limit for GetUtxo |
 | ConcurrencyGetLegacyBlockReader | int | -1 | asset_concurrency_get_legacy_block_reader | Rate limit for GetLegacyBlockReader (default: NumCPU) |
 | SubtreeDataStreamingChunkSize | int | 10000 | asset_subtreeDataStreamingChunkSize | Records per subtree data streaming chunk |
-| SubtreeDataStreamingConcurrency | int | 4 | asset_subtreeDataStreamingConcurrency | Parallel workers for subtree data streaming |
+| SubtreeDataStreamingConcurrency | int | 2 | asset_subtreeDataStreamingConcurrency | Parallel workers for subtree data streaming |
 
 **Concurrency Control:**
 
