@@ -5,9 +5,11 @@ description: Drive Teranode's release lifecycle — survey state, triage hotfix 
 
 # Teranode Release Manager
 
-Drives the release lifecycle: hotfix triage, cherry-picks, beta tags, prod-gated stable patches. Replaces the prior ad-hoc process.
+Drives the release lifecycle: hotfix triage, cherry-picks, beta tags, prod-gated stable patches.
 
 ## Branch and tag model
+
+Teranode follows trunk-based development. `main` is the trunk; all changes — internal and external — land there first via pull request. External contributors work from forks per the [Fork and Pull Request Guidelines](https://bsv-blockchain.github.io/teranode/howto/forkAndPullRequestGuidelines/).
 
 - `main` — development tip. Every PR lands here first.
 - `release/vX.Y` — long-lived release branch, cut from `main` at minor bumps. Hotfixes arrive as squash-merge cherry-picks.
