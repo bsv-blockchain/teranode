@@ -304,8 +304,9 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	options := &Options{}
 
 	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
-	// Should error trying to extend transaction since parent doesn't exist
-	assert.Error(t, err)
+	// BDK-owned transaction structure validation now happens in
+	// validateTransactionScripts; the early phase keeps Teranode-owned checks.
+	assert.NoError(t, err)
 }
 
 func TestValidator_ValidateTransactionScripts_NotExtended(t *testing.T) {

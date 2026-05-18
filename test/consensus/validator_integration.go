@@ -45,17 +45,29 @@ func NewValidatorIntegration() *ValidatorIntegration {
 	}
 }
 
-// ValidateScript validates a script using the specified validator
+// ValidateScript validates a transaction using the specified validator.
+//
+// The method name is historical. For GoBDK, TxScriptInterpreter.VerifyScript
+// now delegates to BDK ValidateTransaction in production. This consensus-test
+// helper intentionally keeps script-only coverage by calling BDK VerifyScript
+// through verifyGoBDKScriptOnly.
 func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) ValidatorResult {
 	result := ValidatorResult{
 		ValidatorType: validatorType,
 		Success:       true,
 	}
 
-	var scriptInterpreter validator.TxScriptInterpreter
-
 	// Get the appropriate validator from the factory
 	switch validatorType {
+	case ValidatorGoBDK:
+		if err := vi.verifyGoBDKScriptOnly(tx, blockHeight, utxoHeights); err != nil {
+			result.Success = false
+			result.Error = err
+			result.ErrorMessage = err.Error()
+		}
+
+		return result
+
 	case ValidatorGoBT:
 		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBT]
 		if !exists {
@@ -63,7 +75,8 @@ func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *
 			result.Error = errors.NewProcessingError("go-bt validator not registered")
 			return result
 		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
+
+		return vi.validateWithScriptInterpreter(result, factory(vi.logger, vi.policy, vi.params), tx, blockHeight, utxoHeights)
 
 	case ValidatorGoSDK:
 		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoSDK]
@@ -72,24 +85,18 @@ func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *
 			result.Error = errors.NewProcessingError("go-sdk validator not registered")
 			return result
 		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
 
-	case ValidatorGoBDK:
-		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBDK]
-		if !exists {
-			result.Success = false
-			result.Error = errors.NewProcessingError("go-bdk validator not registered")
-			return result
-		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
+		return vi.validateWithScriptInterpreter(result, factory(vi.logger, vi.policy, vi.params), tx, blockHeight, utxoHeights)
 
 	default:
 		result.Success = false
 		result.Error = errors.NewProcessingError("unknown validator type: %s", validatorType)
 		return result
 	}
+}
 
-	// Run the validation
+func (vi *ValidatorIntegration) validateWithScriptInterpreter(result ValidatorResult, scriptInterpreter validator.TxScriptInterpreter, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) ValidatorResult {
+	// Run legacy script-interpreter validation.
 	err := scriptInterpreter.VerifyScript(tx, blockHeight, true, utxoHeights)
 	if err != nil {
 		result.Success = false

@@ -187,14 +187,13 @@ The validator package defines multiple interfaces for transaction validation:
 
 ```go
 type TxValidatorI interface {
-    // ValidateTransaction performs comprehensive validation of a transaction.
-    // This method enforces all consensus and policy rules against the transaction,
-    // including format, structure, inputs/outputs, signature verification, and fees.
+    // ValidateTransaction performs Teranode-owned validation that needs node context,
+    // including coinbase routing, local input guards, fee policy, and fee exemptions.
     ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 
-    // ValidateTransactionScripts performs script validation for a transaction.
-    // This method specifically handles the script execution and signature verification
-    // portion of validation, which is typically the most computationally intensive part.
+    // ValidateTransactionScripts runs the configured validation interpreter.
+    // With GoBDK this calls BDK ValidateTransaction, which covers BDK-side structure,
+    // standardness, sigops, value, and script validation.
     ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 }
 ```
@@ -203,7 +202,8 @@ type TxValidatorI interface {
 
 ```go
 type TxScriptInterpreter interface {
-    // VerifyScript implements script verification for a transaction
+    // VerifyScript runs the interpreter validation path. The name is historical;
+    // GoBDK now performs full BDK transaction validation here.
     VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
 
     // Interpreter returns the interpreter being used
@@ -223,20 +223,17 @@ The validator supports multiple script interpreter implementations:
 
 ### TxValidator Methods
 
-- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs comprehensive validation checks on a transaction. This includes checking input and output presence, transaction size limits, input values and coinbase restrictions, output values and dust limits, lock time requirements, script operation limits, script validation, and fee requirements.
-- `ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Validates transaction scripts using the configured script interpreter.
-- `checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates transaction outputs, checking for dust values and other output-specific rules.
-- `checkInputs(tx *bt.Tx, blockHeight uint32) error`: Validates transaction inputs, checking for proper formatting and sequence values.
-- `checkTxSize(txSize int) error`: Checks if the transaction size is within the allowed policy limit.
+- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and consolidation-fee exemption.
+- `ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Runs the configured script interpreter. With GoBDK this calls BDK `ValidateTransaction`, which performs full BDK-side transaction validation and script verification even though the Teranode interface name remains script-oriented.
+- `checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and `MaxCoinsViewCacheSize`.
 - `checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Verifies if the transaction fee is sufficient according to the fee policy.
-- `sigOpsCheck(tx *bt.Tx, validationOptions *Options) error`: Checks the number of signature operations in the transaction against policy limits.
 - `pushDataCheck(tx *bt.Tx) error`: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.
 
 ### Validator Methods
 
 - `validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)`: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.
-- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs transaction-level validation checks. Ensures transaction is properly extended and meets all validation rules.
-- `validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs script validation for a transaction. Returns error if validation fails.
+- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, then optional BIP68 block-context validation.
+- `validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Runs the configured interpreter validation path. With GoBDK this calls BDK `ValidateTransaction`, not only script validation.
 - `spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
 - `sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error`: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.
 - `extendTransaction(ctx context.Context, tx *bt.Tx) error`: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.

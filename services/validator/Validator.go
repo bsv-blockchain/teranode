@@ -44,22 +44,6 @@ import (
 // These constants establish the fundamental constraints that govern transaction and block validation,
 // ensuring compliance with Bitcoin protocol specifications and network consensus requirements.
 const (
-	// MaxBlockSize defines the maximum allowed size of a block in bytes (4GB).
-	// This limit governs the maximum amount of transaction data that can be included in a single block,
-	// directly impacting network throughput and scalability. Blocks exceeding this size are rejected
-	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
-	MaxBlockSize = 4 * 1024 * 1024 * 1024
-
-	// MaxTxSizeConsensusBeforeGenesis defines the consensus limit for transaction size before Genesis (1 MB).
-	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS in consensus/consensus.h
-	// Transactions exceeding this size are invalid by consensus rules pre-Genesis.
-	MaxTxSizeConsensusBeforeGenesis = 1_000_000 // 1 MB
-
-	// MaxTxSizeConsensusAfterGenesis defines the consensus limit for transaction size after Genesis (1 GB).
-	// This matches C++ bitcoin-sv: MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS in consensus/consensus.h
-	// Transactions exceeding this size are invalid by consensus rules post-Genesis.
-	MaxTxSizeConsensusAfterGenesis = 1_000_000_000 // 1 GB
-
 	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
@@ -71,10 +55,6 @@ const (
 	// This constant is used to identify and handle coinbase transactions differently from regular transactions
 	// during validation, as they have special rules and don't spend existing UTXOs.
 	coinbaseTxID = "0000000000000000000000000000000000000000000000000000000000000000"
-
-	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
-	// operations allowed in a transaction after the Genesis upgrade (UINT32_MAX).
-	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0)
 
 	// DustLimit defines the minimum output value in satoshis (1 satoshi)
 	// Outputs with less than this value are considered dust unless they are
@@ -565,8 +545,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
+	// Run Teranode-owned transaction checks that need node context.
+	// BDK-owned transaction validation runs in validateTransactionScripts below.
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 		span.RecordError(err)
@@ -574,7 +554,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	// validate the transaction scripts and signatures
+	// Run the configured interpreter validation. With GoBDK this calls BDK
+	// ValidateTransaction, including BDK-side structure, policy, and scripts.
 	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 		span.RecordError(err)
@@ -1265,9 +1246,15 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	return nil
 }
 
-// validateTransaction performs transaction-level validation checks in two phases:
-//  1. Full transaction validation (structure, scripts, fees) via txValidator.ValidateTransaction.
-//  2. BIP68 sequence-lock validation (block context only) via txValidator.ValidateBIP68.
+// validateTransaction performs the non-script Teranode-owned transaction checks
+// plus BIP68 sequence-lock validation.
+//
+// Phase 1 keeps checks that need local node context, including fee policy and
+// cache-size limits. BDK-owned transaction structure, standardness, sigops, and
+// script checks run later through validateTransactionScripts.
+//
+// Phase 2 is BIP68 sequence-lock validation (block context only) via
+// txValidator.ValidateBIP68.
 //
 // Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
 // This avoids the cost of MTP lookups when a transaction fails normal validation.
@@ -1290,7 +1277,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// Phase 1: run the internal tx validation, checking policies, scripts, signatures etc.
+	// Phase 1: run Teranode-owned transaction checks that need node context.
 	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		span.RecordError(err)
 		return err
@@ -1365,7 +1352,8 @@ func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) 
 	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
 }
 
-// validateTransactionScripts performs script validation for a transaction
+// validateTransactionScripts runs the configured interpreter validation path.
+// With GoBDK this calls BDK ValidateTransaction, not only script validation.
 // Returns error if validation fails
 func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32,
 	validationOptions *Options) error {
@@ -1385,6 +1373,6 @@ func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, b
 		}
 	}
 
-	// run the internal tx validation, checking policies, scripts, signatures etc.
+	// Run BDK-owned transaction validation through the configured interpreter.
 	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
 }

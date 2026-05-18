@@ -202,65 +202,18 @@ The validation process includes several stages:
     - Ensure inputs are unspent (prevent double-spending)
     - Validate input script format
 
-Transactions are validated by the `ValidateTransaction()` function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (`github.com/bsv-blockchain/go-bt`). The implementation uses the GoBDK script interpreter for script verification. GoBT and GoSDK implementations exist in the codebase for historical reasons but are not active.
+Transactions are validated through two transaction-validator phases plus node-context checks in `Validator.validateInternal()`. The first phase keeps Teranode-owned checks that need local node context, such as coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and the local consolidation-fee exemption. The second phase calls the GoBDK-backed `TxScriptInterpreter.VerifyScript` method; despite the historical name, the GoBDK implementation now calls BDK `ValidateTransaction`, which performs full BDK-side transaction structure, value, standardness, sigops, and script validation.
 
-We can see the exact steps being executed as part of the validation process below:
+The current shape is:
 
 ```go
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
- //
- // Each node will verify every transaction against a long checklist of criteria:
- //
- txSize := tx.Size()
+ // Teranode-owned checks only.
+}
 
- // 1) Neither lists of inputs nor outputs are empty
- if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-  return errors.NewTxInvalidError("transaction has no inputs or outputs")
- }
-
- // 2) The transaction size in bytes is less than maxtxsizepolicy.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkTxSize(txSize); err != nil {
-   return err
-  }
- }
-
- // 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
- // 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
- if err := tv.checkInputs(tx, blockHeight); err != nil {
-  return err
- }
-
- // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
- //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
- if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
-  return err
- }
-
- // The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
-
- // The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
- // Note: This may be disabled for unlimited operation counts
-
- // The unlocking script (scriptSig) can only push numbers on the stack
- if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-  if err := tv.pushDataCheck(tx); err != nil {
-   return err
-  }
- }
-
- // 10) Reject if the sum of input values is less than sum of output values
- // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
-   return err
-  }
- }
-
- // 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
- // (Script verification is handled separately with multiple interpreter options)
-
- return nil
+func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
+ // With GoBDK, this calls BDK ValidateTransaction through the historical
+ // TxScriptInterpreter.VerifyScript interface method.
 }
 ```
 
