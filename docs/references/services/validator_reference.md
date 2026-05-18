@@ -174,57 +174,36 @@ The `TxValidator` implements transaction validation logic based on Bitcoin conse
 
 ```go
 type TxValidator struct {
-    logger      ulogger.Logger
-    settings    *settings.Settings
-    interpreter TxScriptInterpreter
-    options     *TxValidatorOptions
+    logger   ulogger.Logger
+    settings *settings.Settings
+    bdk      bdkValidator
+    options  *TxValidatorOptions
 }
 ```
 
-The validator package defines multiple interfaces for transaction validation:
+The validator package defines the transaction validation interface:
 
 #### TxValidatorI Interface
 
 ```go
 type TxValidatorI interface {
-    // ValidateTransaction performs Teranode-owned validation that needs node context,
-    // including coinbase routing, local input guards, fee policy, and fee exemptions.
+    // ValidateTransaction performs Teranode-owned validation that needs node context
+    // and BDK-side transaction validation.
     ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 
-    // ValidateTransactionScripts runs the configured validation interpreter.
-    // With GoBDK this calls BDK ValidateTransaction, which covers BDK-side structure,
-    // standardness, sigops, value, and script validation.
-    ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
+    // ValidateBIP68 verifies relative lock-time constraints for block validation.
+    ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
 }
 ```
 
-#### TxScriptInterpreter Interface
-
-```go
-type TxScriptInterpreter interface {
-    // VerifyScript runs the interpreter validation path. The name is historical;
-    // GoBDK now performs full BDK transaction validation here.
-    VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
-
-    // Interpreter returns the interpreter being used
-    Interpreter() TxInterpreter
-}
-```
-
-The validator supports multiple script interpreter implementations:
-
-- **GoBT**: Pure Go implementation from the libsv/go-bt library
-- **GoSDK**: BSV SDK implementation
-- **GoBDK**: Bitcoin Development Kit implementation
-
-> **Note**: The script interpreter is hardcoded to **GoBDK** (`TxInterpreterGoBDK`). Runtime selection via configuration is not supported.
+`TxValidator` uses GoBDK directly through a private adapter. The old GoBT/GoSDK script-interpreter variants are no longer part of this validator package.
 
 ## Key Functions
 
 ### TxValidator Methods
 
-- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and consolidation-fee exemption.
-- `ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Runs the configured script interpreter. With GoBDK this calls BDK `ValidateTransaction`, which performs full BDK-side transaction validation and script verification even though the Teranode interface name remains script-oriented.
+- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and consolidation-fee exemption, then calls BDK `ValidateTransaction`.
+- `ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error`: Verifies BIP68 relative lock-time constraints for block validation.
 - `checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and `MaxCoinsViewCacheSize`.
 - `checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Verifies if the transaction fee is sufficient according to the fee policy.
 - `pushDataCheck(tx *bt.Tx) error`: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.
@@ -232,8 +211,7 @@ The validator supports multiple script interpreter implementations:
 ### Validator Methods
 
 - `validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)`: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.
-- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, then optional BIP68 block-context validation.
-- `validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Runs the configured interpreter validation path. With GoBDK this calls BDK `ValidateTransaction`, not only script validation.
+- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks, BDK transaction validation, then optional BIP68 block-context validation.
 - `spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
 - `sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error`: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.
 - `extendTransaction(ctx context.Context, tx *bt.Tx) error`: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.

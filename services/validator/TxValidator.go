@@ -6,19 +6,12 @@ Bitcoin transaction validation rules and policies. The TxValidator component is 
 for enforcing both consensus rules (which all nodes must follow) and policy rules
 (which can be configured per node).
 
-The implementation supports multiple script interpreters through a plugin architecture,
-allowing different script verification engines to be used based on configuration. Currently
-supported interpreters include:
-- Go-BT: Pure Go implementation from the libsv/go-bt library
-- Go-SDK: BSV SDK implementation
-- Go-BDK: Bitcoin Development Kit implementation
+The implementation uses GoBDK for BSV transaction validation and keeps only the
+Teranode-owned checks that need node context outside BDK.
 
 The validation process enforces rules including but not limited to:
-- Transaction size limits
-- Input and output structure verification
-- Non-dust output values
-- Script operation count limits
-- Signature verification
+- BDK transaction structure, standardness, sigops, and script validation
+- Teranode-specific input and node-context checks
 - Fee policy enforcement
 - Locktime and sequence number verification
 
@@ -32,25 +25,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
-)
-
-// TxInterpreter defines the type of script interpreter to be used
-// for transaction validation
-type TxInterpreter string
-
-const (
-	// TxInterpreterGoBT specifies the Go-BT library interpreter
-	TxInterpreterGoBT TxInterpreter = "GoBT"
-
-	// TxInterpreterGoSDK specifies the Go-SDK library interpreter
-	TxInterpreterGoSDK TxInterpreter = "GoSDK"
-
-	// TxInterpreterGoBDK specifies the Go-BDK library interpreter
-	TxInterpreterGoBDK TxInterpreter = "GoBDK"
 )
 
 // BIP68 sequence lock constants
@@ -81,17 +58,15 @@ const (
 // a consistent API.
 //
 // The validator is responsible for enforcing Teranode-owned checks that need
-// node context, then routing the transaction through the configured interpreter
-// for BDK-side validation.
+// node context and then running BDK-side validation.
 type TxValidatorI interface {
 	// ValidateTransaction performs Teranode-owned validation that needs node
-	// context, excluding BIP68 sequence-lock checks. BDK-side transaction
-	// validation is performed separately by ValidateTransactionScripts. BIP68
-	// validation is performed separately via ValidateBIP68 so that MTP lookups
-	// are skipped when the transaction fails normal validation first.
+	// context and BDK-side transaction validation, excluding BIP68 sequence-lock
+	// checks. BIP68 validation is performed separately via ValidateBIP68 so that
+	// MTP lookups are skipped when the transaction fails normal validation first.
 	//
 	// Parameters:
-	//   - tx: The transaction to validate, must be properly initialized
+	//   - tx: The extended transaction to validate, with previous-output data populated
 	//   - blockHeight: The current block height for validation context
 	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
 	//   - validationOptions: Optional validation options to customize validation behavior
@@ -113,59 +88,15 @@ type TxValidatorI interface {
 	// Returns:
 	//   - error: Validation error if sequence locks are not satisfied, nil on success
 	ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
-
-	// ValidateTransactionScripts runs the configured validation interpreter for
-	// a transaction. With GoBDK this calls BDK ValidateTransaction, covering
-	// BDK-side structure, value, standardness, sigops, and script checks.
-	//
-	// Parameters:
-	//   - tx: The transaction containing the scripts to validate
-	//   - blockHeight: Current block height for validation context (affects script flags)
-	//   - utxoHeights: Heights of the UTXOs being spent, used for BIP68 relative locktime
-	//   - validationOptions: Optional validation options to customize validation behavior
-	// Returns:
-	//   - error: Specific script validation error if validation fails, nil on success
-	ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 }
 
 // TxValidator implements transaction validation logic
 type TxValidator struct {
-	logger      ulogger.Logger
-	settings    *settings.Settings
-	interpreter TxScriptInterpreter
-	options     *TxValidatorOptions
+	logger   ulogger.Logger
+	settings *settings.Settings
+	bdk      bdkValidator
+	options  *TxValidatorOptions
 }
-
-// TxScriptInterpreter defines the interface for transaction interpreter operations.
-type TxScriptInterpreter interface {
-	// VerifyScript runs the interpreter validation path. The name is historical;
-	// the GoBDK implementation now performs full BDK transaction validation.
-	// Parameters:
-	//   - tx: The transaction to validate
-	//   - blockHeight: Current block height for validation context
-	//   - consensus: true for block/consensus validation, false for policy validation
-	//   - utxoHeights: Heights of the UTXOs being spent
-	// Returns:
-	//   - error: Any validation errors encountered
-	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
-
-	// Interpreter returns the interpreter being used
-	Interpreter() TxInterpreter
-}
-
-// TxScriptInterpreterCreator defines a function type for creating script interpreters
-// Parameters:
-//   - logger: Logger instance for the interpreter
-//   - policy: Policy settings for validation
-//   - params: Network parameters
-//
-// Returns:
-//   - TxScriptInterpreter: The created script interpreter
-type TxScriptInterpreterCreator func(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) TxScriptInterpreter
-
-// TxScriptInterpreterFactory stores registered TxValidator creator methods
-// The factory is populated at build time based on build tags
-var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreator)
 
 // NewTxValidator creates a new transaction validator with the specified configuration
 // Parameters:
@@ -179,33 +110,20 @@ var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreat
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) *TxValidator {
 	options := NewTxValidatorOptions(opts...)
 
-	var txScriptInterpreter TxScriptInterpreter
-
-	// If a creator was not registered to the factory, then return nil
-	if createTxScriptInterpreter, ok := TxScriptInterpreterFactory[TxInterpreterGoBDK]; ok {
-		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
-	}
-
-	// Make sure script interpreter is created
-	if txScriptInterpreter == nil {
-		panic("unable to create script interpreter")
-	}
-
 	return &TxValidator{
-		logger:      logger,
-		settings:    tSettings,
-		interpreter: txScriptInterpreter,
-		options:     options,
+		logger:   logger,
+		settings: tSettings,
+		bdk:      newScriptVerifierGoBDK(logger, tSettings.Policy, tSettings.ChainCfgParams),
+		options:  options,
 	}
 }
 
-// ValidateTransaction performs Teranode-owned transaction validation,
-// excluding BIP68 sequence-lock checks (use ValidateBIP68 for that) and
-// excluding the BDK-owned full transaction validation performed by
-// ValidateTransactionScripts.
+// ValidateTransaction performs Teranode-owned transaction validation and BDK
+// transaction validation, excluding BIP68 sequence-lock checks (use
+// ValidateBIP68 for that).
 //
 // Parameters:
-//   - tx: The transaction to validate
+//   - tx: The extended transaction to validate, with previous-output data populated
 //   - blockHeight: Current block height for validation context
 //   - utxoHeights: Block heights where each input UTXO was created
 //   - validationOptions: Optional validation options
@@ -233,7 +151,9 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		}
 	}
 
-	return nil
+	// SkipPolicyChecks is equivalent to BDK consensus=true.
+	// https://github.com/bsv-blockchain/teranode/issues/2367
+	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
 }
 
 // ValidateBIP68 verifies that BIP68 relative lock-time constraints are satisfied.
@@ -242,33 +162,6 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 // when a transaction fails normal validation.
 func (tv *TxValidator) ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error {
 	return tv.sequenceLocks(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
-}
-
-// ValidateTransactionScripts runs the configured interpreter validation path.
-// With GoBDK this calls BDK ValidateTransaction, not only script validation.
-func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
-	if tv == nil {
-		return errors.NewTxInvalidError("tx validator is nil")
-	}
-
-	if tv.interpreter == nil {
-		return errors.NewTxInvalidError("tx interpreter is nil, available interpreters: %v", TxScriptInterpreterFactory)
-	}
-
-	// SkipPolicy is equivalent to execute the script with consensus = true
-	// https://github.com/bsv-blockchain/teranode/issues/2367
-	consensus := true
-	if validationOptions != nil {
-		consensus = validationOptions.SkipPolicyChecks
-	}
-
-	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.interpreter.VerifyScript(tx, blockHeight, consensus, utxoHeights); err != nil {
-		return err
-	}
-
-	// everything checks out
-	return nil
 }
 
 // sequenceLocks verifies that relative lock-time constraints (BIP68) are satisfied for block validation.

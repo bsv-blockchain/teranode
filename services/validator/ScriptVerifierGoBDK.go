@@ -1,9 +1,7 @@
 /*
 Package validator implements BSV Blockchain transaction validation functionality.
 
-This file implements the Go-BDK script verification functionality, providing
-script validation using the Bitcoin Development Kit (BDK) implementation.
-This verifier is only built when the 'bdk' build tag is specified.
+This file implements the GoBDK transaction validation adapter.
 */
 package validator
 
@@ -22,15 +20,9 @@ import (
 )
 
 const (
-	errMsgInvalidTx = "ScriptVerifierGoBDK fail to ValidateTransaction"
-	errMsgPolicy    = "ScriptVerifierGoBDK fail to ValidateTransaction by policy settings"
+	errMsgInvalidTx = "GoBDK fail to ValidateTransaction"
+	errMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
 )
-
-// init registers the Go-BDK script verifier with the verification factory
-// This is called automatically when the package is imported with the 'bdk' build tag
-func init() {
-	TxScriptInterpreterFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
-}
 
 // uint2int safely converts uint32 slice to int32 slice, checking for overflow.
 func uint2int(arr []uint32) ([]int32, error) {
@@ -76,16 +68,16 @@ func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 	return chainNameMap[pa.Name]
 }
 
-// newScriptVerifierGoBDK creates a new Go-BDK script verifier instance
+// newScriptVerifierGoBDK creates a new GoBDK transaction validator adapter.
 // Parameters:
 //   - l: Logger instance for verification operations
 //   - po: Policy settings for validation rules
 //   - pa: Network parameters
 //
 // Returns:
-//   - TxScriptInterpreter: The created script interpreter
-func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
-	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
+//   - bdkValidator: The created GoBDK validation adapter
+func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) bdkValidator {
+	l.Infof("Use GoBDK transaction validator, version : %v", gobdk.BDK_VERSION_STRING())
 
 	network := getBDKChainNameFromParams(l, pa)
 	se := bdkscript.NewTxValidator(network)
@@ -151,16 +143,20 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	}
 }
 
-type bdkTxValidator interface {
+type bdkValidator interface {
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
+}
+
+type bdkNativeTxValidator interface {
 	ValidateTransaction(extendedTX []byte, utxoHeights []int32, blockHeight int32, consensus bool) error
 }
 
-// scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
+// scriptVerifierGoBDK adapts Teranode validation data to GoBDK.
 type scriptVerifierGoBDK struct {
 	logger ulogger.Logger
 	policy *settings.PolicySettings
 	params *chaincfg.Params
-	se     bdkTxValidator
+	se     bdkNativeTxValidator
 }
 
 func bdkBlockHeight(blockHeight uint32, consensus bool) (int32, error) {
@@ -175,16 +171,8 @@ func bdkBlockHeight(blockHeight uint32, consensus bool) (int32, error) {
 	return safeconversion.Uint32ToInt32(blockHeight - 1)
 }
 
-// VerifyScript runs the BDK-side validation for tx.
-//
-// NOTE: the method name is historical. As of bdk/module/gobdk v1.2.4 the
-// BDK-side path is se.ValidateTransaction, which performs the full transaction
-// validation pipeline, not just script verification as in v1.2.3. The Go
-// interface name is kept as VerifyScript for existing call-site compatibility.
-//
-// TODO: rename TxScriptInterpreter.VerifyScript to ValidateTransaction in a
-// follow-up change that touches the interface and all call sites.
-func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
+// ValidateTransaction runs BDK-side validation for tx.
+func (v *scriptVerifierGoBDK) ValidateTransaction(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
 	if tx.IsCoinbase() {
 		return errors.NewTxInvalidError("coinbase transactions are not supported")
 	}
@@ -259,8 +247,4 @@ func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {
 		errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
 		errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
 		errCode == bdkscript.SCRIPT_ERR_STACK_SIZE
-}
-
-func (v *scriptVerifierGoBDK) Interpreter() TxInterpreter {
-	return TxInterpreterGoBDK
 }

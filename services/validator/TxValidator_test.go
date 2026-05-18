@@ -2,14 +2,12 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -23,7 +21,6 @@ package validator
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 
@@ -78,50 +75,26 @@ var txTests = []struct {
 	},
 }
 
-func TestScriptVerifierGoBt(t *testing.T) {
-	for _, tt := range txTests {
-		t.Run(tt.name, func(t *testing.T) {
-			params, err := chaincfg.GetChainParams(tt.args.network)
-			require.NoError(t, err)
-
-			scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
-		})
-	}
-}
-
-func TestScriptVerifierGoSDK(t *testing.T) {
-	for _, tt := range txTests {
-		t.Run(tt.name, func(t *testing.T) {
-			params, err := chaincfg.GetChainParams(tt.args.network)
-			require.NoError(t, err)
-
-			scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
-		})
-	}
-}
-
 func TestScriptVerifierGoBDK(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			params, err := chaincfg.GetChainParams(tt.args.network)
 			require.NoError(t, err)
 
-			scriptInterpreter := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoBDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			bdkValidator := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
+			tt.wantErr(t, bdkValidator.ValidateTransaction(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights))
 		})
 	}
 }
 
-type countingTxScriptInterpreter struct {
+type countingBDKValidator struct {
 	calls       int
 	blockHeight uint32
 	consensus   bool
 	utxoHeights []uint32
 }
 
-func (c *countingTxScriptInterpreter) VerifyScript(_ *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
+func (c *countingBDKValidator) ValidateTransaction(_ *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
 	c.calls++
 	c.blockHeight = blockHeight
 	c.consensus = consensus
@@ -129,131 +102,21 @@ func (c *countingTxScriptInterpreter) VerifyScript(_ *bt.Tx, blockHeight uint32,
 	return nil
 }
 
-func (c *countingTxScriptInterpreter) Interpreter() TxInterpreter {
-	return TxInterpreterGoBDK
-}
-
-func TestTxValidatorCallsBDKValidationOnlyInScriptPhase(t *testing.T) {
+func TestTxValidatorCallsBDKValidationOnceInValidateTransaction(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	counter := &countingTxScriptInterpreter{}
+	counter := &countingBDKValidator{}
 	txValidator := &TxValidator{
-		logger:      ulogger.TestLogger{},
-		settings:    tSettings,
-		interpreter: counter,
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+		bdk:      counter,
 	}
 
 	validationOptions := &Options{SkipPolicyChecks: true}
 	require.NoError(t, txValidator.ValidateTransaction(aTx, 100, []uint32{99, 99}, validationOptions))
-	assert.Equal(t, 0, counter.calls)
-
-	require.NoError(t, txValidator.ValidateTransactionScripts(aTx, 100, []uint32{99, 99}, validationOptions))
 	assert.Equal(t, 1, counter.calls)
 	assert.True(t, counter.consensus)
 	assert.Equal(t, uint32(100), counter.blockHeight)
 	assert.Equal(t, []uint32{99, 99}, counter.utxoHeights)
-}
-
-func Test_Tx(t *testing.T) {
-	f1, err := os.Open("testdata/65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3.bin")
-	require.NoError(t, err)
-	defer f1.Close()
-
-	// The extended version of the transaction is used to test the script verification
-	// in Go SDK, which contains additional metadata such as the block height.
-
-	f2, err := os.Open("testdata/65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3.bin.extended")
-	require.NoError(t, err)
-	defer f2.Close()
-
-	var tx bt.Tx
-	_, err = tx.ReadFrom(f1)
-	require.NoError(t, err)
-
-	var txE bt.Tx
-	_, err = txE.ReadFrom(f2)
-	require.NoError(t, err)
-
-	assert.Equal(t, "65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3", tx.TxID())
-	assert.Equal(t, tx.TxID(), txE.TxID())
-
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
-
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-
-	err = scriptInterpreter.VerifyScript(&tx, 720899, true, []uint32{720899})
-	require.Error(t, err)
-
-	err = scriptInterpreter.VerifyScript(&txE, 729000, true, []uint32{729000})
-	require.NoError(t, err)
-}
-
-func TestGoBt2GoSDKTransaction(t *testing.T) {
-	t.Run("TestGoBt2GoSDKTransaction", func(t *testing.T) {
-		largeTxHex, err := os.ReadFile("./testdata/9a87105441107db10d3e4cf2146022f754241b3b93c39539e2ce882a398e7d69.bin.extended")
-		require.NoError(t, err)
-
-		largeTx, err := bt.NewTxFromBytes(largeTxHex)
-		require.NoError(t, err)
-
-		txBytes := largeTx.Bytes()
-
-		sdkTx := goBt2GoSDKTransaction(largeTx)
-
-		assert.Equal(t, largeTx.TxID(), sdkTx.TxID().String())
-		assert.Equal(t, txBytes, sdkTx.Bytes())
-	})
-}
-
-func BenchmarkVerifyTransactionGoBt(b *testing.B) {
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(b, err)
-
-	scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9")
-	require.NoError(b, err)
-	tx, err := bt.NewTxFromBytes(txHex)
-	require.NoError(b, err)
-
-	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
-		}
-	})
-}
-
-func BenchmarkVerifyTransactionGoSDK(b *testing.B) {
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(b, err)
-
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
-	require.NoError(b, err)
-	tx, err := bt.NewTxFromBytes(txHex)
-	require.NoError(b, err)
-
-	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
-		}
-	})
-}
-
-func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(b, err)
-
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
-	txHex, err := os.ReadFile("./testdata/f568c66631de7b5842ebae84594cee00f7864132828997d09441fc2a937e9fab.hex")
-	require.NoError(b, err)
-	tx, err := bt.NewTxFromString(string(txHex))
-	require.NoError(b, err)
-
-	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
-		}
-	})
 }
 
 // policy settings tests
@@ -276,7 +139,7 @@ func TestMaxTxSizePolicy(t *testing.T) {
 		utxoHeights[i] = 720898
 	}
 
-	err = txValidator.ValidateTransactionScripts(tx, 720899, utxoHeights, &Options{})
+	err = txValidator.ValidateTransaction(tx, 720899, utxoHeights, &Options{})
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.ErrTxPolicy)
 }
@@ -296,10 +159,6 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
-	assert.NoError(t, err)
-
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
-
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.ErrTxPolicy)
 }
@@ -319,10 +178,6 @@ func TestMaxScriptSizePolicy(t *testing.T) {
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
-	assert.NoError(t, err)
-
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
-
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.ErrTxPolicy)
 }
@@ -342,7 +197,7 @@ func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, errors.ErrTxPolicy)
 	})
@@ -353,7 +208,7 @@ func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err)
 	})
 }
@@ -394,7 +249,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, errors.ErrTxPolicy)
 	})
@@ -406,7 +261,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
 		assert.NoError(t, err)
 	})
 
@@ -417,7 +272,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, errors.ErrTxPolicy)
 	})
@@ -429,7 +284,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err)
 	})
 }
@@ -463,7 +318,7 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	// non-standard: it appends two 6-byte number pushes and OP_NUMEQUALVERIFY after a
 	// standard P2PKH, specifically to exercise the MaxScriptNumLength policy limit.
 	//
-	// BDK v1.2.2 added a standardness check inside VerifyScript for policy mode
+	// BDK added a standardness check during policy-mode validation
 	// (consensus=false). On mainnet, chainParams.RequireStandard()=true, so BDK runs
 	// IsStandardTx/IsInputStandard before executing the script. The non-standard UTXO
 	// script causes that check to fail with SCRIPT_ERR_UNKNOWN_ERROR, masking the
@@ -480,10 +335,11 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	t.Run("low MaxScriptNumLengthPolicy must fail", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 5
+		tSettings.Policy.MinMiningTxFee = 0
 		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, errors.ErrTxPolicy)
 	})
@@ -491,10 +347,11 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	t.Run("high MaxScriptNumLengthPolicy must pass", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 6
+		tSettings.Policy.MinMiningTxFee = 0
 		tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err)
 	})
 }
@@ -516,25 +373,8 @@ func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
-	assert.NoError(t, err)
-
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
-
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.ErrTxPolicy)
-}
-
-func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-
-	tSettings.Policy.MaxOpsPerScriptPolicy = 2       // insanely low
-	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
-	tSettings.ChainCfgParams.GenesisActivationHeight = 100
-
-	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-
-	err := txValidator.ValidateTransaction(aTx, 101, nil, &Options{})
-	assert.NoError(t, err)
 }
 
 func Test_MinFeePolicy(t *testing.T) {
@@ -645,6 +485,7 @@ func Test_MinFeePolicy(t *testing.T) {
 			t.Logf("Total Transaction size: %d bytes", tx.Size())
 
 			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			txValidator.bdk = noopBDKValidator{}
 			err = txValidator.ValidateTransaction(tx, 10000000, nil, &Options{})
 
 			if tt.expectError {
@@ -673,7 +514,7 @@ func TestCheckP2SHOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	// P2SH output policy is now owned by BDK ValidateTransaction through
-	// ValidateTransactionScripts. This skipped fixture should be re-enabled
+	// ValidateTransaction. This skipped fixture should be re-enabled
 	// against that path when the later P2SH work resumes.
 	_ = txValidator
 	_ = txP2SH
@@ -901,7 +742,8 @@ func TestTx5f37c7a38b5e0bc177a4c353481f30c6de1bc46db534019846d7bc829f58254a(t *t
 	err = txValidator.ValidateTransaction(tx, 687064, []uint32{687002}, &Options{
 		SkipPolicyChecks: true,
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errors.ErrTxInvalid)
 }
 
 func TestMaxCoinsViewCacheSize(t *testing.T) {

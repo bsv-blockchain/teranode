@@ -2,8 +2,7 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters and implements the full Bitcoin transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 */
 package validator
 
@@ -545,19 +544,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// Run Teranode-owned transaction checks that need node context.
-	// BDK-owned transaction validation runs in validateTransactionScripts below.
+	// Run Teranode-owned checks and BDK transaction validation.
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
-	}
-
-	// Run the configured interpreter validation. With GoBDK this calls BDK
-	// ValidateTransaction, including BDK-side structure, policy, and scripts.
-	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 		span.RecordError(err)
 
 		return nil, err
@@ -1246,12 +1235,11 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	return nil
 }
 
-// validateTransaction performs the non-script Teranode-owned transaction checks
-// plus BIP68 sequence-lock validation.
+// validateTransaction performs Teranode-owned transaction checks, BDK
+// transaction validation, and BIP68 sequence-lock validation.
 //
 // Phase 1 keeps checks that need local node context, including fee policy and
-// cache-size limits. BDK-owned transaction structure, standardness, sigops, and
-// script checks run later through validateTransactionScripts.
+// cache-size limits, and runs BDK transaction validation.
 //
 // Phase 2 is BIP68 sequence-lock validation (block context only) via
 // txValidator.ValidateBIP68.
@@ -1277,7 +1265,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// Phase 1: run Teranode-owned transaction checks that need node context.
+	// Phase 1: run Teranode-owned checks and BDK transaction validation.
 	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		span.RecordError(err)
 		return err
@@ -1350,29 +1338,4 @@ func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) 
 	}
 
 	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
-}
-
-// validateTransactionScripts runs the configured interpreter validation path.
-// With GoBDK this calls BDK ValidateTransaction, not only script validation.
-// Returns error if validation fails
-func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32,
-	validationOptions *Options) error {
-	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransactionScripts",
-		tracing.WithHistogram(prometheusTransactionValidateScripts),
-	)
-	defer deferFn()
-
-	// 0) Check whether we have a complete transaction in extended format, with all input information
-	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !tx.IsExtended() {
-		err := v.extendTransaction(ctx, tx)
-		if err != nil {
-			// error is already wrapped in our errors package
-			span.RecordError(err)
-			return err
-		}
-	}
-
-	// Run BDK-owned transaction validation through the configured interpreter.
-	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
 }

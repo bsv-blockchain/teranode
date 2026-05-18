@@ -2,14 +2,12 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -83,7 +81,7 @@ func Test_ScriptVerificationGoBDK(t *testing.T) {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
 		require.NoError(t, errTx)
 
-		err := verifier.VerifyScript(tx, test.BlockHeight, true, test.UTXOHeights)
+		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", test.TxID))
 	}
 }
@@ -151,14 +149,14 @@ func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, 
 	return f.err
 }
 
-func TestScriptVerifierGoBDKVerifyScriptCallsBDKValidateTransaction(t *testing.T) {
+func TestScriptVerifierGoBDKValidateTransactionCallsBDKValidateTransaction(t *testing.T) {
 	fake := &fakeBDKTxValidator{}
 	verifier := &scriptVerifierGoBDK{
 		logger: ulogger.TestLogger{},
 		se:     fake,
 	}
 
-	err := verifier.VerifyScript(aTx, 100, false, []uint32{1, 2})
+	err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, fake.calls)
@@ -167,7 +165,7 @@ func TestScriptVerifierGoBDKVerifyScriptCallsBDKValidateTransaction(t *testing.T
 	assert.Equal(t, []int32{1, 2}, fake.utxoHeights)
 }
 
-func TestScriptVerifierGoBDKVerifyScriptRejectsCoinbaseBeforeBDK(t *testing.T) {
+func TestScriptVerifierGoBDKValidateTransactionRejectsCoinbaseBeforeBDK(t *testing.T) {
 	coinbaseTx := &bt.Tx{
 		Version: 1,
 		Inputs: []*bt.Input{
@@ -186,7 +184,7 @@ func TestScriptVerifierGoBDKVerifyScriptRejectsCoinbaseBeforeBDK(t *testing.T) {
 		se:     fake,
 	}
 
-	err := verifier.VerifyScript(coinbaseTx, 100, true, nil)
+	err := verifier.ValidateTransaction(coinbaseTx, 100, true, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errors.ErrTxInvalid)
 	assert.Equal(t, 0, fake.calls)
@@ -286,7 +284,7 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 		modifiedLockingScript := bscript.NewFromBytes(binUnlockingScript)
 		tx.Inputs[0].UnlockingScript = modifiedLockingScript
 
-		err := verifier.VerifyScript(tx, test.BlockHeight, true, test.UTXOHeights)
+		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.Error(t, err, fmt.Sprintf("Failed tx with TXID %v", test.TxID))
 	}
 }
