@@ -3885,6 +3885,19 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 // Clear()ed at moveForwardBlock commit, after readers are guaranteed to have
 // finished — see swapCurrentTxMapBack for the rollback inverse.
 func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool) (err error) {
+	// Track whether the in-memory pool swap has already been performed in this
+	// call. If a later step fails (notably stp.newSubtree below) we must roll
+	// the swap back here, atomically, because moveForwardBlock's own rollback
+	// defer is not yet registered when this function returns — and would not
+	// fire on an error path that exits before that registration.
+	var swappedHere bool
+
+	defer func() {
+		if err != nil && swappedHere {
+			stp.swapCurrentTxMapBack()
+		}
+	}()
+
 	if stp.diskTxMap != nil {
 		reportDiskMapStats(stp.diskTxMap.Stats())
 		stp.diskTxMap.Clear()
@@ -3898,6 +3911,7 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 		stp.currentTxMap = NewSplitTxInpointsMap(stp.splitMapBuckets)
 	} else {
 		stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
+		swappedHere = true
 	}
 
 	subtreeSize := int(stp.currentItemsPerFile.Load())

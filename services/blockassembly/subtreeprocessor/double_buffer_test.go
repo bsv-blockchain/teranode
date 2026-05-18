@@ -237,6 +237,52 @@ func makeNode(b byte) subtreepkg.Node {
 	return subtreepkg.Node{Hash: makeHash(b)}
 }
 
+// TestResetSubtreeState_RollsBackSwapOnNewSubtreeFailure pins the latent
+// rollback hole noted in code review: resetSubtreeState performs the
+// double-buffer swap before calling stp.newSubtree, which can fail (e.g. with
+// a non-power-of-two leaf count). Without the in-function rollback, the swap
+// would be left committed and moveForwardBlock's own swap-back defer is not
+// yet registered at the early-return path — leaving the prior block's data
+// stranded in the shadow.
+//
+// Failure is injected by setting currentItemsPerFile to a non-power-of-two
+// (3), which makes subtreepkg.NewTreeByLeafCount return ErrNotPowerOfTwo via
+// resetSubtreeState -> stp.newSubtree.
+func TestResetSubtreeState_RollsBackSwapOnNewSubtreeFailure(t *testing.T) {
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.SplitMapBuckets = 16
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+	stp, err := NewSubtreeProcessor(
+		context.Background(), ulogger.TestLogger{}, settings,
+		nil, nil, nil, make(chan NewSubtreeRequest, 1),
+	)
+	require.NoError(t, err)
+
+	priorCurrent := stp.currentTxMap.(*SplitTxInpointsMap)
+	priorShadow := stp.currentTxMapShadow
+
+	// Seed "current" with prior-block data so we can verify it isn't lost.
+	priorHash := makeHash(0xF1)
+	_, ok := priorCurrent.SetIfNotExists(priorHash, &subtreepkg.TxInpoints{})
+	require.True(t, ok)
+	require.Equal(t, 1, priorCurrent.Length())
+
+	// Inject a failure into the upcoming stp.newSubtree call: a non-power-of-
+	// two leaf count makes subtreepkg.NewTreeByLeafCount return ErrNotPowerOfTwo.
+	stp.currentItemsPerFile.Store(3)
+
+	err = stp.resetSubtreeState(true)
+	require.Error(t, err, "resetSubtreeState must surface the newSubtree failure")
+
+	// Rollback assertions: the swap must have been undone so the prior-block
+	// data is visible via stp.currentTxMap and the shadow is empty.
+	require.Same(t, priorCurrent, stp.currentTxMap.(*SplitTxInpointsMap), "rollback must restore the pre-reset currentTxMap pointer")
+	require.Same(t, priorShadow, stp.currentTxMapShadow, "rollback must restore the pre-reset shadow pointer")
+	require.True(t, stp.currentTxMap.(*SplitTxInpointsMap).Exists(priorHash), "prior-block data must survive a failed reset")
+	require.Equal(t, 0, stp.currentTxMapShadow.Length(), "shadow must remain empty after a failed reset")
+}
+
 // TestDoubleBuffer_DisableViaFlag verifies that setting
 // disableCurrentTxMapPool causes swapCurrentTxMapBack and
 // clearCurrentTxMapShadow to no-op, matching the reorgBlocks rollback
