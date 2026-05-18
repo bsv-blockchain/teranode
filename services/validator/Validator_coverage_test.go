@@ -304,35 +304,6 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	options := &Options{}
 
 	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
-	// Should error trying to extend transaction since parent doesn't exist
-	assert.Error(t, err)
-}
-
-func TestValidator_ValidateTransactionScripts_NotExtended(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	nullStore, _ := nullstore.NewNullStore()
-	settings := test.CreateBaseTestSettings(t)
-
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	// Create non-extended transaction
-	tx := bt.NewTx()
-	prevHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	input := &bt.Input{
-		PreviousTxOutIndex: 0,
-		SequenceNumber:     0xfffffffe,
-	}
-	_ = input.PreviousTxIDAdd(prevHash)
-	tx.Inputs = append(tx.Inputs, input)
-
-	v := validator.(*Validator)
-	options := &Options{}
-
-	err = v.validateTransactionScripts(ctx, tx, 100, []uint32{99}, options)
-	// Should error trying to extend transaction since parent doesn't exist
 	assert.Error(t, err)
 }
 

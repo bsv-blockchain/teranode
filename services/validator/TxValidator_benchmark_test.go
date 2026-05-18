@@ -138,7 +138,6 @@ func BenchmarkConsolidationValidationImpact(b *testing.B) {
 			Policy:         policy,
 			ChainCfgParams: &chaincfg.MainNetParams,
 		},
-		interpreter: &scriptVerifierGoBDK{},
 	}
 
 	// Create transactions with varying characteristics

@@ -25,6 +25,85 @@ type MockRepository struct {
 	mock.Mock
 }
 
+func TestShouldSkipGzipForLargeBinaryAssetResponse(t *testing.T) {
+	const hash = "0000000000000000000000000000000000000000000000000000000000000001"
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		route  string
+		want   bool
+	}{
+		{
+			name:   "raw subtree binary",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash,
+			route:  "/api/v1/subtree/:hash",
+			want:   true,
+		},
+		{
+			name:   "subtree hex remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/hex",
+			route:  "/api/v1/subtree/:hash/hex",
+			want:   false,
+		},
+		{
+			name:   "subtree json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/json",
+			route:  "/api/v1/subtree/:hash/json",
+			want:   false,
+		},
+		{
+			name:   "subtree data binary",
+			method: http.MethodGet,
+			target: "/api/v1/subtree_data/" + hash,
+			route:  "/api/v1/subtree_data/:hash",
+			want:   true,
+		},
+		{
+			name:   "subtree transactions binary",
+			method: http.MethodPost,
+			target: "/api/v1/subtree/" + hash + "/txs",
+			route:  "/api/v1/subtree/:hash/txs",
+			want:   true,
+		},
+		{
+			name:   "subtree transactions json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/txs/json",
+			route:  "/api/v1/subtree/:hash/txs/json",
+			want:   false,
+		},
+		{
+			name:   "block subtrees json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/block/" + hash + "/subtrees/json",
+			route:  "/api/v1/block/:hash/subtrees/json",
+			want:   false,
+		},
+		{
+			name:   "falls back to request path before route is set",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash,
+			want:   true,
+		},
+	}
+
+	e := echo.New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.target, nil)
+			c := e.NewContext(req, httptest.NewRecorder())
+			c.SetPath(tt.route)
+
+			require.Equal(t, tt.want, shouldSkipGzipForLargeBinaryAssetResponse(c))
+		})
+	}
+}
+
 // Health mocks the Health method
 func (m *MockRepository) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	args := m.Called(ctx, checkLiveness)
