@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -24,7 +25,6 @@ import (
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -497,24 +497,24 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	// (1) Best block height is target.
 	bestHeader, bestMeta, err := bcStore.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(2), bestMeta.Height, "best block height should match target")
-	assert.Equal(t, block2.Hash().String(), bestHeader.Hash().String(), "best block hash should be block2")
+	require.Equal(t, uint32(2), bestMeta.Height, "best block height should match target")
+	require.Equal(t, block2.Hash().String(), bestHeader.Hash().String(), "best block hash should be block2")
 
 	// (2) Blocks above target are gone.
 	_, err = bcStore.GetBlockByHeight(ctx, 3)
-	assert.Error(t, err, "block at height 3 should be absent after rewind")
+	require.Error(t, err, "block at height 3 should be absent after rewind")
 	_, err = bcStore.GetBlockByHeight(ctx, 4)
-	assert.Error(t, err, "block at height 4 should be absent after rewind")
+	require.Error(t, err, "block at height 4 should be absent after rewind")
 
 	// block3alt (fork) should also be gone — look it up by hash directly.
 	_, _, err = bcStore.GetBlock(ctx, block3alt.Hash())
-	assert.Error(t, err, "fork block should be absent after rewind")
+	require.Error(t, err, "fork block should be absent after rewind")
 
 	// (3, 4) Coinbases and regular txs from deleted blocks are gone from UTXO store.
 	for _, tx := range []*bt.Tx{coinbase3, coinbase4, coinbase3alt, regTx3, regTx4} {
 		_, err := utxoStore.Get(ctx, tx.TxIDChainHash())
 		require.Error(t, err, "tx %s from deleted block should be gone", tx.TxID())
-		assert.True(t, errors.Is(err, errors.ErrTxNotFound), "expected ErrTxNotFound for %s, got %v", tx.TxID(), err)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected ErrTxNotFound for %s, got %v", tx.TxID(), err)
 	}
 
 	// Surviving blocks' txs still present.
@@ -537,13 +537,13 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	for _, tx := range []*bt.Tx{unmined1, unmined2} {
 		_, err := utxoStore.Get(ctx, tx.TxIDChainHash())
 		require.Error(t, err, "unmined tx %s should be purged", tx.TxID())
-		assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+		require.True(t, errors.Is(err, errors.ErrTxNotFound))
 	}
 
 	// (7) Conflicting tx is gone.
 	_, err = utxoStore.Get(ctx, conflictingTx.TxIDChainHash())
 	require.Error(t, err, "conflicting tx should be purged")
-	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+	require.True(t, errors.Is(err, errors.ErrTxNotFound))
 
 	// (8) Subtree blobs for deleted blocks are absent.
 	for name, h := range map[string]*chainhash.Hash{
@@ -553,7 +553,7 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	} {
 		exists, err := subtreeStore.Exists(ctx, h[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
-		assert.False(t, exists, "subtree blob %s should be deleted from blob store", name)
+		require.False(t, exists, "subtree blob %s should be deleted from blob store", name)
 	}
 
 	// Surviving subtree blobs remain.
@@ -563,7 +563,7 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	} {
 		exists, err := subtreeStore.Exists(ctx, h[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
-		assert.True(t, exists, "subtree blob %s should survive the rewind", name)
+		require.True(t, exists, "subtree blob %s should survive the rewind", name)
 	}
 
 	// (9) state[BlockAssembler] decodes to target height with target header.
@@ -571,28 +571,28 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(baBytes), 4+80, "BlockAssembler state too short")
 	gotHeight := binary.LittleEndian.Uint32(baBytes[:4])
-	assert.Equal(t, uint32(2), gotHeight, "BlockAssembler height should be target")
+	require.Equal(t, uint32(2), gotHeight, "BlockAssembler height should be target")
 	gotHeader, err := model.NewBlockHeaderFromBytes(baBytes[4:])
 	require.NoError(t, err)
-	assert.Equal(t, block2.Hash().String(), gotHeader.Hash().String(), "BlockAssembler header should be block2's")
+	require.Equal(t, block2.Hash().String(), gotHeader.Hash().String(), "BlockAssembler header should be block2's")
 
 	// (10) state[BlockPersisterHeight] decodes to LE(target).
 	bpBytes, err := bcStore.GetState(ctx, "BlockPersisterHeight")
 	require.NoError(t, err)
 	require.Len(t, bpBytes, 4)
-	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(bpBytes),
+	require.Equal(t, uint32(2), binary.LittleEndian.Uint32(bpBytes),
 		"BlockPersisterHeight should be rewritten to target")
 
 	// (11) Stats counters plausible.
-	assert.GreaterOrEqual(t, stats.BlocksDeleted, 3, "expected >= 3 blocks deleted (block3, block4, block3alt)")
-	assert.GreaterOrEqual(t, stats.TxsDeleted, 2, "expected >= 2 txs deleted (deleted coinbases + regular txs)")
-	assert.GreaterOrEqual(t, stats.UnminedPurged, 2, "expected >= 2 unmined txs purged")
-	assert.GreaterOrEqual(t, stats.ConflictingPurged, 1, "expected >= 1 conflicting tx purged")
-	assert.GreaterOrEqual(t, stats.TxsBlockIDsTrimmed, 1, "expected >= 1 tx block-id trim (multiBlockTx)")
-	assert.GreaterOrEqual(t, stats.SubtreesDeleted, 3, "expected >= 3 subtree blobs deleted")
+	require.GreaterOrEqual(t, stats.BlocksDeleted, 3, "expected >= 3 blocks deleted (block3, block4, block3alt)")
+	require.GreaterOrEqual(t, stats.TxsDeleted, 2, "expected >= 2 txs deleted (deleted coinbases + regular txs)")
+	require.GreaterOrEqual(t, stats.UnminedPurged, 2, "expected >= 2 unmined txs purged")
+	require.GreaterOrEqual(t, stats.ConflictingPurged, 1, "expected >= 1 conflicting tx purged")
+	require.GreaterOrEqual(t, stats.TxsBlockIDsTrimmed, 1, "expected >= 1 tx block-id trim (multiBlockTx)")
+	require.GreaterOrEqual(t, stats.SubtreesDeleted, 3, "expected >= 3 subtree blobs deleted")
 
 	// UTXO store internal block height got set to target (Phase 0).
-	assert.Equal(t, uint32(2), utxoStore.GetBlockHeight(), "utxo store internal height should be target")
+	require.Equal(t, uint32(2), utxoStore.GetBlockHeight(), "utxo store internal height should be target")
 }
 
 // -----------------------------------------------------------------------------
@@ -607,4 +607,270 @@ type blobStoreSet struct {
 
 func (b blobStoreSet) Set(ctx context.Context, key []byte, ft fileformat.FileType, value []byte, _ ...blobOption) error {
 	return b.store.Set(ctx, key, ft, value)
+}
+
+// -----------------------------------------------------------------------------
+// Branch-coverage tests: DryRun / ForceNotIdle / ForceDeep
+//
+// These exercise the four preflight branches and the rewind.go DryRun early
+// return that the main integration test (which sets FSM=IDLE, depth=2,
+// DryRun=false) does not reach.
+// -----------------------------------------------------------------------------
+
+// buildLinearChain stores n minimal blocks above genesis and returns the
+// resulting block list (block[0] is height 1, block[n-1] is height n).
+// Blocks share the supplied bits, each gets a unique coinbase, and the
+// per-block subtree exists only as a hash — StoreBlock does not validate the
+// blob is present in any subtree store, and preflight does not read subtrees.
+func buildLinearChain(t *testing.T, ctx context.Context, bcStore blockchain_store.Store, n int, bits *model.NBit, genesisHash *chainhash.Hash) []*model.Block {
+	t.Helper()
+	require.LessOrEqual(t, n, 255, "buildLinearChain capped at 255 by 1-byte heightByte")
+
+	blocks := make([]*model.Block, 0, n)
+	prevHash := genesisHash
+	for i := 1; i <= n; i++ {
+		heightByte := byte(i)
+		coinbase := makeCoinbaseTx(t, heightByte, heightByte)
+
+		// Single-tx merkle root = coinbase txid. Reuse the same hash for the
+		// block's single Subtrees entry: preflight only enumerates block refs,
+		// it never opens these subtree blobs.
+		root := coinbase.TxIDChainHash()
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      uint32(1700000000 + i),
+				Nonce:          uint32(i),
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: root,
+				Bits:           *bits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{root},
+		}
+		_, _, err := bcStore.StoreBlock(ctx, block, "peer", blockchainoptions.WithMinedSet(true))
+		require.NoError(t, err, "StoreBlock height %d", i)
+
+		blocks = append(blocks, block)
+		prevHash = block.Hash()
+	}
+	return blocks
+}
+
+// newTestStores builds a fresh sqlitememory blockchain store + nil-tolerant
+// UTXO/subtree stubs suitable for tests whose Rewind call exits inside
+// preflight or via DryRun before phase 1.
+func newTestStores(t *testing.T, ctx context.Context) (blockchain_store.Store, utxo.Store, *memory.Memory, *settings.Settings) {
+	t.Helper()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
+
+	bcURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+	bcStore, err := blockchainsql.New(logger(), bcURL, tSettings)
+	require.NoError(t, err)
+
+	utxoURL, err := url.Parse("sqlitememory:///rewind-utxo")
+	require.NoError(t, err)
+	utxoStore, err := utxosql.New(ctx, logger(), tSettings, utxoURL)
+	require.NoError(t, err)
+
+	return bcStore, utxoStore, memory.New(), tSettings
+}
+
+func logger() ulogger.Logger { return ulogger.TestLogger{} }
+
+// TestRewindBlockchain_DryRun verifies that DryRun=true exits before any
+// Phase 0+ mutation: stats stay zero, the tip block is still present, and
+// the UTXO store's internal block height is unchanged.
+func TestRewindBlockchain_DryRun(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	genesisHash := tSettings.ChainCfgParams.GenesisHash
+
+	blocks := buildLinearChain(t, ctx, bcStore, 4, bits, genesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	preHeight := utxoStore.GetBlockHeight()
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		DryRun:       true,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.Zero(t, stats.BlocksDeleted, "DryRun must not delete blocks")
+	require.Zero(t, stats.TxsDeleted, "DryRun must not delete txs")
+	require.Equal(t, preHeight, utxoStore.GetBlockHeight(), "DryRun must not touch UTXO store height")
+
+	// Tip block still present at original height.
+	_, bestMeta, err := bcStore.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(4), bestMeta.Height, "DryRun must not delete the tip")
+	// Sanity: the 4th block (tip) is still retrievable.
+	_, _, err = bcStore.GetBlock(ctx, blocks[3].Hash())
+	require.NoError(t, err)
+}
+
+// TestRewindBlockchain_ForceNotIdle covers both branches of the FSM gate:
+// rejection when FSM!=IDLE without --force-not-idle, and acceptance when
+// the flag is supplied. The accepted branch uses DryRun=true to short-circuit
+// after preflight so we don't need a UTXO/subtree fixture.
+func TestRewindBlockchain_ForceNotIdle(t *testing.T) {
+	t.Run("rejected when flag not set", func(t *testing.T) {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "RUNNING"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: 2,
+			DryRun:       true,
+			AssumeYes:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       utxoStore,
+				Subtree:    subtreeStore,
+			},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "FSM state")
+		require.Contains(t, err.Error(), "--force-not-idle")
+	})
+
+	t.Run("accepted when flag set", func(t *testing.T) {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "RUNNING"))
+
+		stats, err := Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: 2,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceNotIdle: true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       utxoStore,
+				Subtree:    subtreeStore,
+			},
+		})
+		require.NoError(t, err, "ForceNotIdle should let preflight pass")
+		require.NotNil(t, stats)
+		require.Zero(t, stats.BlocksDeleted, "DryRun must not delete blocks")
+	})
+}
+
+// TestRewindBlockchain_ForceDeep covers both branches of the depth gate:
+// rejection when tip-target > coinbaseMaturity (100) without --force-deep,
+// and acceptance when the flag is supplied. Uses 102 minimal blocks so
+// depth = 102-1 = 101 > 100. Accepted branch short-circuits via DryRun.
+func TestRewindBlockchain_ForceDeep(t *testing.T) {
+	const chainHeight = 102
+
+	t.Run("rejected when flag not set", func(t *testing.T) {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: 1,
+			DryRun:       true,
+			AssumeYes:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       utxoStore,
+				Subtree:    subtreeStore,
+			},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rewind depth")
+		require.Contains(t, err.Error(), "--force-deep")
+	})
+
+	t.Run("accepted when flag set", func(t *testing.T) {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		stats, err := Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: 1,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceDeep:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       utxoStore,
+				Subtree:    subtreeStore,
+			},
+		})
+		require.NoError(t, err, "ForceDeep should let preflight pass")
+		require.NotNil(t, stats)
+		require.Zero(t, stats.BlocksDeleted, "DryRun must not delete blocks")
+	})
+}
+
+// errOnGetStateStore wraps a blockchain.Store and overrides GetState to
+// return a configurable error. All other methods delegate to the embedded
+// store. Used to simulate genuine storage failures distinct from
+// ErrNotFound / sql.ErrNoRows.
+type errOnGetStateStore struct {
+	blockchain_store.Store
+	getStateErr error
+}
+
+func (e *errOnGetStateStore) GetState(ctx context.Context, key string) ([]byte, error) {
+	if e.getStateErr != nil {
+		return nil, e.getStateErr
+	}
+	return e.Store.GetState(ctx, key)
+}
+
+// TestResetBlockPersisterHeight_RealErrorPropagates covers the branch in
+// phase3_finalize.go where GetState returns a non-NotFound error. Previously
+// any error was silently swallowed as "missing key" — the new code must
+// distinguish sql.ErrNoRows / errors.ErrNotFound from real failures and
+// surface the latter.
+func TestResetBlockPersisterHeight_RealErrorPropagates(t *testing.T) {
+	ctx := context.Background()
+	bcStore, _, _, _ := newTestStores(t, ctx)
+
+	simulated := errors.NewStorageError("simulated db read failure")
+	wrapped := &errOnGetStateStore{Store: bcStore, getStateErr: simulated}
+
+	e := &env{
+		logger:          logger(),
+		blockchainStore: wrapped,
+	}
+	pf := &preflightResult{target: 1}
+
+	err := e.resetBlockPersisterHeight(ctx, pf)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to read state")
+	require.True(t, errors.Is(err, simulated), "real error must propagate, not be swallowed as missing")
 }

@@ -31,10 +31,6 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 		return err
 	}
 
-	// Revalidate any block at or below the target that may have been marked
-	// invalid transitively: skipped — InvalidateBlock's recursive CTE only
-	// touches descendants, and descendants were all deleted.
-
 	return nil
 }
 

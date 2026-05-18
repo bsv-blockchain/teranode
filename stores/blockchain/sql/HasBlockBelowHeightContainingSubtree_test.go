@@ -21,7 +21,7 @@ func TestSQLHasBlockBelowHeightContainingSubtree(t *testing.T) {
 		require.NoError(t, err)
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}))
+		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams))
 		return s
 	}
 

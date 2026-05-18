@@ -43,7 +43,7 @@ func TestSQLDeleteBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}))
+		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams))
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithMinedSet(true))
 		require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestSQLDeleteBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}))
+		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams))
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithMinedSet(true))
 		require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestSQLDeleteBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}))
+		require.NoError(t, s.insertGenesisTransaction(ulogger.TestLogger{}, tSettings.ChainCfgParams))
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithMinedSet(true))
 		require.NoError(t, err)

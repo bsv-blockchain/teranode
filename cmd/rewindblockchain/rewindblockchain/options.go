@@ -17,9 +17,6 @@ type Options struct {
 	// DryRun logs planned actions without mutating any store.
 	DryRun bool
 
-	// BatchSize controls the unmined/conflicting iterator batch size.
-	BatchSize int
-
 	// AssumeYes skips the interactive confirmation prompt.
 	AssumeYes bool
 

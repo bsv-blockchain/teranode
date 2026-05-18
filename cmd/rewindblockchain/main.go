@@ -23,7 +23,6 @@ func main() {
 	var (
 		targetHeight int64
 		dryRun       bool
-		batchSize    int
 		assumeYes    bool
 		forceNotIdle bool
 		forceDeep    bool
@@ -34,7 +33,6 @@ func main() {
 
 	flag.Int64Var(&targetHeight, "target-height", -1, "Target height to rewind to (default: read state[\"BlockAssembler\"])")
 	flag.BoolVar(&dryRun, "dry-run", false, "Log actions but do not modify any store")
-	flag.IntVar(&batchSize, "batch-size", 1000, "Batch size for unmined/conflicting tx iteration")
 	flag.BoolVar(&assumeYes, "assume-yes", false, "Skip interactive confirmation prompt")
 	flag.BoolVar(&forceNotIdle, "force-not-idle", false, "Proceed even if FSM is not IDLE (DANGEROUS)")
 	flag.BoolVar(&forceDeep, "force-deep", false, "Allow rewind deeper than 100 blocks (coinbase-maturity risk)")
@@ -65,7 +63,6 @@ func main() {
 	opts := rewindblockchain.Options{
 		TargetHeight: targetHeight,
 		DryRun:       dryRun,
-		BatchSize:    batchSize,
 		AssumeYes:    assumeYes,
 		ForceNotIdle: forceNotIdle,
 		ForceDeep:    forceDeep,

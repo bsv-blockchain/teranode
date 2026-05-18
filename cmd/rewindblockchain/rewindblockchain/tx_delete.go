@@ -131,6 +131,15 @@ func (e *env) deleteTxWithParents(ctx context.Context, txHash *chainhash.Hash, p
 			// Tolerate NotFound: parent tx may have been DAH-reaped, already
 			// deleted, or have had its outputs removed. SQL raises ErrNotFound
 			// ("output X:Y not found") while Aerospike raises ErrTxNotFound.
+			//
+			// NOTE: tolerance is batch-wide. Aerospike short-circuits on the
+			// first failing input (subsequent inputs are not unspent). SQL is
+			// transactional and rolls back the entire batch on any failure —
+			// no inputs are unspent. Acceptable here because the tolerated
+			// outcome is "parent already gone": there is no UTXO row to
+			// un-mark, so the no-op is correct. If a future store gains
+			// per-input partial-success semantics, switch to single-input
+			// calls and aggregate errors.
 			if !isNotFound(err) {
 				return false, errors.NewStorageError("Unspend tx %s: %w", txHash.String(), err)
 			}

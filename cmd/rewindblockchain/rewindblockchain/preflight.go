@@ -54,11 +54,10 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	}
 
 	// 3. Read current tip.
-	tipHeader, tipMeta, err := e.blockchainStore.GetBestBlockHeader(ctx)
+	_, tipMeta, err := e.blockchainStore.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to read best block: %w", err)
 	}
-	_ = tipHeader
 
 	tip := tipMeta.Height
 

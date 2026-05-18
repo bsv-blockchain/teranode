@@ -18,6 +18,11 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+// errAerospikeClientNotInit is the message used when an entry point is
+// reached before the Aerospike client has been initialised. Surfaces in
+// repair tooling and consistency scans; tests assert on the exact text.
+const errAerospikeClientNotInit = "aerospike client not initialized"
+
 // unminedTxIterator implements utxo.UnminedTxIterator for Aerospike
 // It scans all records in the set and yields those that are not mined (i.e., unmined/mempool)
 // Uses multiple workers to read from Aerospike in parallel for improved throughput
@@ -809,7 +814,7 @@ func toUint64(val interface{}) (uint64, error) {
 // Uses the unmined_since index to efficiently query only unmined transactions.
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	return newUnminedTxIterator(s)
@@ -820,7 +825,7 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 // the bins needed by the pruner (txID, unminedSince, external, inputs).
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	return newPrunableUnminedTxIterator(s, cutoffBlockHeight)
@@ -845,7 +850,7 @@ func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unmi
 // losing side of double-spends during a blockchain rewind.
 func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	numPartitionQueries, err := calculatePartitionQueries(s)
