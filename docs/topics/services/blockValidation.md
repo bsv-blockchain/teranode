@@ -1046,6 +1046,47 @@ The `SetMinedMulti` operation is highly optimized for batch processing:
 - **Lua Script Execution**: Aerospike UTXO store uses atomic Lua scripts for metadata updates
 - **Automatic Unlocking**: Locked flag automatically unset as part of mined metadata update
 
+#### Coverage Postcondition and `setMinedChan` Retry Loop
+
+`SetMinedMulti` enforces a coverage postcondition: when `UnsetMined=false` and a nil error is returned, every submitted hash MUST appear in the returned map and every returned slice MUST contain the current `blockID`. Implementations (Aerospike UDF + expression paths, SQL store, TxMetaCache wrapper) all enforce this; `model.UpdateTxMinedStatus` re-verifies it at the caller layer as defence-in-depth.
+
+When the postcondition cannot be satisfied — typically because of historical-corrupt `block_ids` state in the UTXO store from pre-coverage-enforcement bugs — `setTxMinedStatus` returns a `ProcessingError` and the `setMinedChan` worker retries.
+
+**Bounded exponential backoff.** The worker tracks consecutive failures per block hash and applies an exponential-with-cap backoff:
+
+| Retry attempt | Sleep before re-queue |
+| --- | --- |
+| 1 | 1s |
+| 2 | 2s |
+| 3 | 4s |
+| 4 | 8s |
+| 5–10 | 16s (capped) |
+
+After **10 consecutive failures** (total worst-case budget: 111s) the worker emits an `ERROR` log line containing the `manual_intervention_required` marker and drops the block hash from the channel. A fresh notification arriving later starts a new counter from zero.
+
+**Counter reset paths:**
+
+- `setTxMinedStatus` returns nil (successful mark): counter deleted.
+- `MinedSet` is already true when the worker dequeues (block was completed by another path): counter deleted.
+- Block returns `ErrBlockNotFound` (block is gone): counter deleted.
+- Drop after `setMinedMaxRetries`: counter deleted; future notifications restart fresh.
+
+**Observability.**
+
+- `teranode_blockvalidation_setmined_retry_total{blockhash}` (counter) — incremented on every retry. Alert when a single label series approaches the retry ceiling.
+- `teranode_blockvalidation_setmined_drops_total{blockhash}` (counter) — incremented when the worker drops a block after exceeding retries. Any non-zero value is page-worthy.
+- Log marker: grep `manual_intervention_required` in the blockvalidation service logs for dropped block hashes.
+
+**Operator runbook for `manual_intervention_required`.**
+
+1. Identify the block hash from the log line.
+2. Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's `blockID` in its `blockIDs` slice. Drift here is the signal.
+3. If the block is on the longest chain and has missing tags, repair via a targeted re-run of `SetMinedMulti` for the affected txs (use the maintenance CLI; do NOT bypass the coverage check).
+4. After repair, re-trigger marking by re-publishing `NotificationType_BlockSubtreesSet` for the block hash (blockchain service `SetBlockSubtreesSet`). The worker counter is already cleared from the drop, so the new attempt starts fresh.
+5. If `block_validation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
+
+The label cardinality cost of `{blockhash}` is intentional: a per-block alert is the only useful operator signal for "this specific block is unrecoverable". Once repaired and the counter stops incrementing, the series naturally falls out of recent windows.
+
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >
 ## 3. gRPC Protobuf Definitions

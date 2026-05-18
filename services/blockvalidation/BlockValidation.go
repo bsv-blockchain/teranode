@@ -86,6 +86,37 @@ type validationResult struct {
 	mu   sync.RWMutex  // Protects err
 }
 
+const (
+	// setMinedMaxRetries caps consecutive setTxMined retries for the same block
+	// hash before the worker bails out with a manual_intervention_required log
+	// marker. Sized so the total backoff (1s+2s+4s+8s + 6×16s = 111s) gives a
+	// transient I/O blip room to recover but doesn't burn a CPU forever on an
+	// unrecoverable coverage-postcondition violation (e.g. historical-corrupt
+	// block_ids state from pre-PR-850 bugs).
+	setMinedMaxRetries = 10
+
+	// setMinedBaseBackoff is the first sleep before the second attempt.
+	setMinedBaseBackoff = 1 * time.Second
+
+	// setMinedMaxBackoff caps the per-retry sleep once exponential doubling
+	// would exceed it (after attempt 5).
+	setMinedMaxBackoff = 16 * time.Second
+)
+
+// setMinedRetryBackoff computes the exponential-with-cap backoff for the
+// (attempt)th retry. attempt is 1-indexed (1 = first retry after the initial
+// failure). 1s, 2s, 4s, 8s, 16s, 16s, ...
+func setMinedRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		return setMinedBaseBackoff
+	}
+	d := setMinedBaseBackoff << (attempt - 1)
+	if d <= 0 || d > setMinedMaxBackoff {
+		return setMinedMaxBackoff
+	}
+	return d
+}
+
 // revalidateBlockData contains information needed to revalidate a block
 // that previously failed validation or requires additional verification.
 type revalidateBlockData struct {
@@ -161,6 +192,14 @@ type BlockValidation struct {
 
 	// setMinedChan receives block hashes that need to be marked as mined
 	setMinedChan chan *chainhash.Hash
+
+	// setMinedRetries tracks consecutive setTxMined failures per block hash so
+	// the retry loop can apply exponential backoff and bail out with a
+	// manual_intervention_required marker instead of spinning forever on a
+	// block whose historical state can never satisfy the new coverage
+	// postcondition. Keyed by chainhash.Hash, value is the attempt counter
+	// (uint64 stored as any). Reset on success / MinedSet shortcut.
+	setMinedRetries sync.Map
 
 	// revalidateBlockChan receives blocks that need revalidation
 	revalidateBlockChan chan revalidateBlockData
@@ -532,6 +571,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				if blockHeaderMeta.MinedSet {
 					u.logger.Infof("[BlockValidation:start][%s] block already has mined_set true, skipping setTxMined", blockHash.String())
+					u.setMinedRetries.Delete(*blockHash)
 					continue
 				}
 
@@ -560,12 +600,49 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 						u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 
-						if !errors.Is(err, errors.ErrBlockNotFound) {
-							time.Sleep(1 * time.Second)
-							// put the block back in the setMinedChan for retry
-							u.setMinedChan <- blockHash
+						if errors.Is(err, errors.ErrBlockNotFound) {
+							// Block is gone; nothing to retry. Drop the counter
+							// so a future notification for this hash starts fresh.
+							u.setMinedRetries.Delete(*blockHash)
+							return
 						}
+
+						// Bounded exponential-backoff retry. Track per-block
+						// attempts so a block whose historical state can never
+						// satisfy the coverage postcondition stops burning the
+						// worker (and operator log volume) and instead surfaces
+						// as a manual_intervention_required signal.
+						prev, _ := u.setMinedRetries.LoadOrStore(*blockHash, uint64(0))
+						attempt := prev.(uint64) + 1
+						u.setMinedRetries.Store(*blockHash, attempt)
+
+						prometheusBlockValidationSetMinedRetries.WithLabelValues(blockHash.String()).Inc()
+
+						if attempt >= setMinedMaxRetries {
+							u.logger.Errorf("[BlockValidation:start][%s] manual_intervention_required: setTxMined exceeded %d retries; dropping from setMinedChan. Last error: %s", blockHash.String(), setMinedMaxRetries, err)
+							prometheusBlockValidationSetMinedDrops.WithLabelValues(blockHash.String()).Inc()
+							u.setMinedRetries.Delete(*blockHash)
+							return
+						}
+
+						backoff := setMinedRetryBackoff(int(attempt))
+						u.logger.Warnf("[BlockValidation:start][%s] setTxMined retry %d/%d in %s", blockHash.String(), attempt, setMinedMaxRetries, backoff)
+						time.Sleep(backoff)
+
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
+
+						// put the block back in the setMinedChan for retry
+						u.setMinedChan <- blockHash
+						return
 					}
+
+					// Success: reset the retry counter so the next failure (if
+					// any) starts a fresh backoff sequence.
+					u.setMinedRetries.Delete(*blockHash)
 				}()
 
 				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
