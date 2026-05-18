@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -52,16 +53,20 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 	childHash := chainhash.HashH([]byte("child-of-conflicting-parent"))
 	otherHash := chainhash.HashH([]byte("unrelated-tx"))
 
+	mkInpoints := func(parent chainhash.Hash) *subtreepkg.TxInpoints {
+		in := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in.PreviousTxIDAdd(&parent))
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in})
+		require.NoError(t, err)
+
+		return &ti
+	}
+
 	childNode := subtreepkg.Node{Hash: childHash, Fee: 1, SizeInBytes: 250}
-	childInpoints := &subtreepkg.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{parentHash},
-		Idxs:           [][]uint32{{0}},
-	}
+	childInpoints := mkInpoints(parentHash)
 	otherNode := subtreepkg.Node{Hash: otherHash, Fee: 2, SizeInBytes: 220}
-	otherInpoints := &subtreepkg.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{chainhash.HashH([]byte("unrelated-parent"))},
-		Idxs:           [][]uint32{{0}},
-	}
+	otherInpoints := mkInpoints(chainhash.HashH([]byte("unrelated-parent")))
 
 	// Pin both clocks to the same instant so this test is deterministic
 	// (no wall-time waits). With DoubleSpendWindow=0 the queue filter is

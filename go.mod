@@ -16,7 +16,7 @@ require (
 	github.com/bsv-blockchain/go-bt/v2 v2.6.3
 	github.com/bsv-blockchain/go-chaincfg v1.5.8
 	github.com/bsv-blockchain/go-sdk v1.2.23
-	github.com/bsv-blockchain/go-subtree v1.2.0
+	github.com/bsv-blockchain/go-subtree v1.4.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
@@ -186,7 +186,7 @@ require (
 	github.com/bsv-blockchain/go-bn v1.1.4
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
-	github.com/bsv-blockchain/go-safe-conversion v1.1.2
+	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	// Pseudo-version pins the un-released feat(synced): add SetIfNotExistsMulti
 	// commit (bsv-blockchain/go-tx-map#114). PutMultiBucketTxInpoints in
 	// services/blockassembly/subtreeprocessor relies on this bulk method to

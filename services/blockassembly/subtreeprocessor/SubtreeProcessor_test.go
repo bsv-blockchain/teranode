@@ -2621,11 +2621,18 @@ func createSubtreeMeta(t *testing.T, subtree *subtreepkg.Subtree) *subtreepkg.Me
 
 	parent := chainhash.HashH([]byte("txInpoints"))
 
+	parentInput := &bt.Input{PreviousTxOutIndex: 1}
+	if err := parentInput.PreviousTxIDAdd(&parent); err != nil {
+		panic(err)
+	}
+
+	ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+	if err != nil {
+		panic(err)
+	}
+
 	for idx := range subtree.Nodes {
-		_ = subtreeMeta.SetTxInpoints(idx, subtreepkg.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parent},
-			Idxs:           [][]uint32{{1}},
-		})
+		_ = subtreeMeta.SetTxInpoints(idx, ti)
 	}
 
 	return subtreeMeta

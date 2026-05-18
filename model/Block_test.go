@@ -3134,12 +3134,20 @@ func createSubtreeMetadataWithParents(subtree *subtreepkg.Subtree, nodeIndex int
 	for i := 0; i < subtree.Length(); i++ {
 		// Add parent hashes to specific node
 		if i == nodeIndex && len(parentHashes) > 0 {
-			txInpoints := subtreepkg.NewTxInpoints()
-			// Add parent hashes (simplified - in real usage would need proper input indices)
-			for _, parentHash := range parentHashes {
-				// Create mock input with parent hash
-				txInpoints.ParentTxHashes = append(txInpoints.ParentTxHashes, parentHash)
-				txInpoints.Idxs = append(txInpoints.Idxs, []uint32{0}) // Mock output index
+			// Build mock inputs — vout 0 for each parent hash.
+			inputs := make([]*bt.Input, 0, len(parentHashes))
+			for j := range parentHashes {
+				in := &bt.Input{PreviousTxOutIndex: 0}
+				if err := in.PreviousTxIDAdd(&parentHashes[j]); err != nil {
+					return nil, err
+				}
+
+				inputs = append(inputs, in)
+			}
+
+			txInpoints, err := subtreepkg.NewTxInpointsFromInputs(inputs)
+			if err != nil {
+				return nil, err
 			}
 
 			subtreeMeta.TxInpoints[i] = txInpoints
@@ -4472,26 +4480,35 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 		// Create subtree metadata
 		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 		for i := 0; i < subtree.Length(); i++ {
-			txInpoints := subtreepkg.NewTxInpoints()
 			// Skip coinbase placeholder in first subtree
 			if s == 0 && i == 0 {
-				subtreeMeta.TxInpoints[i] = txInpoints
+				subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
 				continue
 			}
 
+			var parentHash *chainhash.Hash
 			if i <= numExternalParents {
 				// First N transactions reference external parents (need UTXO lookup)
-				txInpoints.ParentTxHashes = append(txInpoints.ParentTxHashes, allParentHashes[s][i])
-				txInpoints.Idxs = append(txInpoints.Idxs, []uint32{0})
+				parentHash = &allParentHashes[s][i]
 			} else {
 				// Remaining transactions reference the previous tx in the subtree (in txMap)
 				prevIdx := i - 1
 				if prevIdx >= 0 && prevIdx < len(allTxHashes[s]) {
-					txInpoints.ParentTxHashes = append(txInpoints.ParentTxHashes, allTxHashes[s][prevIdx])
-					txInpoints.Idxs = append(txInpoints.Idxs, []uint32{0})
+					parentHash = &allTxHashes[s][prevIdx]
 				}
 			}
-			subtreeMeta.TxInpoints[i] = txInpoints
+
+			if parentHash != nil {
+				in := &bt.Input{PreviousTxOutIndex: 0}
+				require.NoError(t, in.PreviousTxIDAdd(parentHash))
+
+				ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in})
+				require.NoError(t, err)
+
+				subtreeMeta.TxInpoints[i] = ti
+			} else {
+				subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
+			}
 		}
 
 		subtreeMetaBytes, err := subtreeMeta.Serialize()
