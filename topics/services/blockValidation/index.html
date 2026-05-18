@@ -3849,6 +3849,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#coverage-postcondition-and-setminedchan-retry-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coverage Postcondition and setMinedChan Retry Loop
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -8106,6 +8117,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#coverage-postcondition-and-setminedchan-retry-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coverage Postcondition and setMinedChan Retry Loop
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -9242,6 +9264,63 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><strong>Lua Script Execution</strong>: Aerospike UTXO store uses atomic Lua scripts for metadata updates</li>
 <li><strong>Automatic Unlocking</strong>: Locked flag automatically unset as part of mined metadata update</li>
 </ul>
+<h4 id="coverage-postcondition-and-setminedchan-retry-loop">Coverage Postcondition and <code>setMinedChan</code> Retry Loop<a class="headerlink" href="#coverage-postcondition-and-setminedchan-retry-loop" title="Permanent link">&para;</a></h4>
+<p><code>SetMinedMulti</code> enforces a coverage postcondition: when <code>UnsetMined=false</code> and a nil error is returned, every submitted hash MUST appear in the returned map and every returned slice MUST contain the current <code>blockID</code>. Implementations (Aerospike UDF + expression paths, SQL store, TxMetaCache wrapper) all enforce this; <code>model.UpdateTxMinedStatus</code> re-verifies it at the caller layer as defence-in-depth.</p>
+<p>When the postcondition cannot be satisfied — typically because of historical-corrupt <code>block_ids</code> state in the UTXO store from pre-coverage-enforcement bugs — <code>setTxMinedStatus</code> returns a <code>ProcessingError</code> and the <code>setMinedChan</code> worker retries.</p>
+<p><strong>Bounded exponential backoff.</strong> The worker tracks consecutive failures per block hash and applies an exponential-with-cap backoff:</p>
+<table>
+<thead>
+<tr>
+<th>Retry attempt</th>
+<th>Sleep before re-queue</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>1s</td>
+</tr>
+<tr>
+<td>2</td>
+<td>2s</td>
+</tr>
+<tr>
+<td>3</td>
+<td>4s</td>
+</tr>
+<tr>
+<td>4</td>
+<td>8s</td>
+</tr>
+<tr>
+<td>5–10</td>
+<td>16s (capped)</td>
+</tr>
+</tbody>
+</table>
+<p>After <strong>10 consecutive failures</strong> (total worst-case budget: 111s) the worker emits an <code>ERROR</code> log line containing the <code>manual_intervention_required</code> marker and drops the block hash from the channel. A fresh notification arriving later starts a new counter from zero.</p>
+<p><strong>Counter reset paths:</strong></p>
+<ul>
+<li><code>setTxMinedStatus</code> returns nil (successful mark): counter deleted.</li>
+<li><code>MinedSet</code> is already true when the worker dequeues (block was completed by another path): counter deleted.</li>
+<li>Block returns <code>ErrBlockNotFound</code> (block is gone): counter deleted.</li>
+<li>Drop after <code>setMinedMaxRetries</code>: counter deleted; future notifications restart fresh.</li>
+</ul>
+<p><strong>Observability.</strong></p>
+<ul>
+<li><code>teranode_blockvalidation_setmined_retry_total{blockhash}</code> (counter) — incremented on every retry. Alert when a single label series approaches the retry ceiling.</li>
+<li><code>teranode_blockvalidation_setmined_drops_total{blockhash}</code> (counter) — incremented when the worker drops a block after exceeding retries. Any non-zero value is page-worthy.</li>
+<li>Log marker: grep <code>manual_intervention_required</code> in the blockvalidation service logs for dropped block hashes.</li>
+</ul>
+<p><strong>Operator runbook for <code>manual_intervention_required</code>.</strong></p>
+<ol>
+<li>Identify the block hash from the log line.</li>
+<li>Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's <code>blockID</code> in its <code>blockIDs</code> slice. Drift here is the signal.</li>
+<li>If the block is on the longest chain and has missing tags, repair via a targeted re-run of <code>SetMinedMulti</code> for the affected txs (use the maintenance CLI; do NOT bypass the coverage check).</li>
+<li>After repair, re-trigger marking by re-publishing <code>NotificationType_BlockSubtreesSet</code> for the block hash (blockchain service <code>SetBlockSubtreesSet</code>). The worker counter is already cleared from the drop, so the new attempt starts fresh.</li>
+<li>If <code>block_validation_setmined_drops_total</code> keeps incrementing across a cluster after deploy, <strong>stop the rollout</strong> and audit <code>block_ids</code> data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.</li>
+</ol>
+<p>The label cardinality cost of <code>{blockhash}</code> is intentional: a per-block alert is the only useful operator signal for "this specific block is unrecoverable". Once repaired and the counter stops incrementing, the series naturally falls out of recent windows.</p>
 <blockquote>
 <p><strong>For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the <a href="../../features/two_phase_commit/">Two-Phase Transaction Commit Process</a> documentation.</strong>
 </p>
