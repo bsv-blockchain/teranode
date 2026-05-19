@@ -504,16 +504,36 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 	return nil
 }
 
+// setMultiScratch is the per-call working memory used by ImprovedCache.SetMulti
+// on the bucket-batching path. Held in setMultiScratchPool so the ~400 KB of
+// outer slice headers (two [BucketsCount][][]byte plus a [BucketsCount]int
+// counts vector) are reused across calls instead of allocated every time.
+//
+// The hashes slice is kept as a variable-length []uint64 and re-grown only
+// when a batch larger than any prior batch arrives. The fixed-size arrays
+// rely on BucketsCount being a compile-time constant.
+type setMultiScratch struct {
+	hashes []uint64
+	counts [BucketsCount]int
+	keys   [BucketsCount][][]byte
+	values [BucketsCount][][]byte
+}
+
+var setMultiScratchPool = sync.Pool{
+	New: func() any { return &setMultiScratch{} },
+}
+
 // SetMulti stores multiple (k, v) entries in the cache, for different values.
 //
 // Implementation note: keys are pre-hashed and counted per bucket in a first
 // pass so that each per-bucket sub-slice can be allocated at its exact
 // capacity in the second pass. The previous implementation grew each
 // per-bucket sub-slice via append(), producing a cap-doubling chain
-// (1 → 2 → 4 → …) for every non-empty bucket — heap profiling on the
+// (1 → 2 → 4 → …) for every non-empty bucket. The outer per-bucket scratch
+// is reused via setMultiScratchPool so the ~400 KB of [BucketsCount][][]byte
+// headers do not allocate on every call — heap profiling on the
 // cache-write-back path attributed multi-TB / 45 s of allocations to that
-// growth chain. Two-pass counting trades one extra walk of keys (and one
-// []uint64 for hashes) for zero growth-time allocations.
+// outer scratch.
 func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 	if len(keys) != len(values) {
 		return errors.NewProcessingError("keys and values length mismatch; got %d keys and %d values", len(keys), len(values))
@@ -527,48 +547,67 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		return nil
 	}
 
-	hashes := make([]uint64, len(keys))
-	counts := make([]int, BucketsCount)
+	s := setMultiScratchPool.Get().(*setMultiScratch)
+	// Reset on return so the pool does not pin the per-bucket inner sub-slices
+	// (and the user keys/values they reference) past this call. counts is
+	// zeroed wholesale; keys/values are nil'd only for the buckets we actually
+	// populated (cheap walk via counts).
+	defer func() {
+		for i, n := range s.counts {
+			if n > 0 {
+				s.keys[i] = nil
+				s.values[i] = nil
+			}
+		}
+
+		clear(s.counts[:])
+		setMultiScratchPool.Put(s)
+	}()
+
+	// Re-grow hashes only when a larger batch arrives. Smaller batches reuse
+	// the previously-grown backing array via reslicing.
+	if cap(s.hashes) < len(keys) {
+		s.hashes = make([]uint64, len(keys))
+	} else {
+		s.hashes = s.hashes[:len(keys)]
+	}
 
 	// Pass 1: hash + count.
 	for i, key := range keys {
 		h := xxhash.Sum64(key)
-		hashes[i] = h
-		counts[h%BucketsCount]++
+		s.hashes[i] = h
+		s.counts[h%BucketsCount]++
 	}
 
-	batchedKeys := make([][][]byte, BucketsCount)
-	batchedValues := make([][][]byte, BucketsCount)
-
 	// Pre-size each non-empty bucket sub-slice exactly.
-	for i, c := range counts {
-		if c == 0 {
+	for i, n := range s.counts {
+		if n == 0 {
 			continue
 		}
 
-		batchedKeys[i] = make([][]byte, 0, c)
-		batchedValues[i] = make([][]byte, 0, c)
+		s.keys[i] = make([][]byte, 0, n)
+		s.values[i] = make([][]byte, 0, n)
 	}
 
 	// Pass 2: scatter. Reusing the cached hashes avoids re-running xxhash on
 	// every key. Append never grows because cap was set above.
 	for i, key := range keys {
-		b := hashes[i] % BucketsCount
-		batchedKeys[b] = append(batchedKeys[b], key)
-		batchedValues[b] = append(batchedValues[b], values[i])
+		b := s.hashes[i] % BucketsCount
+		s.keys[b] = append(s.keys[b], key)
+		s.values[b] = append(s.values[b], values[i])
 	}
 
 	g := errgroup.Group{}
 
-	for bucketIdx := range batchedKeys {
-		if counts[bucketIdx] == 0 {
+	for bucketIdx := range s.keys {
+		if s.counts[bucketIdx] == 0 {
 			continue
 		}
 
 		bucketIdx := bucketIdx
 
 		g.Go(func() error {
-			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
+			c.buckets[bucketIdx].SetMulti(s.keys[bucketIdx], s.values[bucketIdx])
 			return nil
 		})
 	}
