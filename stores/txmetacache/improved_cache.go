@@ -89,7 +89,11 @@ const (
 	minSlabBytesPerMmap = minSlabChunks * ChunkSize // keep in sync with minSlabChunks
 )
 
-const smallSetMultiBatchThreshold = 32
+// smallSetMultiBatchThreshold gates SetMulti's two paths: at or below this
+// size, keys are written sequentially via per-key Set on the caller's
+// goroutine. Above it, keys are bucketed and dispatched to one goroutine
+// per non-empty bucket.
+const smallSetMultiBatchThreshold = 256
 
 func mapCapacityPerBucket() int {
 	return max(1, MapInitialCapacity/BucketsCount)
