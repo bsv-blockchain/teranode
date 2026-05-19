@@ -14,6 +14,82 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// ssrfSafeDialer wraps the default dialer and rejects connections to private/loopback IPs
+// after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal check
+// in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
+// hostname resolves to 10.x or 127.x only at dial time.
+//
+// Loopback and RFC1918 ranges are intentionally blocked here because the dialer-level check
+// is specifically for hostnames that resolve to private IPs (SSRF via DNS). The static
+// ValidateURL check still allows explicit private-IP literals for backwards compatibility
+// with direct peer-IP URLs; if that policy changes, update isBlockedIP.
+var ssrfSafeDialer = &net.Dialer{
+	Timeout:   30 * time.Second,
+	KeepAlive: 30 * time.Second,
+}
+
+// ssrfDialContext wraps ssrfSafeDialer.DialContext and rejects resolved addresses that
+// fall into loopback or RFC1918 ranges. It is installed as the Transport.DialContext for
+// httpClient so that every outgoing connection is checked, including those that follow
+// HTTP redirects.
+func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if !ssrfProtectionEnabled {
+		return ssrfSafeDialer.DialContext(ctx, network, addr)
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
+	}
+
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isBlockedDialIP(ip) {
+			return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a blocked IP", ipStr, host)
+		}
+	}
+
+	return ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+}
+
+// isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
+// came from a peer-controlled URL. Unlike isBlockedIP (which only guards link-local for
+// the static ValidateURL pre-check), this also blocks loopback and RFC1918 ranges because
+// a peer should never be able to make us dial cluster-internal services.
+func isBlockedDialIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"fc00::/7",   // IPv6 unique-local
+		"fe80::/10",  // IPv6 link-local
+		"::1/128",    // IPv6 loopback
+	}
+	for _, cidrStr := range privateRanges {
+		_, cidr, err := net.ParseCIDR(cidrStr)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
 var (
 	// httpRequestTimeout defines the default HTTP request timeout in milliseconds
 	// when no deadline is set on the context.
@@ -27,14 +103,29 @@ var (
 	// httpClient is configured with connection pooling optimized for high-concurrency
 	// operations like P2P catchup. Default MaxIdleConnsPerHost=2 is far too low for catchup
 	// operations that can have 128+ concurrent requests per peer (16 workers * 8 subtree fetchers).
+	//
+	// The transport uses ssrfDialContext so that DNS-resolved private/loopback IPs are
+	// rejected at dial time, closing the SSRF-via-hostname gap. CheckRedirect applies the
+	// same validation to redirect targets so a peer-controlled server cannot bounce us to
+	// an internal address.
 	httpClient = &http.Client{
 		Transport: func() *http.Transport {
 			t := http.DefaultTransport.(*http.Transport).Clone()
 			t.MaxIdleConns = 1000       // Total idle connections across all hosts (default: 100)
 			t.MaxIdleConnsPerHost = 100 // Per-host idle connections (default: 2)
 			t.MaxConnsPerHost = 200     // Per-host total connections (default: 0/unlimited)
+			t.DialContext = ssrfDialContext
 			return t
 		}(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.NewInvalidArgumentError("stopped after 10 redirects")
+			}
+			if err := ValidateURL(req.URL.String()); err != nil {
+				return errors.NewInvalidArgumentError("SSRF redirect check: %v", err)
+			}
+			return nil
+		},
 	}
 )
 
@@ -174,13 +265,19 @@ func ValidateURL(rawURL string) error {
 		return nil
 	}
 
+	// Reject credentials embedded in the URL (e.g. http://user:pass@host/). Userinfo
+	// has no legitimate use here and can be used to bypass auth or confuse logging.
+	if parsed.User != nil {
+		return errors.NewInvalidArgumentError("URL must not contain userinfo (credentials)")
+	}
+
 	hostname := parsed.Hostname()
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("URL has no hostname")
 	}
 
-	// Check IP literals directly (no DNS resolution to avoid test/latency issues).
-	// Hostnames that resolve to link-local at runtime will be caught by the OS/network layer.
+	// Check IP literals directly. DNS-resolved addresses are validated later by
+	// ssrfDialContext at connection time.
 	if ip := net.ParseIP(hostname); ip != nil {
 		if isBlockedIP(ip) {
 			return errors.NewInvalidArgumentError("URL contains blocked IP address %s", ip.String())
