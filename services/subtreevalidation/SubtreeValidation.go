@@ -899,6 +899,11 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
 	}
 
+	parsedBase, err := url.Parse(baseURL)
+	if err != nil || (parsedBase.Scheme != "http" && parsedBase.Scheme != "https") {
+		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] invalid baseURL '%s' - must be a valid http/https URL", subtreeHash.String(), baseURL)
+	}
+
 	start := gocore.CurrentTime()
 
 	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
