@@ -44,7 +44,7 @@ type HTTP struct {
 	e                   *echo.Echo
 	startTime           time.Time
 	privKey             crypto.PrivKey
-	peerTierCache       *peerTierCache
+	peerAuth            *peerAuthVerifier
 	rateLimiters        []*tieredRateLimiter
 }
 
@@ -188,12 +188,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	// Peer authentication — verifies Ed25519 signed requests and sets peer_tier in context.
-	// The peerCache refresh goroutine is started in Start() when a context is available.
-	var peerCache *peerTierCache
+	// The verifier owns the tier cache and the replay cache; both are started in
+	// Start() when a context is available.
+	var peerAuth *peerAuthVerifier
 	p2pClient := repo.GetP2PClient()
 	if p2pClient != nil {
-		peerCache = newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
-		e.Use(peerAuthMiddleware(logger, peerCache))
+		peerCache := newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
+		peerAuth = newPeerAuthVerifier(logger, peerCache)
+		e.Use(peerAuth.Middleware())
 	}
 
 	// Always-on access logging with Prometheus metrics.
@@ -223,13 +225,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	h := &HTTP{
-		logger:        logger,
-		settings:      tSettings,
-		repository:    repo,
-		e:             e,
-		startTime:     time.Now(),
-		peerTierCache: peerCache,
-		rateLimiters:  rateLimiters,
+		logger:       logger,
+		settings:     tSettings,
+		repository:   repo,
+		e:            e,
+		startTime:    time.Now(),
+		peerAuth:     peerAuth,
+		rateLimiters: rateLimiters,
 	}
 
 	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
@@ -525,8 +527,8 @@ func (h *HTTP) Init(_ context.Context) error {
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	// Start background goroutines (all stop when ctx is cancelled).
-	if h.peerTierCache != nil {
-		h.peerTierCache.Start(ctx)
+	if h.peerAuth != nil {
+		h.peerAuth.Start(ctx)
 	}
 	for _, rl := range h.rateLimiters {
 		rl.StartCleanup(ctx)

@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -36,6 +37,15 @@ const (
 // hosts will fail loudly rather than open a wide replay window; loose enough
 // to survive normal multi-second clock jitter on well-NTP'd infrastructure.
 const freshnessWindowSeconds = 10
+
+// replayCacheTTL is how long a seen (pubkey, signature) pair is remembered.
+// It must exceed freshnessWindowSeconds so that an attacker can't outlast the
+// cache by replaying right at the edge of the window.
+const replayCacheTTL = 15 * time.Second
+
+// replayCacheCapacity bounds memory usage under a signature-flood attack.
+// At ~70 bytes per entry (key + ttlcache overhead) this is ~7 MB worst case.
+const replayCacheCapacity = 100_000
 
 // peerAuthHeaderTimestamp / Signature / PubKey are the request headers a
 // signed peer must set. The body-digest header is util.PeerAuthBodyDigestHeader.
@@ -136,9 +146,43 @@ func (c *peerTierCache) GetTier(id peer.ID) peerTier {
 	return tier
 }
 
-// peerAuthMiddleware returns Echo middleware that authenticates incoming requests
-// using Ed25519 peer signatures (v2 signed-payload format) and sets the "peer_tier"
-// context value.
+// peerAuthVerifier holds the shared state used by the peer-auth middleware:
+// the tier cache (peer registry snapshot) and the replay cache. Cache
+// goroutines are started via Start(ctx) and stopped when ctx is cancelled.
+type peerAuthVerifier struct {
+	logger      ulogger.Logger
+	tierCache   *peerTierCache
+	replayCache *ttlcache.Cache[string, struct{}]
+}
+
+// newPeerAuthVerifier constructs a verifier with its own replay cache.
+func newPeerAuthVerifier(logger ulogger.Logger, tierCache *peerTierCache) *peerAuthVerifier {
+	return &peerAuthVerifier{
+		logger:    logger,
+		tierCache: tierCache,
+		replayCache: ttlcache.New[string, struct{}](
+			ttlcache.WithTTL[string, struct{}](replayCacheTTL),
+			ttlcache.WithCapacity[string, struct{}](replayCacheCapacity),
+		),
+	}
+}
+
+// Start launches background goroutines for the tier and replay caches. They
+// stop when ctx is cancelled.
+func (v *peerAuthVerifier) Start(ctx context.Context) {
+	if v.tierCache != nil {
+		v.tierCache.Start(ctx)
+	}
+	go v.replayCache.Start()
+	go func() {
+		<-ctx.Done()
+		v.replayCache.Stop()
+	}()
+}
+
+// Middleware returns Echo middleware that authenticates incoming requests
+// using Ed25519 peer signatures (v2 signed-payload format) and sets the
+// "peer_tier" context value.
 //
 // Signed payload format (see util.buildSignedPayload):
 //
@@ -155,7 +199,7 @@ func (c *peerTierCache) GetTier(id peer.ID) peerTier {
 // All error paths fall through with tierUnverified (fail open). NTP drift
 // outside the freshness window is treated as an auth failure; operators should
 // keep clocks within ±5s of UTC.
-func peerAuthMiddleware(logger ulogger.Logger, cache *peerTierCache) echo.MiddlewareFunc {
+func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			c.Set("peer_tier", tierUnverified)
@@ -192,6 +236,13 @@ func peerAuthMiddleware(logger ulogger.Logger, cache *peerTierCache) echo.Middle
 				return next(c)
 			}
 
+			// Replay check: hash (pubkey, signature) for a short fixed key and
+			// reject anything we've already seen within the TTL window.
+			replayKey := replayCacheKey(pubKeyHex, sigHex)
+			if v.replayCache.Has(replayKey) {
+				return next(c)
+			}
+
 			// Verify the body digest header against the actual body bytes.
 			// Without this step the digest is just attacker-controlled data.
 			declaredDigest := strings.ToLower(c.Request().Header.Get(util.PeerAuthBodyDigestHeader))
@@ -210,18 +261,30 @@ func peerAuthMiddleware(logger ulogger.Logger, cache *peerTierCache) echo.Middle
 				return next(c)
 			}
 
+			// Signature is valid AND fresh — record it so a re-submit within
+			// the window is rejected. Recorded after verify so a flood of
+			// invalid signatures doesn't pollute the cache.
+			v.replayCache.Set(replayKey, struct{}{}, ttlcache.DefaultTTL)
+
 			peerID, err := peer.IDFromPublicKey(pubKey)
 			if err != nil {
 				return next(c)
 			}
 
-			tier := cache.GetTier(peerID)
+			tier := v.tierCache.GetTier(peerID)
 			c.Set("peer_tier", tier)
-			logger.Debugf("[PeerAuth] authenticated peer %s as %s", peerID, tier)
+			v.logger.Debugf("[PeerAuth] authenticated peer %s as %s", peerID, tier)
 
 			return next(c)
 		}
 	}
+}
+
+// replayCacheKey returns a short fixed-length key for the (pubkey, signature)
+// pair. Using SHA-256 keeps the map keys bounded regardless of input size.
+func replayCacheKey(pubKeyHex, sigHex string) string {
+	sum := sha256.Sum256([]byte(pubKeyHex + ":" + sigHex))
+	return string(sum[:])
 }
 
 // digestRequestBody computes the lowercase hex SHA-256 of the request body and

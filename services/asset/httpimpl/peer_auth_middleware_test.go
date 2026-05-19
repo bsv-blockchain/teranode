@@ -58,7 +58,7 @@ func newAuthEcho(t *testing.T, cache *peerTierCache) (*echo.Echo, *peerTier) {
 	logger := ulogger.TestLogger{}
 	e := echo.New()
 	captured := new(peerTier)
-	e.Use(peerAuthMiddleware(logger, cache))
+	e.Use(newPeerAuthVerifier(logger, cache).Middleware())
 	e.Any("/test", func(c echo.Context) error {
 		*captured = c.Get("peer_tier").(peerTier)
 		return c.NoContent(http.StatusOK)
@@ -275,6 +275,47 @@ func TestPeerAuthMiddleware_QueryStringBound(t *testing.T) {
 	require.Equal(t, tierUnverified, *captured, "signature is bound to query string; mismatched replay must fail")
 }
 
+// TestPeerAuthMiddleware_ReplayBlocked — submitting the same signed headers
+// twice within the replay-cache TTL must succeed once and fail once.
+func TestPeerAuthMiddleware_ReplayBlocked(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	require.NoError(t, err)
+
+	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
+
+	logger := ulogger.TestLogger{}
+	verifier := newPeerAuthVerifier(logger, cache)
+	e := echo.New()
+	var capturedTier peerTier
+	e.Use(verifier.Middleware())
+	e.GET("/test", func(c echo.Context) error {
+		capturedTier = c.Get("peer_tier").(peerTier)
+		return c.NoContent(http.StatusOK)
+	})
+
+	// Sign once, then replay the same headers in a second request.
+	original := httptest.NewRequest(http.MethodGet, "/test", nil)
+	signTestRequest(t, original, privKey)
+
+	// First submission: authenticated.
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, original)
+	require.Equal(t, http.StatusOK, rec1.Code)
+	require.Equal(t, tierMiner, capturedTier)
+
+	// Replay: same headers, fresh request — must drop to unverified.
+	replay := httptest.NewRequest(http.MethodGet, "/test", nil)
+	for k, v := range original.Header {
+		replay.Header[k] = v
+	}
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, replay)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	require.Equal(t, tierUnverified, capturedTier, "second submission of the same signature must be rejected")
+}
+
 // TestPeerAuthMiddleware_BodyPassesThroughToHandler — after digest verification,
 // the handler must still receive the original body bytes.
 func TestPeerAuthMiddleware_BodyPassesThroughToHandler(t *testing.T) {
@@ -288,7 +329,7 @@ func TestPeerAuthMiddleware_BodyPassesThroughToHandler(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	e := echo.New()
 	var received []byte
-	e.Use(peerAuthMiddleware(logger, cache))
+	e.Use(newPeerAuthVerifier(logger, cache).Middleware())
 	e.POST("/test", func(c echo.Context) error {
 		buf, err := io.ReadAll(c.Request().Body)
 		if err != nil {
