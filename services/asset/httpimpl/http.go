@@ -128,9 +128,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Configure real IP extraction for reverse proxy deployments.
+	// Configure real IP extraction for reverse proxy deployments. When
+	// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed,
+	// fail loudly rather than silently falling back to "trust all private
+	// ranges" — operator typos must not weaken the trust boundary.
 	if tSettings.Asset.TrustedProxyCIDRs != "" {
 		var trustOpts []echo.TrustOption
+		var parseErrors []string
 		for _, cidrStr := range strings.Split(tSettings.Asset.TrustedProxyCIDRs, "|") {
 			cidrStr = strings.TrimSpace(cidrStr)
 			if cidrStr == "" {
@@ -138,13 +142,24 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 			}
 			_, ipNet, err := net.ParseCIDR(cidrStr)
 			if err != nil {
-				logger.Errorf("[Asset] invalid trusted proxy CIDR %q: %v", cidrStr, err)
+				parseErrors = append(parseErrors, fmt.Sprintf("%q (%v)", cidrStr, err))
 				continue
 			}
 			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
 		}
 		if len(trustOpts) == 0 {
-			logger.Warnf("[Asset] asset_trustedProxyCIDRs is set but no valid CIDRs were parsed; using default XFF extraction")
+			return nil, errors.NewConfigurationError(
+				"[Asset] asset_trustedProxyCIDRs is set but no valid CIDRs were parsed: %s",
+				strings.Join(parseErrors, ", "),
+			)
+		}
+		if len(parseErrors) > 0 {
+			// Some valid, some invalid: still fail. Mixed input is almost
+			// always a typo and silently using only the valid subset masks it.
+			return nil, errors.NewConfigurationError(
+				"[Asset] asset_trustedProxyCIDRs contains invalid entries: %s",
+				strings.Join(parseErrors, ", "),
+			)
 		}
 		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
 	} else {

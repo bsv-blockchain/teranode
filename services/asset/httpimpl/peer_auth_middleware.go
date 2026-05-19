@@ -210,6 +210,26 @@ func (v *peerAuthVerifier) Start(ctx context.Context) {
 	}()
 }
 
+// Result labels for prometheusAssetHTTPPeerAuthResult.
+const (
+	peerAuthResultOK             = "ok"
+	peerAuthResultBadSig         = "bad_sig"
+	peerAuthResultBadDigest      = "bad_digest"
+	peerAuthResultExpired        = "expired"
+	peerAuthResultReplay         = "replay"
+	peerAuthResultUnknownKey     = "unknown_key"
+	peerAuthResultNotAllowlisted = "not_allowlisted"
+)
+
+// recordAuthResult increments the auth-result counter, tolerating an uninitialised
+// metric (some tests skip metrics setup).
+func recordAuthResult(result string) {
+	if prometheusAssetHTTPPeerAuthResult == nil {
+		return
+	}
+	prometheusAssetHTTPPeerAuthResult.WithLabelValues(result).Inc()
+}
+
 // Middleware returns Echo middleware that authenticates incoming requests
 // using Ed25519 peer signatures (v2 signed-payload format) and sets the
 // "peer_tier" context value.
@@ -226,9 +246,10 @@ func (v *peerAuthVerifier) Start(ctx context.Context) {
 //     different bodies
 //   - X-Peer-Signature   — hex-encoded Ed25519 signature over the payload
 //
-// All error paths fall through with tierUnverified (fail open). NTP drift
-// outside the freshness window is treated as an auth failure; operators should
-// keep clocks within ±5s of UTC.
+// All error paths fall through with tierUnverified (fail open) and increment
+// prometheusAssetHTTPPeerAuthResult with the specific failure reason. NTP
+// drift outside the freshness window is treated as an auth failure;
+// operators should keep clocks within ±5s of UTC.
 func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -236,6 +257,8 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 
 			pubKeyHex := c.Request().Header.Get(peerAuthHeaderPubKey)
 			if pubKeyHex == "" {
+				// No auth attempted — no metric increment, this is the common
+				// path for unauthenticated public traffic.
 				return next(c)
 			}
 
@@ -243,19 +266,23 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			tsStr := c.Request().Header.Get(peerAuthHeaderTimestamp)
 			ts, err := strconv.ParseInt(tsStr, 10, 64)
 			if err != nil {
+				recordAuthResult(peerAuthResultExpired)
 				return next(c)
 			}
 			if math.Abs(float64(time.Now().Unix()-ts)) > freshnessWindowSeconds {
+				recordAuthResult(peerAuthResultExpired)
 				return next(c)
 			}
 
 			// Decode the public key.
 			pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 			if err != nil {
+				recordAuthResult(peerAuthResultBadSig)
 				return next(c)
 			}
 			pubKey, err := crypto.UnmarshalEd25519PublicKey(pubKeyBytes)
 			if err != nil {
+				recordAuthResult(peerAuthResultBadSig)
 				return next(c)
 			}
 
@@ -263,6 +290,7 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			sigHex := c.Request().Header.Get(peerAuthHeaderSignature)
 			sigBytes, err := hex.DecodeString(sigHex)
 			if err != nil {
+				recordAuthResult(peerAuthResultBadSig)
 				return next(c)
 			}
 
@@ -270,6 +298,7 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			// reject anything we've already seen within the TTL window.
 			replayKey := replayCacheKey(pubKeyHex, sigHex)
 			if v.replayCache.Has(replayKey) {
+				recordAuthResult(peerAuthResultReplay)
 				return next(c)
 			}
 
@@ -278,9 +307,11 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			declaredDigest := strings.ToLower(c.Request().Header.Get(util.PeerAuthBodyDigestHeader))
 			actualDigest, err := digestRequestBody(c.Request())
 			if err != nil {
+				recordAuthResult(peerAuthResultBadDigest)
 				return next(c)
 			}
 			if declaredDigest != actualDigest {
+				recordAuthResult(peerAuthResultBadDigest)
 				return next(c)
 			}
 
@@ -288,6 +319,7 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			payload := "v2:" + tsStr + ":" + c.Request().Host + ":" + c.Request().Method + ":" + c.Request().URL.RequestURI() + ":" + declaredDigest
 			ok, err := pubKey.Verify([]byte(payload), sigBytes)
 			if err != nil || !ok {
+				recordAuthResult(peerAuthResultBadSig)
 				return next(c)
 			}
 
@@ -298,6 +330,7 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 
 			peerID, err := peer.IDFromPublicKey(pubKey)
 			if err != nil {
+				recordAuthResult(peerAuthResultBadSig)
 				return next(c)
 			}
 
@@ -307,16 +340,25 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			// but un-allowlisted peers stay at tierUnverified — this is the
 			// authentication signal without the rate-limit privilege.
 			if _, ok := v.allowlist[peerID]; !ok {
+				recordAuthResult(peerAuthResultNotAllowlisted)
 				v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
 				return next(c)
 			}
 
 			tier := v.tierCache.GetTier(peerID)
+			if tier == tierUnverified {
+				// Peer is allowlisted but not in the registry yet (e.g. fresh
+				// connection before tier cache refresh). Treat as unknown.
+				recordAuthResult(peerAuthResultUnknownKey)
+				return next(c)
+			}
+
 			c.Set("peer_tier", tier)
 			// peer_id is consumed by the rate limiter so authenticated buckets
 			// are keyed by stable peer identity rather than the (possibly
 			// shared, possibly mobile) source IP.
 			c.Set("peer_id", peerID.String())
+			recordAuthResult(peerAuthResultOK)
 			v.logger.Debugf("[PeerAuth] authenticated peer %s as %s", peerID, tier)
 
 			return next(c)
