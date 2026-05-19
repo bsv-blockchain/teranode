@@ -86,6 +86,11 @@ func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	return args.Error(0)
 }
 
+func (m *mockCache) SetCacheMulti(keys, values [][]byte) error {
+	args := m.Called(keys, values)
+	return args.Error(0)
+}
+
 func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	args := m.Called(ctx, txs, fields)
 	return args.Error(0)
@@ -309,14 +314,14 @@ func TestServer_txmetaHandler(t *testing.T) {
 		{
 			name: "successful set operation",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
 		},
 		{
 			name: "failed set operation logs debug",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
 				l.On("Debugf", mock.Anything, mock.Anything).Return()
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
@@ -356,7 +361,7 @@ func TestServer_txmetaHandler_PreservesPerKeyOrdering(t *testing.T) {
 		operations  []string
 	)
 
-	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		operationMu.Lock()
 		defer operationMu.Unlock()
 		operations = append(operations, "add")
@@ -407,8 +412,8 @@ func TestServer_txmetaHandler_CaughtUpModeDropsOnFullQueue(t *testing.T) {
 	// Pretend workers are already initialized; an unbuffered channel with no
 	// reader is always "full" for a non-blocking send.
 	server.txmetaWorkerInitOnce.Do(func() {})
-	server.txmetaWorkerQueues = []chan txmetaWorkItem{
-		make(chan txmetaWorkItem),
+	server.txmetaWorkerQueues = []chan *txmetaShardBatch{
+		make(chan *txmetaShardBatch),
 	}
 
 	hash := chainhash.Hash{0}
@@ -428,11 +433,11 @@ func TestServer_txmetaHandler_StartupModeBlocksUntilDrained(t *testing.T) {
 	// Latch defaults to false (startup mode).
 
 	server.txmetaWorkerInitOnce.Do(func() {})
-	ch := make(chan txmetaWorkItem, 1)
-	server.txmetaWorkerQueues = []chan txmetaWorkItem{ch}
+	ch := make(chan *txmetaShardBatch, 1)
+	server.txmetaWorkerQueues = []chan *txmetaShardBatch{ch}
 
 	// Pre-fill the queue. Any further send blocks until a reader appears.
-	ch <- txmetaWorkItem{}
+	ch <- &txmetaShardBatch{}
 
 	// Drain a single item after a short delay; this should unblock the handler.
 	go func() {
@@ -462,8 +467,8 @@ func TestServer_txmetaHandler_StartupModeUnblocksOnContextCancel(t *testing.T) {
 	}
 
 	server.txmetaWorkerInitOnce.Do(func() {})
-	ch := make(chan txmetaWorkItem) // unbuffered, no reader -> always blocks
-	server.txmetaWorkerQueues = []chan txmetaWorkItem{ch}
+	ch := make(chan *txmetaShardBatch) // unbuffered, no reader -> always blocks
+	server.txmetaWorkerQueues = []chan *txmetaShardBatch{ch}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -485,7 +490,7 @@ func TestServer_txmetaHandler_StartupModeUnblocksOnContextCancel(t *testing.T) {
 func TestServer_txmetaHandler_LatchFlipsAtHighWaterMark(t *testing.T) {
 	mockLogger := &mockLogger{}
 	mockCache := &mockCache{}
-	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
 	mockLogger.On("Infof", mock.Anything, mock.Anything).Return()
 
 	server := &Server{
@@ -516,7 +521,7 @@ func TestServer_txmetaHandler_LatchFlipsAtHighWaterMark(t *testing.T) {
 func TestServer_txmetaHandler_LatchIgnoredWhenHighWaterMarkUnset(t *testing.T) {
 	mockLogger := &mockLogger{}
 	mockCache := &mockCache{}
-	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
 
 	server := &Server{
 		logger:    mockLogger,
@@ -542,7 +547,7 @@ func TestServer_txmetaHandler_LatchIgnoredWhenHighWaterMarkUnset(t *testing.T) {
 func TestServer_txmetaHandler_LatchIsOneWay(t *testing.T) {
 	mockLogger := &mockLogger{}
 	mockCache := &mockCache{}
-	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
 	mockLogger.On("Infof", mock.Anything, mock.Anything).Return()
 
 	server := &Server{

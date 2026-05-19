@@ -137,7 +137,7 @@ type Server struct {
 	// txmeta worker pool state.
 	txmetaWorkerInitOnce sync.Once
 	txmetaWorkerCancel   context.CancelFunc
-	txmetaWorkerQueues   []chan txmetaWorkItem
+	txmetaWorkerQueues   []chan *txmetaShardBatch
 	txmetaWorkerWg       sync.WaitGroup
 	// txmetaCaughtUp is a one-way latch. While false, the txmeta handler blocks on
 	// the shard worker queues so backfill cannot drop messages. The latch flips
