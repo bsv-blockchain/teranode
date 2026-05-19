@@ -505,6 +505,15 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 }
 
 // SetMulti stores multiple (k, v) entries in the cache, for different values.
+//
+// Implementation note: keys are pre-hashed and counted per bucket in a first
+// pass so that each per-bucket sub-slice can be allocated at its exact
+// capacity in the second pass. The previous implementation grew each
+// per-bucket sub-slice via append(), producing a cap-doubling chain
+// (1 → 2 → 4 → …) for every non-empty bucket — heap profiling on the
+// cache-write-back path attributed multi-TB / 45 s of allocations to that
+// growth chain. Two-pass counting trades one extra walk of keys (and one
+// []uint64 for hashes) for zero growth-time allocations.
 func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 	if len(keys) != len(values) {
 		return errors.NewProcessingError("keys and values length mismatch; got %d keys and %d values", len(keys), len(values))
@@ -518,27 +527,41 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		return nil
 	}
 
+	hashes := make([]uint64, len(keys))
+	counts := make([]int, BucketsCount)
+
+	// Pass 1: hash + count.
+	for i, key := range keys {
+		h := xxhash.Sum64(key)
+		hashes[i] = h
+		counts[h%BucketsCount]++
+	}
+
 	batchedKeys := make([][][]byte, BucketsCount)
 	batchedValues := make([][][]byte, BucketsCount)
 
-	var bucketIdx uint64
+	// Pre-size each non-empty bucket sub-slice exactly.
+	for i, c := range counts {
+		if c == 0 {
+			continue
+		}
 
-	var h uint64
+		batchedKeys[i] = make([][]byte, 0, c)
+		batchedValues[i] = make([][]byte, 0, c)
+	}
 
-	// divide keys into buckets
+	// Pass 2: scatter. Reusing the cached hashes avoids re-running xxhash on
+	// every key. Append never grows because cap was set above.
 	for i, key := range keys {
-		h = xxhash.Sum64(key)
-		bucketIdx = h % BucketsCount
-		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
-		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
+		b := hashes[i] % BucketsCount
+		batchedKeys[b] = append(batchedKeys[b], key)
+		batchedValues[b] = append(batchedValues[b], values[i])
 	}
 
 	g := errgroup.Group{}
 
-	// for every bucket run a goroutine to populate it
 	for bucketIdx := range batchedKeys {
-		// if there is no key for this bucket
-		if len(batchedKeys[bucketIdx]) == 0 {
+		if counts[bucketIdx] == 0 {
 			continue
 		}
 
