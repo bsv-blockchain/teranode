@@ -591,7 +591,15 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % BucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		return errors.NewNotFoundError("key %v not found in cache", k, errors.ErrNotFound)
+		// Return the codebase-wide ErrNotFound sentinel rather than a fresh
+		// formatted error. Profiling showed ~10% of CPU on the cache hot path
+		// went into errors.NewNotFoundError("key %v ...", k, ErrNotFound) —
+		// fmt.Errorf on the byte-slice key plus runtime.Caller stack capture
+		// inside teranode/errors.New — all of which the caller's
+		// errors.Is(err, errors.ErrNotFound) check discards. Reusing the
+		// existing sentinel (treated as immutable across the codebase, like
+		// the other errors.Err* values) avoids allocating a parallel one.
+		return errors.ErrNotFound
 	}
 
 	return nil

@@ -1575,15 +1575,29 @@ func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeigh
 		return nil, err
 	}
 
-	// Corrupt TxInpoints: add an extra parent hash without a corresponding Idxs entry.
-	// This causes TxInpoints.Serialize() to return ErrParentTxHashesMismatch,
-	// which makes MetaBytes() fail inside sendTxMetaToKafka.
-	metaData.TxInpoints.ParentTxHashes = append(metaData.TxInpoints.ParentTxHashes, chainhash.Hash{0xDE, 0xAD})
+	// Corrupt TxInpoints: append extra parent hashes so that ParentTxHashes is
+	// strictly longer than the internal packed vout layout (one count + per-parent
+	// vouts). go-subtree v1.4.1's Serialize fails fast with ErrParentTxHashesMismatch
+	// when len(voutIdxs) < len(ParentTxHashes); v1.3.x checked an exact equality,
+	// so a single appended hash used to suffice. Adding three keeps the test
+	// portable across both checks.
+	metaData.TxInpoints.ParentTxHashes = append(
+		metaData.TxInpoints.ParentTxHashes,
+		chainhash.Hash{0xDE, 0xAD},
+		chainhash.Hash{0xBE, 0xEF},
+		chainhash.Hash{0xCA, 0xFE},
+	)
+
 	return metaData, nil
 }
 
 func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *testing.T) {
 	tracing.SetupMockTracer()
+	// sendTxMetaToKafka records to prometheusValidatorSendToBlockValidationKafka,
+	// which is registered lazily via sync.Once in initPrometheusMetrics. Without
+	// this call the histogram is nil and .Observe panics when the test is the
+	// first (or only) Validator test in the run.
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
