@@ -3118,7 +3118,7 @@ func createValidSubtreeMetadata(subtree *subtreepkg.Subtree) ([]byte, error) {
 	// Initialize TxInpoints array for all nodes up to Length()
 	for i := 0; i < subtree.Length(); i++ {
 		// Create empty TxInpoints for all nodes (including root)
-		txInpoints := subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
+		txInpoints := subtreepkg.NewTxInpoints()
 		subtreeMeta.TxInpoints[i] = txInpoints
 	}
 
@@ -3152,7 +3152,7 @@ func createSubtreeMetadataWithParents(subtree *subtreepkg.Subtree, nodeIndex int
 
 			subtreeMeta.TxInpoints[i] = txInpoints
 		} else {
-			subtreeMeta.TxInpoints[i] = subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
+			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
 		}
 	}
 
@@ -4040,7 +4040,7 @@ func CreateValidSubtreeMetadata(subtree *subtreepkg.Subtree) ([]byte, error) {
 
 		// If TxInpoints haven't been set for this node, create empty ones
 		if subtreeMeta.TxInpoints[i].ParentTxHashes == nil {
-			subtreeMeta.TxInpoints[i] = subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
+			subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
 		}
 	}
 
@@ -4482,7 +4482,7 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 		for i := 0; i < subtree.Length(); i++ {
 			// Skip coinbase placeholder in first subtree
 			if s == 0 && i == 0 {
-				subtreeMeta.TxInpoints[i] = subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
+				subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
 				continue
 			}
 
@@ -4507,7 +4507,7 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 
 				subtreeMeta.TxInpoints[i] = ti
 			} else {
-				subtreeMeta.TxInpoints[i] = subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
+				subtreeMeta.TxInpoints[i] = subtreepkg.NewTxInpoints()
 			}
 		}
 
