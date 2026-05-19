@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -420,6 +423,59 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		assert.Nil(t, response)
 		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
 	})
+}
+
+// TestCheckBlockSubtrees_OversizedBody verifies that the peer-fetch fallback at
+// check_block_subtrees.go:218 refuses to allocate a response body larger than
+// MaximumMerkleItemsPerSubtree * HashSize. Pre-fix a malicious peer could OOM the node by
+// streaming oversized bytes inside the request window; post-fix the chain surfaces ErrExternal.
+func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-oversized-checkblock-subtree"))
+
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	response, err := server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal in chain, got %v", err)
 }
 
 func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
@@ -2586,5 +2642,35 @@ func TestBuildParentMetadata(t *testing.T) {
 		meta, exists := result[*tx1.TxIDChainHash()]
 		assert.True(t, exists)
 		assert.Equal(t, uint32(100), meta.BlockHeight)
+	})
+}
+
+func TestValidateSubtreeLeafCount(t *testing.T) {
+	subtreeHash := chainhash.Hash{0x01, 0x02, 0x03}
+
+	t.Run("UnderCap", func(t *testing.T) {
+		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 3, 4))
+	})
+
+	t.Run("AtCap", func(t *testing.T) {
+		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 4, 4))
+	})
+
+	t.Run("OverCap", func(t *testing.T) {
+		err := validateSubtreeLeafCount(subtreeHash, 5, 4)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.Contains(t, err.Error(), subtreeHash.String())
+		require.Contains(t, err.Error(), "exceeds policy max")
+	})
+
+	t.Run("ZeroLeaves", func(t *testing.T) {
+		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 0, 4))
+	})
+
+	t.Run("LargeOverflow", func(t *testing.T) {
+		err := validateSubtreeLeafCount(subtreeHash, 1<<30, 1<<20)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
 	})
 }

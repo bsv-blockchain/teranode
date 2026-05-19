@@ -1531,13 +1531,44 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 }
 
 func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJob []*subtreepkg.Subtree, subtreeHashes []chainhash.Hash, coinbaseTxIDHash *chainhash.Hash) (*chainhash.Hash, error) {
+	// Mirror model.Block.CheckMerkleRoot's Length-based lift so blocks produced
+	// here validate after a disk round-trip. The first subtree's Length() is the
+	// canonical full size; if the final subtree is shorter, replace its hash
+	// with the lifted root computed against the first subtree's height.
+	// subtreeHashes is mutated in place because the downstream
+	// computeCoinbaseBUMP call must see the same hashes that the topTree was
+	// built from.
+	if len(subtreesInJob) > 1 {
+		first := subtreesInJob[0]
+		last := subtreesInJob[len(subtreesInJob)-1]
+
+		if last.Length() < first.Length() {
+			liftedRoot, err := last.RootHashPadded(first.Height)
+			if err != nil {
+				return nil, errors.NewProcessingError("[BlockAssembly][%s] failed lifting final subtree", jobID, err)
+			}
+
+			subtreeHashes[len(subtreeHashes)-1] = *liftedRoot
+		}
+	}
+
 	// Create a new subtree with the subtreeHashes of the subtrees
 	topTree, err := subtreepkg.NewTreeByLeafCount(subtreepkg.CeilPowerOfTwo(len(subtreesInJob)))
 	if err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err)
 	}
 
+	// Mirror model.Block.CheckMerkleRoot's CVE-2012-2459-style duplicate detection
+	// so assembly cannot silently emit a block the validator will reject.
+	seen := make(map[chainhash.Hash]struct{}, len(subtreeHashes))
+
 	for _, hash := range subtreeHashes {
+		if _, dup := seen[hash]; dup {
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] duplicate subtree root hash in top-level merkle tree: %s", jobID, hash.String())
+		}
+
+		seen[hash] = struct{}{}
+
 		if err = topTree.AddNode(hash, 1, 0); err != nil {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to add node to topTree", jobID, err)
 		}

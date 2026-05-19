@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -505,6 +506,139 @@ func TestDoHTTPRequestJSONResponse(t *testing.T) {
 	assert.Equal(t, float64(123), parsed["id"]) // JSON numbers become float64
 	assert.Equal(t, "test", parsed["name"])
 	assert.Equal(t, true, parsed["active"])
+}
+
+func TestDoHTTPRequestBounded_HappyPath(t *testing.T) {
+	responseData := []byte(`{"message": "success"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+}
+
+func TestDoHTTPRequestBounded_POST(t *testing.T) {
+	requestBody := []byte(`{"data": "test"}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Equal(t, requestBody, body)
+
+		w.WriteHeader(http.StatusOK)
+		_, err = w.Write([]byte(`{"processed": true}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024, requestBody)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"processed": true}`, string(response))
+}
+
+func TestDoHTTPRequestBounded_BodyEqualToLimit(t *testing.T) {
+	// Boundary case: server returns exactly maxBytes — must succeed.
+	const limit = 32
+	responseData := []byte(strings.Repeat("a", limit))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+	assert.Len(t, response, limit)
+}
+
+func TestDoHTTPRequestBounded_BodyExceedsLimit(t *testing.T) {
+	// Server returns more than maxBytes — must return a typed error and not allocate the whole body.
+	const limit = 16
+	responseData := []byte(strings.Repeat("x", limit*4))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+	assert.Contains(t, err.Error(), "exceeds")
+}
+
+func TestDoHTTPRequestBounded_BodyOneByteOverLimit(t *testing.T) {
+	// Off-by-one boundary: maxBytes+1 bytes must fail.
+	const limit = 32
+	responseData := []byte(strings.Repeat("b", limit+1))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal))
+}
+
+func TestDoHTTPRequestBounded_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, err := w.Write([]byte("not found"))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}
+
+func TestDoHTTPRequestBounded_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("slow response"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+	require.Error(t, err)
 }
 
 // Benchmark tests

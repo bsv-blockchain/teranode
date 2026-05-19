@@ -83,6 +83,55 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	}
 }
 
+// DoHTTPRequestBounded behaves like DoHTTPRequest but caps the response body at maxBytes.
+//
+// Why a separate function: DoHTTPRequest uses io.ReadAll on a peer-supplied response, so a
+// hostile peer can stream arbitrary bytes within the request timeout and force the node to
+// allocate gigabytes. Callers that fetch peer-controlled data (subtree fetches, etc.) must
+// bound the allocation. We read up to maxBytes+1 bytes via io.LimitReader; if the result is
+// longer than maxBytes the body was over the cap and we return ErrExternal without retaining
+// the bytes for the caller.
+func DoHTTPRequestBounded(ctx context.Context, url string, maxBytes int64, requestBody ...[]byte) ([]byte, error) {
+	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
+	defer cancelFn()
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if closeErr := bodyReaderCloser.Close(); closeErr != nil {
+			// Log the error but don't override the main return value
+		}
+	}()
+
+	bounded := io.LimitReader(bodyReaderCloser, maxBytes+1)
+
+	done := make(chan struct{})
+	var blockBytes []byte
+	var readErr error
+
+	go func() {
+		blockBytes, readErr = io.ReadAll(bounded)
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
+	case <-done:
+		if readErr != nil {
+			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
+		}
+
+		if int64(len(blockBytes)) > maxBytes {
+			return nil, errors.NewExternalError("http request [%s] response body exceeds %d bytes", url, maxBytes)
+		}
+
+		return blockBytes, nil
+	}
+}
+
 // readCloserWithCancel wraps an io.ReadCloser and calls a cancel function when closed.
 type readCloserWithCancel struct {
 	io.ReadCloser

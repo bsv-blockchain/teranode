@@ -296,7 +296,100 @@ func Test_calculateTransactionFee(t *testing.T) {
 	}
 }
 
-func Benchmark_createSubtree(b *testing.B) {
+// TestSyncManager_createSubtrees_MultiSubtreeDistribution exercises the
+// multi-subtree fill path: a 6-tx block (1 coinbase + 5 regular) partitioned
+// per the [4, 2] shape lands as subtree 0 = coinbase placeholder + 3 regular
+// (Length 4, complete) and subtree 1 = 2 regular (Length 2, complete).
+func TestSyncManager_createSubtrees_MultiSubtreeDistribution(t *testing.T) {
+	initPrometheusMetrics()
+
+	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Version:   1,
+			PrevBlock: chainhash.Hash{},
+			Timestamp: time.Now(),
+			Bits:      0x1d00ffff,
+			Nonce:     0,
+		},
+	}
+
+	coinbaseMsgTx := wire.NewMsgTx(1)
+	coinbaseMsgTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0xffffffff},
+		SignatureScript:  []byte{0x00},
+		Sequence:         0xffffffff,
+	})
+	coinbaseMsgTx.AddTxOut(&wire.TxOut{Value: 50 * 100000000, PkScript: []byte{0x76, 0xa9, 0x14}})
+	msgBlock.Transactions = append(msgBlock.Transactions, coinbaseMsgTx)
+
+	parentHash := chainhash.Hash{0x01}
+
+	for i := 0; i < 5; i++ {
+		regularMsgTx := wire.NewMsgTx(1)
+		regularMsgTx.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{Hash: parentHash, Index: uint32(i)},
+			SignatureScript:  []byte{0x00, byte(i)},
+			Sequence:         0xffffffff,
+		})
+		regularMsgTx.AddTxOut(&wire.TxOut{Value: 1000 + int64(i), PkScript: []byte{0x76, 0xa9, 0x14, byte(i)}})
+		msgBlock.Transactions = append(msgBlock.Transactions, regularMsgTx)
+	}
+
+	block := bsvutil.NewBlock(msgBlock)
+	block.SetHeight(100)
+
+	require.Equal(t, 6, len(block.Transactions()))
+
+	sm := &SyncManager{logger: ulogger.TestLogger{}}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+	require.NoError(t, sm.createTxMap(context.Background(), block, txMap))
+	require.Equal(t, 5, txMap.Length(), "createTxMap should skip the coinbase")
+
+	for _, wrapper := range txMap.Range() {
+		for _, in := range wrapper.Tx.Inputs {
+			in.PreviousTxSatoshis = 5_000
+			in.PreviousTxScript = &bscript.Script{0x76, 0xa9, 0x14}
+		}
+	}
+
+	subtreeSize, numSubtrees, finalLeafCount, err := partitionLegacyBlock(len(block.Transactions()), 4)
+	require.NoError(t, err)
+	require.Equal(t, 4, subtreeSize)
+	require.Equal(t, 2, numSubtrees)
+	require.Equal(t, 2, finalLeafCount)
+
+	subtreeSlices := make([]*subtreepkg.Subtree, numSubtrees)
+	subtreeDatas := make([]*subtreepkg.Data, numSubtrees)
+	subtreeMetas := make([]*subtreepkg.Meta, numSubtrees)
+
+	for i := 0; i < numSubtrees; i++ {
+		capacity := subtreeSize
+		if i == numSubtrees-1 && finalLeafCount < subtreeSize {
+			capacity = finalLeafCount
+		}
+
+		st, terr := subtreepkg.NewIncompleteTreeByLeafCount(capacity)
+		require.NoError(t, terr)
+
+		if i == 0 {
+			require.NoError(t, st.AddCoinbaseNode())
+		}
+
+		subtreeSlices[i] = st
+		subtreeDatas[i] = subtreepkg.NewSubtreeData(st)
+		subtreeMetas[i] = subtreepkg.NewSubtreeMeta(st)
+	}
+
+	require.NoError(t, sm.createSubtrees(context.Background(), block, txMap, subtreeSlices, subtreeDatas, subtreeMetas))
+
+	require.Equal(t, 4, subtreeSlices[0].Length(), "subtree 0 should hold coinbase + 3 regular txs")
+	require.True(t, subtreeSlices[0].IsComplete())
+	require.Equal(t, 2, subtreeSlices[1].Length(), "subtree 1 should hold 2 regular txs")
+	require.True(t, subtreeSlices[1].IsComplete())
+}
+
+func Benchmark_createSubtrees(b *testing.B) {
 	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin")
 	require.NoError(b, err)
 
@@ -316,7 +409,11 @@ func Benchmark_createSubtree(b *testing.B) {
 		subtreeData := subtreepkg.NewSubtreeData(subtree)
 		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
-		_ = sm.createSubtree(b.Context(), block, txMap, subtree, subtreeData, subtreeMeta)
+		_ = sm.createSubtrees(b.Context(), block, txMap,
+			[]*subtreepkg.Subtree{subtree},
+			[]*subtreepkg.Data{subtreeData},
+			[]*subtreepkg.Meta{subtreeMeta},
+		)
 	}
 }
 

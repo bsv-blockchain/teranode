@@ -4636,3 +4636,276 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 		fmt.Printf("\nNote: validateSubtree returned error (may be expected): %v\n", benchErr)
 	}
 }
+
+// TestCheckMerkleRoot_LiftsIncompleteFinalSubtree verifies that CheckMerkleRoot
+// accepts a block whose final subtree is incomplete by lifting its root to the
+// height of the preceding complete subtrees.
+func TestCheckMerkleRoot_LiftsIncompleteFinalSubtree(t *testing.T) {
+	// Build 258 random tx hashes: 256 in the first subtree, 2 in the second.
+	const (
+		totalTxs    = 258
+		subtreeSize = 256
+	)
+
+	block, expectedRoot := buildBlockWithSubtrees(t, subtreeSize, totalTxs)
+	block.Header.HashMerkleRoot = expectedRoot
+
+	require.NoError(t, block.CheckMerkleRoot(context.Background()))
+}
+
+// TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree verifies that
+// CheckMerkleRoot rejects a block whose middle subtree has fewer leaves than
+// the first subtree. Only the final subtree may be shorter than the first.
+func TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree(t *testing.T) {
+	// Three subtrees with leaf counts [4, 2, 4]: the middle (non-final) has
+	// fewer leaves than the first, which is illegal.
+	block := buildBlockWithMidStreamIncomplete(t)
+
+	err := block.CheckMerkleRoot(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.Contains(t, err.Error(), "only the final subtree may be incomplete")
+}
+
+// TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst verifies that
+// CheckMerkleRoot rejects a block whose final subtree contains more leaves
+// than the first subtree. The first subtree dictates the target length and
+// the final subtree must not exceed it.
+func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
+	// First subtree has 2 leaves (capacity 2), second has 4 leaves (capacity 4).
+	block := buildBlockWithFinalSubtreeLargerThanFirst(t)
+
+	err := block.CheckMerkleRoot(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
+}
+
+// TestCheckMerkleRoot_RejectsNonPowerOfTwoFinalSubtree verifies that
+// CheckMerkleRoot rejects a block whose final subtree leaf count is not a
+// power of two (lifting requires a power-of-two leaf count).
+func TestCheckMerkleRoot_RejectsNonPowerOfTwoFinalSubtree(t *testing.T) {
+	// First subtree complete (4 leaves). Final subtree has 3 leaves.
+	block := buildBlockWithNonPowerOfTwoFinal(t)
+
+	err := block.CheckMerkleRoot(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.Contains(t, err.Error(), "leaf count is not a power of two")
+}
+
+// TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo verifies that
+// CheckMerkleRoot rejects a block whose first subtree's leaf count is not a
+// power of two. The lift math depends on this invariant — without the guard a
+// peer can craft a non-power-of-two first subtree and produce a merkle root
+// that diverges from the canonical flat tree.
+func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
+	block := buildBlockWithFirstSubtreeNonPowerOfTwo(t)
+
+	err := block.CheckMerkleRoot(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
+}
+
+// buildBlockWithFirstSubtreeNonPowerOfTwo returns a Block whose first subtree
+// has 3 leaves (non-power-of-two) and second subtree is complete with 4 leaves.
+// Under the lift rules the first subtree's length is the canonical capacity, so
+// allowing a non-power-of-two value here would break the merkle-root math.
+func buildBlockWithFirstSubtreeNonPowerOfTwo(t *testing.T) *Block {
+	t.Helper()
+
+	first, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, first.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	second, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 10; i < 14; i++ {
+		require.NoError(t, second.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	return &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    newTestCoinbaseTx(t),
+		Subtrees:      []*chainhash.Hash{first.RootHash(), second.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{first, second},
+	}
+}
+
+// newTestCoinbaseTx returns a fresh coinbase tx parsed from the shared
+// CoinbaseHex constant used elsewhere in this file.
+func newTestCoinbaseTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(t, err)
+
+	return coinbase
+}
+
+// newTestBlockHeader returns a BlockHeader parsed from the shared block1Header
+// constant. Tests that build Block structs directly use this to ensure header
+// pointer fields (HashPrevBlock, Bits, HashMerkleRoot) are non-nil so that
+// error formatting via Block.String() does not panic on the failure path.
+func newTestBlockHeader(t *testing.T) *BlockHeader {
+	t.Helper()
+
+	headerBytes, err := hex.DecodeString(block1Header)
+	require.NoError(t, err)
+
+	header, err := NewBlockHeaderFromBytes(headerBytes)
+	require.NoError(t, err)
+
+	return header
+}
+
+// buildBlockWithSubtrees constructs a Block with two subtrees: a fully populated
+// first subtree of `subtreeSize` leaves and a final subtree containing the
+// remaining `totalTxs - subtreeSize` leaves (which may be fewer than
+// `subtreeSize`). It returns the block and the expected top-level merkle root
+// computed with the final subtree's root lifted to the first subtree's height.
+func buildBlockWithSubtrees(t *testing.T, subtreeSize, totalTxs int) (*Block, *chainhash.Hash) {
+	t.Helper()
+	require.Greater(t, totalTxs, subtreeSize)
+	require.LessOrEqual(t, totalTxs-subtreeSize, subtreeSize)
+
+	hashes := make([]chainhash.Hash, totalTxs)
+	for i := range hashes {
+		hashes[i] = chainhash.HashH([]byte{byte(i), byte(i >> 8)})
+	}
+
+	left, err := subtreepkg.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, err)
+
+	for i := 0; i < subtreeSize; i++ {
+		require.NoError(t, left.AddNode(hashes[i], 0, 0))
+	}
+
+	right, err := subtreepkg.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, err)
+
+	for i := subtreeSize; i < totalTxs; i++ {
+		require.NoError(t, right.AddNode(hashes[i], 0, 0))
+	}
+
+	coinbaseTx := newTestCoinbaseTx(t)
+
+	leftRoot, err := left.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	rightLifted, err := right.RootHashPadded(left.Height)
+	require.NoError(t, err)
+
+	top, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, top.AddNode(*leftRoot, 0, 0))
+	require.NoError(t, top.AddNode(*rightLifted, 0, 0))
+
+	block := &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    coinbaseTx,
+		Subtrees:      []*chainhash.Hash{left.RootHash(), right.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{left, right},
+	}
+
+	return block, top.RootHash()
+}
+
+// buildBlockWithMidStreamIncomplete returns a Block with three subtrees whose
+// leaf counts are [4, 2, 4]. The middle (non-final) subtree has fewer leaves
+// than the first, which violates the rule that only the final subtree may be
+// shorter than the first.
+func buildBlockWithMidStreamIncomplete(t *testing.T) *Block {
+	t.Helper()
+
+	first, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 0; i < 4; i++ {
+		require.NoError(t, first.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	middle, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 10; i < 12; i++ {
+		require.NoError(t, middle.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	third, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 20; i < 24; i++ {
+		require.NoError(t, third.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	return &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    newTestCoinbaseTx(t),
+		Subtrees:      []*chainhash.Hash{first.RootHash(), middle.RootHash(), third.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{first, middle, third},
+	}
+}
+
+// buildBlockWithFinalSubtreeLargerThanFirst returns a Block whose final
+// subtree contains more leaves than the first. The first subtree has 2 leaves
+// (capacity 2) and the second has 4 leaves (capacity 4), which violates the
+// rule that the final subtree must not exceed the first subtree's length.
+func buildBlockWithFinalSubtreeLargerThanFirst(t *testing.T) *Block {
+	t.Helper()
+
+	first, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		require.NoError(t, first.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	second, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 10; i < 14; i++ {
+		require.NoError(t, second.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	return &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    newTestCoinbaseTx(t),
+		Subtrees:      []*chainhash.Hash{first.RootHash(), second.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{first, second},
+	}
+}
+
+// buildBlockWithNonPowerOfTwoFinal returns a Block whose final subtree has a
+// non-power-of-two leaf count (3 leaves in a capacity-4 subtree). This
+// violates the new lift rules because RootHashPadded requires a power-of-two
+// leaf count.
+func buildBlockWithNonPowerOfTwoFinal(t *testing.T) *Block {
+	t.Helper()
+
+	first, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 0; i < 4; i++ {
+		require.NoError(t, first.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	second, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i := 10; i < 13; i++ {
+		require.NoError(t, second.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	return &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    newTestCoinbaseTx(t),
+		Subtrees:      []*chainhash.Hash{first.RootHash(), second.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{first, second},
+	}
+}

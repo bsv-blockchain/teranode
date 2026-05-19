@@ -67,7 +67,14 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 	// Note: semaphore will be released when the returned reader is closed
 
 	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-	if err == nil && subtreeDataExists {
+	if err != nil {
+		// Surface storage errors instead of falling through to the NotFound /
+		// on-demand path — otherwise an IO failure here would be silently
+		// reclassified as 404 or trigger an unnecessary regeneration attempt.
+		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		return nil, err
+	}
+	if subtreeDataExists {
 		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		if err != nil {
 			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
@@ -78,6 +85,30 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 			ReadCloser: reader,
 			sem:        repo.semGetSubtreeDataReader,
 		}, nil
+	}
+
+	// SubtreeData doesn't exist. The on-demand fallback (dualStreamWithFileCreation)
+	// regenerates the data from the underlying subtree file in a goroutine *after* the
+	// HTTP handler has committed to 200 OK. If neither the subtree nor the
+	// subtreeToCheck file is present we cannot regenerate, and the handler would
+	// otherwise emit "200 OK + empty body", which peers report as
+	// ErrSubtreeLengthMismatch. Surface a NotFound instead so the handler returns 404
+	// and callers can attempt another peer.
+	subtreeExists, existsErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if existsErr != nil {
+		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		return nil, existsErr
+	}
+	if !subtreeExists {
+		toCheckExists, toCheckErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+		if toCheckErr != nil {
+			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+			return nil, toCheckErr
+		}
+		if !toCheckExists {
+			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+			return nil, errors.NewNotFoundError("subtree %s not found", subtreeHash.String())
+		}
 	}
 
 	// File doesn't exist - create it on-demand while streaming to HTTP response

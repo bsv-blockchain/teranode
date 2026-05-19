@@ -138,6 +138,8 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nxadm/tail v1.4.11 // indirect
+	github.com/onsi/ginkgo/v2 v2.27.5 // indirect
+	github.com/onsi/gomega v1.39.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect
@@ -187,13 +189,7 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
-	// Pseudo-version pins the un-released feat(synced): add SetIfNotExistsMulti
-	// commit (bsv-blockchain/go-tx-map#114). PutMultiBucketTxInpoints in
-	// services/blockassembly/subtreeprocessor relies on this bulk method to
-	// take a single per-bucket lock instead of one Lock/Unlock pair per entry,
-	// which materially reduces moveForwardBlock CPU on the hot path. Replace
-	// with the next tagged release (>= v1.3.6) once go-tx-map#114 ships.
-	github.com/bsv-blockchain/go-tx-map v1.3.6-0.20260515143932-e509e98caded
+	github.com/bsv-blockchain/go-tx-map v1.3.7
 	github.com/bsv-blockchain/go-wire v1.2.3
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -470,5 +466,5 @@ require (
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/labstack/gommon v0.4.2
 	github.com/spf13/cobra v1.10.1 // indirect
-	github.com/yuin/gopher-lua v1.1.1 // indirect
+	github.com/yuin/gopher-lua v1.1.2 // indirect
 )

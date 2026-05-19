@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	_ "embed"
+	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -275,22 +276,87 @@ type LuaMapResponse struct {
 	// Debug      string               `json:"debug,omitempty"`
 }
 
+// Reset clears all fields of LuaMapResponse so it can be reused via a sync.Pool.
+//
+// BlockIDs MUST be nil-ed (not truncated to [:0]) because the public contract
+// observed by processBatchResultsForSetMined is "BlockIDs != nil iff the Lua
+// response actually contained a blockIDs field". parseLuaMapResponseInto only
+// writes BlockIDs when the response includes that key — error responses (e.g.
+// TX_NOT_FOUND) leave BlockIDs untouched. Truncating to [:0] across pool
+// iterations would carry forward a non-nil empty slice from a successful
+// previous record and cause the caller to insert the failed record's hash
+// into the returned map with an empty value. (See test
+// TestAerospike/aerospike_setmined_multi_partial_failure.)
+//
+// The Errors map is cleared (entries deleted) rather than nil-ed so its backing
+// buckets can be reused. parseLuaMapResponseInto explicitly checks the
+// respMap["errors"] key existence before writing, so the same nil/empty
+// contract concern does not apply — the loop body checks res.Signal and other
+// scalar fields rather than relying on r.Errors == nil semantics.
+func (r *LuaMapResponse) Reset() {
+	r.Status = ""
+	r.ErrorCode = ""
+	r.Message = ""
+	r.Signal = ""
+	r.BlockIDs = nil
+	if r.Errors != nil {
+		for k := range r.Errors {
+			delete(r.Errors, k)
+		}
+	}
+	r.ChildCount = 0
+}
+
+// luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
+// where each record allocates one response. The pool is scoped to internal hot-loop
+// callers (parseLuaMapResponseInto); the public ParseLuaMapResponse still allocates
+// fresh structs for the 12+ other callers that don't release back to the pool.
+var luaMapResponsePool = sync.Pool{
+	New: func() interface{} { return &LuaMapResponse{} },
+}
+
+// getLuaMapResponse returns a zeroed LuaMapResponse from the pool.
+func getLuaMapResponse() *LuaMapResponse {
+	return luaMapResponsePool.Get().(*LuaMapResponse)
+}
+
+// putLuaMapResponse returns a LuaMapResponse to the pool after resetting it.
+// Callers must not retain references to r or any of its fields after this call.
+func putLuaMapResponse(r *LuaMapResponse) {
+	if r == nil {
+		return
+	}
+	r.Reset()
+	luaMapResponsePool.Put(r)
+}
+
 // ParseLuaMapResponse parses the map response from Lua scripts.
 // This handles the new structured response format where Lua returns a map.
+// The returned struct is freshly allocated; callers that wish to participate
+// in pooling should use parseLuaMapResponseInto with a pool-owned destination.
 func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, error) {
+	result := &LuaMapResponse{}
+	if err := s.parseLuaMapResponseInto(response, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// parseLuaMapResponseInto parses the Lua map response into the caller-provided
+// destination. The destination must be zeroed (e.g. via Reset) before the call.
+// This permits sync.Pool-backed reuse of LuaMapResponse across hot batch loops.
+func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResponse) error {
 	// Handle the expected map response
 	respMap, ok := response.(map[interface{}]interface{})
 	if !ok {
-		return nil, errors.NewProcessingError("expected map response but got %T", response)
+		return errors.NewProcessingError("expected map response but got %T", response)
 	}
-
-	result := &LuaMapResponse{}
 
 	// Parse status
 	if status, ok := respMap["status"].(string); ok {
 		result.Status = LuaStatus(status)
 	} else {
-		return nil, errors.NewProcessingError("missing or invalid status in response")
+		return errors.NewProcessingError("missing or invalid status in response")
 	}
 
 	// Add debug field if it exists
@@ -312,20 +378,31 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 		result.Signal = LuaSignal(signal)
 	}
 
-	// Parse blockIDs (can be list or []interface{})
+	// Parse blockIDs (can be list or []interface{}). Reuse the existing slice
+	// capacity if the caller obtained `result` from a pool and it had been used
+	// previously (Reset truncates to [:0]). The presence of the blockIDs key —
+	// even an empty list — must yield a non-nil result.BlockIDs to preserve the
+	// existing observable contract.
 	if blockIDs, ok := respMap["blockIDs"]; ok {
 		switch v := blockIDs.(type) {
 		case []interface{}:
-			result.BlockIDs = make([]int, len(v))
+			switch {
+			case cap(result.BlockIDs) >= len(v) && result.BlockIDs != nil:
+				result.BlockIDs = result.BlockIDs[:len(v)]
+			case len(v) == 0:
+				result.BlockIDs = make([]int, 0)
+			default:
+				result.BlockIDs = make([]int, len(v))
+			}
 			for i, id := range v {
 				if idInt, ok := id.(int); ok {
 					result.BlockIDs[i] = idInt
 				} else {
-					return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+					return errors.NewProcessingError("invalid blockID at index %d", i)
 				}
 			}
 		default:
-			return nil, errors.NewProcessingError("invalid blockIDs type: %T", blockIDs)
+			return errors.NewProcessingError("invalid blockIDs type: %T", blockIDs)
 		}
 	}
 
@@ -333,29 +410,31 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 	if errorsField, ok := respMap["errors"]; ok {
 		errMap, ok := errorsField.(map[interface{}]interface{})
 		if !ok {
-			return nil, errors.NewProcessingError("invalid errors type: %T", errorsField)
+			return errors.NewProcessingError("invalid errors type: %T", errorsField)
 		}
 
-		result.Errors = make(map[int]LuaErrorInfo)
+		if result.Errors == nil {
+			result.Errors = make(map[int]LuaErrorInfo, len(errMap))
+		}
 		for k, v := range errMap {
 			offset, ok := k.(int)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid error offset type: %T", k)
+				return errors.NewProcessingError("invalid error offset type: %T", k)
 			}
 
 			errorObj, ok := v.(map[interface{}]interface{})
 			if !ok {
-				return nil, errors.NewProcessingError("invalid error object type: %T", v)
+				return errors.NewProcessingError("invalid error object type: %T", v)
 			}
 
 			errorCode, ok := errorObj["errorCode"].(string)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid errorCode type in error object")
+				return errors.NewProcessingError("invalid errorCode type in error object")
 			}
 
 			errorMessage, ok := errorObj["message"].(string)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid message type in error object")
+				return errors.NewProcessingError("invalid message type in error object")
 			}
 
 			errorInfo := LuaErrorInfo{
@@ -379,5 +458,5 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 		}
 	}
 
-	return result, nil
+	return nil
 }

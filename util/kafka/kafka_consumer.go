@@ -30,6 +30,10 @@ type KafkaMessage struct {
 	Partition int32
 	Offset    int64
 	Timestamp time.Time
+	// HighWaterMark is the partition's high water mark (the next offset that will be
+	// produced) at the time this fetch response was returned. Consumers can compare
+	// Offset+1 against HighWaterMark to detect "caught up to the live tail".
+	HighWaterMark int64
 }
 
 // KafkaConsumerGroupI defines the interface for Kafka consumer group operations.
@@ -460,26 +464,34 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 						continue
 					}
 
-					fetches.EachRecord(func(record *kgo.Record) {
-						kafkaMsg := &KafkaMessage{
-							Key:       record.Key,
-							Value:     record.Value,
-							Topic:     record.Topic,
-							Partition: record.Partition,
-							Offset:    record.Offset,
-							Timestamp: record.Timestamp,
-						}
+					fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+						hwm := p.HighWatermark
+						for _, record := range p.Records {
+							kafkaMsg := &KafkaMessage{
+								Key:           record.Key,
+								Value:         record.Value,
+								Topic:         record.Topic,
+								Partition:     record.Partition,
+								Offset:        record.Offset,
+								Timestamp:     record.Timestamp,
+								HighWaterMark: hwm,
+							}
 
-						if err := consumerFn(kafkaMsg); err != nil {
-							k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
-								record.Topic, record.Partition, record.Offset, err)
-							return
-						}
+							if err := consumerFn(kafkaMsg); err != nil {
+								k.Config.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
+									record.Topic, record.Partition, record.Offset, err)
+								// Continue to the next record. Skipping the
+								// uncommittedRecords append keeps the failed
+								// record from being marked done, matching the
+								// pre-refactor EachRecord behavior.
+								continue
+							}
 
-						if !k.Config.AutoCommitEnabled {
-							uncommittedMu.Lock()
-							uncommittedRecords = append(uncommittedRecords, record)
-							uncommittedMu.Unlock()
+							if !k.Config.AutoCommitEnabled {
+								uncommittedMu.Lock()
+								uncommittedRecords = append(uncommittedRecords, record)
+								uncommittedMu.Unlock()
+							}
 						}
 					})
 
@@ -684,12 +696,13 @@ func (h *inMemoryConsumerHandler) Cleanup(_ inmemorykafka.ConsumerGroupSession) 
 func (h *inMemoryConsumerHandler) ConsumeClaim(session inmemorykafka.ConsumerGroupSession, claim inmemorykafka.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
 		kafkaMsg := &KafkaMessage{
-			Key:       message.Key,
-			Value:     message.Value,
-			Topic:     message.Topic,
-			Partition: message.Partition,
-			Offset:    message.Offset,
-			Timestamp: message.Timestamp,
+			Key:           message.Key,
+			Value:         message.Value,
+			Topic:         message.Topic,
+			Partition:     message.Partition,
+			Offset:        message.Offset,
+			Timestamp:     message.Timestamp,
+			HighWaterMark: claim.HighWaterMarkOffset(),
 		}
 
 		var err error

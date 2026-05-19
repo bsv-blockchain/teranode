@@ -2282,7 +2282,8 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	server := &Server{
-		logger: logger,
+		logger:   logger,
+		settings: test.CreateBaseTestSettings(t),
 	}
 
 	baseURL := "http://test-peer:8080"
@@ -2357,6 +2358,36 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 				strings.Contains(err.Error(), "failed to fetch subtree"),
 			"Expected error to contain context cancellation or fetch failure, got: %s", err.Error())
 	})
+}
+
+// TestFetchSubtreeFromPeer_OversizedBody verifies that fetchSubtreeFromPeer refuses to allocate
+// a peer-supplied response body larger than MaximumMerkleItemsPerSubtree * HashSize.
+// Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
+func TestFetchSubtreeFromPeer_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+
+	server := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
+	baseURL := "http://test-peer:8080"
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	data, err := server.fetchSubtreeFromPeer(context.Background(), &subtreeHash, "test-peer-id", baseURL)
+
+	require.Error(t, err)
+	require.Nil(t, data)
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
 }
 
 // TestFetchSubtreeDataFromPeer tests the fetchSubtreeDataFromPeer function comprehensively

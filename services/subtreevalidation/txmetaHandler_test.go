@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -393,12 +394,18 @@ func TestServer_txmetaHandler_PreservesPerKeyOrdering(t *testing.T) {
 	assert.Equal(t, []string{"add", "delete"}, operations)
 }
 
-func TestServer_txmetaHandler_ReturnsErrorWhenQueueFull(t *testing.T) {
+// TestServer_txmetaHandler_CaughtUpModeDropsOnFullQueue verifies that once the
+// caught-up latch is set, a full shard queue causes the batch to be silently
+// abandoned (no error returned to the kafka consumer) so the failure mode is
+// logged at Warn level instead of Error.
+func TestServer_txmetaHandler_CaughtUpModeDropsOnFullQueue(t *testing.T) {
 	server := &Server{
 		logger: ulogger.TestLogger{},
 	}
+	server.txmetaCaughtUp.Store(true)
 
-	// Pretend workers are already initialized with a permanently full shard queue.
+	// Pretend workers are already initialized; an unbuffered channel with no
+	// reader is always "full" for a non-blocking send.
 	server.txmetaWorkerInitOnce.Do(func() {})
 	server.txmetaWorkerQueues = []chan txmetaWorkItem{
 		make(chan txmetaWorkItem),
@@ -408,6 +415,158 @@ func TestServer_txmetaHandler_ReturnsErrorWhenQueueFull(t *testing.T) {
 	message := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
 
 	err := server.txmetaHandler(context.Background(), message)
+	assert.NoError(t, err)
+}
+
+// TestServer_txmetaHandler_StartupModeBlocksUntilDrained verifies the startup
+// mode applies backpressure: when the shard queue is full and the latch is not
+// set, the handler waits for the worker to drain instead of dropping.
+func TestServer_txmetaHandler_StartupModeBlocksUntilDrained(t *testing.T) {
+	server := &Server{
+		logger: ulogger.TestLogger{},
+	}
+	// Latch defaults to false (startup mode).
+
+	server.txmetaWorkerInitOnce.Do(func() {})
+	ch := make(chan txmetaWorkItem, 1)
+	server.txmetaWorkerQueues = []chan txmetaWorkItem{ch}
+
+	// Pre-fill the queue. Any further send blocks until a reader appears.
+	ch <- txmetaWorkItem{}
+
+	// Drain a single item after a short delay; this should unblock the handler.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		<-ch // drain the prefill
+	}()
+
+	hash := chainhash.Hash{0}
+	message := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+
+	start := time.Now()
+	err := server.txmetaHandler(context.Background(), message)
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "handler should have blocked until drained")
+	// The new item should now be sitting in the queue.
+	assert.Len(t, ch, 1)
+}
+
+// TestServer_txmetaHandler_StartupModeUnblocksOnContextCancel verifies that a
+// startup-mode blocking send unblocks when the context is cancelled, so the
+// service shutdown is not blocked by a stuck worker.
+func TestServer_txmetaHandler_StartupModeUnblocksOnContextCancel(t *testing.T) {
+	server := &Server{
+		logger: ulogger.TestLogger{},
+	}
+
+	server.txmetaWorkerInitOnce.Do(func() {})
+	ch := make(chan txmetaWorkItem) // unbuffered, no reader -> always blocks
+	server.txmetaWorkerQueues = []chan txmetaWorkItem{ch}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	hash := chainhash.Hash{0}
+	message := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+
+	err := server.txmetaHandler(ctx, message)
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrProcessing))
+	assert.True(t, errors.Is(err, context.Canceled))
+}
+
+// TestServer_txmetaHandler_LatchFlipsAtHighWaterMark verifies that observing a
+// message at the partition tail (msg.Offset+1 == HighWaterMark) flips the
+// caught-up latch.
+func TestServer_txmetaHandler_LatchFlipsAtHighWaterMark(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+	mockLogger.On("Infof", mock.Anything, mock.Anything).Return()
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	hash := chainhash.Hash{7}
+	msg := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+	msg.Topic = "txmeta"
+	msg.Partition = 0
+	msg.Offset = 99
+	msg.HighWaterMark = 100 // Offset+1 == HWM => tail
+
+	require.False(t, server.txmetaCaughtUp.Load())
+
+	err := server.txmetaHandler(context.Background(), msg)
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return server.txmetaCaughtUp.Load()
+	}, 2*time.Second, 10*time.Millisecond, "latch should flip on tail message")
+}
+
+// TestServer_txmetaHandler_LatchIgnoredWhenHighWaterMarkUnset verifies that an
+// unpopulated HighWaterMark (zero value) does NOT prematurely flip the latch.
+// This protects callers that wire a KafkaMessage by hand without HWM info.
+func TestServer_txmetaHandler_LatchIgnoredWhenHighWaterMarkUnset(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	hash := chainhash.Hash{7}
+	msg := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+	msg.Offset = 0
+	msg.HighWaterMark = 0 // unset
+
+	err := server.txmetaHandler(context.Background(), msg)
+	assert.NoError(t, err)
+
+	// Give the worker a moment in case the latch were going to flip async.
+	time.Sleep(20 * time.Millisecond)
+	assert.False(t, server.txmetaCaughtUp.Load(), "latch must not flip when HWM is unset")
+}
+
+// TestServer_txmetaHandler_LatchIsOneWay verifies that once the latch is set,
+// subsequent messages that look like they are lagging (Offset+1 < HWM) do not
+// revert the latch.
+func TestServer_txmetaHandler_LatchIsOneWay(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+	mockLogger.On("Infof", mock.Anything, mock.Anything).Return()
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	hash := chainhash.Hash{9}
+
+	// First message at the tail -> flips latch.
+	first := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("a"))
+	first.Offset = 10
+	first.HighWaterMark = 11
+	require.NoError(t, server.txmetaHandler(context.Background(), first))
+
+	assert.Eventually(t, func() bool {
+		return server.txmetaCaughtUp.Load()
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Second message lagging far behind a moved-on HWM. Latch must remain set.
+	second := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("b"))
+	second.Offset = 12
+	second.HighWaterMark = 5000
+	require.NoError(t, server.txmetaHandler(context.Background(), second))
+
+	assert.True(t, server.txmetaCaughtUp.Load(), "latch is one-way; must not revert")
 }

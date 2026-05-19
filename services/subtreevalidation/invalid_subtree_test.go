@@ -339,6 +339,42 @@ func TestInvalidSubtreeReporting_ReadTxFromReaderPanic(t *testing.T) {
 	assert.Nil(t, tx)
 }
 
+// TestGetSubtreeTxHashes_OversizedBody verifies that getSubtreeTxHashes refuses to allocate
+// a peer-supplied response body larger than MaximumMerkleItemsPerSubtree * HashSize.
+// Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
+func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Lower the cap so the test response is cheap to produce.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+
+	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Register a peer that returns a body larger than the cap.
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	stat := gocore.NewStat("test")
+	_, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly
 func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	// setup

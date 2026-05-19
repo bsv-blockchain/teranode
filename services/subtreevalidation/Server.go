@@ -139,6 +139,12 @@ type Server struct {
 	txmetaWorkerCancel   context.CancelFunc
 	txmetaWorkerQueues   []chan txmetaWorkItem
 	txmetaWorkerWg       sync.WaitGroup
+	// txmetaCaughtUp is a one-way latch. While false, the txmeta handler blocks on
+	// the shard worker queues so backfill cannot drop messages. The latch flips
+	// to true the first time a Kafka message is observed at the partition's
+	// high water mark, after which the handler drops on full (preserving live-
+	// traffic backpressure semantics).
+	txmetaCaughtUp atomic.Bool
 }
 
 // New creates a new Server instance with the provided dependencies.
