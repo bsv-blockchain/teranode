@@ -1088,6 +1088,55 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 			len(req.VoutIdxsTxOffsets), txCount+1))
 	}
 
+	totalParents := len(req.ParentTxHashesPacked) / 32
+	voutIdxsLen := len(req.VoutIdxsPacked)
+
+	// Validate the two offset-array endpoints + monotonicity. Without this a
+	// malformed request triggers a slice-bounds-out-of-range panic inside
+	// the per-tx loop, and grpc-go does not recover handler panics — a
+	// single bad packet would crash the entire block-assembly process. The
+	// validator is trusted at the semantic layer, so we do NOT walk the
+	// packed voutIdxs to verify the count-prefix invariant (that walk would
+	// be O(B·P) at 1M+ TPS); we only do what is needed to make every slice
+	// expression in the per-tx loop bounds-safe.
+	//
+	// Cost: O(txCount) comparisons, ~0.1 % of a core at 1M TPS / batch 1000.
+	if req.ParentTxOffsets[0] != 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+			"parent_tx_offsets[0] must be 0, got %d", req.ParentTxOffsets[0]))
+	}
+
+	if req.VoutIdxsTxOffsets[0] != 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+			"vout_idxs_tx_offsets[0] must be 0, got %d", req.VoutIdxsTxOffsets[0]))
+	}
+
+	if int(req.ParentTxOffsets[txCount]) != totalParents {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+			"parent_tx_offsets[txCount]=%d must equal total parent count %d",
+			req.ParentTxOffsets[txCount], totalParents))
+	}
+
+	if int(req.VoutIdxsTxOffsets[txCount]) != voutIdxsLen {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+			"vout_idxs_tx_offsets[txCount]=%d must equal len(vout_idxs_packed)=%d",
+			req.VoutIdxsTxOffsets[txCount], voutIdxsLen))
+	}
+
+	for i := 1; i <= txCount; i++ {
+		if req.ParentTxOffsets[i] < req.ParentTxOffsets[i-1] {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+				"parent_tx_offsets must be monotonic non-decreasing at index %d (%d < %d)",
+				i, req.ParentTxOffsets[i], req.ParentTxOffsets[i-1]))
+		}
+
+		if req.VoutIdxsTxOffsets[i] < req.VoutIdxsTxOffsets[i-1] {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+				"vout_idxs_tx_offsets must be monotonic non-decreasing at index %d (%d < %d)",
+				i, req.VoutIdxsTxOffsets[i], req.VoutIdxsTxOffsets[i-1]))
+		}
+	}
+
 	if ba.settings.BlockAssembly.Disabled {
 		return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 	}
@@ -1101,8 +1150,13 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 	// for the whole batch. chainhash.Hash is [32]byte with byte alignment, so
 	// a []byte backing is byte-aligned and safe to reinterpret. Each per-tx
 	// slice of `parents` below is just a slice header — zero allocation.
-	totalParents := len(req.ParentTxHashesPacked) / 32
-
+	//
+	// Aliasing assumption: proto.Unmarshal decodes `bytes` fields into a fresh
+	// Go-heap allocation (verified for google.golang.org/protobuf v1.36.x's
+	// consumeBytes path). If a future zero-copy codec ever lands that aliases
+	// the gRPC receive buffer into `ParentTxHashesPacked`, this aliasing must
+	// be reconsidered — the receive buffer is freed after handler return,
+	// which would invalidate any TxInpoints we hand off downstream.
 	var parents []chainhash.Hash
 	if totalParents > 0 {
 		parents = unsafe.Slice(
@@ -1124,10 +1178,8 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 
 		if storeTxInpoints {
 			// Two slice operations per tx: parent hashes and packed voutIdxs.
-			// NewTxInpointsFromPacked stores both aliases directly into the
-			// TxInpoints struct without copying. The request buffers stay
-			// alive for the lifetime of every TxInpoints we hand to
-			// AddTxBatch (gRPC keeps them reachable).
+			// Bounds are guaranteed by the offset-array validation above, so
+			// these slice expressions cannot panic.
 			parentSlice := parents[req.ParentTxOffsets[i]:req.ParentTxOffsets[i+1]]
 			voutSlice := req.VoutIdxsPacked[req.VoutIdxsTxOffsets[i]:req.VoutIdxsTxOffsets[i+1]]
 			txInpointsArr[i] = subtreepkg.NewTxInpointsFromPacked(parentSlice, voutSlice)

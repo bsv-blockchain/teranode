@@ -350,13 +350,20 @@ type AddTxBatchColumnarRequest struct {
 	// with zero copy (NewTxInpointsFromPacked). The buffer's lifetime is bound
 	// to the request; gRPC keeps it alive until every TxInpoints derived from
 	// it is no longer referenced.
-	VoutIdxsPacked []uint32 `protobuf:"varint,8,rep,packed,name=vout_idxs_packed,json=voutIdxsPacked,proto3" json:"vout_idxs_packed,omitempty"`
+	//
+	// Assigned a fresh field number (10) rather than reusing the old field 8
+	// because the old field carried different semantics and the wire types
+	// match — silent misinterpretation under version skew would otherwise be
+	// possible.
+	VoutIdxsPacked []uint32 `protobuf:"varint,10,rep,packed,name=vout_idxs_packed,json=voutIdxsPacked,proto3" json:"vout_idxs_packed,omitempty"`
 	// Offsets into vout_idxs_packed for each transaction.
 	// Length must be exactly transaction_count + 1.
 	// Each offset is an index into vout_idxs_packed (in uint32 units).
 	// Example: [0, 5, 8] represents 2 transactions, the first occupying
 	// vout_idxs_packed[0:5] and the second occupying vout_idxs_packed[5:8].
-	VoutIdxsTxOffsets []uint32 `protobuf:"varint,9,rep,packed,name=vout_idxs_tx_offsets,json=voutIdxsTxOffsets,proto3" json:"vout_idxs_tx_offsets,omitempty"`
+	//
+	// Assigned a fresh field number (11) — see note on field 10.
+	VoutIdxsTxOffsets []uint32 `protobuf:"varint,11,rep,packed,name=vout_idxs_tx_offsets,json=voutIdxsTxOffsets,proto3" json:"vout_idxs_tx_offsets,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1211,15 +1218,17 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
-	"txRequests\"\xa6\x02\n" +
+	"txRequests\"\xd9\x02\n" +
 	"\x19AddTxBatchColumnarRequest\x12!\n" +
 	"\ftxids_packed\x18\x01 \x01(\fR\vtxidsPacked\x12\x12\n" +
 	"\x04fees\x18\x02 \x03(\x04R\x04fees\x12\x14\n" +
 	"\x05sizes\x18\x03 \x03(\x04R\x05sizes\x125\n" +
 	"\x17parent_tx_hashes_packed\x18\x06 \x01(\fR\x14parentTxHashesPacked\x12*\n" +
 	"\x11parent_tx_offsets\x18\a \x03(\rR\x0fparentTxOffsets\x12(\n" +
-	"\x10vout_idxs_packed\x18\b \x03(\rR\x0evoutIdxsPacked\x12/\n" +
-	"\x14vout_idxs_tx_offsets\x18\t \x03(\rR\x11voutIdxsTxOffsets\"E\n" +
+	"\x10vout_idxs_packed\x18\n" +
+	" \x03(\rR\x0evoutIdxsPacked\x12/\n" +
+	"\x14vout_idxs_tx_offsets\x18\v \x03(\rR\x11voutIdxsTxOffsetsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"R\x13parent_vout_indicesR\x10vout_idx_offsets\"E\n" +
 	"\x19GetMiningCandidateRequest\x12(\n" +
 	"\x0fincludeSubtrees\x18\x01 \x01(\bR\x0fincludeSubtrees\"%\n" +
 	"\x0fRemoveTxRequest\x12\x12\n" +

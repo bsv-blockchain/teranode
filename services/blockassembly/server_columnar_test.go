@@ -222,6 +222,98 @@ func TestAddTxBatchColumnar_ValidatesVoutIdxsTxOffsets(t *testing.T) {
 	require.Contains(t, err.Error(), "vout_idxs_tx_offsets must have exactly txCount+1 elements")
 }
 
+// TestAddTxBatchColumnar_RejectsOOBParentTxOffsets verifies the handler
+// rejects a malformed ParentTxOffsets pointing past the parent hash buffer
+// rather than panicking inside the per-tx loop. Regression test for the
+// security audit (see PR #889): grpc-go does not recover handler panics,
+// so a single bad request would otherwise crash block-assembly.
+func TestAddTxBatchColumnar_RejectsOOBParentTxOffsets(t *testing.T) {
+	ba, _ := setupServer(t)
+
+	enableStoreTxInpoints(t, ba)
+
+	txid := chainhash.Hash{}
+	parentHash := chainhash.Hash{}
+	req := &blockassembly_api.AddTxBatchColumnarRequest{
+		TxidsPacked:          txid[:],
+		Fees:                 []uint64{1000},
+		Sizes:                []uint64{250},
+		ParentTxHashesPacked: parentHash[:],   // 1 parent hash → totalParents=1
+		ParentTxOffsets:      []uint32{0, 99}, // claims 99 parents — OOB
+		VoutIdxsPacked:       []uint32{1, 0},
+		VoutIdxsTxOffsets:    []uint32{0, 2},
+	}
+
+	require.NotPanics(t, func() {
+		_, err := ba.AddTxBatchColumnar(context.Background(), req)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "parent_tx_offsets[txCount]")
+	})
+}
+
+// TestAddTxBatchColumnar_RejectsNonMonotonicOffsets ensures non-monotonic
+// offset arrays produce a clean error rather than a slice-bounds panic.
+func TestAddTxBatchColumnar_RejectsNonMonotonicOffsets(t *testing.T) {
+	ba, _ := setupServer(t)
+
+	enableStoreTxInpoints(t, ba)
+
+	// Two parents but offsets dip in the middle. Endpoints still satisfy the
+	// totalParents/voutIdxsLen checks, so the monotonicity loop is what
+	// must catch this.
+	parents := make([]byte, 64) // 2 parent hashes → totalParents=2
+	txids := make([]byte, 64)   // 2 txs
+	req := &blockassembly_api.AddTxBatchColumnarRequest{
+		TxidsPacked:          txids,
+		Fees:                 []uint64{1000, 2000},
+		Sizes:                []uint64{250, 260},
+		ParentTxHashesPacked: parents,
+		ParentTxOffsets:      []uint32{0, 3, 2}, // 3 → 2: monotonicity violation
+		VoutIdxsPacked:       []uint32{1, 0, 1, 1},
+		VoutIdxsTxOffsets:    []uint32{0, 2, 4},
+	}
+
+	require.NotPanics(t, func() {
+		_, err := ba.AddTxBatchColumnar(context.Background(), req)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "parent_tx_offsets must be monotonic")
+	})
+}
+
+// TestAddTxBatchColumnar_RejectsOOBVoutIdxsTxOffsets covers the vout side of
+// the same exploit class.
+func TestAddTxBatchColumnar_RejectsOOBVoutIdxsTxOffsets(t *testing.T) {
+	ba, _ := setupServer(t)
+
+	enableStoreTxInpoints(t, ba)
+
+	txid := chainhash.Hash{}
+	parentHash := chainhash.Hash{}
+	req := &blockassembly_api.AddTxBatchColumnarRequest{
+		TxidsPacked:          txid[:],
+		Fees:                 []uint64{1000},
+		Sizes:                []uint64{250},
+		ParentTxHashesPacked: parentHash[:],
+		ParentTxOffsets:      []uint32{0, 1},
+		VoutIdxsPacked:       []uint32{1, 0},
+		VoutIdxsTxOffsets:    []uint32{0, 999}, // OOB
+	}
+
+	require.NotPanics(t, func() {
+		_, err := ba.AddTxBatchColumnar(context.Background(), req)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "vout_idxs_tx_offsets[txCount]")
+	})
+}
+
+// enableStoreTxInpoints flips the StoreTxInpointsForSubtreeMeta setting so
+// the per-tx loop actually exercises the unsafe.Slice + offset arithmetic
+// that the regression tests target.
+func enableStoreTxInpoints(t *testing.T, ba *BlockAssembly) {
+	t.Helper()
+	ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+}
+
 // TestConvertToColumnarFormat_Success verifies columnar conversion.
 func TestConvertToColumnarFormat_Success(t *testing.T) {
 	ba, _ := setupServer(t)

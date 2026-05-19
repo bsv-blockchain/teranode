@@ -143,6 +143,14 @@ message AddTxBatchRequest {
 // and sent in columnar format. This shifts deserialization work away from the single-machine Server.
 // The Server reconstructs TxInpoints directly from columnar data WITHOUT deserialization overhead.
 message AddTxBatchColumnarRequest {
+  // Fields 8 and 9 previously held parent_vout_indices + vout_idx_offsets
+  // (per-parent) with different semantics from the current packed layout.
+  // They are reserved to prevent silent misinterpretation under version skew:
+  // an old client sending field 8/9 to a new server would otherwise decode
+  // as the new fields with corrupt content. The new fields are 10/11 below.
+  reserved 8, 9;
+  reserved "parent_vout_indices", "vout_idx_offsets";
+
   // All transaction IDs concatenated (each exactly 32 bytes).
   // Total length must be divisible by 32.
   // Transaction count = len(txids_packed) / 32
@@ -180,14 +188,21 @@ message AddTxBatchColumnarRequest {
   // with zero copy (NewTxInpointsFromPacked). The buffer's lifetime is bound
   // to the request; gRPC keeps it alive until every TxInpoints derived from
   // it is no longer referenced.
-  repeated uint32 vout_idxs_packed = 8;
+  //
+  // Assigned a fresh field number (10) rather than reusing the old field 8
+  // because the old field carried different semantics and the wire types
+  // match — silent misinterpretation under version skew would otherwise be
+  // possible.
+  repeated uint32 vout_idxs_packed = 10;
 
   // Offsets into vout_idxs_packed for each transaction.
   // Length must be exactly transaction_count + 1.
   // Each offset is an index into vout_idxs_packed (in uint32 units).
   // Example: [0, 5, 8] represents 2 transactions, the first occupying
   // vout_idxs_packed[0:5] and the second occupying vout_idxs_packed[5:8].
-  repeated uint32 vout_idxs_tx_offsets = 9;
+  //
+  // Assigned a fresh field number (11) — see note on field 10.
+  repeated uint32 vout_idxs_tx_offsets = 11;
 }
 
 // Request for retrieving a mining candidate block template.
