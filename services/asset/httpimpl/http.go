@@ -180,6 +180,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	e.Use(securityHeadersMiddleware())
 
+	// Body size limit runs BEFORE peer-auth so the auth middleware (which reads
+	// the body to verify the SHA-256 digest header) cannot be turned into a
+	// DoS surface by an oversized body.
+	if tSettings.Asset.HTTPBodyLimit != "" {
+		e.Use(middleware.BodyLimit(tSettings.Asset.HTTPBodyLimit))
+	}
+
 	// Peer authentication — verifies Ed25519 signed requests and sets peer_tier in context.
 	// The peerCache refresh goroutine is started in Start() when a context is available.
 	var peerCache *peerTierCache
@@ -199,11 +206,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		globalRL := newTieredRateLimiter(tSettings.Asset.HTTPRateLimit, tSettings.Asset.HTTPPeerRateMultiplier, "global")
 		e.Use(globalRL.Middleware())
 		rateLimiters = append(rateLimiters, globalRL)
-	}
-
-	// Request body size limit.
-	if tSettings.Asset.HTTPBodyLimit != "" {
-		e.Use(middleware.BodyLimit(tSettings.Asset.HTTPBodyLimit))
 	}
 
 	// Heavy-endpoint rate limiter (applied per-route below).
@@ -682,8 +684,12 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			prometheusAssetHTTPRequestDuration.WithLabelValues(method, path, statusStr).Observe(duration.Seconds())
 			prometheusAssetHTTPResponseSize.WithLabelValues(method, path, statusStr).Observe(float64(size))
 
-			logger.Infof("[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s uri=%s",
-				method, path, ip, status, duration, size, tier, c.Request().RequestURI)
+			// Log only the route pattern (already bounded for Prometheus). The raw
+			// RequestURI is intentionally omitted to keep query-string values out
+			// of the access log; any future endpoint adding sensitive query
+			// parameters won't accidentally leak them here.
+			logger.Infof("[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s",
+				method, path, ip, status, duration, size, tier)
 
 			return nil
 		}

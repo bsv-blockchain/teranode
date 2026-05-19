@@ -290,8 +290,8 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	}
 
 	// Sign the request if a signer is configured (silently skip on error)
-	if httpRequestSigner != nil {
-		_ = httpRequestSigner.SignRequest(req)
+	if signer := loadHTTPRequestSigner(); signer != nil {
+		_ = signer.SignRequest(req)
 	}
 
 	var resp *http.Response
