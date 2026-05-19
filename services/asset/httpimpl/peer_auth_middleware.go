@@ -313,6 +313,10 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 
 			tier := v.tierCache.GetTier(peerID)
 			c.Set("peer_tier", tier)
+			// peer_id is consumed by the rate limiter so authenticated buckets
+			// are keyed by stable peer identity rather than the (possibly
+			// shared, possibly mobile) source IP.
+			c.Set("peer_id", peerID.String())
 			v.logger.Debugf("[PeerAuth] authenticated peer %s as %s", peerID, tier)
 
 			return next(c)

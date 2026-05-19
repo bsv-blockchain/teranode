@@ -207,11 +207,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Always-on access logging with Prometheus metrics.
 	e.Use(accessLogMiddleware(logger))
 
-	// Global per-IP tiered rate limiting.
+	// Global tiered rate limiting. Unverified clients are IP-keyed (IPv6 to
+	// /64) in a bounded LRU; authenticated peers are peer-ID-keyed.
 	// Rate limiters are created here; cleanup goroutines are started in Start() with a context.
 	var rateLimiters []*tieredRateLimiter
 	if tSettings.Asset.HTTPRateLimit > 0 {
-		globalRL := newTieredRateLimiter(tSettings.Asset.HTTPRateLimit, tSettings.Asset.HTTPPeerRateMultiplier, "global")
+		globalRL := newTieredRateLimiter(
+			tSettings.Asset.HTTPRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			tSettings.Asset.HTTPMinerRateLimit,
+			"global",
+		)
 		e.Use(globalRL.Middleware())
 		rateLimiters = append(rateLimiters, globalRL)
 	}
@@ -219,7 +225,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Heavy-endpoint rate limiter (applied per-route below).
 	var heavyRateLimiter echo.MiddlewareFunc
 	if tSettings.Asset.HTTPHeavyRateLimit > 0 {
-		heavyRL := newTieredRateLimiter(tSettings.Asset.HTTPHeavyRateLimit, tSettings.Asset.HTTPPeerRateMultiplier, "heavy")
+		heavyRL := newTieredRateLimiter(
+			tSettings.Asset.HTTPHeavyRateLimit,
+			tSettings.Asset.HTTPPeerRateMultiplier,
+			tSettings.Asset.HTTPMinerRateLimit,
+			"heavy",
+		)
 		heavyRateLimiter = heavyRL.Middleware()
 		rateLimiters = append(rateLimiters, heavyRL)
 	}

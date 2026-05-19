@@ -2,14 +2,22 @@ package httpimpl
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/time/rate"
 )
+
+// unverifiedLRUCapacity bounds the number of distinct IP buckets we hold for
+// tier-unverified requests. Beyond this, the oldest entry is evicted. Without
+// the bound, an IPv6 attacker rotating source addresses across a /64 (2^64
+// addresses) could grow the map to many GB before the 5-minute cleanup runs.
+const unverifiedLRUCapacity = 50_000
 
 // limiterEntry holds a rate limiter and the last time it was accessed.
 type limiterEntry struct {
@@ -19,29 +27,50 @@ type limiterEntry struct {
 
 // tieredRateLimiter holds the state for a tiered rate limiting middleware instance.
 // Call StartCleanup to begin the background cleanup goroutine.
+//
+// Bucket keying differs by tier so that authentication elevates the peer, not
+// the source IP:
+//
+//   - tierUnverified: bucket keyed by client IP (or /64 prefix for IPv6).
+//     Held in a bounded LRU so an IPv6 flood can't grow the map without limit.
+//   - tierPeer:       bucket keyed by libp2p peer ID. Two authenticated peers
+//     behind one egress IP get independent buckets.
+//   - tierMiner:      either fully exempt (minerRate == 0, the legacy
+//     behaviour) or bucket keyed by libp2p peer ID at minerRate.
 type tieredRateLimiter struct {
-	unverifiedLimiters sync.Map
-	peerLimiters       sync.Map
+	unverifiedLimiters *lru.Cache[string, *limiterEntry]
+	peerLimiters       sync.Map // map[peerID]*limiterEntry
+	minerLimiters      sync.Map // map[peerID]*limiterEntry — only used when minerRate > 0
 	defaultRate        int
 	peerMultiplier     int
+	minerRate          int
 	tierLabel          string
 }
 
 // newTieredRateLimiter creates a tiered rate limiter. defaultRate <= 0 disables
 // the limiter entirely. peerMultiplier is clamped to a minimum of 1.
-func newTieredRateLimiter(defaultRate int, peerMultiplier int, tierLabel string) *tieredRateLimiter {
+// minerRate <= 0 means miner-tier requests are fully exempt.
+func newTieredRateLimiter(defaultRate, peerMultiplier, minerRate int, tierLabel string) *tieredRateLimiter {
 	if peerMultiplier < 1 {
 		peerMultiplier = 1
 	}
+
+	// LRU constructor only errors on size <= 0, which we guard against.
+	cache, _ := lru.New[string, *limiterEntry](unverifiedLRUCapacity)
+
 	return &tieredRateLimiter{
-		defaultRate:    defaultRate,
-		peerMultiplier: peerMultiplier,
-		tierLabel:      tierLabel,
+		unverifiedLimiters: cache,
+		defaultRate:        defaultRate,
+		peerMultiplier:     peerMultiplier,
+		minerRate:          minerRate,
+		tierLabel:          tierLabel,
 	}
 }
 
-// StartCleanup launches a background goroutine that removes stale limiter entries
-// every 5 minutes. The goroutine stops when ctx is cancelled.
+// StartCleanup launches a background goroutine that removes stale entries
+// from the peer/miner maps every 5 minutes. The unverified map is bounded by
+// the LRU and doesn't need active cleanup. The goroutine stops when ctx is
+// cancelled.
 func (rl *tieredRateLimiter) StartCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
@@ -53,8 +82,8 @@ func (rl *tieredRateLimiter) StartCleanup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				now := time.Now().Unix()
-				cleanupMap(&rl.unverifiedLimiters, now)
-				cleanupMap(&rl.peerLimiters, now)
+				cleanupSyncMap(&rl.peerLimiters, now)
+				cleanupSyncMap(&rl.minerLimiters, now)
 			}
 		}
 	}()
@@ -70,44 +99,103 @@ func (rl *tieredRateLimiter) Middleware() echo.MiddlewareFunc {
 
 			tier, _ := c.Get("peer_tier").(peerTier)
 
-			if tier == tierMiner {
-				return next(c)
-			}
-
-			ip := c.RealIP()
-
-			var limiter *rate.Limiter
 			switch tier {
+			case tierMiner:
+				if rl.minerRate <= 0 {
+					return next(c)
+				}
+				peerID, _ := c.Get("peer_id").(string)
+				if peerID == "" {
+					// Defensive: a tier without a peer_id shouldn't happen,
+					// but fall back to IP-keyed unverified bucket rather than
+					// granting unconditional access.
+					return rl.allowAtBucket(c, next, rl.unverifiedBucket(c.RealIP(), rl.defaultRate))
+				}
+				return rl.allowAtBucket(c, next, rl.peerBucket(&rl.minerLimiters, peerID, rl.minerRate))
+
 			case tierPeer:
+				peerID, _ := c.Get("peer_id").(string)
 				peerRate := rl.defaultRate * rl.peerMultiplier
-				val, _ := rl.peerLimiters.LoadOrStore(ip, &limiterEntry{
-					limiter: rate.NewLimiter(rate.Limit(peerRate), peerRate),
-				})
-				entry := val.(*limiterEntry)
-				entry.lastSeen.Store(time.Now().Unix())
-				limiter = entry.limiter
+				if peerID == "" {
+					return rl.allowAtBucket(c, next, rl.unverifiedBucket(c.RealIP(), peerRate))
+				}
+				return rl.allowAtBucket(c, next, rl.peerBucket(&rl.peerLimiters, peerID, peerRate))
+
 			default:
-				val, _ := rl.unverifiedLimiters.LoadOrStore(ip, &limiterEntry{
-					limiter: rate.NewLimiter(rate.Limit(rl.defaultRate), rl.defaultRate),
-				})
-				entry := val.(*limiterEntry)
-				entry.lastSeen.Store(time.Now().Unix())
-				limiter = entry.limiter
+				key := unverifiedKey(c.RealIP())
+				return rl.allowAtBucket(c, next, rl.unverifiedBucket(key, rl.defaultRate))
 			}
-
-			if !limiter.Allow() {
-				prometheusAssetHTTPRateLimited.WithLabelValues(rl.tierLabel).Inc()
-				return c.JSON(http.StatusTooManyRequests, map[string]string{"message": "rate limit exceeded"})
-			}
-
-			return next(c)
 		}
 	}
 }
 
-// cleanupMap removes entries from the sync.Map that have not been seen in over
-// 5 minutes (300 seconds).
-func cleanupMap(m *sync.Map, now int64) {
+// allowAtBucket consumes one token from the given limiter and returns the next
+// handler or HTTP 429.
+func (rl *tieredRateLimiter) allowAtBucket(c echo.Context, next echo.HandlerFunc, lim *rate.Limiter) error {
+	if !lim.Allow() {
+		prometheusAssetHTTPRateLimited.WithLabelValues(rl.tierLabel).Inc()
+		return c.JSON(http.StatusTooManyRequests, map[string]string{"message": "rate limit exceeded"})
+	}
+	return next(c)
+}
+
+// unverifiedBucket returns the rate.Limiter for the given key in the bounded
+// LRU. Uses load-then-store so the race-loser doesn't allocate a stranded
+// rate.Limiter on the contended path.
+func (rl *tieredRateLimiter) unverifiedBucket(key string, ratePerSec int) *rate.Limiter {
+	if entry, ok := rl.unverifiedLimiters.Get(key); ok {
+		entry.lastSeen.Store(time.Now().Unix())
+		return entry.limiter
+	}
+	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), ratePerSec)}
+	newEntry.lastSeen.Store(time.Now().Unix())
+	// Add returns true if an existing entry was evicted; we don't care, the
+	// LRU handles eviction internally.
+	rl.unverifiedLimiters.Add(key, newEntry)
+	// Re-Get to handle the race where two goroutines added concurrently —
+	// LRU.Add is last-write-wins, so whichever Get returns is the surviving
+	// entry. Both limiters are valid, just slightly less accurate for the
+	// race window.
+	if entry, ok := rl.unverifiedLimiters.Get(key); ok {
+		return entry.limiter
+	}
+	return newEntry.limiter
+}
+
+// peerBucket returns the rate.Limiter for the given peer ID in the supplied
+// sync.Map. Uses load-then-store so race-losers don't allocate.
+func (rl *tieredRateLimiter) peerBucket(m *sync.Map, peerID string, ratePerSec int) *rate.Limiter {
+	if v, ok := m.Load(peerID); ok {
+		entry := v.(*limiterEntry)
+		entry.lastSeen.Store(time.Now().Unix())
+		return entry.limiter
+	}
+	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), ratePerSec)}
+	newEntry.lastSeen.Store(time.Now().Unix())
+	actual, _ := m.LoadOrStore(peerID, newEntry)
+	entry := actual.(*limiterEntry)
+	entry.lastSeen.Store(time.Now().Unix())
+	return entry.limiter
+}
+
+// unverifiedKey normalises the source identifier for unverified buckets. For
+// IPv6 we collapse to the /64 prefix so an attacker rotating addresses across
+// a single /64 can't trivially evade the bucket. IPv4 is kept full-precision
+// because /32 already maps 1:1 to host.
+func unverifiedKey(rawIP string) string {
+	ip := net.ParseIP(rawIP)
+	if ip == nil {
+		return rawIP
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	mask := net.CIDRMask(64, 128)
+	return ip.Mask(mask).String()
+}
+
+// cleanupSyncMap removes entries that haven't been seen in over 5 minutes.
+func cleanupSyncMap(m *sync.Map, now int64) {
 	m.Range(func(key, value any) bool {
 		entry := value.(*limiterEntry)
 		if now-entry.lastSeen.Load() > 300 {
