@@ -190,11 +190,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Peer authentication — verifies Ed25519 signed requests and sets peer_tier in context.
 	// The verifier owns the tier cache and the replay cache; both are started in
 	// Start() when a context is available.
+	//
+	// Tier elevation requires explicit operator opt-in via asset_peerAuthAllowlist.
+	// An empty allowlist (the default) means signatures are still verified
+	// (replay cache + body digest + freshness window all apply) but every
+	// authenticated peer is treated as tierUnverified for rate-limit purposes.
 	var peerAuth *peerAuthVerifier
 	p2pClient := repo.GetP2PClient()
 	if p2pClient != nil {
 		peerCache := newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
-		peerAuth = newPeerAuthVerifier(logger, peerCache)
+		allowlist := parsePeerAuthAllowlist(logger, tSettings.Asset.PeerAuthAllowlist)
+		peerAuth = newPeerAuthVerifier(logger, peerCache, allowlist)
 		e.Use(peerAuth.Middleware())
 	}
 

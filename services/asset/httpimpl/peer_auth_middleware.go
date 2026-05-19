@@ -147,24 +147,54 @@ func (c *peerTierCache) GetTier(id peer.ID) peerTier {
 }
 
 // peerAuthVerifier holds the shared state used by the peer-auth middleware:
-// the tier cache (peer registry snapshot) and the replay cache. Cache
-// goroutines are started via Start(ctx) and stopped when ctx is cancelled.
+// the tier cache (peer registry snapshot), the replay cache, and the
+// per-peer allowlist for tier elevation. Cache goroutines are started via
+// Start(ctx) and stopped when ctx is cancelled.
 type peerAuthVerifier struct {
 	logger      ulogger.Logger
 	tierCache   *peerTierCache
 	replayCache *ttlcache.Cache[string, struct{}]
+
+	// allowlist is the set of peer IDs eligible for tierPeer/tierMiner. An
+	// empty allowlist means **no peer is eligible** — every authenticated
+	// peer is treated as tierUnverified for rate-limit purposes. Operators
+	// opt in by setting asset_peerAuthAllowlist.
+	allowlist map[peer.ID]struct{}
 }
 
-// newPeerAuthVerifier constructs a verifier with its own replay cache.
-func newPeerAuthVerifier(logger ulogger.Logger, tierCache *peerTierCache) *peerAuthVerifier {
+// newPeerAuthVerifier constructs a verifier with its own replay cache and the
+// parsed allowlist of peer IDs eligible for tier elevation.
+func newPeerAuthVerifier(logger ulogger.Logger, tierCache *peerTierCache, allowlist map[peer.ID]struct{}) *peerAuthVerifier {
 	return &peerAuthVerifier{
 		logger:    logger,
 		tierCache: tierCache,
+		allowlist: allowlist,
 		replayCache: ttlcache.New[string, struct{}](
 			ttlcache.WithTTL[string, struct{}](replayCacheTTL),
 			ttlcache.WithCapacity[string, struct{}](replayCacheCapacity),
 		),
 	}
+}
+
+// parsePeerAuthAllowlist turns a pipe-separated string of libp2p peer IDs
+// into a set. Empty or whitespace-only input returns an empty set. Invalid
+// entries are logged at Warn and skipped (the operator's intent should fail
+// safe: an unparseable list shouldn't accidentally trust everyone).
+func parsePeerAuthAllowlist(logger ulogger.Logger, raw string) map[peer.ID]struct{} {
+	out := make(map[peer.ID]struct{})
+	for _, part := range strings.Split(raw, "|") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := peer.Decode(part)
+		if err != nil {
+			logger.Warnf("[PeerAuth] ignoring invalid peer ID in asset_peerAuthAllowlist: %q (%v)", part, err)
+			continue
+		}
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // Start launches background goroutines for the tier and replay caches. They
@@ -268,6 +298,16 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 
 			peerID, err := peer.IDFromPublicKey(pubKey)
 			if err != nil {
+				return next(c)
+			}
+
+			// Allowlist gate: signature is valid but the peer is only
+			// eligible for tier elevation if explicitly listed by the
+			// operator. Empty allowlist => no peer is eligible. Authenticated
+			// but un-allowlisted peers stay at tierUnverified — this is the
+			// authentication signal without the rate-limit privilege.
+			if _, ok := v.allowlist[peerID]; !ok {
+				v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
 				return next(c)
 			}
 

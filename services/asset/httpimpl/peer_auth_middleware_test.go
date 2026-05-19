@@ -53,12 +53,17 @@ func signTestRequest(t *testing.T, req *http.Request, privKey crypto.PrivKey) {
 	req.Header.Set(peerAuthHeaderSignature, hex.EncodeToString(sig))
 }
 
-func newAuthEcho(t *testing.T, cache *peerTierCache) (*echo.Echo, *peerTier) {
+// newAuthEcho builds an Echo server with the peer-auth verifier mounted. The
+// allowlist parameter is the set of peer IDs eligible for tier elevation; pass
+// allowAll() in tests that don't care about gating, or pass a specific set to
+// exercise allowlist behaviour. Pass nil for the empty-allowlist case (every
+// authenticated peer drops to tierUnverified).
+func newAuthEcho(t *testing.T, cache *peerTierCache, allowlist map[peer.ID]struct{}) (*echo.Echo, *peerTier) {
 	t.Helper()
 	logger := ulogger.TestLogger{}
 	e := echo.New()
 	captured := new(peerTier)
-	e.Use(newPeerAuthVerifier(logger, cache).Middleware())
+	e.Use(newPeerAuthVerifier(logger, cache, allowlist).Middleware())
 	e.Any("/test", func(c echo.Context) error {
 		*captured = c.Get("peer_tier").(peerTier)
 		return c.NoContent(http.StatusOK)
@@ -66,9 +71,20 @@ func newAuthEcho(t *testing.T, cache *peerTierCache) (*echo.Echo, *peerTier) {
 	return e, captured
 }
 
+// allowAll returns an allowlist containing every peer ID present in the given
+// tier cache — used by tests that exercise the verify path rather than the
+// gating path.
+func allowAll(cache *peerTierCache) map[peer.ID]struct{} {
+	out := make(map[peer.ID]struct{}, len(cache.tiers))
+	for id := range cache.tiers {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
 func TestPeerAuthMiddleware_NoHeaders(t *testing.T) {
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
@@ -85,7 +101,7 @@ func TestPeerAuthMiddleware_ValidMinerSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	signTestRequest(t, req, privKey)
@@ -103,7 +119,7 @@ func TestPeerAuthMiddleware_ValidPeerSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierPeer}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	signTestRequest(t, req, privKey)
@@ -121,7 +137,7 @@ func TestPeerAuthMiddleware_InvalidSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	signTestRequest(t, req, privKey)
@@ -140,7 +156,7 @@ func TestPeerAuthMiddleware_ExpiredTimestamp(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	// Build headers manually with a timestamp 30s in the past (outside the 10s window).
@@ -168,7 +184,7 @@ func TestPeerAuthMiddleware_UnknownPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	signTestRequest(t, req, privKey)
@@ -188,7 +204,7 @@ func TestPeerAuthMiddleware_RejectV1Payload(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	req := httptest.NewRequest(http.MethodGet, "/test?from=1&to=99", nil)
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
@@ -220,7 +236,7 @@ func TestPeerAuthMiddleware_BodyDigestMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	realBody := []byte(`{"x":1}`)
 	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(realBody))
@@ -256,7 +272,7 @@ func TestPeerAuthMiddleware_QueryStringBound(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
-	e, captured := newAuthEcho(t, cache)
+	e, captured := newAuthEcho(t, cache, allowAll(cache))
 
 	// Sign for one query string...
 	signedReq := httptest.NewRequest(http.MethodGet, "/test?from=1", nil)
@@ -286,7 +302,7 @@ func TestPeerAuthMiddleware_ReplayBlocked(t *testing.T) {
 	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
 
 	logger := ulogger.TestLogger{}
-	verifier := newPeerAuthVerifier(logger, cache)
+	verifier := newPeerAuthVerifier(logger, cache, allowAll(cache))
 	e := echo.New()
 	var capturedTier peerTier
 	e.Use(verifier.Middleware())
@@ -316,6 +332,84 @@ func TestPeerAuthMiddleware_ReplayBlocked(t *testing.T) {
 	require.Equal(t, tierUnverified, capturedTier, "second submission of the same signature must be rejected")
 }
 
+// TestPeerAuthMiddleware_AllowlistEmpty_NoElevation — a valid, fresh, non-replayed
+// signature whose peer is NOT in the allowlist must drop to tierUnverified.
+func TestPeerAuthMiddleware_AllowlistEmpty_NoElevation(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	require.NoError(t, err)
+
+	// Registry says this peer is a miner — but allowlist is empty.
+	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
+	e, captured := newAuthEcho(t, cache, nil) // empty allowlist
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	signTestRequest(t, req, privKey)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, tierUnverified, *captured, "empty allowlist must deny tier elevation")
+}
+
+// TestPeerAuthMiddleware_AllowlistMember_GetsTier — a valid signature from a
+// peer in the allowlist gets the registry-derived tier.
+func TestPeerAuthMiddleware_AllowlistMember_GetsTier(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	require.NoError(t, err)
+
+	cache := &peerTierCache{tiers: map[peer.ID]peerTier{peerID: tierMiner}, logger: ulogger.TestLogger{}}
+	allowlist := map[peer.ID]struct{}{peerID: {}}
+	e, captured := newAuthEcho(t, cache, allowlist)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	signTestRequest(t, req, privKey)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, tierMiner, *captured)
+}
+
+// TestParsePeerAuthAllowlist — parsing of the pipe-separated config value.
+func TestParsePeerAuthAllowlist(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	t.Run("empty input returns empty set", func(t *testing.T) {
+		got := parsePeerAuthAllowlist(logger, "")
+		require.Empty(t, got)
+	})
+
+	t.Run("valid peer IDs are decoded", func(t *testing.T) {
+		// Generate a couple of real peer IDs to feed in.
+		k1, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		require.NoError(t, err)
+		p1, err := peer.IDFromPublicKey(k1.GetPublic())
+		require.NoError(t, err)
+
+		k2, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		require.NoError(t, err)
+		p2, err := peer.IDFromPublicKey(k2.GetPublic())
+		require.NoError(t, err)
+
+		raw := p1.String() + " | " + p2.String() + "||" // mix in whitespace and empty entries
+		got := parsePeerAuthAllowlist(logger, raw)
+		require.Len(t, got, 2)
+		_, ok := got[p1]
+		require.True(t, ok)
+		_, ok = got[p2]
+		require.True(t, ok)
+	})
+
+	t.Run("invalid entries are skipped", func(t *testing.T) {
+		got := parsePeerAuthAllowlist(logger, "definitely-not-a-peer-id")
+		require.Empty(t, got, "garbage entries must not enter the allowlist")
+	})
+}
+
 // TestPeerAuthMiddleware_BodyPassesThroughToHandler — after digest verification,
 // the handler must still receive the original body bytes.
 func TestPeerAuthMiddleware_BodyPassesThroughToHandler(t *testing.T) {
@@ -329,7 +423,7 @@ func TestPeerAuthMiddleware_BodyPassesThroughToHandler(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	e := echo.New()
 	var received []byte
-	e.Use(newPeerAuthVerifier(logger, cache).Middleware())
+	e.Use(newPeerAuthVerifier(logger, cache, allowAll(cache)).Middleware())
 	e.POST("/test", func(c echo.Context) error {
 		buf, err := io.ReadAll(c.Request().Body)
 		if err != nil {
