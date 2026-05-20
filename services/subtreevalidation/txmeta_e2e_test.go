@@ -218,7 +218,13 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 	t.Helper()
 
 	numPartitions := h.server.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
 	bucketsPerPartition := e2eBucketsCount / numPartitions
+	if bucketsPerPartition < 1 {
+		bucketsPerPartition = 1
+	}
 
 	type item struct {
 		hash    chainhash.Hash
@@ -230,6 +236,9 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 		hv := xxhash.Sum64(hashes[i][:])
 		bucket := int(hv % uint64(e2eBucketsCount))
 		p := bucket / bucketsPerPartition
+		if p >= numPartitions {
+			p = numPartitions - 1
+		}
 		partitions[p] = append(partitions[p], item{hash: hashes[i], payload: payloads[i], h: hv})
 	}
 
@@ -477,7 +486,13 @@ var benchV2ScratchPool = sync.Pool{
 // done reading those bytes. This eliminates the producer-side allocations
 // that previously dominated the bench's mem profile (~50% of total).
 func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numPartitions int) ([][]byte, *benchV2Scratch) {
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
 	bucketsPerPartition := e2eBucketsCount / numPartitions
+	if bucketsPerPartition < 1 {
+		bucketsPerPartition = 1
+	}
 
 	s := benchV2ScratchPool.Get().(*benchV2Scratch)
 
@@ -507,6 +522,9 @@ func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numParti
 		hv := xxhash.Sum64(hashes[i][:])
 		bucket := int(hv % uint64(e2eBucketsCount))
 		p := bucket / bucketsPerPartition
+		if p >= numPartitions {
+			p = numPartitions - 1
+		}
 		s.groups[p] = append(s.groups[p], benchV2Item{idx: i, h: hv})
 	}
 

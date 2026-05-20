@@ -134,7 +134,6 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
-
 }
 
 // New creates a new Server instance with the provided dependencies.

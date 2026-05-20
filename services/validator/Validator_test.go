@@ -1548,7 +1548,15 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 // Items whose hashes land in the same partition's bucket range must share a
 // single Kafka record; items in different ranges must be split.
 func Test_sendTxMetaBatchV2_PartitionRouting(t *testing.T) {
-	const numPartitions = 32
+	// Cap numPartitions to BucketsCount so this test exercises real routing
+	// in both production (BucketsCount=8192) and minimal-test
+	// (testtxmetacache tag, BucketsCount=8) builds. With more partitions
+	// than buckets the production code clamps bucketsPerPartition to 1 and
+	// the test below would never find two distinct partitions.
+	numPartitions := 32
+	if numPartitions > txmetacache.BucketsCount {
+		numPartitions = txmetacache.BucketsCount
+	}
 	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
 
 	// Find two hashes whose xxhash lands in different partitions.
