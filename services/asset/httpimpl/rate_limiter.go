@@ -96,37 +96,44 @@ func (rl *tieredRateLimiter) Middleware() echo.MiddlewareFunc {
 			if rl.defaultRate <= 0 {
 				return next(c)
 			}
-
-			tier, _ := c.Get("peer_tier").(peerTier)
-
-			switch tier {
-			case tierMiner:
-				if rl.minerRate <= 0 {
-					return next(c)
-				}
-				peerID, _ := c.Get("peer_id").(string)
-				if peerID == "" {
-					// Defensive: a tier without a peer_id shouldn't happen,
-					// but fall back to IP-keyed unverified bucket rather than
-					// granting unconditional access.
-					return rl.allowAtBucket(c, next, rl.unverifiedBucket(c.RealIP(), rl.defaultRate))
-				}
-				return rl.allowAtBucket(c, next, rl.peerBucket(&rl.minerLimiters, peerID, rl.minerRate))
-
-			case tierPeer:
-				peerID, _ := c.Get("peer_id").(string)
-				peerRate := rl.defaultRate * rl.peerMultiplier
-				if peerID == "" {
-					return rl.allowAtBucket(c, next, rl.unverifiedBucket(c.RealIP(), peerRate))
-				}
-				return rl.allowAtBucket(c, next, rl.peerBucket(&rl.peerLimiters, peerID, peerRate))
-
-			default:
-				key := unverifiedKey(c.RealIP())
-				return rl.allowAtBucket(c, next, rl.unverifiedBucket(key, rl.defaultRate))
+			lim := rl.limiterFor(c)
+			if lim == nil {
+				// Miner tier with minerRate=0 is fully exempt.
+				return next(c)
 			}
+			return rl.allowAtBucket(c, next, lim)
 		}
 	}
+}
+
+// limiterFor returns the rate.Limiter bucket the request should be charged
+// against, or nil if the request is exempt. The tier determines bucket
+// selection; authenticated tiers fall back to the unverified IP-keyed bucket
+// when peer_id is missing (defensive — should not happen in practice).
+func (rl *tieredRateLimiter) limiterFor(c echo.Context) *rate.Limiter {
+	tier, _ := c.Get("peer_tier").(peerTier)
+	switch tier {
+	case tierMiner:
+		if rl.minerRate <= 0 {
+			return nil
+		}
+		return rl.authBucket(c, &rl.minerLimiters, rl.minerRate)
+	case tierPeer:
+		return rl.authBucket(c, &rl.peerLimiters, rl.defaultRate*rl.peerMultiplier)
+	default:
+		return rl.unverifiedBucket(unverifiedKey(c.RealIP()), rl.defaultRate)
+	}
+}
+
+// authBucket returns the per-peer-ID bucket for an authenticated tier. When
+// peer_id is missing (e.g. middleware wiring bug), falls back to an IP-keyed
+// unverified bucket at the same rate rather than granting unconditional access.
+func (rl *tieredRateLimiter) authBucket(c echo.Context, m *sync.Map, ratePerSec int) *rate.Limiter {
+	peerID, _ := c.Get("peer_id").(string)
+	if peerID == "" {
+		return rl.unverifiedBucket(c.RealIP(), ratePerSec)
+	}
+	return rl.peerBucket(m, peerID, ratePerSec)
 }
 
 // allowAtBucket consumes one token from the given limiter and returns the next

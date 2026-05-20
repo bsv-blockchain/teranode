@@ -255,93 +255,14 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			c.Set("peer_tier", tierUnverified)
 
-			pubKeyHex := c.Request().Header.Get(peerAuthHeaderPubKey)
-			if pubKeyHex == "" {
-				// No auth attempted — no metric increment, this is the common
-				// path for unauthenticated public traffic.
+			peerID, result, attempted := v.verifySignedRequest(c)
+			if !attempted {
+				// No auth attempted — this is the common path for
+				// unauthenticated public traffic; no metric increment.
 				return next(c)
 			}
-
-			// Validate freshness.
-			tsStr := c.Request().Header.Get(peerAuthHeaderTimestamp)
-			ts, err := strconv.ParseInt(tsStr, 10, 64)
-			if err != nil {
-				recordAuthResult(peerAuthResultExpired)
-				return next(c)
-			}
-			if math.Abs(float64(time.Now().Unix()-ts)) > freshnessWindowSeconds {
-				recordAuthResult(peerAuthResultExpired)
-				return next(c)
-			}
-
-			// Decode the public key.
-			pubKeyBytes, err := hex.DecodeString(pubKeyHex)
-			if err != nil {
-				recordAuthResult(peerAuthResultBadSig)
-				return next(c)
-			}
-			pubKey, err := crypto.UnmarshalEd25519PublicKey(pubKeyBytes)
-			if err != nil {
-				recordAuthResult(peerAuthResultBadSig)
-				return next(c)
-			}
-
-			// Decode the signature.
-			sigHex := c.Request().Header.Get(peerAuthHeaderSignature)
-			sigBytes, err := hex.DecodeString(sigHex)
-			if err != nil {
-				recordAuthResult(peerAuthResultBadSig)
-				return next(c)
-			}
-
-			// Replay check: hash (pubkey, signature) for a short fixed key and
-			// reject anything we've already seen within the TTL window.
-			replayKey := replayCacheKey(pubKeyHex, sigHex)
-			if v.replayCache.Has(replayKey) {
-				recordAuthResult(peerAuthResultReplay)
-				return next(c)
-			}
-
-			// Verify the body digest header against the actual body bytes.
-			// Without this step the digest is just attacker-controlled data.
-			declaredDigest := strings.ToLower(c.Request().Header.Get(util.PeerAuthBodyDigestHeader))
-			actualDigest, err := digestRequestBody(c.Request())
-			if err != nil {
-				recordAuthResult(peerAuthResultBadDigest)
-				return next(c)
-			}
-			if declaredDigest != actualDigest {
-				recordAuthResult(peerAuthResultBadDigest)
-				return next(c)
-			}
-
-			// Build and verify the canonical payload.
-			payload := "v2:" + tsStr + ":" + c.Request().Host + ":" + c.Request().Method + ":" + c.Request().URL.RequestURI() + ":" + declaredDigest
-			ok, err := pubKey.Verify([]byte(payload), sigBytes)
-			if err != nil || !ok {
-				recordAuthResult(peerAuthResultBadSig)
-				return next(c)
-			}
-
-			// Signature is valid AND fresh — record it so a re-submit within
-			// the window is rejected. Recorded after verify so a flood of
-			// invalid signatures doesn't pollute the cache.
-			v.replayCache.Set(replayKey, struct{}{}, ttlcache.DefaultTTL)
-
-			peerID, err := peer.IDFromPublicKey(pubKey)
-			if err != nil {
-				recordAuthResult(peerAuthResultBadSig)
-				return next(c)
-			}
-
-			// Allowlist gate: signature is valid but the peer is only
-			// eligible for tier elevation if explicitly listed by the
-			// operator. Empty allowlist => no peer is eligible. Authenticated
-			// but un-allowlisted peers stay at tierUnverified — this is the
-			// authentication signal without the rate-limit privilege.
-			if _, ok := v.allowlist[peerID]; !ok {
-				recordAuthResult(peerAuthResultNotAllowlisted)
-				v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
+			if result != peerAuthResultOK {
+				recordAuthResult(result)
 				return next(c)
 			}
 
@@ -360,10 +281,102 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 			c.Set("peer_id", peerID.String())
 			recordAuthResult(peerAuthResultOK)
 			v.logger.Debugf("[PeerAuth] authenticated peer %s as %s", peerID, tier)
-
 			return next(c)
 		}
 	}
+}
+
+// verifySignedRequest performs the cryptographic and policy checks against a
+// signed request. Returns (peerID, result, attempted) where:
+//   - attempted=false: no X-Peer-PubKey header; caller should fall through
+//     without recording a metric.
+//   - attempted=true and result==peerAuthResultOK: caller should look up the
+//     tier and elevate.
+//   - attempted=true and result!=peerAuthResultOK: caller should record the
+//     result label and fall through as tierUnverified.
+//
+// Splitting this out keeps Middleware itself well under the cognitive-complexity
+// budget; the bulk of the logic here is straight-line fail-fast checks.
+func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string, bool) {
+	req := c.Request()
+
+	pubKeyHex := req.Header.Get(peerAuthHeaderPubKey)
+	if pubKeyHex == "" {
+		return "", "", false
+	}
+
+	if !checkFreshness(req.Header.Get(peerAuthHeaderTimestamp)) {
+		return "", peerAuthResultExpired, true
+	}
+
+	pubKey, ok := decodeEd25519PublicKey(pubKeyHex)
+	if !ok {
+		return "", peerAuthResultBadSig, true
+	}
+
+	sigHex := req.Header.Get(peerAuthHeaderSignature)
+	sigBytes, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return "", peerAuthResultBadSig, true
+	}
+
+	// Replay check before any expensive work (signature verify, body read).
+	replayKey := replayCacheKey(pubKeyHex, sigHex)
+	if v.replayCache.Has(replayKey) {
+		return "", peerAuthResultReplay, true
+	}
+
+	declaredDigest := strings.ToLower(req.Header.Get(util.PeerAuthBodyDigestHeader))
+	actualDigest, err := digestRequestBody(req)
+	if err != nil || declaredDigest != actualDigest {
+		return "", peerAuthResultBadDigest, true
+	}
+
+	payload := "v2:" + req.Header.Get(peerAuthHeaderTimestamp) + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + declaredDigest
+	verified, err := pubKey.Verify([]byte(payload), sigBytes)
+	if err != nil || !verified {
+		return "", peerAuthResultBadSig, true
+	}
+
+	// Signature is valid AND fresh — record so a re-submit within the window
+	// is rejected. Recorded only after verify so a flood of invalid sigs
+	// doesn't pollute the cache.
+	v.replayCache.Set(replayKey, struct{}{}, ttlcache.DefaultTTL)
+
+	peerID, err := peer.IDFromPublicKey(pubKey)
+	if err != nil {
+		return "", peerAuthResultBadSig, true
+	}
+
+	if _, ok := v.allowlist[peerID]; !ok {
+		v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
+		return peerID, peerAuthResultNotAllowlisted, true
+	}
+
+	return peerID, peerAuthResultOK, true
+}
+
+// checkFreshness parses the X-Peer-Timestamp header and verifies it is within
+// the freshness window. Wraps the strconv + math.Abs check into a single bool.
+func checkFreshness(tsStr string) bool {
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	return math.Abs(float64(time.Now().Unix()-ts)) <= freshnessWindowSeconds
+}
+
+// decodeEd25519PublicKey decodes a hex-encoded Ed25519 public key.
+func decodeEd25519PublicKey(hexStr string) (crypto.PubKey, bool) {
+	raw, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return nil, false
+	}
+	pubKey, err := crypto.UnmarshalEd25519PublicKey(raw)
+	if err != nil {
+		return nil, false
+	}
+	return pubKey, true
 }
 
 // replayCacheKey returns a short fixed-length key for the (pubkey, signature)
