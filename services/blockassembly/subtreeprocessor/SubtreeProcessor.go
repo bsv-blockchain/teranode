@@ -4437,9 +4437,15 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		itemsProcessed := int64(0)
-		validFromMillis := stp.clock.Now().UnixMilli()
+		// Take a single clock sample so both the zero-window and
+		// non-zero-window branches anchor on the same moment — the
+		// "function entry" semantic the docstring describes. Calling
+		// stp.clock.Now() twice would let the second call admit batches
+		// enqueued in the gap between the two samples.
+		now := stp.clock.Now()
+		validFromMillis := now.UnixMilli()
 		if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-			validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+			validFromMillis = now.Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 		}
 
 		for itemsProcessed < queueLength {

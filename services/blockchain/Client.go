@@ -204,7 +204,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					}
 
 					for _, s := range c.subscribers {
-						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
+						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification, subscriberSource string) {
 							// Bounded timeout so a slow / unresponsive subscriber
 							// cannot park this fan-out goroutine indefinitely.
 							// Each notification spawns one goroutine per subscriber;
@@ -214,8 +214,15 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 							// 30s is long relative to block cadence (~10 min) but
 							// short relative to "forever" — slow subscribers lose
 							// the notification, which is preferable to a leak.
-							_ = util.SafeSend(ch, notification, notificationSendTimeout)
-						}(s.ch, notification)
+							//
+							// SafeSend returns false on timeout. We surface that
+							// at Warn so a wedged subscriber is visible in logs
+							// during diagnosis without flooding the log on every
+							// notification (notifications are infrequent).
+							if !util.SafeSend(ch, notification, notificationSendTimeout) {
+								c.logger.Warnf("[Blockchain] dropping notification for subscriber %s: channel full for %s", subscriberSource, notificationSendTimeout)
+							}
+						}(s.ch, notification, s.source)
 					}
 					c.subscribersMu.Unlock()
 				}
@@ -1178,8 +1185,15 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 			// new subscriber's channel is never drained, this goroutine
 			// would otherwise park forever holding a reference to the
 			// notification.
-			_ = util.SafeSend(ch, lastNotification, notificationSendTimeout)
-			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			//
+			// Only log success when the send actually completed — on
+			// timeout the notification was dropped, which is unexpected
+			// for a brand-new subscriber (its channel should be empty).
+			if util.SafeSend(ch, lastNotification, notificationSendTimeout) {
+				c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			} else {
+				c.logger.Warnf("[Blockchain] dropping initial block notification for new subscriber %s: channel full for %s", source, notificationSendTimeout)
+			}
 		}()
 	}
 	c.subscribersMu.Unlock()
