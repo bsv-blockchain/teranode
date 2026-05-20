@@ -73,6 +73,11 @@ type FSMStateType = blockchain_api.FSMStateType
 // FSMEventType is an alias for blockchain_api.FSMEventType
 type FSMEventType = blockchain_api.FSMEventType
 
+// notificationSendTimeout bounds how long a fan-out goroutine will wait for
+// a subscriber's channel to accept a block notification. See the two
+// SafeSend call sites in this file for the rationale.
+const notificationSendTimeout = 30 * time.Second
+
 const (
 	FSMStateIDLE           = blockchain_api.FSMStateType_IDLE
 	FSMStateRUNNING        = blockchain_api.FSMStateType_RUNNING
@@ -200,7 +205,16 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 					for _, s := range c.subscribers {
 						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
-							util.SafeSend(ch, notification)
+							// Bounded timeout so a slow / unresponsive subscriber
+							// cannot park this fan-out goroutine indefinitely.
+							// Each notification spawns one goroutine per subscriber;
+							// without a timeout, a subscriber whose channel never
+							// drains accumulates one parked goroutine per
+							// notification for the lifetime of the process.
+							// 30s is long relative to block cadence (~10 min) but
+							// short relative to "forever" — slow subscribers lose
+							// the notification, which is preferable to a leak.
+							_ = util.SafeSend(ch, notification, notificationSendTimeout)
 						}(s.ch, notification)
 					}
 					c.subscribersMu.Unlock()
@@ -1159,7 +1173,12 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	if c.lastBlockNotification != nil {
 		lastNotification := c.lastBlockNotification
 		go func() {
-			util.SafeSend(ch, lastNotification)
+			// Same bounded-timeout rationale as the fan-out send in
+			// NewClientWithAddress's notification consumer goroutine: if the
+			// new subscriber's channel is never drained, this goroutine
+			// would otherwise park forever holding a reference to the
+			// notification.
+			_ = util.SafeSend(ch, lastNotification, notificationSendTimeout)
 			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
 		}()
 	}

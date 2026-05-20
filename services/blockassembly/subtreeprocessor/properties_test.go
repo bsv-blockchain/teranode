@@ -65,14 +65,18 @@ func Test_propertyDequeueBatchAdmitPredicate(t *testing.T) {
 // Test_propertyDrainAdmitInvariant drives dequeueDuringBlockMovement
 // with random (window, enqueue_clock, drain_clock) and asserts the
 // integration-level outcome matches the expected admit predicate. This
-// catches regressions in either the validFromMillis formula at
-// SubtreeProcessor.go:3789-3796 or the queue filter at queue.go:96.
+// catches regressions in either the validFromMillis formula in
+// dequeueDuringBlockMovement or the queue filter at queue.go:96.
 //
 // The expected predicate composes both call sites:
 //
-//	validFromMillis = 0                                      if window == 0
+//	validFromMillis = drain_clock.UnixMilli()                if window == 0
 //	validFromMillis = (drain_clock - window).UnixMilli()     otherwise
-//	admit iff validFromMillis <= 0 OR batch.time < validFromMillis
+//	admit iff batch.time < validFromMillis
+//
+// (validFromMillis is always non-zero in dequeueDuringBlockMovement so
+// the queue.go:96 zero-guard never triggers from this call site; the
+// zero-guard still applies to the Start-loop default-case dequeue.)
 func Test_propertyDrainAdmitInvariant(outerT *testing.T) {
 	rapid.Check(outerT, func(t *rapid.T) {
 		windowMs := rapid.Int64Range(0, 10_000).Draw(t, "windowMs")
@@ -106,8 +110,10 @@ func Test_propertyDrainAdmitInvariant(outerT *testing.T) {
 		var validFromMillis int64
 		if window > 0 {
 			validFromMillis = drainTime.Add(-window).UnixMilli()
+		} else {
+			validFromMillis = drainTime.UnixMilli()
 		}
-		wantAdmit := validFromMillis <= 0 || enqueueMs < validFromMillis
+		wantAdmit := enqueueMs < validFromMillis
 
 		ctx := fmt.Sprintf("window=%v, enqueueMs=%d, drainMs=%d, validFromMillis=%d",
 			window, enqueueMs, drainTime.UnixMilli(), validFromMillis)

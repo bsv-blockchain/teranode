@@ -121,11 +121,13 @@ func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	// returns before reaching the drain.
 	stp.currentBlockHeader.Store(model.GenesisBlockHeader)
 
-	// Pin both clocks to the same instant. With DoubleSpendWindow=0 every
-	// enqueued batch admits at drain time.
-	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
-	stp.clock = fixedClock{t: fixed}
-	stp.queue.clock = fixedClock{t: fixed}
+	// Drain clock 1ms ahead of the enqueue clock so the per-drain cutoff
+	// (validFromMillis = drainClock at window=0) admits the enqueued
+	// batch. Same construction as TestDequeueDuringBlockMovement_*.
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	drainAt := enqueueAt.Add(1 * time.Millisecond)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: drainAt}
 
 	// Enqueue a batch directly into the queue. Using a tx hash that is
 	// NOT in the block we are about to move forward, so the dequeue path
