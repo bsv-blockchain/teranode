@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -34,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -65,6 +67,15 @@ const (
 	txmetaActionADD = byte(0)
 	// txmetaActionDELETE represents the DELETE action for txmeta batch messages
 	txmetaActionDELETE = byte(1)
+
+	// txmetaWireV2Magic is the first byte of a v2-format txmeta Kafka message.
+	// v1 messages start with the low byte of a uint32 entry count, which can
+	// never be 0xFF for any realistic batch size — see the receiver in
+	// services/subtreevalidation/txmetaHandler.go for the symmetric check.
+	txmetaWireV2Magic = byte(0xFF)
+	// txmetaWireV2Version identifies the v2 sub-version. Bump if the per-entry
+	// or header layout changes; the receiver rejects unknown sub-versions.
+	txmetaWireV2Version = byte(0x02)
 )
 
 // txmetaBatchItem represents an item to be batched for TxMeta Kafka messages.
@@ -956,19 +967,23 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			isDelete:  false,
 		})
 	} else {
-		// Fallback: send single item as batch format for consistency
-		value := serializeTxMetaBatch([]*txmetaBatchItem{{
+		// Fallback: send single item as batch format for consistency.
+		item := &txmetaBatchItem{
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-		}})
-
-		// Hash key spreads single-item fallback messages evenly across partitions
-		// instead of bunching on franz-go's StickyKeyPartitioner default for nil keys.
-		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Key:   txHash[:],
-			Value: value,
-		})
+		}
+		if v.settings.Validator.TxMetaWireFormat == "v2" {
+			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
+		} else {
+			value := serializeTxMetaBatch([]*txmetaBatchItem{item})
+			// Hash key spreads single-item fallback messages evenly across partitions
+			// instead of bunching on franz-go's StickyKeyPartitioner default for nil keys.
+			v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+				Key:   txHash[:],
+				Value: value,
+			})
+		}
 	}
 
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
@@ -990,6 +1005,11 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 // throughput oscillation on the consumer side.
 func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 	if len(batch) == 0 {
+		return
+	}
+
+	if v.settings.Validator.TxMetaWireFormat == "v2" {
+		v.sendTxMetaBatchV2(batch)
 		return
 	}
 
@@ -1055,6 +1075,156 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	}
 
 	return buf
+}
+
+// txmetaItemWithHash bundles a batch item with its pre-computed xxhash so
+// per-partition grouping and serialization don't re-hash.
+type txmetaItemWithHash struct {
+	item *txmetaBatchItem
+	h    uint64
+}
+
+// serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
+// items that have already been grouped into a single Kafka partition.
+//
+// Layout (see services/subtreevalidation/txmetaHandler.go for the symmetric
+// parser):
+//
+//	[1 byte]    magic = 0xFF
+//	[1 byte]    version = 0x02
+//	[2 bytes]   reserved (zero)
+//	[4 bytes]   entry count (uint32 LE)
+//	per entry:
+//	  [8 bytes]  xxhash(tx hash) (uint64 LE)
+//	  [32 bytes] tx hash
+//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [4 bytes]  content length (uint32 LE)
+//	  [N bytes]  content (only for ADD)
+//
+// Putting the pre-computed xxhash on the wire lets the receiver skip its own
+// xxhash on every entry — a small per-entry saving that compounds at the
+// production rates this is designed for.
+func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
+	size := 8 // header: magic + version + 2 reserved + count
+	for _, it := range items {
+		size += 8 + 32 + 1 + 4
+		if !it.item.isDelete {
+			size += len(it.item.metaBytes)
+		}
+	}
+
+	buf := make([]byte, size)
+	buf[0] = txmetaWireV2Magic
+	buf[1] = txmetaWireV2Version
+	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
+	off := 8
+
+	for _, it := range items {
+		binary.LittleEndian.PutUint64(buf[off:], it.h)
+		off += 8
+		copy(buf[off:], it.item.hash[:])
+		off += 32
+		if it.item.isDelete {
+			buf[off] = txmetaActionDELETE
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], 0)
+			off += 4
+		} else {
+			buf[off] = txmetaActionADD
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
+			off += 4
+			copy(buf[off:], it.item.metaBytes)
+			off += len(it.item.metaBytes)
+		}
+	}
+
+	return buf
+}
+
+// sendTxMetaBatchV2 splits the batch into per-partition sub-batches keyed by
+// xxhash(tx hash) and emits one Kafka record per non-empty partition with the
+// partition number set explicitly on the record (requires the txmeta producer
+// to have been built with kafka.KafkaProducerConfig.ManualPartitioning=true).
+//
+// Routing rule:
+//
+//	bucketIdx           = xxhash(hash) % BucketsCount
+//	bucketsPerPartition = BucketsCount / NumPartitions
+//	partition           = bucketIdx / bucketsPerPartition
+//
+// Each partition therefore owns a contiguous, disjoint range of receiver
+// cache buckets. The subtreevalidation handler can write its partition's
+// records to the cache without taking locks contended by any other
+// partition's records (modulo the cache's own bucket-lock granularity).
+// txmetaPartitionsScratch is the per-call scratch held in
+// txmetaPartitionsScratchPool. partitions[p] is the per-partition group of
+// items being assembled before serialization. The outer slice header and the
+// per-partition inner slices' backing arrays are both reused across calls;
+// only newly-required capacity (e.g. when a hot partition gets a bigger
+// group than any prior call) triggers a fresh allocation. The byte buffer
+// produced by serializeTxMetaBatchV2 is NOT pooled — it is handed to
+// franz-go via Publish and we have no callback hook for safe return.
+type txmetaPartitionsScratch struct {
+	partitions [][]txmetaItemWithHash
+}
+
+var txmetaPartitionsScratchPool = sync.Pool{
+	New: func() any { return &txmetaPartitionsScratch{} },
+}
+
+func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
+	if len(batch) == 0 {
+		return
+	}
+
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+	if bucketsPerPartition < 1 {
+		bucketsPerPartition = 1
+	}
+
+	scratch := txmetaPartitionsScratchPool.Get().(*txmetaPartitionsScratch)
+	// Ensure outer slice has the right shape, growing only if needed.
+	if cap(scratch.partitions) < numPartitions {
+		scratch.partitions = make([][]txmetaItemWithHash, numPartitions)
+	} else {
+		scratch.partitions = scratch.partitions[:numPartitions]
+	}
+	// Reset every per-partition slice's length to 0 but retain capacity for
+	// reuse on the next pool hit. We do NOT nil the elements: they're past
+	// len, GC can still collect the txmetaBatchItem pointers when no live
+	// slice header references them, and they get overwritten the next time
+	// this partition is hit.
+	for i := range scratch.partitions {
+		scratch.partitions[i] = scratch.partitions[i][:0]
+	}
+	defer txmetaPartitionsScratchPool.Put(scratch)
+
+	for _, item := range batch {
+		h := xxhash.Sum64(item.hash[:])
+		bucket := int(h % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p >= numPartitions {
+			// Defensive cap; only fires if BucketsCount is not an exact
+			// multiple of NumPartitions, which is documented as a constraint.
+			p = numPartitions - 1
+		}
+		scratch.partitions[p] = append(scratch.partitions[p], txmetaItemWithHash{item: item, h: h})
+	}
+
+	for p, items := range scratch.partitions {
+		if len(items) == 0 {
+			continue
+		}
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
+			Value:     serializeTxMetaBatchV2(items),
+		})
+	}
 }
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.

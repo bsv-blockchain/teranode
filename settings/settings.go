@@ -392,6 +392,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxMetaKafkaBatchSize:      getInt("validator_txmeta_kafka_batchSize", 1024, alternativeContext...),
 			TxMetaKafkaBatchTimeoutMs: getInt("validator_txmeta_kafka_batchTimeoutMs", 5, alternativeContext...),
 			TxLockedMaxRetries:        getInt("validator_txlocked_maxRetries", 3, alternativeContext...),
+			TxMetaWireFormat:          getString("validator_txmeta_wireFormat", "v1", alternativeContext...),
+			TxMetaNumPartitions:       getInt("validator_txmeta_numPartitions", 32, alternativeContext...),
 		},
 		Region: RegionSettings{
 			Name: getString("regionName", "defaultRegionName", alternativeContext...),
@@ -548,6 +550,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
 			TxMetaCacheMaxMB:                          getInt("txMetaCacheMaxMB", 256, alternativeContext...),
+			TxMetaCacheBucketType:                     getString("subtreevalidation_txMetaCacheBucketType", "unallocated", alternativeContext...),
+			TxMetaCacheTrimRatio:                      getInt("subtreevalidation_txMetaCacheTrimRatio", 2, alternativeContext...),
 			TxChanBufferSize:                          getInt("subtreevalidation_txChanBufferSize", 0, alternativeContext...),
 			BatchMissingTransactions:                  getBool("subtreevalidation_batch_missing_transactions", true, alternativeContext...),
 			SpendBatcherSize:                          getInt("subtreevalidation_spendBatcherSize", 1024, alternativeContext...),

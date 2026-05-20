@@ -70,6 +70,13 @@ type KafkaProducerConfig struct {
 
 	// Transfer rate monitoring
 	SlowTransfer SlowTransferConfig // Thresholds for slow-send detection (zero value uses defaults)
+
+	// ManualPartitioning routes every record to Message.Partition without any
+	// hashing or sticky-batching by franz-go. Callers MUST set Partition on
+	// every Message they publish — there is no fallback. Used by the validator
+	// when emitting v2-format txmeta messages so each Kafka message lands on a
+	// partition aligned with the receiver's cache bucket range.
+	ManualPartitioning bool
 }
 
 // MessageStatus represents the status of a produced message.
@@ -80,9 +87,18 @@ type MessageStatus struct {
 }
 
 // Message represents a Kafka message with key and value.
+//
+// Partition is honored only when the producer was created with
+// KafkaProducerConfig.ManualPartitioning=true. In that mode the producer is
+// registered with kgo.ManualPartitioner, which writes the record to exactly
+// the partition number specified — there is no fallback, so callers MUST set
+// Partition explicitly for every Message. With ManualPartitioning=false the
+// field is ignored (franz-go's default StickyKeyPartitioner picks the
+// partition from Key).
 type Message struct {
-	Key   []byte
-	Value []byte
+	Key       []byte
+	Value     []byte
+	Partition int32
 }
 
 // KafkaAsyncProducer implements asynchronous Kafka producer functionality using franz-go.
@@ -101,8 +117,22 @@ type KafkaAsyncProducer struct {
 	isInMemory       bool
 }
 
+// ProducerOption mutates the KafkaProducerConfig built from a URL before the
+// underlying client is constructed. Use with NewKafkaAsyncProducerFromURL to
+// override flags that aren't expressible in the URL (e.g. ManualPartitioning).
+type ProducerOption func(*KafkaProducerConfig)
+
+// WithManualPartitioning switches the producer to franz-go's ManualPartitioner.
+// Every Message.Partition is honored verbatim; there is no fallback for
+// records without an explicit partition. Use when the caller wants strict
+// control over partition routing (e.g. the validator emitting v2 txmeta
+// messages aligned to receiver-side cache bucket ranges).
+func WithManualPartitioning() ProducerOption {
+	return func(c *KafkaProducerConfig) { c.ManualPartitioning = true }
+}
+
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
-func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings, opts ...ProducerOption) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := safeconversion.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
@@ -142,6 +172,10 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		TLSCertFile:           tlsCertFile,
 		TLSKeyFile:            tlsKeyFile,
 		EnableDebugLogging:    enableDebugLogging,
+	}
+
+	for _, opt := range opts {
+		opt(&producerConfig)
 	}
 
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
@@ -215,6 +249,10 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		kgo.ProducerLinger(cfg.FlushFrequency),
 		kgo.MaxBufferedRecords(cfg.FlushMessages),
 		kgo.DisableIdempotentWrite(),
+	}
+
+	if cfg.ManualPartitioning {
+		opts = append(opts, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	}
 
 	// Configure TLS if enabled
@@ -319,6 +357,9 @@ func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered
 			Topic: c.Config.Topic,
 			Key:   msgBytes.Key,
 			Value: msgBytes.Value,
+		}
+		if c.Config.ManualPartitioning {
+			record.Partition = msgBytes.Partition
 		}
 		c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
 			if err != nil {

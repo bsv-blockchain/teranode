@@ -294,6 +294,56 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+// SetCacheMultiSequential is the partition-aware twin of SetCacheMulti. It
+// appends the current block height to each value (same as SetCacheMulti) and
+// then delegates to ImprovedCache.SetMultiSequential, which performs all
+// bucket writes on the calling goroutine without errgroup fan-out.
+//
+// Use this in receivers that already have parallelism elsewhere (one
+// goroutine per Kafka partition, partitions aligned with disjoint cache
+// bucket ranges). See SetMultiSequential's doc for the throughput rationale.
+func (t *TxMetaCache) SetCacheMultiSequential(keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	valuesWithHeight := make([][]byte, len(values))
+	for i, value := range values {
+		valuesWithHeight[i] = t.appendHeightToValue(value)
+	}
+
+	if err := t.cache.SetMultiSequential(keys, valuesWithHeight); err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
+// SetCacheMultiSequentialWithHashes is SetCacheMultiSequential with caller-
+// supplied xxhash values, allowing the v2 txmeta receiver to skip its own
+// xxhash by reading the hash from the wire format. hashes[i] MUST equal
+// xxhash.Sum64(keys[i]) — see ImprovedCache.SetMultiSequentialWithHashes.
+func (t *TxMetaCache) SetCacheMultiSequentialWithHashes(keys [][]byte, values [][]byte, hashes []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	valuesWithHeight := make([][]byte, len(values))
+	for i, value := range values {
+		valuesWithHeight[i] = t.appendHeightToValue(value)
+	}
+
+	if err := t.cache.SetMultiSequentialWithHashes(keys, valuesWithHeight, hashes); err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
 func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) error {
 
 	err := t.cache.SetMulti(keys, values)
