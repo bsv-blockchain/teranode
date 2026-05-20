@@ -218,8 +218,11 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 	t.Helper()
 
 	numPartitions := h.server.settings.Validator.TxMetaNumPartitions
-	if numPartitions <= 0 {
-		numPartitions = 1
+	// Cap to BucketsCount so the floor below keeps bucketsPerPartition >= 1.
+	// Under the testtxmetacache build tag BucketsCount=8, so the harness's
+	// default 32 partitions would otherwise divide to zero.
+	if numPartitions > e2eBucketsCount {
+		numPartitions = e2eBucketsCount
 	}
 	bucketsPerPartition := e2eBucketsCount / numPartitions
 	if bucketsPerPartition < 1 {
@@ -236,9 +239,6 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 		hv := xxhash.Sum64(hashes[i][:])
 		bucket := int(hv % uint64(e2eBucketsCount))
 		p := bucket / bucketsPerPartition
-		if p >= numPartitions {
-			p = numPartitions - 1
-		}
 		partitions[p] = append(partitions[p], item{hash: hashes[i], payload: payloads[i], h: hv})
 	}
 
@@ -486,8 +486,11 @@ var benchV2ScratchPool = sync.Pool{
 // done reading those bytes. This eliminates the producer-side allocations
 // that previously dominated the bench's mem profile (~50% of total).
 func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numPartitions int) ([][]byte, *benchV2Scratch) {
-	if numPartitions <= 0 {
-		numPartitions = 1
+	// Same floor as validator.sendTxMetaBatchV2 — necessary under the
+	// testtxmetacache build tag where BucketsCount=8 collapses to zero
+	// against the bench's default 32 partitions.
+	if numPartitions > e2eBucketsCount {
+		numPartitions = e2eBucketsCount
 	}
 	bucketsPerPartition := e2eBucketsCount / numPartitions
 	if bucketsPerPartition < 1 {
@@ -522,9 +525,6 @@ func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numParti
 		hv := xxhash.Sum64(hashes[i][:])
 		bucket := int(hv % uint64(e2eBucketsCount))
 		p := bucket / bucketsPerPartition
-		if p >= numPartitions {
-			p = numPartitions - 1
-		}
 		s.groups[p] = append(s.groups[p], benchV2Item{idx: i, h: hv})
 	}
 
