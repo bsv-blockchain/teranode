@@ -2361,14 +2361,14 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 }
 
 // TestFetchSubtreeFromPeer_OversizedBody verifies that fetchSubtreeFromPeer refuses to allocate
-// a peer-supplied response body larger than MaximumMerkleItemsPerSubtree * HashSize.
+// a peer-supplied response body larger than SubtreeValidation.MaxIncomingSubtreeBytes.
 // Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
 func TestFetchSubtreeFromPeer_OversizedBody(t *testing.T) {
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap so the test response is cheap to produce
 
 	server := &Server{
 		logger:   ulogger.TestLogger{},
@@ -2388,6 +2388,42 @@ func TestFetchSubtreeFromPeer_OversizedBody(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, data)
 	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
+// TestFetchSubtreeFromPeer_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// PR #772 originally bounded incoming peer responses by the local
+// BlockAssembly.MaximumMerkleItemsPerSubtree, which broke catchup on docker/test profiles
+// whose assembly cap is smaller than the network's real subtree size. After the fix, the
+// bound is governed by SubtreeValidation.MaxIncomingSubtreeBytes only, so a small local
+// assembly cap no longer rejects legitimate peer responses.
+func TestFetchSubtreeFromPeer_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Mimic the docker quickstart profile: small local assembly cap (32k items * 32 bytes
+	// = 1 MiB) paired with the generous receive-side cap from the default config.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024 // 128 MiB (default)
+
+	server := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	subtreeHash := chainhash.HashH([]byte("test-large-peer-subtree"))
+	baseURL := "http://test-peer:8080"
+
+	// Response larger than the local assembly cap (1 MiB) but well under the receive cap.
+	largeBody := bytes.Repeat([]byte{0xcd}, 2*1024*1024) // 2 MiB
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, largeBody))
+
+	data, err := server.fetchSubtreeFromPeer(context.Background(), &subtreeHash, "test-peer-id", baseURL)
+
+	require.NoError(t, err)
+	require.Len(t, data, len(largeBody))
 }
 
 // TestFetchSubtreeDataFromPeer tests the fetchSubtreeDataFromPeer function comprehensively

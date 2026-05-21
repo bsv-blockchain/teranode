@@ -7,21 +7,25 @@ import (
 
 // partitionLegacyBlock determines how to partition a legacy block's transactions
 // into subtrees so the resulting block satisfies model.Block.CheckMerkleRoot's
-// rules: all non-final subtrees must share the same length, the final subtree
-// must be at most that length and a power of two if smaller.
+// rules: every non-final subtree shares the same power-of-two length, and the
+// final subtree's length is at most that.
 //
 // Returns (subtreeSize, K, finalLeafCount):
 //   - K is the number of subtrees
-//   - subtreeSize is the capacity (and Length) of each non-final subtree
-//   - finalLeafCount is the actual leaf count of the final subtree (== subtreeSize
-//     if the final subtree is full, smaller power-of-two otherwise)
+//   - subtreeSize is the capacity (and Length) of each non-final subtree (always
+//     a power of two ≤ maxItems)
+//   - finalLeafCount is the actual leaf count of the final subtree, in [1, subtreeSize]
 //
-// For totalLeaves <= maxItems, returns (totalLeaves, 1, totalLeaves), preserving
-// today's single-subtree behaviour.
+// For totalLeaves ≤ maxItems, returns (totalLeaves, 1, totalLeaves), preserving
+// today's single-subtree behaviour for small blocks.
 //
-// For larger totalLeaves, picks the largest power-of-two s ≤ maxItems such that
-// totalLeaves - (ceil(totalLeaves/s)-1)*s is a power of two. Always terminates
-// because s=1 yields r=1 which is power-of-two.
+// For larger totalLeaves, the partition is fixed: subtreeSize = maxItems and the
+// final subtree holds the remainder. Because the duplicate-when-odd rule already
+// pads the merkle tree internally at every level, the final subtree's leaf count
+// can be any value in [1, subtreeSize] — it does not need to be a power of two.
+// This avoids the pre-#901 degenerate case where adversarial leaf counts (e.g.
+// 900,679 transactions) forced the partitioner all the way down to subtreeSize=2
+// and produced hundreds of thousands of tiny subtrees.
 func partitionLegacyBlock(totalLeaves, maxItems int) (subtreeSize, K, finalLeafCount int, err error) {
 	if totalLeaves <= 0 {
 		return 0, 0, 0, errors.NewProcessingError("partitionLegacyBlock: totalLeaves must be > 0, got %d", totalLeaves)
@@ -39,14 +43,9 @@ func partitionLegacyBlock(totalLeaves, maxItems int) (subtreeSize, K, finalLeafC
 		return totalLeaves, 1, totalLeaves, nil
 	}
 
-	for s := maxItems; s >= 1; s /= 2 {
-		kCalc := (totalLeaves + s - 1) / s
-		r := totalLeaves - (kCalc-1)*s
+	subtreeSize = maxItems
+	K = (totalLeaves + subtreeSize - 1) / subtreeSize
+	finalLeafCount = totalLeaves - (K-1)*subtreeSize
 
-		if r == s || subtreepkg.IsPowerOfTwo(r) {
-			return s, kCalc, r, nil
-		}
-	}
-
-	return 0, 0, 0, errors.NewProcessingError("partitionLegacyBlock: no valid partition found for totalLeaves=%d, maxItems=%d", totalLeaves, maxItems)
+	return subtreeSize, K, finalLeafCount, nil
 }

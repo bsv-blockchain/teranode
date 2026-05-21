@@ -1667,12 +1667,32 @@ func (stp *SubtreeProcessor) GetChainedSubtrees() []*subtreepkg.Subtree {
 	return <-response
 }
 
-func (stp *SubtreeProcessor) GetSubtreeHashes() []chainhash.Hash {
-	response := make(chan []chainhash.Hash)
+func (stp *SubtreeProcessor) GetSubtreeHashes(ctx context.Context) []chainhash.Hash {
+	// response is buffered size 1 so that even if this function returns
+	// early (because ctx cancelled before the main loop responded), the
+	// main loop's send at line 707 — `getSubtreeHashesChan <- subtreeHashes`
+	// in Start.func1 — never blocks. Combined with the ctx-aware select
+	// on the request send below, this eliminates the goroutine leak that
+	// previously kept ~one parked goroutine per GetBlockAssemblyState RPC
+	// every time the SubtreeProcessor main loop was busy (e.g. inside
+	// moveForwardBlock).
+	response := make(chan []chainhash.Hash, 1)
 
-	stp.getSubtreeHashesChan <- response
+	select {
+	case stp.getSubtreeHashesChan <- response:
+	case <-ctx.Done():
+		return nil
+	}
 
-	return <-response
+	select {
+	case r := <-response:
+		return r
+	case <-ctx.Done():
+		// Main loop will still write into the buffered response channel
+		// when it gets there; the buffer absorbs the write so the main
+		// loop doesn't block. Nothing leaks.
+		return nil
+	}
 }
 
 func (stp *SubtreeProcessor) GetTransactionHashes() []chainhash.Hash {
@@ -4390,20 +4410,45 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
+	// Bound the drain by two complementary cutoffs:
+	//
+	//  1. Time: validFromMillis = clock.Now() at function entry (or
+	//     clock.Now() - DoubleSpendWindow when that filter is enabled).
+	//     The queue filter at queue.go:96 holds back any batch whose
+	//     enqueue timestamp is >= this value, so we only drain batches
+	//     that existed before this moment. Batches arriving during the
+	//     drain stay queued and roll forward to the next state-transition
+	//     cycle. By design AddTxBatchColumnar (the gRPC ingest path) does
+	//     not backpressure, so this time cap is what stops the loop from
+	//     chasing ingest.
+	//
+	//  2. Items: queueLength snapshotted at entry, compared against items
+	//     drained. Belt-and-braces — if clock granularity ever caused the
+	//     time filter to admit slightly more than expected, this caps
+	//     total work at the snapshot.
+	//
+	// Previous form left validFromMillis=0 when DoubleSpendWindow=0,
+	// which disables the queue filter entirely (queue.go:96 short-circuits
+	// on `validFromMillis > 0`). And the items-bound compared
+	// `nrBatchesProcessed` to `queueLength`, but queue.length() returns
+	// total *items* (queue.go:71 / 75 add len(nodes)), not batches. With
+	// ~1k items/batch and ingest at line-rate, neither bound fired — the
+	// scaling-2 pod sat for 35+ minutes at 558 GB RSS inside this loop.
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
-		nrBatchesProcessed := int64(0)
-		// Match the Start-loop zero-guard at the default-case dequeue
-		// (line 810-813): a zero DoubleSpendWindow disables the queue
-		// filter entirely. Without this guard, the drain computes
-		// Now().UnixMilli() and the queue filter at queue.go:96 holds
-		// back same-millisecond batches under the default config.
-		validFromMillis := int64(0)
+		itemsProcessed := int64(0)
+		// Take a single clock sample so both the zero-window and
+		// non-zero-window branches anchor on the same moment — the
+		// "function entry" semantic the docstring describes. Calling
+		// stp.clock.Now() twice would let the second call admit batches
+		// enqueued in the gap between the two samples.
+		now := stp.clock.Now()
+		validFromMillis := now.UnixMilli()
 		if stp.settings.BlockAssembly.DoubleSpendWindow > 0 {
-			validFromMillis = stp.clock.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+			validFromMillis = now.Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 		}
 
-		for {
+		for itemsProcessed < queueLength {
 			batch, found := stp.queue.dequeueBatch(validFromMillis)
 			if !found {
 				break
@@ -4442,12 +4487,8 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 				_ = stp.addNode(node, txInpoints, skipNotification)
 			}
 
+			itemsProcessed += int64(len(batch.nodes))
 			prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(batch.nodes)))
-
-			nrBatchesProcessed++
-			if nrBatchesProcessed > queueLength {
-				break
-			}
 		}
 	}
 

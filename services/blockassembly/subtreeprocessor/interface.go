@@ -242,9 +242,18 @@ type Interface interface {
 	// GetSubtreeHashes returns the hashes of all subtrees currently managed by the processor.
 	// This provides a quick reference to the subtrees without needing to access their full structures.
 	//
+	// Returns nil if ctx is cancelled before the SubtreeProcessor's main
+	// loop services the request. Callers should pass a context with a
+	// timeout so a busy main loop (e.g. in moveForwardBlock) does not park
+	// the caller indefinitely.
+	//
+	// Parameters:
+	//   - ctx: Cancellation context; returning early on cancel never leaks
+	//     a goroutine because the underlying response channel is buffered.
+	//
 	// Returns:
-	//   - []chainhash.Hash: Array of subtree hashes
-	GetSubtreeHashes() []chainhash.Hash
+	//   - []chainhash.Hash: Array of subtree hashes (nil if cancelled)
+	GetSubtreeHashes(ctx context.Context) []chainhash.Hash
 
 	// GetTransactionHashes returns the hashes of all transactions currently being processed.
 	// This provides a complete list of transactions in the processor's queue.

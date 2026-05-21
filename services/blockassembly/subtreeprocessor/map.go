@@ -41,8 +41,21 @@ func NewSplitSwissMap(nrOfBuckets uint16, length int) *SplitSwissMap {
 	}
 }
 
+// Exists reports whether hash is present in its bucket. Holds the per-bucket
+// RLock for the duration of the lookup.
+//
+// The dolthub/swiss.Map underlying each bucket uses open-addressing with
+// in-place control-byte probing — concurrent read while another goroutine is
+// writing (Put or Delete) can land the reader in an inconsistent probe state,
+// in the worst case spinning forever on a corrupted control sequence. Put
+// and PutMultiBucket acquire the per-bucket sync.RWMutex as a write lock;
+// Exists now matches with a read lock. Readers across distinct buckets do
+// not serialise on each other; readers and writers within one bucket do.
 func (s *SplitSwissMap) Exists(hash chainhash.Hash) bool {
-	_, ok := s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].Get(hash)
+	bucket := txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)
+	s.mu[bucket].RLock()
+	_, ok := s.m[bucket].Get(hash)
+	s.mu[bucket].RUnlock()
 	return ok
 }
 

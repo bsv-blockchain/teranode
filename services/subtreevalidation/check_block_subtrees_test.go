@@ -426,8 +426,8 @@ func TestCheckBlockSubtrees(t *testing.T) {
 }
 
 // TestCheckBlockSubtrees_OversizedBody verifies that the peer-fetch fallback at
-// check_block_subtrees.go:218 refuses to allocate a response body larger than
-// MaximumMerkleItemsPerSubtree * HashSize. Pre-fix a malicious peer could OOM the node by
+// check_block_subtrees.go refuses to allocate a response body larger than
+// SubtreeValidation.MaxIncomingSubtreeBytes. Pre-fix a malicious peer could OOM the node by
 // streaming oversized bytes inside the request window; post-fix the chain surfaces ErrExternal.
 func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 	httpmock.ActivateNonDefault(util.HTTPClient())
@@ -436,7 +436,7 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -476,6 +476,73 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, response)
 	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal in chain, got %v", err)
+}
+
+// TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// The peer-fetch fallback in CheckBlockSubtrees gates the response twice: first by the
+// HTTP body size, then by the derived leaf count. Pre-fix both gates used the local
+// BlockAssembly.MaximumMerkleItemsPerSubtree, so a docker-quickstart node (32k cap) rejected
+// every peer subtree larger than 1 MiB even though the body cap was generous. Post-fix both
+// gates are governed by SubtreeValidation.MaxIncomingSubtreeBytes; the local assembly cap
+// no longer rejects legitimate peer responses.
+func TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Docker quickstart profile: small local assembly cap, generous receive cap.
+	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-large-peer-checkblock-subtree"))
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+
+	// 65,536 32-byte hashes = 2 MiB. This is 2x the docker assembly cap (32k * 32 = 1 MiB)
+	// but well below the receive cap (128 MiB). Pre-fix the leaf-count gate rejected this
+	// with "exceeds policy max"; post-fix it must pass that gate. The synthesized hashes
+	// won't compute back to subtreeHash so the call still fails downstream — we assert only
+	// that the failure is NOT the policy-max gate.
+	const leafCount = 65536
+	payload := make([]byte, leafCount*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, payload))
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err, "expected the synthesized payload's root to mismatch subtreeHash")
+	require.NotContains(t, err.Error(), "exceeds policy max",
+		"leaf-count gate rejected a peer subtree larger than the local assembly cap — see issue #905")
 }
 
 func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {

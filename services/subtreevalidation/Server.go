@@ -6,6 +6,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,18 +134,6 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
-
-	// txmeta worker pool state.
-	txmetaWorkerInitOnce sync.Once
-	txmetaWorkerCancel   context.CancelFunc
-	txmetaWorkerQueues   []chan txmetaWorkItem
-	txmetaWorkerWg       sync.WaitGroup
-	// txmetaCaughtUp is a one-way latch. While false, the txmeta handler blocks on
-	// the shard worker queues so backfill cannot drop messages. The latch flips
-	// to true the first time a Kafka message is observed at the partition's
-	// high water mark, after which the handler drops on full (preserving live-
-	// traffic backpressure semantics).
-	txmetaCaughtUp atomic.Bool
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -230,11 +219,12 @@ func New(
 
 	// create a caching tx meta store
 	if tSettings.SubtreeValidation.TxMetaCacheEnabled {
-		logger.Infof("Using cached version of tx meta store")
+		bucketType := resolveTxMetaCacheBucketType(logger, tSettings.SubtreeValidation.TxMetaCacheBucketType)
+		logger.Infof("Using cached version of tx meta store (bucket type: %s)", tSettings.SubtreeValidation.TxMetaCacheBucketType)
 
 		var err error
 
-		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
+		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, bucketType)
 		if err != nil {
 			logger.Errorf("Failed to create tx meta cache: %v", err)
 		}
@@ -565,11 +555,6 @@ func (u *Server) Stop(_ context.Context) error {
 			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 		}
 	}
-
-	if u.txmetaWorkerCancel != nil {
-		u.txmetaWorkerCancel()
-	}
-	u.txmetaWorkerWg.Wait()
 
 	if u.invalidSubtreeKafkaProducer != nil {
 		if err := u.invalidSubtreeKafkaProducer.Stop(); err != nil {
@@ -902,6 +887,26 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 		}
 
 		u.logger.Infof("[CheckSubtreeFromBlock] Processed %d orphaned transactions after subtree validation", processedOrphans.Load())
+	}
+}
+
+// resolveTxMetaCacheBucketType maps the subtreevalidation_txMetaCacheBucketType
+// setting (string) to the txmetacache.BucketType enum. Unknown values fall
+// back to Unallocated and log a warning so a typo never silently changes the
+// deployed allocator on a flag-day style flip.
+func resolveTxMetaCacheBucketType(logger ulogger.Logger, raw string) txmetacache.BucketType {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "unallocated":
+		return txmetacache.Unallocated
+	case "preallocated":
+		return txmetacache.Preallocated
+	case "trimmed":
+		return txmetacache.Trimmed
+	case "native":
+		return txmetacache.Native
+	default:
+		logger.Warnf("[SubtreeValidation] unknown txMetaCacheBucketType %q; falling back to unallocated", raw)
+		return txmetacache.Unallocated
 	}
 }
 

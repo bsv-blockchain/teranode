@@ -340,7 +340,7 @@ func TestInvalidSubtreeReporting_ReadTxFromReaderPanic(t *testing.T) {
 }
 
 // TestGetSubtreeTxHashes_OversizedBody verifies that getSubtreeTxHashes refuses to allocate
-// a peer-supplied response body larger than MaximumMerkleItemsPerSubtree * HashSize.
+// a peer-supplied response body larger than SubtreeValidation.MaxIncomingSubtreeBytes.
 // Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
 func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
 	httpmock.ActivateNonDefault(util.HTTPClient())
@@ -348,7 +348,7 @@ func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	// Lower the cap so the test response is cheap to produce.
-	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 4 // 4 * 32 = 128 byte cap
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
 	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
 	baseURL := testPeerURL
@@ -373,6 +373,51 @@ func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
+// TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// The receive-side cap must be governed by SubtreeValidation.MaxIncomingSubtreeBytes only,
+// not by local BlockAssembly.MaximumMerkleItemsPerSubtree. Otherwise nodes with a smaller
+// local assembly cap than the network norm (docker quickstart on teratestnet) reject every
+// legitimate peer response and stall catchup.
+func TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Docker quickstart profile: small local assembly cap, generous receive cap.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768 // 1 MiB worth of node hashes
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024
+
+	subtreeHash := chainhash.HashH([]byte("test-large-subtree-from-peer"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Build a valid node-hash payload larger than the local assembly cap but well under the
+	// receive cap: 65,536 32-byte hashes = 2 MiB.
+	const leafCount = 65536
+	payload := make([]byte, leafCount*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, payload))
+
+	stat := gocore.NewStat("test")
+	hashes, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+
+	require.NoError(t, err)
+	require.Len(t, hashes, leafCount)
 }
 
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly

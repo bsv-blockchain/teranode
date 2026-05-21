@@ -725,13 +725,13 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
 	var idx64 uint64
 
-	// Calculate the base index for this subtree by summing sizes of all previous subtrees.
-	// We cannot use (subIdx * subtreeSize) because the last subtree may be smaller.
-	// Per Block.go:1192: "all subtrees need to be the same size as the first tree, except the last one"
-	baseIdx := 0
-	for i := 0; i < subIdx; i++ {
-		baseIdx += b.SubtreeSlices[i].Size()
-	}
+	// All subtrees before subIdx are full-size (the per-block invariant enforced by
+	// validateAndSetTransactionCount allows only the last subtree to be smaller), so the
+	// base index is subIdx*subtreeSize. Summing the prior subtree sizes via Size() would
+	// be O(N) per subtree and O(N^2) per block, with every Size() call taking the
+	// subtree's RWMutex; on blocks with hundreds of thousands of subtrees that contention
+	// pins every worker on atomic ops instead of doing useful dedup work.
+	baseIdx := subIdx * subtreeSize
 
 	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
 		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -740,7 +740,6 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		// Calculate the global transaction index as baseIdx + txIdx
 		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
@@ -1431,18 +1430,18 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 					b.String(), sub.Length(), targetLength,
 				)
 			}
-
-			if isLast && sub.Length() < targetLength && !subtreepkg.IsPowerOfTwo(sub.Length()) {
-				return errors.NewBlockInvalidError(
-					"[BLOCK][%s] final subtree leaf count is not a power of two: %d",
-					b.String(), sub.Length(),
-				)
-			}
 		}
 
 		// If the final subtree is shorter than the target length, lift its root
 		// to the target height so it occupies the slot of a same-capacity subtree
-		// in the top-level merkle tree.
+		// in the top-level merkle tree. The final subtree's leaf count does NOT
+		// need to be a power of two: BuildMerkleTreeStoreFromBytes already applies
+		// the duplicate-when-odd rule at every internal level, so the subtree's
+		// own RootHash() naturally lives at height ceil(log2(Length)) and matches
+		// what the canonical flat tree produces for that segment. Allowing
+		// non-power-of-two final subtrees is what lets the legacy-block
+		// partitioner stay at maxItems instead of degenerating to tiny subtrees
+		// for adversarial transaction counts — see issue #901.
 		if last := b.SubtreeSlices[len(b.SubtreeSlices)-1]; last.Length() < targetLength {
 			liftedRoot, err := last.RootHashPadded(targetHeight)
 			if err != nil {

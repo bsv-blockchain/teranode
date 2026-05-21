@@ -252,7 +252,7 @@
     gap: 8px;
   }
   .tools .icon {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     cursor: pointer;
   }
 
@@ -262,31 +262,31 @@
   }
 
   .key {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
   }
 
   .string {
-    color: #15b241;
+    color: var(--json-tree-string-color, #15b241);
   }
 
   .string2 {
-    color: #9917ff;
+    color: var(--json-tree-string2-color, #9917ff);
   }
 
   .boolean {
-    color: blue;
+    color: var(--json-tree-boolean-color, #1a6bd4);
   }
 
   .undefined,
   .null {
-    color: gray;
+    color: var(--comp-label-color);
   }
 
   .expand {
     display: inline-block;
     position: relative;
     left: var(--block-indent);
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--comp-label-color);
   }
 
   button.expand {
@@ -298,7 +298,7 @@
   }
   .expand:hover {
     cursor: pointer;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--app-color);
   }
   .exp_icon {
     width: 11px;
@@ -319,7 +319,7 @@
     transform: rotate(-90deg);
   }
   .expand:hover .exp_icon {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: var(--app-subtle-bg-color);
   }
 
   .obj-start {

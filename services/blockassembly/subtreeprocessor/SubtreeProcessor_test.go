@@ -648,8 +648,13 @@ func TestMoveForwardBlock(t *testing.T) {
 
 	wg.Wait()
 
-	// this is to make sure the subtrees are added to the chain
-	for stp.txCount.Load() < n-1 {
+	// this is to make sure the subtrees are added to the chain.
+	// txCount starts at 1 (coinbase placeholder counted by setTxCountFromSubtrees)
+	// and reaches 1+(n-1) = n after all AddBatch items are processed. Polling for n-1
+	// races: the worker can transiently expose txCount = n-1 between iterations
+	// when only n-2 of n-1 items are committed, letting lengthCh fire before the
+	// last item is added to the current subtree.
+	for stp.txCount.Load() < n {
 		time.Sleep(10 * time.Millisecond)
 	}
 

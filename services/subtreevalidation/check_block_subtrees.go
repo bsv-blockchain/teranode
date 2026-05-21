@@ -211,9 +211,11 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree from the peer
 					url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
 
-					// Bound the body at the policy cap (MaximumMerkleItemsPerSubtree * HashSize) so
-					// a malicious peer can't OOM us by streaming oversized responses.
-					maxSubtreeBytes := int64(u.settings.BlockAssembly.MaximumMerkleItemsPerSubtree) * int64(chainhash.HashSize)
+					// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
+					// malicious peer can't OOM us by streaming oversized responses. This must be
+					// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
+					// controls what *this node* assembles; peers may legitimately produce larger subtrees.
+					maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
 
 					subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
 					if err != nil {
@@ -227,8 +229,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 						}
 					}
 
+					// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
+					// peers may legitimately produce subtrees larger than the local assembly policy. The
+					// bounded HTTP read already enforces this, but we keep the explicit check as a guard
+					// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
 					leafCount := len(subtreeNodeBytes) / chainhash.HashSize
-					if err := validateSubtreeLeafCount(subtreeHash, leafCount, u.settings.BlockAssembly.MaximumMerkleItemsPerSubtree); err != nil {
+					maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
+					if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
 						return err
 					}
 

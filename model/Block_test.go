@@ -1829,6 +1829,94 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 	})
 }
 
+// TestBlock_CheckDuplicateTransactions_ManySubtrees is a regression guard for issue #900.
+// PR #198 replaced the O(1) base-index formula (subIdx*subtreeSize) with an O(N) prefix-sum
+// loop that called Subtree.Size() on every prior subtree. Subtree.Size() takes an RWMutex,
+// so under the concurrent dedup workers this scaled as O(N^2) atomic ops on shared cache
+// lines, pinning every core on lock contention for blocks with hundreds of thousands of
+// subtrees. This test exercises the dedup path with a few thousand subtrees (last one
+// smaller, exercising the "first tree, except the last one" invariant) and asserts both
+// correctness of the global indices and that the work completes within a tight wall-clock
+// budget — the O(1) path completes the dedup call in well under 100 ms on a developer
+// machine; the budget below is sized for slow CI runners while still tripping on any
+// reintroduced O(N^2) implementation, which under worker fan-out and RWMutex contention
+// would blow past it by orders of magnitude.
+func TestBlock_CheckDuplicateTransactions_ManySubtrees(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	const (
+		numSubtrees = 2000
+		subtreeSize = 16 // capacity of every full subtree
+		lastSize    = 8  // capacity of the trailing (smaller) subtree
+		budget      = 2 * time.Second
+	)
+
+	blockHeaderBytes, err := hex.DecodeString(block1Header)
+	require.NoError(t, err)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(t, err)
+
+	subtreeHashes := make([]*chainhash.Hash, numSubtrees)
+	subtrees := make([]*subtreepkg.Subtree, numSubtrees)
+	// Track a few node hashes we'll probe back to ensure indices are correct at scale.
+	probeIndices := []int{0, 1, subtreeSize, (numSubtrees / 2) * subtreeSize, (numSubtrees-1)*subtreeSize + lastSize - 1}
+	probeHashes := make(map[int]chainhash.Hash, len(probeIndices))
+	probeSet := make(map[int]struct{}, len(probeIndices))
+	for _, p := range probeIndices {
+		probeSet[p] = struct{}{}
+	}
+
+	totalTxs := uint64(0)
+	for sIdx := 0; sIdx < numSubtrees; sIdx++ {
+		capacity := subtreeSize
+		if sIdx == numSubtrees-1 {
+			capacity = lastSize
+		}
+		st, sErr := subtreepkg.NewTreeByLeafCount(capacity)
+		require.NoError(t, sErr)
+
+		for nIdx := 0; nIdx < capacity; nIdx++ {
+			buf := make([]byte, 32)
+			_, _ = rand.Read(buf)
+			h, hErr := chainhash.NewHash(buf)
+			require.NoError(t, hErr)
+			require.NoError(t, st.AddNode(*h, 1, 0))
+
+			global := sIdx*subtreeSize + nIdx
+			if _, ok := probeSet[global]; ok {
+				probeHashes[global] = *h
+			}
+		}
+
+		subtrees[sIdx] = st
+		subtreeHashes[sIdx] = st.RootHash()
+		totalTxs += uint64(capacity)
+	}
+
+	b, err := NewBlock(blockHeader, coinbase, subtreeHashes, totalTxs, 0, 0, 0)
+	require.NoError(t, err)
+	b.SubtreeSlices = subtrees
+
+	start := time.Now()
+	err = b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, tSettings.Block.CheckDuplicateTransactionsConcurrency, nil)
+	elapsed := time.Since(start)
+	require.NoError(t, err, "dedup should succeed on a block with unique hashes")
+	require.Less(t, elapsed, budget, "dedup wall time exceeded %s (got %s) — likely a re-introduced O(N^2) prefix sum, see issue #900", budget, elapsed)
+
+	// Spot-check that probed nodes ended up at the expected global indices — this is the
+	// invariant the prefix-sum loop was (mistakenly) trying to defend, and proves the
+	// O(1) formula handles the last-smaller-subtree case correctly.
+	for _, global := range probeIndices {
+		hash, ok := probeHashes[global]
+		require.True(t, ok, "probe at global index %d not recorded", global)
+		got, exists := b.txMap.Get(hash)
+		require.True(t, exists, "probe hash at global index %d not in txMap", global)
+		require.Equal(t, uint64(global), got, "global index mismatch for probe at %d", global)
+	}
+}
+
 func TestBlock_GetSubtrees(t *testing.T) {
 	t.Run("get subtrees with missing store", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
@@ -4681,17 +4769,23 @@ func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
 	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
 }
 
-// TestCheckMerkleRoot_RejectsNonPowerOfTwoFinalSubtree verifies that
-// CheckMerkleRoot rejects a block whose final subtree leaf count is not a
-// power of two (lifting requires a power-of-two leaf count).
-func TestCheckMerkleRoot_RejectsNonPowerOfTwoFinalSubtree(t *testing.T) {
-	// First subtree complete (4 leaves). Final subtree has 3 leaves.
-	block := buildBlockWithNonPowerOfTwoFinal(t)
+// TestCheckMerkleRoot_AcceptsNonPowerOfTwoFinalSubtree verifies that
+// CheckMerkleRoot accepts a block whose final subtree leaf count is not a
+// power of two. The duplicate-when-odd rule already pads the subtree's own
+// merkle root internally, so the phantom-step lift composes correctly with
+// non-power-of-two final lengths — see issue #901 for why this matters.
+func TestCheckMerkleRoot_AcceptsNonPowerOfTwoFinalSubtree(t *testing.T) {
+	// 7 leaves split across two capacity-4 subtrees: [4, 3]. The final subtree
+	// has a non-power-of-two leaf count.
+	const (
+		totalTxs    = 7
+		subtreeSize = 4
+	)
 
-	err := block.CheckMerkleRoot(context.Background())
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
-	require.Contains(t, err.Error(), "leaf count is not a power of two")
+	block, expectedRoot := buildBlockWithSubtrees(t, subtreeSize, totalTxs)
+	block.Header.HashMerkleRoot = expectedRoot
+
+	require.NoError(t, block.CheckMerkleRoot(context.Background()))
 }
 
 // TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo verifies that
@@ -4767,8 +4861,9 @@ func newTestBlockHeader(t *testing.T) *BlockHeader {
 // buildBlockWithSubtrees constructs a Block with two subtrees: a fully populated
 // first subtree of `subtreeSize` leaves and a final subtree containing the
 // remaining `totalTxs - subtreeSize` leaves (which may be fewer than
-// `subtreeSize`). It returns the block and the expected top-level merkle root
-// computed with the final subtree's root lifted to the first subtree's height.
+// `subtreeSize`, and may be a non-power-of-two count). It returns the block
+// and the expected top-level merkle root computed with the final subtree's
+// root lifted to the first subtree's height.
 func buildBlockWithSubtrees(t *testing.T, subtreeSize, totalTxs int) (*Block, *chainhash.Hash) {
 	t.Helper()
 	require.Greater(t, totalTxs, subtreeSize)
@@ -4786,7 +4881,9 @@ func buildBlockWithSubtrees(t *testing.T, subtreeSize, totalTxs int) (*Block, *c
 		require.NoError(t, left.AddNode(hashes[i], 0, 0))
 	}
 
-	right, err := subtreepkg.NewTreeByLeafCount(subtreeSize)
+	rightLeafCount := totalTxs - subtreeSize
+
+	right, err := subtreepkg.NewIncompleteTreeByLeafCount(rightLeafCount)
 	require.NoError(t, err)
 
 	for i := subtreeSize; i < totalTxs; i++ {
@@ -4870,35 +4967,6 @@ func buildBlockWithFinalSubtreeLargerThanFirst(t *testing.T) *Block {
 	require.NoError(t, err)
 
 	for i := 10; i < 14; i++ {
-		require.NoError(t, second.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
-	}
-
-	return &Block{
-		Header:        newTestBlockHeader(t),
-		CoinbaseTx:    newTestCoinbaseTx(t),
-		Subtrees:      []*chainhash.Hash{first.RootHash(), second.RootHash()},
-		SubtreeSlices: []*subtreepkg.Subtree{first, second},
-	}
-}
-
-// buildBlockWithNonPowerOfTwoFinal returns a Block whose final subtree has a
-// non-power-of-two leaf count (3 leaves in a capacity-4 subtree). This
-// violates the new lift rules because RootHashPadded requires a power-of-two
-// leaf count.
-func buildBlockWithNonPowerOfTwoFinal(t *testing.T) *Block {
-	t.Helper()
-
-	first, err := subtreepkg.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-
-	for i := 0; i < 4; i++ {
-		require.NoError(t, first.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
-	}
-
-	second, err := subtreepkg.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-
-	for i := 10; i < 13; i++ {
 		require.NoError(t, second.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
 	}
 

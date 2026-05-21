@@ -1847,19 +1847,18 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting subtree count", err)
 	}
 
-	// this will block when the subtree processor is busy with someting else
-	// wait only 1 second for this and continue
-	subtreeHashesChan := make(chan []chainhash.Hash, 1)
-	go func() {
-		subtreeHashesChan <- ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
-	}()
-
-	var subtreeHashes []chainhash.Hash
-	select {
-	case subtreeHashes = <-subtreeHashesChan:
-		// Successfully retrieved subtree hashes
-	case <-time.After(1 * time.Second):
-		// Timeout occurred, continue with empty slice
+	// Block at most 1s waiting for the SubtreeProcessor main loop to
+	// service the request. GetSubtreeHashes is ctx-aware and uses a
+	// buffered response channel internally so cancellation here cannot
+	// leak a goroutine. Previously this was a `go func` + time.After
+	// pattern that left the spawned goroutine parked on an unbuffered
+	// channel send forever every time the main loop was busy (~224
+	// observed parked on the scaling-2 pod during a moveForwardBlock
+	// stall).
+	subtreeHashesCtx, subtreeHashesCancel := context.WithTimeout(ctx, 1*time.Second)
+	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes(subtreeHashesCtx)
+	subtreeHashesCancel()
+	if subtreeHashes == nil {
 		subtreeHashes = []chainhash.Hash{}
 	}
 

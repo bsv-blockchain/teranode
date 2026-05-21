@@ -712,3 +712,79 @@ func TestHandleWebSocket_PerConnectionContext(t *testing.T) {
 	require.Equal(t, "post_failed_upgrade", received.Type)
 	require.Equal(t, baseURL, received.BaseURL)
 }
+
+// TestBroadcast_BoundedPool verifies the broadcast goroutine pool caps in-flight goroutines.
+// It overrides maxConcurrentBroadcasts to a small value, then submits 4x that many unresponsive
+// (unbuffered, unread) channels. Every channel hits the 1s send-timeout. With the cap, total
+// wall-clock time is ceil(channels/poolSize) * 1s; without it, all timeouts run concurrently
+// and total wall-clock is ~1s. The lower bound asserts the semaphore actually serialises work.
+func TestBroadcast_BoundedPool(t *testing.T) {
+	originalPoolSize := maxConcurrentBroadcasts
+	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
+	maxConcurrentBroadcasts = 2
+
+	cm := newClientChannelMap()
+
+	const numChannels = 8
+	channels := make([]chan []byte, numChannels)
+
+	for i := 0; i < numChannels; i++ {
+		channels[i] = make(chan []byte)
+		cm.add(channels[i])
+	}
+
+	require.Equal(t, numChannels, cm.count(), "All channels should be registered")
+
+	logger := &ulogger.TestLogger{}
+
+	startTime := time.Now()
+	cm.broadcast([]byte("test"), logger)
+	elapsed := time.Since(startTime)
+
+	expectedMin := time.Duration(numChannels/maxConcurrentBroadcasts) * time.Second
+	expectedMax := expectedMin + 2*time.Second
+
+	require.GreaterOrEqual(t, elapsed, expectedMin,
+		"Broadcast finished too quickly (%v); pool of %d should have serialised %d unresponsive channels into batches taking ~%v",
+		elapsed, maxConcurrentBroadcasts, numChannels, expectedMin)
+	require.LessOrEqual(t, elapsed, expectedMax,
+		"Broadcast took too long (%v); expected at most %v", elapsed, expectedMax)
+
+	require.Equal(t, 0, cm.count(), "All timed-out channels should be removed")
+
+	t.Logf("Broadcast of %d unresponsive channels with pool=%d completed in %v (expected %v..%v)",
+		numChannels, maxConcurrentBroadcasts, elapsed, expectedMin, expectedMax)
+}
+
+// TestBroadcast_NonPositivePoolSizeDoesNotDeadlock verifies that a misconfigured
+// (zero or negative) maxConcurrentBroadcasts is clamped to a usable value rather
+// than deadlocking the broadcast loop. With cap=0, sem <- struct{}{} on an
+// unbuffered channel would block forever because the receiver runs only after
+// the send returns.
+func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
+	originalPoolSize := maxConcurrentBroadcasts
+	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
+	maxConcurrentBroadcasts = 0
+
+	cm := newClientChannelMap()
+
+	const numChannels = 3
+	for i := 0; i < numChannels; i++ {
+		cm.add(make(chan []byte, 1)) // buffered so sends succeed immediately
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		cm.broadcast([]byte("test"), &ulogger.TestLogger{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcast deadlocked with maxConcurrentBroadcasts <= 0")
+	}
+
+	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
+}
