@@ -125,7 +125,10 @@ func benchmarkTxmetaHandlerThroughput(b *testing.B, entriesPerMessage, payloadSi
 	}
 
 	expected := uint64(b.N) * uint64(entriesPerMessage)
+	// Match the warm-up loop above: a tiny sleep keeps this from busy-spinning
+	// on a core (which both burns CPU and skews the throughput measurement).
 	for cache.adds.Load() < expected {
+		time.Sleep(time.Microsecond)
 	}
 	elapsed := time.Since(start)
 	b.StopTimer()

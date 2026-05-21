@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -281,50 +282,67 @@ func createKafkaMessageForHash(t *testing.T, hash chainhash.Hash, action byte, c
 func TestServer_txmetaHandler(t *testing.T) {
 	// Note: The handler dispatches work to bounded shard workers and may return an error if a queue is full.
 	// Tests verify proper parsing of the binary batch format.
+	// setupMocks takes a `bumpDone` callback that the mock's Run hook invokes
+	// once per cache operation. Driving sync off a goroutine-safe atomic is
+	// race-free, unlike polling mockCache.Calls (testify's internal mutex
+	// is unexported).
 	tests := []struct {
-		name       string
-		setupMocks func(*mockLogger, *mockCache)
-		input      *kafka.KafkaMessage
+		name               string
+		setupMocks         func(l *mockLogger, c *mockCache, bumpDone func())
+		input              *kafka.KafkaMessage
+		expectedCacheCalls int
 	}{
 		{
 			name:       "nil message",
-			setupMocks: func(l *mockLogger, c *mockCache) {},
+			setupMocks: func(_ *mockLogger, _ *mockCache, _ func()) {},
 			input:      nil,
 		},
 		{
 			name:       "message too short for entry count",
-			setupMocks: func(l *mockLogger, c *mockCache) {},
+			setupMocks: func(_ *mockLogger, _ *mockCache, _ func()) {},
 			input:      &kafka.KafkaMessage{Value: make([]byte, 3)},
 		},
 		{
 			name: "successful delete operation",
-			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(nil)
+			setupMocks: func(_ *mockLogger, c *mockCache, bumpDone func()) {
+				c.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).
+					Return(nil).
+					Run(func(_ mock.Arguments) { bumpDone() })
 			},
-			input: createKafkaMessage(t, true, []byte{}),
+			input:              createKafkaMessage(t, true, []byte{}),
+			expectedCacheCalls: 1,
 		},
 		{
 			name: "failed delete operation logs error",
-			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(errors.ErrProcessing)
+			setupMocks: func(l *mockLogger, c *mockCache, bumpDone func()) {
+				c.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).
+					Return(errors.ErrProcessing).
+					Run(func(_ mock.Arguments) { bumpDone() })
 				l.On("Errorf", mock.Anything, mock.Anything).Return()
 			},
-			input: createKafkaMessage(t, true, []byte{}),
+			input:              createKafkaMessage(t, true, []byte{}),
+			expectedCacheCalls: 1,
 		},
 		{
 			name: "successful set operation",
-			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil)
+			setupMocks: func(_ *mockLogger, c *mockCache, bumpDone func()) {
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).
+					Return(nil).
+					Run(func(_ mock.Arguments) { bumpDone() })
 			},
-			input: createKafkaMessage(t, false, []byte("test data")),
+			input:              createKafkaMessage(t, false, []byte("test data")),
+			expectedCacheCalls: 1,
 		},
 		{
 			name: "failed set operation logs debug",
-			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheMulti", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
+			setupMocks: func(l *mockLogger, c *mockCache, bumpDone func()) {
+				c.On("SetCacheMulti", mock.Anything, mock.Anything).
+					Return(errors.ErrProcessing).
+					Run(func(_ mock.Arguments) { bumpDone() })
 				l.On("Debugf", mock.Anything, mock.Anything).Return()
 			},
-			input: createKafkaMessage(t, false, []byte("test data")),
+			input:              createKafkaMessage(t, false, []byte("test data")),
+			expectedCacheCalls: 1,
 		},
 	}
 
@@ -332,7 +350,8 @@ func TestServer_txmetaHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockLogger := &mockLogger{}
 			mockCache := &mockCache{}
-			tt.setupMocks(mockLogger, mockCache)
+			var done atomic.Int32
+			tt.setupMocks(mockLogger, mockCache, func() { done.Add(1) })
 
 			server := &Server{
 				logger:    mockLogger,
@@ -341,11 +360,15 @@ func TestServer_txmetaHandler(t *testing.T) {
 
 			// The handler always returns nil (async processing)
 			err := server.txmetaHandler(context.Background(), tt.input)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			// Wait briefly for async goroutine to complete
-			// This is a bit awkward but necessary since processing is async
-			<-time.After(10 * time.Millisecond)
+			// Sync on the atomic counter (race-free) instead of a fixed
+			// time.After sleep, so the test is robust on loaded CI.
+			if tt.expectedCacheCalls > 0 {
+				require.Eventually(t, func() bool {
+					return int(done.Load()) >= tt.expectedCacheCalls
+				}, 2*time.Second, time.Millisecond, "expected at least %d mock cache calls", tt.expectedCacheCalls)
+			}
 
 			mockCache.AssertExpectations(t)
 		})
@@ -539,6 +562,193 @@ func TestServer_txmetaHandler_LatchIgnoredWhenHighWaterMarkUnset(t *testing.T) {
 	// Give the worker a moment in case the latch were going to flip async.
 	time.Sleep(20 * time.Millisecond)
 	assert.False(t, server.txmetaCaughtUp.Load(), "latch must not flip when HWM is unset")
+}
+
+// buildMultiOpKafkaMessage encodes N entries into a single Kafka message in
+// the txmetaHandler binary format. Used by the bucketing and ordering tests
+// that need more than one entry per message.
+func buildMultiOpKafkaMessage(t *testing.T, entries []struct {
+	hash    chainhash.Hash
+	action  byte
+	content []byte
+},
+) *kafka.KafkaMessage {
+	t.Helper()
+
+	size := 4
+	for _, e := range entries {
+		size += 32 + 1 + 4
+		if e.action == txmetaActionADD {
+			size += len(e.content)
+		}
+	}
+	buf := make([]byte, size)
+	off := 0
+
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(entries)))
+	off += 4
+
+	for _, e := range entries {
+		copy(buf[off:], e.hash[:])
+		off += 32
+		buf[off] = e.action
+		off++
+		if e.action == txmetaActionADD {
+			binary.LittleEndian.PutUint32(buf[off:], uint32(len(e.content)))
+			off += 4
+			copy(buf[off:], e.content)
+			off += len(e.content)
+		} else {
+			binary.LittleEndian.PutUint32(buf[off:], 0)
+			off += 4
+		}
+	}
+
+	return &kafka.KafkaMessage{Value: buf}
+}
+
+// TestServer_txmetaHandler_ShardBucketingByHashByte verifies the central
+// invariant of the per-shard dispatch model: entries from a single Kafka
+// message are bucketed across shards by hash[0], and each shard batch
+// contains only entries whose hash[0] matches its shard index.
+func TestServer_txmetaHandler_ShardBucketingByHashByte(t *testing.T) {
+	server := &Server{logger: ulogger.TestLogger{}}
+	// Caught-up mode so the dispatch is non-blocking and we don't need a
+	// reader on every channel.
+	server.txmetaCaughtUp.Store(true)
+
+	// Pre-create all shard channels and skip starting real workers; we
+	// inspect what landed in each queue directly.
+	server.txmetaWorkerInitOnce.Do(func() {})
+	queues := make([]chan *txmetaShardBatch, txmetaWorkerShardCount)
+	for i := range queues {
+		queues[i] = make(chan *txmetaShardBatch, 1)
+	}
+	server.txmetaWorkerQueues = queues
+
+	// Two entries per shard: one ADD and one DELETE, with hash[0] = shard
+	// and hash[1] = 0 or 1 to keep entries distinct.
+	type entry = struct {
+		hash    chainhash.Hash
+		action  byte
+		content []byte
+	}
+	entries := make([]entry, 0, 2*txmetaWorkerShardCount)
+	for shard := 0; shard < txmetaWorkerShardCount; shard++ {
+		var h1, h2 chainhash.Hash
+		h1[0] = byte(shard)
+		h1[1] = 0
+		h2[0] = byte(shard)
+		h2[1] = 1
+		entries = append(entries,
+			entry{hash: h1, action: txmetaActionADD, content: []byte{byte(shard)}},
+			entry{hash: h2, action: txmetaActionDELETE},
+		)
+	}
+
+	msg := buildMultiOpKafkaMessage(t, entries)
+	require.NoError(t, server.txmetaHandler(context.Background(), msg))
+
+	for shard := 0; shard < txmetaWorkerShardCount; shard++ {
+		select {
+		case b := <-queues[shard]:
+			require.Len(t, b.ops, 2, "shard %d should have 2 ops", shard)
+			for _, op := range b.ops {
+				require.Equal(t, byte(shard), op.hash[0], "shard %d received op for hash[0]=%d", shard, op.hash[0])
+			}
+		default:
+			t.Fatalf("shard %d received no batch", shard)
+		}
+	}
+}
+
+// TestServer_txmetaHandler_PreservesOrderWithinKafkaMessage verifies that when
+// a single Kafka message contains interleaved ADD/DELETE ops for the same hash
+// (and therefore the same shard), the worker applies them in arrival order:
+// ADD → DELETE → ADD must result in the cache holding the second ADD's value,
+// not the first.
+func TestServer_txmetaHandler_PreservesOrderWithinKafkaMessage(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+
+	var (
+		mu  sync.Mutex
+		ops []string
+	)
+	mockCache.On("SetCacheMulti", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		mu.Lock()
+		defer mu.Unlock()
+		ops = append(ops, "add")
+	})
+	mockCache.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(nil).Run(func(args mock.Arguments) {
+		mu.Lock()
+		defer mu.Unlock()
+		ops = append(ops, "delete")
+	})
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	hash := chainhash.Hash{42}
+	msg := buildMultiOpKafkaMessage(t, []struct {
+		hash    chainhash.Hash
+		action  byte
+		content []byte
+	}{
+		{hash: hash, action: txmetaActionADD, content: []byte("v1")},
+		{hash: hash, action: txmetaActionDELETE},
+		{hash: hash, action: txmetaActionADD, content: []byte("v2")},
+	})
+
+	require.NoError(t, server.txmetaHandler(context.Background(), msg))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(ops) == 3
+	}, 2*time.Second, time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"add", "delete", "add"}, ops)
+}
+
+// TestServer_txmetaHandler_TruncatedMessageDoesNotLatch verifies that a
+// truncated Kafka message neither dispatches partial work nor flips the
+// caught-up latch even when the message claims to be at the partition's tail.
+func TestServer_txmetaHandler_TruncatedMessageDoesNotLatch(t *testing.T) {
+	mockLogger := &mockLogger{}
+	mockCache := &mockCache{}
+	mockLogger.On("Errorf", mock.Anything, mock.Anything).Return()
+
+	server := &Server{
+		logger:    mockLogger,
+		utxoStore: mockCache,
+	}
+
+	// Claim 2 entries but only encode header for 1 entry's worth of bytes
+	// (no content); the second entry's header trips the truncation check.
+	buf := make([]byte, 4+32+1+4)
+	binary.LittleEndian.PutUint32(buf, 2)
+	// Leave the rest zeroed; entry-1 header is read, then the loop's next
+	// iteration sees offset+32+1+4 > len(buf) and bails.
+
+	msg := &kafka.KafkaMessage{
+		Value:         buf,
+		Offset:        99,
+		HighWaterMark: 100, // would normally flip the latch
+	}
+
+	require.NoError(t, server.txmetaHandler(context.Background(), msg))
+
+	// Give the async worker plenty of time to NOT do anything.
+	time.Sleep(20 * time.Millisecond)
+
+	require.False(t, server.txmetaCaughtUp.Load(), "latch must not flip on truncated message")
+	mockCache.AssertNotCalled(t, "SetCacheMulti", mock.Anything, mock.Anything)
+	mockCache.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
 }
 
 // TestServer_txmetaHandler_LatchIsOneWay verifies that once the latch is set,

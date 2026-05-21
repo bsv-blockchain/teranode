@@ -32,17 +32,23 @@ const (
 // from a single Kafka message that hashed to the same shard. Batching at the
 // Kafka-message boundary (instead of one channel send per entry) collapses
 // N channel hops into 1 and lets the worker bulk-write ADDs via
-// SetCacheMulti, which takes the cache bucket lock once for the whole batch.
+// SetCacheMulti, which takes the cache bucket lock once per ADD run.
+//
+// Ops are kept in arrival order so per-key ordering is preserved when ADDs
+// and DELETEs for the same hash appear in the same Kafka message. The
+// worker flushes any buffered ADDs before each DELETE.
 type txmetaShardBatch struct {
 	ctx        context.Context
-	adds       []txmetaAdd
-	deletes    []chainhash.Hash
+	ops        []txmetaOp
 	enqueuedAt time.Time
 }
 
-type txmetaAdd struct {
+// txmetaOp is a single parsed entry. content is non-nil for ADD (copied out
+// of msg.Value at parse time) and nil for DELETE.
+type txmetaOp struct {
 	hash    chainhash.Hash
-	content []byte // copied out of msg.Value at parse time
+	content []byte
+	action  byte
 }
 
 // txmetaMessageHandler returns a Kafka message handler for transaction metadata operations.
@@ -91,8 +97,10 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 //
 // Errors:
 //
-//   - Truncated message: logged and acked (return nil) to avoid infinite
-//     retry loops on corrupt input.
+//   - Truncated message: logged, error counter incremented, and acked
+//     (return nil) to avoid infinite retry loops on corrupt input. Any
+//     partial shard batches built before the truncation are discarded
+//     and the caught-up latch is NOT advanced on the malformed message.
 //
 //   - Enqueue error (shard channel send fails for a reason other than
 //     full): returned, so the Kafka offset stays uncommitted and the
@@ -120,10 +128,12 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	enqueuedAt := time.Now()
 
 	var hash chainhash.Hash
+	parseError := false
 
 	for i := uint32(0); i < entryCount; i++ {
 		if offset+32+1+4 > len(data) {
 			u.logger.Errorf("[txmetaHandler] truncated message at entry %d", i)
+			parseError = true
 			break
 		}
 
@@ -138,6 +148,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 
 		if offset+int(contentLen) > len(data) {
 			u.logger.Errorf("[txmetaHandler] truncated content at entry %d", i)
+			parseError = true
 			break
 		}
 
@@ -152,9 +163,9 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		case txmetaActionADD:
 			content := make([]byte, contentLen)
 			copy(content, data[offset:offset+int(contentLen)])
-			b.adds = append(b.adds, txmetaAdd{hash: hash, content: content})
+			b.ops = append(b.ops, txmetaOp{hash: hash, content: content, action: txmetaActionADD})
 		case txmetaActionDELETE:
-			b.deletes = append(b.deletes, hash)
+			b.ops = append(b.ops, txmetaOp{hash: hash, action: txmetaActionDELETE})
 		default:
 			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
 			u.logger.Errorf("[txmetaHandler][%s] unknown txmeta action: %d", hash, action)
@@ -162,8 +173,24 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		offset += int(contentLen)
 	}
 
+	if parseError {
+		// Discard any partial shard batches built before the truncation
+		// and do NOT flip the caught-up latch — a malformed message must
+		// not advance the startup-to-live mode transition.
+		prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+		return nil
+	}
+
 	// Dispatch each non-empty shard batch. enqueueTxmetaShardBatch enforces
 	// the two-mode (startup-block / caught-up-drop) contract per shard.
+	//
+	// NOTE: in caught-up mode, an early bail-out on a full queue abandons
+	// any shard batches we haven't dispatched yet — earlier shards in
+	// this iteration have already been enqueued and will still be
+	// processed. The Kafka offset is committed (we return nil), so the
+	// abandoned shards are not retried; the cache will catch up either
+	// from the next ADD touching the same keys or from a Kafka replay on
+	// restart.
 	for shard, b := range shardBatches {
 		if b == nil {
 			continue
@@ -173,9 +200,6 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			return err
 		}
 		if !ok {
-			// Caught-up mode + full queue: abandon the remaining shard
-			// batches in this Kafka message. enqueueTxmetaShardBatch
-			// already emitted the Warn log.
 			return nil
 		}
 	}
@@ -260,39 +284,52 @@ func (u *Server) runTxmetaWorker(ctx context.Context, workQueue <-chan *txmetaSh
 }
 
 func (u *Server) processTxmetaShardBatch(b *txmetaShardBatch) {
-	// DELETEs are processed one-at-a-time: they're rare relative to ADDs
-	// and the cache exposes no batch-delete API today.
-	for i := range b.deletes {
-		if err := u.DelTxMetaCache(b.ctx, &b.deletes[i]); err != nil {
-			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-			u.logger.Errorf("[txmetaHandler][%s] failed to delete tx meta data: %v", b.deletes[i], err)
+	// Walk ops in arrival order. Accumulate consecutive ADDs and flush
+	// via SetCacheMulti before each DELETE (and at the end) so per-key
+	// ordering is preserved when a single Kafka message contains an
+	// ADD/DELETE pair for the same hash. For ADD-only shard batches
+	// (the common case under current producers) this still yields a
+	// single SetCacheMulti call.
+	//
+	// keys[i] = op.hash[:] aliases the hash field inside the op struct;
+	// the underlying txmetaShardBatch is not pooled/reused, so the
+	// alias is stable for the lifetime of the SetCacheMulti call. If
+	// batch pooling is added later, that aliasing has to be revisited.
+	addKeys := make([][]byte, 0, len(b.ops))
+	addValues := make([][]byte, 0, len(b.ops))
+
+	flushAdds := func() {
+		if len(addKeys) == 0 {
+			return
 		}
-		prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(float64(time.Since(b.enqueuedAt).Microseconds()) / 1_000_000)
+		if err := u.SetTxMetaCacheMulti(b.ctx, addKeys, addValues); err != nil {
+			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+			u.logger.Debugf("[txmetaHandler] failed to set tx meta data batch (%d items): %v", len(addKeys), err)
+		}
+		// One observation per SetCacheMulti call. DELETE is observed
+		// per-item below; the asymmetry is intentional because each
+		// observation maps to one underlying cache API call.
+		prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(float64(time.Since(b.enqueuedAt).Microseconds()) / 1_000_000)
+		addKeys = addKeys[:0]
+		addValues = addValues[:0]
 	}
 
-	if len(b.adds) == 0 {
-		return
+	for i := range b.ops {
+		op := &b.ops[i]
+		switch op.action {
+		case txmetaActionADD:
+			addKeys = append(addKeys, op.hash[:])
+			addValues = append(addValues, op.content)
+		case txmetaActionDELETE:
+			flushAdds()
+			if err := u.DelTxMetaCache(b.ctx, &op.hash); err != nil {
+				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				u.logger.Errorf("[txmetaHandler][%s] failed to delete tx meta data: %v", op.hash, err)
+			}
+			prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(float64(time.Since(b.enqueuedAt).Microseconds()) / 1_000_000)
+		}
 	}
-
-	// Single SetCacheMulti call for the whole shard batch: the cache
-	// bucket mutex is taken once instead of len(b.adds) times.
-	keys := make([][]byte, len(b.adds))
-	values := make([][]byte, len(b.adds))
-	for i := range b.adds {
-		keys[i] = b.adds[i].hash[:]
-		values[i] = b.adds[i].content
-	}
-
-	if err := u.SetTxMetaCacheMulti(b.ctx, keys, values); err != nil {
-		prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-		u.logger.Debugf("[txmetaHandler] failed to set tx meta data batch (%d items): %v", len(keys), err)
-	}
-
-	// Per-batch metric observation; histogram now records per-shard-batch
-	// latency rather than per-item. Downstream dashboards that assumed one
-	// observation == one record need adjustment.
-	elapsed := float64(time.Since(b.enqueuedAt).Microseconds()) / 1_000_000
-	prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(elapsed)
+	flushAdds()
 }
 
 // enqueueTxmetaShardBatch dispatches a shard batch to its worker queue. Two
