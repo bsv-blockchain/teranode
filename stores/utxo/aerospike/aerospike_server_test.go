@@ -10,6 +10,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -652,12 +653,12 @@ func TestAerospike(t *testing.T) {
 		// utxoSpendTxID := utxos[spends[0].Vout]
 		// require.Equal(t, spendingTxID1.String(), utxoSpendTxID)
 
-		// try to reset the utxo
+		// try to reset the utxo — must pass the SpendingData GetSpends populated during Spend(spendTx).
 		err = store.Unspend(ctx, []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingData: spendpkg.NewSpendingData(spendingTxID2, 2),
+			SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
 		}})
 		require.NoError(t, err)
 
@@ -707,7 +708,14 @@ func TestAerospike(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, spendUtxos)
 
-		err = store.Unspend(ctx, spends)
+		// Match the SpendingData populated by GetSpends inside Spend(spendTx) above.
+		luaUnspends := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         0,
+			UTXOHash:     utxoHash0,
+			SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
+		}}
+		err = store.Unspend(ctx, luaUnspends)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
@@ -1417,6 +1425,75 @@ func TestStoreDecorate(t *testing.T) {
 		assert.Len(t, *childTx.Inputs[4].PreviousTxScript, 25)
 		assert.Equal(t, uint64(2_000_000), childTx.Inputs[4].PreviousTxSatoshis)
 	})
+
+	t.Run("aerospike_BatchPreviousOutputsDecorate", func(t *testing.T) {
+		// Covers the per-tx fan-out inside BatchPreviousOutputsDecorate: multiple
+		// child txs decorate concurrently, every input across every child must end
+		// up populated, and the shared outpoint batcher must dedupe the parent
+		// fetch even though three goroutines race to request it.
+		cleanDB(t, client)
+
+		_, createErr := store.Create(ctx, tx, 0)
+		require.NoError(t, createErr)
+
+		// Each child references two different outputs of the same parent. Three
+		// children -> six inputs across the batch, exercising the errgroup fan-out
+		// and the batcher's dedup of the shared parent.
+		newChild := func(vout1, vout2 uint32) *bt.Tx {
+			child := &bt.Tx{}
+
+			in1 := &bt.Input{PreviousTxOutIndex: vout1}
+			_ = in1.PreviousTxIDAdd(tx.TxIDChainHash())
+			child.Inputs = append(child.Inputs, in1)
+
+			in2 := &bt.Input{PreviousTxOutIndex: vout2}
+			_ = in2.PreviousTxIDAdd(tx.TxIDChainHash())
+			child.Inputs = append(child.Inputs, in2)
+
+			return child
+		}
+
+		child1 := newChild(0, 4)
+		child2 := newChild(1, 2)
+		child3 := newChild(3, 0) // vout 0 also referenced by child1 -> dedup path
+
+		batchErr := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{child1, child2, child3})
+		require.NoError(t, batchErr)
+
+		// Expected satoshis taken from the same parent fixture used by the
+		// aerospike_PreviousOutputsDecorate subtest above.
+		expected := map[uint32]uint64{
+			0: 5_000_000,
+			1: 2_000_000,
+			2: 20_000,
+			3: 20_000,
+			4: 2_817_689,
+		}
+		for _, child := range []*bt.Tx{child1, child2, child3} {
+			for i, input := range child.Inputs {
+				require.NotNil(t, input.PreviousTxScript, "input %d not decorated", i)
+				assert.Len(t, *input.PreviousTxScript, 25)
+				assert.Equal(t, expected[input.PreviousTxOutIndex], input.PreviousTxSatoshis,
+					"wrong satoshis for vout %d", input.PreviousTxOutIndex)
+			}
+		}
+
+		// Empty + nil-tolerance: empty slice is a no-op; an already-decorated
+		// input must not be touched (PreviousOutputsDecorate skips on
+		// PreviousTxScript != nil, which the batch path relies on).
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, nil))
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{}))
+
+		preserved := newChild(0, 1)
+		sentinel := bscript.NewFromBytes([]byte{0xde, 0xad, 0xbe, 0xef})
+		preserved.Inputs[0].PreviousTxScript = sentinel
+		preserved.Inputs[0].PreviousTxSatoshis = 999
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{preserved}))
+		assert.Same(t, sentinel, preserved.Inputs[0].PreviousTxScript, "already-decorated input was overwritten")
+		assert.Equal(t, uint64(999), preserved.Inputs[0].PreviousTxSatoshis)
+		// the other input should still have been decorated from the store
+		assert.Equal(t, expected[1], preserved.Inputs[1].PreviousTxSatoshis)
+	})
 }
 
 // func TestLargeUTXO(t *testing.T) {
@@ -2073,6 +2150,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 func TestRespendSameUTXO(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendBatcherSize = 1
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 

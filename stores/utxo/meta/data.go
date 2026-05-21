@@ -98,8 +98,9 @@ type Data struct {
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
 //   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//               vout-count followed by 4 bytes per vout (uint32, little-endian)
 //
 // Parameters:
 //   - dataBytes: Pointer to a byte slice containing the serialized metadata
@@ -133,8 +134,9 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
 //   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//               vout-count followed by 4 bytes per vout (uint32, little-endian)
 //   - [...]   - Variable-length transaction data (full transaction)
 //   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
 //
@@ -211,8 +213,9 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
 //   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//               vout-count followed by 4 bytes per vout (uint32, little-endian)
 //   - [...]   - Variable-length transaction data (full transaction)
 //   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
 //
@@ -273,8 +276,9 @@ func (d *Data) Bytes() ([]byte, error) {
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
 //   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//               vout-count followed by 4 bytes per vout (uint32, little-endian)
 //
 // Returns:
 //   - Byte slice containing the serialized metadata (without transaction or block IDs)
@@ -282,7 +286,19 @@ func (d *Data) Bytes() ([]byte, error) {
 // Use this method when you need to efficiently store or transmit just the
 // metadata portion of a transaction record.
 func (d *Data) MetaBytes() ([]byte, error) {
-	buf := make([]byte, 17, 1024) // 8 for Fee, 8 for SizeInBytes, 1 for flags
+	// Serialize the TxInpoints first so we can size the outer buffer exactly.
+	// The previous fixed cap of 1024 over-allocated ~10x for the common case
+	// (single-parent tx) and dominated allocator pressure on hot paths (profile
+	// attributed several TB / 45 s to this function). Calling Serialize up
+	// front also surfaces an inconsistent TxInpoints (e.g.
+	// ErrParentTxHashesMismatch from test fixtures) without us having to walk
+	// the packed vout layout ourselves and risk a bounds-check panic.
+	txInpointsBytes, err := d.TxInpoints.Serialize()
+	if err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, 17, 17+len(txInpointsBytes))
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
@@ -301,11 +317,6 @@ func (d *Data) MetaBytes() ([]byte, error) {
 
 	if d.Locked {
 		buf[16] |= 0b1000
-	}
-
-	txInpointsBytes, err := d.TxInpoints.Serialize()
-	if err != nil {
-		return nil, err
 	}
 
 	buf = append(buf, txInpointsBytes...)

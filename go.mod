@@ -16,7 +16,7 @@ require (
 	github.com/bsv-blockchain/go-bt/v2 v2.6.3
 	github.com/bsv-blockchain/go-chaincfg v1.5.8
 	github.com/bsv-blockchain/go-sdk v1.2.23
-	github.com/bsv-blockchain/go-subtree v1.2.0
+	github.com/bsv-blockchain/go-subtree v1.4.2
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
@@ -55,12 +55,12 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.42.0
 	go.opentelemetry.io/otel/sdk v1.42.0
 	go.opentelemetry.io/otel/trace v1.43.0
-	golang.org/x/crypto v0.50.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.43.0
-	golang.org/x/term v0.42.0
-	golang.org/x/text v0.36.0
+	golang.org/x/sys v0.44.0
+	golang.org/x/term v0.43.0
+	golang.org/x/text v0.37.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
@@ -138,6 +138,8 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nxadm/tail v1.4.11 // indirect
+	github.com/onsi/ginkgo/v2 v2.27.5 // indirect
+	github.com/onsi/gomega v1.39.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect
@@ -186,15 +188,9 @@ require (
 	github.com/bsv-blockchain/go-bn v1.1.4
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
-	github.com/bsv-blockchain/go-safe-conversion v1.1.2
-	// Pseudo-version pins the un-released feat(synced): add SetIfNotExistsMulti
-	// commit (bsv-blockchain/go-tx-map#114). PutMultiBucketTxInpoints in
-	// services/blockassembly/subtreeprocessor relies on this bulk method to
-	// take a single per-bucket lock instead of one Lock/Unlock pair per entry,
-	// which materially reduces moveForwardBlock CPU on the hot path. Replace
-	// with the next tagged release (>= v1.3.6) once go-tx-map#114 ships.
-	github.com/bsv-blockchain/go-tx-map v1.3.6-0.20260515143932-e509e98caded
-	github.com/bsv-blockchain/go-wire v1.2.3
+	github.com/bsv-blockchain/go-safe-conversion v1.2.0
+	github.com/bsv-blockchain/go-tx-map v1.3.7
+	github.com/bsv-blockchain/go-wire v1.2.5
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -470,5 +466,5 @@ require (
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/labstack/gommon v0.4.2
 	github.com/spf13/cobra v1.10.1 // indirect
-	github.com/yuin/gopher-lua v1.1.1 // indirect
+	github.com/yuin/gopher-lua v1.1.2 // indirect
 )

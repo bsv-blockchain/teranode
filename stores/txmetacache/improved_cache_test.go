@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -259,6 +260,31 @@ func TestImprovedCache_SetAndGet(t *testing.T) {
 			require.Equal(t, tc.value, dst)
 		})
 	}
+}
+
+// TestImprovedCache_GetMissReturnsSentinel pins the cache-miss contract: the
+// returned error must satisfy errors.Is(err, errors.ErrNotFound) and must not
+// allocate per call. The previous formatted error accounted for ~10% of CPU
+// under load via fmt.Errorf + runtime.Caller.
+func TestImprovedCache_GetMissReturnsSentinel(t *testing.T) {
+	cache, err := New(64*1024, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	var buf []byte
+	err1 := cache.Get(&buf, []byte("absent-key-1"))
+	err2 := cache.Get(&buf, []byte("absent-key-2"))
+
+	require.Error(t, err1)
+	require.Error(t, err2)
+	require.True(t, errors.Is(err1, errors.ErrNotFound), "miss must satisfy errors.Is(err, ErrNotFound)")
+	require.True(t, errors.Is(err2, errors.ErrNotFound))
+
+	key := []byte("absent-key-1")
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = cache.Get(&buf, key)
+	})
+	require.Zero(t, allocs, "cache miss must not allocate; got %.2f allocs/op", allocs)
 }
 
 // TestImprovedCache_Has tests the Has function

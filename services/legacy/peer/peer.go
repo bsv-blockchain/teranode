@@ -1183,6 +1183,9 @@ func (p *Peer) handleAuthChMsg(msg *wire.MsgAuthch) {
 }
 
 // readMessage reads the next bitcoin message from the peer with logging.
+// It buffers the full payload before decoding and returns the raw payload
+// bytes. Use this for messages whose Bsvdecode requires a *bytes.Buffer
+// (notably MsgVersion) or whose raw bytes are needed downstream.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
 	n, msg, buf, err := wire.ReadMessageWithEncodingN(p.conn,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
@@ -1196,10 +1199,44 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 		return nil, nil, err
 	}
 
+	p.logReadMessage(msg, buf)
+	return msg, buf, nil
+}
+
+// readMessageStreaming reads the next bitcoin message from the peer using the
+// streaming entry point added in go-wire v1.2.5. The payload is consumed
+// directly off the wire — no full-payload allocation — and the DoubleHash
+// checksum is verified incrementally. The raw payload bytes are NOT returned
+// (the second return is always nil).
+//
+// This is the right entry point for the main post-handshake message loop,
+// where fat blocks would otherwise force a multi-GB payload buffer. It is
+// NOT safe to use for handshake messages: MsgVersion.Bsvdecode type-asserts
+// its reader to *bytes.Buffer; go-wire rejects CmdVersion explicitly with a
+// *wire.MessageError.
+func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (wire.Message, error) {
+	n, msg, err := wire.ReadMessageStreamingN(p.conn,
+		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	atomic.AddUint64(&p.bytesReceived, uint64(n))
+
+	if p.cfg.Listeners.OnRead != nil {
+		p.cfg.Listeners.OnRead(p, n, msg, err)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	p.logReadMessage(msg, nil)
+	return msg, nil
+}
+
+// logReadMessage emits the debug logging that readMessage / readMessageStreaming
+// share. buf may be nil for the streaming path.
+func (p *Peer) logReadMessage(msg wire.Message, buf []byte) {
 	// Use closures to log expensive operations so they are only run when
 	// the logging level requires it.
 	p.logger.Debugf("%v", newLogClosure(func() string {
-		// Debug summary of message.
 		summary := messageSummary(msg)
 		if len(summary) > 0 {
 			summary = " (" + summary + ")"
@@ -1217,8 +1254,6 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 			return spew.Sdump(buf)
 		}))
 	}
-
-	return msg, buf, nil
 }
 
 // writeMessage sends a bitcoin message to the peer with logging.
@@ -1565,7 +1600,13 @@ out:
 		// Read a message and stop the idle timer as soon as the read
 		// is done.  The timer is reset below for the next iteration if
 		// needed.
-		rmsg, buf, err := p.readMessage(p.wireEncoding)
+		//
+		// The streaming path is used post-handshake to avoid buffering the
+		// full payload of large messages (notably fat blocks). MsgVersion is
+		// rejected by the streaming path, but a version message here would
+		// already be a protocol error (duplicate version), so the rejection
+		// surfaces as a peer-disconnect rather than a silent failure.
+		rmsg, err := p.readMessageStreaming(p.wireEncoding)
 		idleTimer.Stop()
 
 		if err != nil {
@@ -1684,7 +1725,9 @@ out:
 
 		case *wire.MsgBlock:
 			if p.cfg.Listeners.OnBlock != nil {
-				p.cfg.Listeners.OnBlock(p, msg, buf)
+				// Streaming path does not return the raw payload bytes.
+				// bsvutil.Block.Bytes() lazy-serializes from msg on demand.
+				p.cfg.Listeners.OnBlock(p, msg, nil)
 			}
 
 		case *wire.MsgInv:

@@ -85,6 +85,21 @@ func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	return args.Error(0)
 }
 
+func (m *mockCache) SetCacheMulti(keys, values [][]byte) error {
+	args := m.Called(keys, values)
+	return args.Error(0)
+}
+
+func (m *mockCache) SetCacheMultiSequential(keys, values [][]byte) error {
+	args := m.Called(keys, values)
+	return args.Error(0)
+}
+
+func (m *mockCache) SetCacheMultiSequentialWithHashes(keys, values [][]byte, hashes []uint64) error {
+	args := m.Called(keys, values, hashes)
+	return args.Error(0)
+}
+
 func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	args := m.Called(ctx, txs, fields)
 	return args.Error(0)
@@ -308,14 +323,14 @@ func TestServer_txmetaHandler(t *testing.T) {
 		{
 			name: "successful set operation",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil)
+				c.On("SetCacheMultiSequential", mock.Anything, mock.Anything).Return(nil)
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
 		},
 		{
 			name: "failed set operation logs debug",
 			setupMocks: func(l *mockLogger, c *mockCache) {
-				c.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
+				c.On("SetCacheMultiSequential", mock.Anything, mock.Anything).Return(errors.ErrProcessing)
 				l.On("Debugf", mock.Anything, mock.Anything).Return()
 			},
 			input: createKafkaMessage(t, false, []byte("test data")),
@@ -355,7 +370,7 @@ func TestServer_txmetaHandler_PreservesPerKeyOrdering(t *testing.T) {
 		operations  []string
 	)
 
-	mockCache.On("SetCacheFromBytes", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+	mockCache.On("SetCacheMultiSequential", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		operationMu.Lock()
 		defer operationMu.Unlock()
 		operations = append(operations, "add")
@@ -393,21 +408,104 @@ func TestServer_txmetaHandler_PreservesPerKeyOrdering(t *testing.T) {
 	assert.Equal(t, []string{"add", "delete"}, operations)
 }
 
-func TestServer_txmetaHandler_ReturnsErrorWhenQueueFull(t *testing.T) {
+// TestServer_txmetaHandler_V2_Parses verifies the receiver correctly handles
+// the v2 wire format (magic byte 0xFF, 8-byte hash per entry).
+func TestServer_txmetaHandler_V2_Parses(t *testing.T) {
+	mLogger := &mockLogger{}
+	mCache := &mockCache{}
+	mCache.On("SetCacheMultiSequentialWithHashes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
 	server := &Server{
-		logger: ulogger.TestLogger{},
+		logger:    mLogger,
+		utxoStore: mCache,
 	}
 
-	// Pretend workers are already initialized with a permanently full shard queue.
-	server.txmetaWorkerInitOnce.Do(func() {})
-	server.txmetaWorkerQueues = []chan txmetaWorkItem{
-		make(chan txmetaWorkItem),
+	payload := []byte("test-meta")
+	totalSize := 8 + 8 + 32 + 1 + 4 + len(payload)
+	data := make([]byte, totalSize)
+	data[0] = txmetaWireV2Magic
+	data[1] = txmetaWireV2Version
+	binary.LittleEndian.PutUint32(data[4:], 1)
+
+	off := 8
+	binary.LittleEndian.PutUint64(data[off:], 0xCAFEBABE)
+	off += 8
+	hash := chainhash.Hash{42}
+	copy(data[off:], hash[:])
+	off += 32
+	data[off] = txmetaActionADD
+	off++
+	binary.LittleEndian.PutUint32(data[off:], uint32(len(payload)))
+	off += 4
+	copy(data[off:], payload)
+
+	err := server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: data})
+	assert.NoError(t, err)
+	mCache.AssertExpectations(t)
+}
+
+// TestServer_txmetaHandler_V2_UnknownVersion confirms that an unknown v2
+// sub-version is logged and acked rather than triggering a redelivery loop.
+func TestServer_txmetaHandler_V2_UnknownVersion(t *testing.T) {
+	mLogger := &mockLogger{}
+	mLogger.On("Errorf", mock.Anything, mock.Anything).Return()
+
+	server := &Server{logger: mLogger}
+
+	data := make([]byte, 8)
+	data[0] = txmetaWireV2Magic
+	data[1] = 0x99
+
+	err := server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: data})
+	assert.NoError(t, err)
+	mLogger.AssertCalled(t, "Errorf", mock.Anything, mock.Anything)
+}
+
+// TestServer_txmetaHandler_V2_MixedAddDelete verifies the receiver handles a
+// v2 message containing both ADDs and DELETEs in any order, mirroring what
+// the validator's serializeTxMetaBatchV2 can emit when a partition has a
+// mixed batch.
+func TestServer_txmetaHandler_V2_MixedAddDelete(t *testing.T) {
+	mLogger := &mockLogger{}
+	mCache := &mockCache{}
+	// Two ADDs (single SetCacheMultiSequential call) + one DELETE.
+	mCache.On("SetCacheMultiSequentialWithHashes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mCache.On("Delete", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(nil)
+
+	server := &Server{
+		logger:    mLogger,
+		utxoStore: mCache,
 	}
 
-	hash := chainhash.Hash{0}
-	message := createKafkaMessageForHash(t, hash, txmetaActionADD, []byte("payload"))
+	hashes := []chainhash.Hash{{1}, {2}, {3}}
+	payloads := [][]byte{[]byte("a"), nil, []byte("ccc")}
+	actions := []byte{txmetaActionADD, txmetaActionDELETE, txmetaActionADD}
+	pseudoHashes := []uint64{0x11, 0x22, 0x33}
 
-	err := server.txmetaHandler(context.Background(), message)
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrProcessing))
+	size := 8 // header
+	for i := range hashes {
+		size += 8 + 32 + 1 + 4 + len(payloads[i])
+	}
+	data := make([]byte, size)
+	data[0] = txmetaWireV2Magic
+	data[1] = txmetaWireV2Version
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(hashes)))
+	off := 8
+
+	for i := range hashes {
+		binary.LittleEndian.PutUint64(data[off:], pseudoHashes[i])
+		off += 8
+		copy(data[off:], hashes[i][:])
+		off += 32
+		data[off] = actions[i]
+		off++
+		binary.LittleEndian.PutUint32(data[off:], uint32(len(payloads[i])))
+		off += 4
+		copy(data[off:], payloads[i])
+		off += len(payloads[i])
+	}
+
+	err := server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: data})
+	assert.NoError(t, err)
+	mCache.AssertExpectations(t)
 }

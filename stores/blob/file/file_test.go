@@ -972,7 +972,7 @@ func TestFileHealth(t *testing.T) {
 		// Assert
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
-		require.Equal(t, "File Store: Healthy", message)
+		require.Regexp(t, `^File Store: Healthy \(.+ available of .+\)$`, message)
 	})
 
 	t.Run("non-existent path", func(t *testing.T) {

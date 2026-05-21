@@ -101,7 +101,7 @@
   }
 
   .label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -113,7 +113,7 @@
   .value {
     word-break: break-all;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;

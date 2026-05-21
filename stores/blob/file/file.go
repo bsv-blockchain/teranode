@@ -37,6 +37,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -575,8 +576,37 @@ func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
 		return http.StatusInternalServerError, "File Store: Unable to delete file", err
 	}
 
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.path, &stat); err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to check disk space", err
+	}
+
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	totalBytes := stat.Blocks * uint64(stat.Bsize)
+
+	const minAvailableBytes = 1 << 30 // 1 GiB
+	if availableBytes < minAvailableBytes {
+		return http.StatusServiceUnavailable, fmt.Sprintf("File Store: Low disk space (%s available of %s)", humanBytes(availableBytes), humanBytes(totalBytes)),
+			errors.NewStorageUnavailableError("disk space below threshold: %s available", humanBytes(availableBytes))
+	}
+
 	s.debugf("[File] Health check succeeded path=%s", s.path)
-	return http.StatusOK, "File Store: Healthy", nil
+	return http.StatusOK, fmt.Sprintf("File Store: Healthy (%s available of %s)", humanBytes(availableBytes), humanBytes(totalBytes)), nil
+}
+
+func humanBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // Close performs any necessary cleanup for the file store.

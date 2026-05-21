@@ -133,6 +133,27 @@ func (m *MockUtxostore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
+// GetConflictingTxIterator mocks the iterator over conflicting transactions.
+func (m *MockUtxostore) GetConflictingTxIterator() (UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
+// RemoveFromConflictingChildren mocks batched removal of conflicting-child entries.
+func (m *MockUtxostore) RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+// RemoveBlockIDs mocks batched trimming of block IDs across many transactions.
+func (m *MockUtxostore) RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
 // BatchDecorate mocks the batch decoration of unresolved metadata with field data.
 // Returns the configured mock response for batch metadata decoration operations.
 func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {

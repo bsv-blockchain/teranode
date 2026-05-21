@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/go-bitcoin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -296,7 +297,100 @@ func Test_calculateTransactionFee(t *testing.T) {
 	}
 }
 
-func Benchmark_createSubtree(b *testing.B) {
+// TestSyncManager_createSubtrees_MultiSubtreeDistribution exercises the
+// multi-subtree fill path: a 6-tx block (1 coinbase + 5 regular) partitioned
+// per the [4, 2] shape lands as subtree 0 = coinbase placeholder + 3 regular
+// (Length 4, complete) and subtree 1 = 2 regular (Length 2, complete).
+func TestSyncManager_createSubtrees_MultiSubtreeDistribution(t *testing.T) {
+	initPrometheusMetrics()
+
+	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Version:   1,
+			PrevBlock: chainhash.Hash{},
+			Timestamp: time.Now(),
+			Bits:      0x1d00ffff,
+			Nonce:     0,
+		},
+	}
+
+	coinbaseMsgTx := wire.NewMsgTx(1)
+	coinbaseMsgTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0xffffffff},
+		SignatureScript:  []byte{0x00},
+		Sequence:         0xffffffff,
+	})
+	coinbaseMsgTx.AddTxOut(&wire.TxOut{Value: 50 * 100000000, PkScript: []byte{0x76, 0xa9, 0x14}})
+	msgBlock.Transactions = append(msgBlock.Transactions, coinbaseMsgTx)
+
+	parentHash := chainhash.Hash{0x01}
+
+	for i := 0; i < 5; i++ {
+		regularMsgTx := wire.NewMsgTx(1)
+		regularMsgTx.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{Hash: parentHash, Index: uint32(i)},
+			SignatureScript:  []byte{0x00, byte(i)},
+			Sequence:         0xffffffff,
+		})
+		regularMsgTx.AddTxOut(&wire.TxOut{Value: 1000 + int64(i), PkScript: []byte{0x76, 0xa9, 0x14, byte(i)}})
+		msgBlock.Transactions = append(msgBlock.Transactions, regularMsgTx)
+	}
+
+	block := bsvutil.NewBlock(msgBlock)
+	block.SetHeight(100)
+
+	require.Equal(t, 6, len(block.Transactions()))
+
+	sm := &SyncManager{logger: ulogger.TestLogger{}}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+	require.NoError(t, sm.createTxMap(context.Background(), block, txMap))
+	require.Equal(t, 5, txMap.Length(), "createTxMap should skip the coinbase")
+
+	for _, wrapper := range txMap.Range() {
+		for _, in := range wrapper.Tx.Inputs {
+			in.PreviousTxSatoshis = 5_000
+			in.PreviousTxScript = &bscript.Script{0x76, 0xa9, 0x14}
+		}
+	}
+
+	subtreeSize, numSubtrees, finalLeafCount, err := partitionLegacyBlock(len(block.Transactions()), 4)
+	require.NoError(t, err)
+	require.Equal(t, 4, subtreeSize)
+	require.Equal(t, 2, numSubtrees)
+	require.Equal(t, 2, finalLeafCount)
+
+	subtreeSlices := make([]*subtreepkg.Subtree, numSubtrees)
+	subtreeDatas := make([]*subtreepkg.Data, numSubtrees)
+	subtreeMetas := make([]*subtreepkg.Meta, numSubtrees)
+
+	for i := 0; i < numSubtrees; i++ {
+		capacity := subtreeSize
+		if i == numSubtrees-1 && finalLeafCount < subtreeSize {
+			capacity = finalLeafCount
+		}
+
+		st, terr := subtreepkg.NewIncompleteTreeByLeafCount(capacity)
+		require.NoError(t, terr)
+
+		if i == 0 {
+			require.NoError(t, st.AddCoinbaseNode())
+		}
+
+		subtreeSlices[i] = st
+		subtreeDatas[i] = subtreepkg.NewSubtreeData(st)
+		subtreeMetas[i] = subtreepkg.NewSubtreeMeta(st)
+	}
+
+	require.NoError(t, sm.createSubtrees(context.Background(), block, txMap, subtreeSlices, subtreeDatas, subtreeMetas))
+
+	require.Equal(t, 4, subtreeSlices[0].Length(), "subtree 0 should hold coinbase + 3 regular txs")
+	require.True(t, subtreeSlices[0].IsComplete())
+	require.Equal(t, 2, subtreeSlices[1].Length(), "subtree 1 should hold 2 regular txs")
+	require.True(t, subtreeSlices[1].IsComplete())
+}
+
+func Benchmark_createSubtrees(b *testing.B) {
 	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin")
 	require.NoError(b, err)
 
@@ -316,7 +410,11 @@ func Benchmark_createSubtree(b *testing.B) {
 		subtreeData := subtreepkg.NewSubtreeData(subtree)
 		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
-		_ = sm.createSubtree(b.Context(), block, txMap, subtree, subtreeData, subtreeMeta)
+		_ = sm.createSubtrees(b.Context(), block, txMap,
+			[]*subtreepkg.Subtree{subtree},
+			[]*subtreepkg.Data{subtreeData},
+			[]*subtreepkg.Meta{subtreeMeta},
+		)
 	}
 }
 
@@ -586,6 +684,129 @@ func TestSyncManager_extendFromTxMap_OOB(t *testing.T) {
 	parentHash, child, txMap := buildOOBFixture(t)
 
 	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), parentHash.String())
+}
+
+// buildInRangeFixture constructs a parent (2 outputs) and a child whose only
+// input references PreviousTxOutIndex == 0 (in range), plus a txMap containing
+// both. Used by the nil-deref regression tests so the bounds-check passes and
+// the nil-check is the one that must fire.
+func buildInRangeFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
+	t.Helper()
+
+	parentScript := &bscript.Script{}
+	parent := &bt.Tx{
+		Version: 1,
+		Inputs:  []*bt.Input{},
+		Outputs: []*bt.Output{
+			{Satoshis: 100, LockingScript: parentScript},
+			{Satoshis: 200, LockingScript: parentScript},
+		},
+	}
+	parent.SetExtended(true)
+	parentHash := parent.TxIDChainHash()
+
+	child := &bt.Tx{
+		Version: 1,
+		Inputs: []*bt.Input{
+			{
+				UnlockingScript:    &bscript.Script{},
+				PreviousTxOutIndex: 0,
+			},
+		},
+		Outputs: []*bt.Output{
+			{Satoshis: 50, LockingScript: &bscript.Script{}},
+		},
+	}
+	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
+	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
+
+	return parentHash, child, txMap
+}
+
+// TestSyncManager_extendFromTxMap_NilParentTx verifies that extendFromTxMap
+// returns a TxInvalidError (rather than panicking) when the parent's
+// TxMapWrapper carries a nil Tx pointer.
+func TestSyncManager_extendFromTxMap_NilParentTx(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	// Replace the parent wrapper with one that has a nil Tx — the child's hash
+	// is already keyed before this mutation, so the child lookup still succeeds.
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: nil})
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "missing previous transaction")
+	require.Contains(t, err.Error(), parentHash.String())
+}
+
+// TestSyncManager_extendFromTxMap_NilOutput verifies that extendFromTxMap
+// returns a TxInvalidError when the referenced parent output is nil.
+func TestSyncManager_extendFromTxMap_NilOutput(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	parentWrapper, _ := txMap.Get(*parentHash)
+	parentWrapper.Tx.Outputs[0] = nil
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "nil or has nil locking script")
+}
+
+// TestSyncManager_extendFromTxMap_NilLockingScript verifies that extendFromTxMap
+// returns a TxInvalidError when the referenced parent output's locking script
+// is nil (which would otherwise panic on the deref into bscript.NewFromBytes).
+func TestSyncManager_extendFromTxMap_NilLockingScript(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	parentWrapper, _ := txMap.Get(*parentHash)
+	parentWrapper.Tx.Outputs[0].LockingScript = nil
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "nil or has nil locking script")
+}
+
+// TestSyncManager_ExtendTransaction_NilParentTx mirrors the same guard on the
+// parallel-decoration path used by ExtendTransaction.
+func TestSyncManager_ExtendTransaction_NilParentTx(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: nil})
+
+	err := sm.ExtendTransaction(context.Background(), child, txMap)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
 	require.Contains(t, err.Error(), parentHash.String())
@@ -971,6 +1192,62 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sm := &SyncManager{chainParams: tt.chainParams}
 			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+		})
+	}
+}
+
+// TestClassifyAndCountPrewarmError verifies that classifyAndCountPrewarmError routes
+// each validator error class to the correct prometheusLegacyNetsyncPrewarmErrors label,
+// preserving the silent-drop semantics flagged by issue #4590 while restoring observability.
+func TestClassifyAndCountPrewarmError(t *testing.T) {
+	initPrometheusMetrics()
+
+	tests := []struct {
+		name  string
+		err   error
+		label string
+	}{
+		{
+			name:  "tx_invalid",
+			err:   errors.NewTxInvalidError("script failed"),
+			label: "tx_invalid",
+		},
+		{
+			name:  "service",
+			err:   errors.NewServiceError("validator unavailable"),
+			label: "service",
+		},
+		{
+			name:  "processing",
+			err:   errors.NewProcessingError("transient processing error"),
+			label: "processing",
+		},
+		{
+			name:  "policy_conflicting",
+			err:   errors.NewTxConflictingError("double-spend in mempool"),
+			label: "policy",
+		},
+		{
+			name:  "policy_already_exists",
+			err:   errors.NewTxExistsError("already in mempool"),
+			label: "policy",
+		},
+		{
+			name:  "other",
+			err:   errors.NewStorageError("disk full"),
+			label: "other",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := prometheusLegacyNetsyncPrewarmErrors.WithLabelValues(tt.label)
+			before := testutil.ToFloat64(counter)
+
+			classifyAndCountPrewarmError(ulogger.TestLogger{}, tt.err)
+
+			after := testutil.ToFloat64(counter)
+			require.Equal(t, before+1, after, "counter for label %q must increment by 1", tt.label)
 		})
 	}
 }

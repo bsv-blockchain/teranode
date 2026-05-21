@@ -291,6 +291,11 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 	pending := make(map[int]chunkResult)
 	nextChunk := 0
 
+	// Defensive cap on out-of-order chunks held in memory. With the current scheduler
+	// this should never exceed `concurrency`, but a future change to the scheduler could
+	// silently grow it. Aborting beats OOM. 2x leaves headroom for transient races.
+	pendingCap := 2 * concurrency
+
 	for result := range resultsChan {
 		if result.err != nil {
 			cancel()
@@ -300,6 +305,13 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 		}
 
 		pending[result.chunkIdx] = result
+		if len(pending) > pendingCap {
+			cancel()
+			drainChunkResults(resultsChan)
+			_ = g.Wait()
+			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (likely scheduler regression)",
+				subtreeHash.String(), pendingCap)
+		}
 
 		for {
 			chunk, ok := pending[nextChunk]
@@ -307,7 +319,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 				break
 			}
 
-			if err = repo.writeChunkToWriter(w, block, chunk.chunkHashes, chunk.chunkMetaSlice, chunk.chunkOffset); err != nil {
+			if err = repo.writeChunkToWriter(streamCtx, w, block, chunk.chunkHashes, chunk.chunkMetaSlice, chunk.chunkOffset); err != nil {
 				cancel()
 				drainChunkResults(resultsChan)
 				_ = g.Wait()
@@ -420,9 +432,21 @@ func drainChunkResults(resultsChan <-chan chunkResult) {
 }
 
 // writeChunkToWriter writes a chunk of transactions to the writer in order.
-func (repo *Repository) writeChunkToWriter(w io.Writer, block *model.Block,
+//
+// The ctx check between writes lets the loop abort promptly when the caller's context is
+// cancelled (e.g. HTTP client disconnect). io.MultiWriter / pipe writes are not ctx-aware
+// on their own, so without this check we'd keep producing tx bytes until the first write
+// happens to land on a closed pipe — meanwhile retaining chunkMetaSlice in heap.
+func (repo *Repository) writeChunkToWriter(ctx context.Context, w io.Writer, block *model.Block,
 	chunkHashes []chainhash.Hash, chunkMetaSlice []*meta.Data, chunkOffset int) error {
+	const ctxCheckEvery = 256
+
 	for i := 0; i < len(chunkHashes); i++ {
+		if i%ctxCheckEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
 			if block != nil {
 				// The coinbase tx is not in the txmeta store, so we add in a special coinbase placeholder tx

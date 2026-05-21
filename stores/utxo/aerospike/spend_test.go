@@ -1,6 +1,8 @@
 package aerospike_test
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -21,6 +24,108 @@ import (
 )
 
 // go test -v -tags test_aerospike ./test/...
+
+func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
+	tests := []struct {
+		name              string
+		enableExpressions bool
+	}{
+		{name: "lua", enableExpressions: false},
+		{name: "expressions", enableExpressions: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 1
+			tSettings.UtxoStore.SpendBatcherSize = 2
+			tSettings.UtxoStore.SpendBatcherDurationMillis = 5_000
+			tSettings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+			tSettings.Aerospike.EnableSpendFilterExpressions = tt.enableExpressions
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(func() {
+				deferFn()
+			})
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tx, 101)
+			require.NoError(t, err)
+
+			winnerCandidate := spendTx.Clone()
+			loserCandidate := spendTx2.Clone()
+			loserCandidate.Version = winnerCandidate.Version + 1
+
+			outcomes := spendConcurrently(t, store, winnerCandidate, loserCandidate)
+
+			var (
+				successCount int
+				failureCount int
+				winner       *bt.Tx
+				loserSpend   *utxo.Spend
+			)
+			candidates := []*bt.Tx{winnerCandidate, loserCandidate}
+			for idx, outcome := range outcomes {
+				require.Len(t, outcome.spends, 1)
+				if outcome.err == nil {
+					successCount++
+					winner = candidates[idx]
+					continue
+				}
+
+				failureCount++
+				require.ErrorIs(t, outcome.err, errors.ErrUtxoError)
+				require.ErrorIs(t, outcome.spends[0].Err, errors.ErrSpent)
+				loserSpend = outcome.spends[0]
+			}
+
+			require.Equal(t, 1, successCount)
+			require.Equal(t, 1, failureCount)
+			require.NotNil(t, winner)
+			require.NotNil(t, loserSpend)
+			require.NotNil(t, loserSpend.ConflictingTxID)
+			require.Equal(t, winner.TxIDChainHash().String(), loserSpend.ConflictingTxID.String())
+
+			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), 0, store.GetUtxoBatchSize())
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+			require.NoError(t, err)
+
+			rec, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key, fields.SpentUtxos.String())
+			require.NoError(t, err)
+			require.NotNil(t, rec)
+			require.Equal(t, 1, rec.Bins[fields.SpentUtxos.String()])
+		})
+	}
+}
+
+type spendOutcome struct {
+	spends []*utxo.Spend
+	err    error
+}
+
+func spendConcurrently(t *testing.T, store *teranode_aerospike.Store, txs ...*bt.Tx) []spendOutcome {
+	t.Helper()
+
+	start := make(chan struct{})
+	outcomes := make([]spendOutcome, len(txs))
+
+	var wg sync.WaitGroup
+	wg.Add(len(txs))
+	for idx, spendTx := range txs {
+		idx, spendTx := idx, spendTx
+		go func() {
+			defer wg.Done()
+			<-start
+			outcomes[idx].spends, outcomes[idx].err = store.Spend(context.Background(), spendTx, store.GetBlockHeight()+1)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	return outcomes
+}
 
 func TestStore_SpendMultiRecord(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
@@ -498,17 +603,21 @@ func TestStore_Unspend(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		// Try to unspend a tx that hasn't been spent
+		// Unspend a never-spent UTXO is an idempotent no-op: the row's spending_data
+		// is already nil, so the ownership check naturally short-circuits and the
+		// call succeeds without modifying anything.
+		someTxHash := chainhash.HashH([]byte("some-other-tx"))
 		err = store.Unspend(ctx, []*utxo.Spend{
 			{
-				TxID:     tx.TxIDChainHash(),
-				Vout:     0,
-				UTXOHash: utxoHash,
+				TxID:         tx.TxIDChainHash(),
+				Vout:         0,
+				UTXOHash:     utxoHash,
+				SpendingData: spendpkg.NewSpendingData(&someTxHash, 0),
 			},
 		})
 		require.NoError(t, err)
 
-		// Verify we can still spend it
+		// Verify we can still spend the UTXO normally.
 		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)

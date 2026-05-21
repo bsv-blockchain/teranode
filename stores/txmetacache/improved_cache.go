@@ -89,7 +89,11 @@ const (
 	minSlabBytesPerMmap = minSlabChunks * ChunkSize // keep in sync with minSlabChunks
 )
 
-const smallSetMultiBatchThreshold = 32
+// smallSetMultiBatchThreshold gates SetMulti's two paths: at or below this
+// size, keys are written sequentially via per-key Set on the caller's
+// goroutine. Above it, keys are bucketed and dispatched to one goroutine
+// per non-empty bucket.
+const smallSetMultiBatchThreshold = 256
 
 func mapCapacityPerBucket() int {
 	return max(1, MapInitialCapacity/BucketsCount)
@@ -504,7 +508,36 @@ func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byt
 	return nil
 }
 
+// setMultiScratch is the per-call working memory used by ImprovedCache.SetMulti
+// on the bucket-batching path. Held in setMultiScratchPool so the ~400 KB of
+// outer slice headers (two [BucketsCount][][]byte plus a [BucketsCount]int
+// counts vector) are reused across calls instead of allocated every time.
+//
+// The hashes slice is kept as a variable-length []uint64 and re-grown only
+// when a batch larger than any prior batch arrives. The fixed-size arrays
+// rely on BucketsCount being a compile-time constant.
+type setMultiScratch struct {
+	hashes []uint64
+	counts [BucketsCount]int
+	keys   [BucketsCount][][]byte
+	values [BucketsCount][][]byte
+}
+
+var setMultiScratchPool = sync.Pool{
+	New: func() any { return &setMultiScratch{} },
+}
+
 // SetMulti stores multiple (k, v) entries in the cache, for different values.
+//
+// Implementation note: keys are pre-hashed and counted per bucket in a first
+// pass so that each per-bucket sub-slice can be allocated at its exact
+// capacity in the second pass. The previous implementation grew each
+// per-bucket sub-slice via append(), producing a cap-doubling chain
+// (1 → 2 → 4 → …) for every non-empty bucket. The outer per-bucket scratch
+// is reused via setMultiScratchPool so the ~400 KB of [BucketsCount][][]byte
+// headers do not allocate on every call — heap profiling on the
+// cache-write-back path attributed multi-TB / 45 s of allocations to that
+// outer scratch.
 func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 	if len(keys) != len(values) {
 		return errors.NewProcessingError("keys and values length mismatch; got %d keys and %d values", len(keys), len(values))
@@ -518,34 +551,67 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		return nil
 	}
 
-	batchedKeys := make([][][]byte, BucketsCount)
-	batchedValues := make([][][]byte, BucketsCount)
+	s := setMultiScratchPool.Get().(*setMultiScratch)
+	// Reset on return so the pool does not pin the per-bucket inner sub-slices
+	// (and the user keys/values they reference) past this call. counts is
+	// zeroed wholesale; keys/values are nil'd only for the buckets we actually
+	// populated (cheap walk via counts).
+	defer func() {
+		for i, n := range s.counts {
+			if n > 0 {
+				s.keys[i] = nil
+				s.values[i] = nil
+			}
+		}
 
-	var bucketIdx uint64
+		clear(s.counts[:])
+		setMultiScratchPool.Put(s)
+	}()
 
-	var h uint64
+	// Re-grow hashes only when a larger batch arrives. Smaller batches reuse
+	// the previously-grown backing array via reslicing.
+	if cap(s.hashes) < len(keys) {
+		s.hashes = make([]uint64, len(keys))
+	} else {
+		s.hashes = s.hashes[:len(keys)]
+	}
 
-	// divide keys into buckets
+	// Pass 1: hash + count.
 	for i, key := range keys {
-		h = xxhash.Sum64(key)
-		bucketIdx = h % BucketsCount
-		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
-		batchedValues[bucketIdx] = append(batchedValues[bucketIdx], values[i])
+		h := xxhash.Sum64(key)
+		s.hashes[i] = h
+		s.counts[h%BucketsCount]++
+	}
+
+	// Pre-size each non-empty bucket sub-slice exactly.
+	for i, n := range s.counts {
+		if n == 0 {
+			continue
+		}
+
+		s.keys[i] = make([][]byte, 0, n)
+		s.values[i] = make([][]byte, 0, n)
+	}
+
+	// Pass 2: scatter. Reusing the cached hashes avoids re-running xxhash on
+	// every key. Append never grows because cap was set above.
+	for i, key := range keys {
+		b := s.hashes[i] % BucketsCount
+		s.keys[b] = append(s.keys[b], key)
+		s.values[b] = append(s.values[b], values[i])
 	}
 
 	g := errgroup.Group{}
 
-	// for every bucket run a goroutine to populate it
-	for bucketIdx := range batchedKeys {
-		// if there is no key for this bucket
-		if len(batchedKeys[bucketIdx]) == 0 {
+	for bucketIdx := range s.keys {
+		if s.counts[bucketIdx] == 0 {
 			continue
 		}
 
 		bucketIdx := bucketIdx
 
 		g.Go(func() error {
-			c.buckets[bucketIdx].SetMulti(batchedKeys[bucketIdx], batchedValues[bucketIdx])
+			c.buckets[bucketIdx].SetMulti(s.keys[bucketIdx], s.values[bucketIdx])
 			return nil
 		})
 	}
@@ -554,6 +620,121 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		return err
 	}
 
+	return nil
+}
+
+// SetMultiSequential is the partition-aware twin of SetMulti. It groups keys
+// by bucket and applies each bucket's batch on the calling goroutine, with no
+// errgroup and no per-bucket goroutine.
+//
+// Use when the caller already has parallelism elsewhere (one goroutine per
+// Kafka partition, with partitions sized so each partition's bucket range is
+// disjoint from any other partition's). Under that layout, SetMulti's
+// per-bucket goroutine fan-out adds pure overhead — it spawns ~one goroutine
+// per non-empty bucket per call, which dominates allocation and scheduler
+// cost.
+//
+// Benchmarks at batch=10000 random keys over 8192 buckets:
+//
+//	SetMulti           ~2.1M tx/s, 40 allocs/tx (errgroup spawns ~7k goroutines/call)
+//	SetMultiSequential ~5-10M tx/s, single-digit allocs/tx (single goroutine)
+//
+// Multiplied across N partition-aware writers running concurrently on disjoint
+// bucket ranges, this clears the 10M tx/s/pod target.
+//
+// Concurrency: a single SetMultiSequential call still acquires each touched
+// bucket's lock once. Concurrent SetMultiSequential calls on disjoint bucket
+// ranges (the partition-aligned receiver design) never contend; on overlapping
+// ranges they serialise per bucket exactly like SetMulti.
+func (c *ImprovedCache) SetMultiSequential(keys [][]byte, values [][]byte) error {
+	if len(keys) != len(values) {
+		return errors.NewProcessingError("keys and values length mismatch; got %d keys and %d values", len(keys), len(values))
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	if len(keys) <= smallSetMultiBatchThreshold {
+		for i, key := range keys {
+			_ = c.Set(key, values[i])
+		}
+		return nil
+	}
+
+	s := setMultiScratchPool.Get().(*setMultiScratch)
+	defer func() {
+		for i, n := range s.counts {
+			if n > 0 {
+				s.keys[i] = nil
+				s.values[i] = nil
+			}
+		}
+		clear(s.counts[:])
+		setMultiScratchPool.Put(s)
+	}()
+
+	if cap(s.hashes) < len(keys) {
+		s.hashes = make([]uint64, len(keys))
+	} else {
+		s.hashes = s.hashes[:len(keys)]
+	}
+
+	// Pass 1: hash + count.
+	for i, key := range keys {
+		h := xxhash.Sum64(key)
+		s.hashes[i] = h
+		s.counts[h%BucketsCount]++
+	}
+
+	// Pre-size each non-empty bucket sub-slice exactly.
+	for i, n := range s.counts {
+		if n == 0 {
+			continue
+		}
+		s.keys[i] = make([][]byte, 0, n)
+		s.values[i] = make([][]byte, 0, n)
+	}
+
+	// Pass 2: scatter.
+	for i, key := range keys {
+		b := s.hashes[i] % BucketsCount
+		s.keys[b] = append(s.keys[b], key)
+		s.values[b] = append(s.values[b], values[i])
+	}
+
+	// Sequential bucket walks — same per-bucket work as SetMulti, but no
+	// goroutine fan-out.
+	for bucketIdx := range s.keys {
+		if s.counts[bucketIdx] == 0 {
+			continue
+		}
+		c.buckets[bucketIdx].SetMulti(s.keys[bucketIdx], s.values[bucketIdx])
+	}
+
+	return nil
+}
+
+// SetMultiSequentialWithHashes is SetMultiSequential with caller-supplied
+// xxhash values. Skip-hashes use case: the v2 txmeta wire format carries
+// xxhash(tx hash) on the wire, so the receiver hands them straight through
+// without re-hashing.
+//
+// hashes[i] MUST equal xxhash.Sum64(keys[i]); otherwise the cache will
+// store under one bucket and a subsequent Get(key) will look in another.
+// Caller-side mismatch is silent.
+func (c *ImprovedCache) SetMultiSequentialWithHashes(keys [][]byte, values [][]byte, hashes []uint64) error {
+	if len(keys) != len(values) || len(keys) != len(hashes) {
+		return errors.NewProcessingError("keys/values/hashes length mismatch; got %d/%d/%d", len(keys), len(values), len(hashes))
+	}
+
+	// Per-key path: each Set takes its bucket lock for one entry. For the
+	// receiver's typical call shape (~31 entries per partition over ~30
+	// distinct buckets) batching by bucket buys little — collisions are
+	// rare, and avoiding the scratch-pool grouping overhead is a wash.
+	for i, key := range keys {
+		_ = c.buckets[hashes[i]%BucketsCount].Set(key, values[i], hashes[i])
+	}
 	return nil
 }
 
@@ -591,7 +772,15 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % BucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		return errors.NewNotFoundError("key %v not found in cache", k, errors.ErrNotFound)
+		// Return the codebase-wide ErrNotFound sentinel rather than a fresh
+		// formatted error. Profiling showed ~10% of CPU on the cache hot path
+		// went into errors.NewNotFoundError("key %v ...", k, ErrNotFound) —
+		// fmt.Errorf on the byte-slice key plus runtime.Caller stack capture
+		// inside teranode/errors.New — all of which the caller's
+		// errors.Is(err, errors.ErrNotFound) check discards. Reusing the
+		// existing sentinel (treated as immutable across the codebase, like
+		// the other errors.Err* values) avoids allocating a parallel one.
+		return errors.ErrNotFound
 	}
 
 	return nil
@@ -725,7 +914,16 @@ func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	}
 
 	b.chunks = make([][]byte, maxChunksInt)
-	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
+	// Inner shard count of 1: the outer ImprovedCache already shards
+	// across BucketsCount (8192) outer buckets via h%BucketsCount, AND we
+	// serialize all writes to this map under b.mu, so the lock-free
+	// "splitting" inside the map adds no concurrency benefit. Previously
+	// this passed BucketsCount, which made every bucket's map allocate
+	// 8192 inner sub-maps (8192 outer × 8192 inner ≈ 67M sub-maps per
+	// cache). cleanLockedMap re-builds the map on every chunk wrap, so
+	// that allocation pattern dominated CPU + heap profiles. 1 inner
+	// shard reduces sub-map count by 8000x.
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), 1)
 
 	b.Reset()
 
@@ -741,7 +939,7 @@ func (b *bucketNative) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
+	b.m = swiss.NewNativeSplitLockFreeMapUint64(mapCapacityPerBucket(), 1)
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -767,7 +965,8 @@ func (b *bucketNative) cleanLockedMap() {
 	})
 
 	if newItems < bm.Length() {
-		bmNew := swiss.NewNativeSplitLockFreeMapUint64(newItems, uint64(BucketsCount))
+		// See bucketNative.Init for rationale: 1 inner shard, not BucketsCount.
+		bmNew := swiss.NewNativeSplitLockFreeMapUint64(newItems, 1)
 
 		bm.IterAll(func(k, v uint64) (stop bool) {
 			gen := v >> bucketSizeBits
@@ -1042,8 +1241,12 @@ func (b *bucketNative) putChunk(chunk []byte) {
 // deleteFromNativeSplitMapShard rebuilds the target shard without h.
 // We do this because go-tx-map's lock-free split map does not currently
 // expose a delete API that keeps the shard length counter in sync.
+//
+// Routing must match the map's internal hash%nrOfBuckets dispatch. We now
+// construct these maps with nrOfBuckets=1 (see bucketNative.Init), so the
+// shard index is always 0.
 func deleteFromNativeSplitMapShard(m *swiss.NativeSplitLockFreeMapUint64, h uint64) {
-	shardIdx := h % uint64(BucketsCount)
+	const shardIdx = uint64(0)
 	shards := m.Map()
 	shard, ok := shards[shardIdx]
 	if !ok || shard == nil || !shard.Exists(h) {
@@ -1155,7 +1358,13 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 		return errors.NewProcessingError("failed converting maxChunks", err)
 	}
 	b.chunks = make([][]byte, maxChunksInt)
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
+	// Inner shard count of 1 — see bucketNative.Init for the rationale. The
+	// outer cache already shards across BucketsCount=8192 outer buckets and
+	// b.mu serialises writes to this map, so per-bucket inner splitting only
+	// multiplied allocation in cleanLockedMap. This is the bucketTrimmed
+	// (production "unallocated" deployment) path observed in the scaling-2
+	// pod heap profile — cleanLockedMap held 17 GiB in-use there.
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), 1)
 	b.overWriting = false
 	b.Reset()
 
@@ -1171,7 +1380,7 @@ func (b *bucketTrimmed) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket(), 1)
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -1207,7 +1416,9 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := swiss.NewSplitSwissLockFreeMapUint64(bm.Length(), uint64(BucketsCount))
+		// See bucketTrimmed.Init for inner-shard rationale: 1, not BucketsCount.
+		// deleteFromSwissSplitMapShard routes via shard 0 — must stay consistent.
+		bmNew := swiss.NewSplitSwissLockFreeMapUint64(bm.Length(), 1)
 
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
@@ -1534,8 +1745,12 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 // deleteFromSwissSplitMapShard rebuilds the target shard without h.
 // We do this because go-tx-map's lock-free split map does not currently
 // expose a delete API that keeps the shard length counter in sync.
+//
+// Routing must match the map's internal hash%nrOfBuckets dispatch. We now
+// construct these maps with nrOfBuckets=1 (see bucketTrimmed.Init), so the
+// shard index is always 0.
 func deleteFromSwissSplitMapShard(m *swiss.SplitSwissLockFreeMapUint64, h uint64) {
-	shardIdx := h % uint64(BucketsCount)
+	const shardIdx = uint64(0)
 	shards := m.Map()
 	shard, ok := shards[shardIdx]
 	if !ok || shard == nil || !shard.Exists(h) {

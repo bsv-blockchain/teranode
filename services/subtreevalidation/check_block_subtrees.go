@@ -217,7 +217,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree from the peer
 					url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
 
-					subtreeNodeBytes, err := util.DoHTTPRequest(gCtx, url)
+					// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
+					// malicious peer can't OOM us by streaming oversized responses. This must be
+					// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
+					// controls what *this node* assembles; peers may legitimately produce larger subtrees.
+					maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
+					subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
 					if err != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
 					}
@@ -229,7 +235,17 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 						}
 					}
 
-					subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(len(subtreeNodeBytes) / chainhash.HashSize)
+					// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
+					// peers may legitimately produce subtrees larger than the local assembly policy. The
+					// bounded HTTP read already enforces this, but we keep the explicit check as a guard
+					// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
+					leafCount := len(subtreeNodeBytes) / chainhash.HashSize
+					maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
+					if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
+						return err
+					}
+
+					subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
 					if err != nil {
 						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
 					}
@@ -277,7 +293,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree data from the peer and process it directly
 					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
 
-					body, subtreeDataErr := util.DoHTTPRequestBodyReader(gCtx, url)
+					// Retry on 503 — peer's asset service may reject under admission control
+					// while it generates the file on-demand from Aerospike.
+					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(gCtx, url)
 					if subtreeDataErr != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 					}
@@ -1023,4 +1041,17 @@ func extendTxWithInBlockParents(tx *bt.Tx, parentMap map[chainhash.Hash]*bt.Tx) 
 	}
 
 	return extendedCount
+}
+
+// validateSubtreeLeafCount rejects peer-supplied leaf counts that exceed the
+// configured policy cap before they reach allocation paths such as
+// subtreepkg.NewIncompleteTreeByLeafCount, where the capacity argument would
+// otherwise drive an unbounded make() backed by attacker-controlled bytes.
+func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax int) error {
+	if leafCount > policyMax {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
+			subtreeHash.String(), policyMax, leafCount)
+	}
+
+	return nil
 }

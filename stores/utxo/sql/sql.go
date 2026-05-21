@@ -1897,6 +1897,21 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		retryable := s.trySendSpendBatch(batch)
@@ -2797,6 +2812,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		_ = txn.Rollback()
 	}()
 
+	// Match-on-spending_data is the safety guarantee: we only clear spending_data
+	// when the caller's expected value matches what's stored. This prevents a stale
+	// or wrong Spend record from silently wiping the legitimate spend.
+	// SpendingData is mandatory: every production caller derives spends from
+	// Spend()/SetConflicting()/GetSpends(), all of which populate it.
 	q1 := `
 		UPDATE outputs
 		SET spending_data = NULL
@@ -2804,7 +2824,25 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			SELECT id FROM transactions WHERE hash = $1
 		)
 		AND idx = $2
+		AND spending_data = $3
 		RETURNING transaction_id
+	`
+
+	// qFindTxID runs after q1 returns 0 rows. Unspend is idempotent: if the output
+	// row exists but our caller doesn't own the spend (stored data is NULL or
+	// belongs to someone else), we no-op on spending_data but still need the
+	// transaction_id to apply the locked/DAH housekeeping below — callers like
+	// ProcessConflicting rely on the parent transaction's locked state being
+	// updated regardless of whether the spend was the loser's. Only a missing
+	// row is a real error (NotFound). Mirrors stores/utxo/aerospike/teranode.lua
+	// where the unspend UDF returns STATUS_OK with no bin mutation for the same
+	// non-owning cases.
+	qFindTxID := `
+		SELECT transaction_id FROM outputs
+		WHERE transaction_id IN (
+			SELECT id FROM transactions WHERE hash = $1
+		)
+		AND idx = $2
 	`
 
 	locked := false
@@ -2829,15 +2867,28 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				continue
 			}
 
+			if spend.SpendingData == nil {
+				return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
+			}
+
 			var transactionID int
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout, spend.SpendingData.Bytes()).Scan(&transactionID)
 			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+				if !errors.Is(err, sql.ErrNoRows) {
+					return err
 				}
 
-				return err
+				// q1 declined to clear — caller isn't the spend's current owner.
+				// Look up the transaction_id directly so the housekeeping below
+				// still runs; the only real error here is a missing row.
+				if err = txn.QueryRowContext(ctx, qFindTxID, spend.TxID[:], spend.Vout).Scan(&transactionID); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					}
+
+					return err
+				}
 			}
 
 			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {

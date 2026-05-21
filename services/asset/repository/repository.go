@@ -97,6 +97,7 @@ type Repository struct {
 	semGetTransactionMeta     *semaphore.Weighted
 	semGetSubtreeData         *semaphore.Weighted
 	semGetSubtreeDataReader   *semaphore.Weighted
+	semSubtreeDataCreate      *semaphore.Weighted
 	semGetSubtreeTransactions *semaphore.Weighted
 	semGetSubtreeExists       *semaphore.Weighted
 	semGetSubtreeHead         *semaphore.Weighted
@@ -155,6 +156,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	repo.semGetTransactionMeta = initSemaphore(tSettings.Asset.ConcurrencyGetTransactionMeta, "GetTransactionMeta")
 	repo.semGetSubtreeData = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeData, "GetSubtreeData")
 	repo.semGetSubtreeDataReader = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeDataReader, "GetSubtreeDataReader")
+	repo.semSubtreeDataCreate = initSemaphore(tSettings.Asset.ConcurrencySubtreeDataCreate, "SubtreeDataCreate")
 	repo.semGetSubtreeTransactions = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeTransactions, "GetSubtreeTransactions")
 	repo.semGetSubtreeExists = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeExists, "GetSubtreeExists")
 	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
@@ -200,6 +202,17 @@ func releaseSemaphorePermit(sem *semaphore.Weighted) {
 	if sem != nil {
 		sem.Release(1)
 	}
+}
+
+// tryAcquireSemaphorePermit acquires a permit without blocking.
+// If sem is nil (unlimited concurrency), returns true.
+// Returns false if the semaphore is at capacity — callers should treat this as a
+// "service unavailable" condition and surface it to clients (HTTP 503), not retry locally.
+func tryAcquireSemaphorePermit(sem *semaphore.Weighted) bool {
+	if sem == nil {
+		return true
+	}
+	return sem.TryAcquire(1)
 }
 
 // Health performs health checks on the repository and its dependencies.

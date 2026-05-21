@@ -97,6 +97,12 @@ func (cm *clientChannelMap) remove(ch chan []byte) {
 	delete(cm.channels, ch)
 }
 
+// maxConcurrentBroadcasts caps the number of in-flight broadcast goroutines so a
+// notification burst with many connected clients can't exhaust goroutines/timers.
+// Declared as a var (not const) so tests can override it; not exposed to settings
+// because the cap is an internal resource ceiling, not a behavioural knob.
+var maxConcurrentBroadcasts = 256
+
 func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	// Get a snapshot of channels under the lock
 	cm.RLock()
@@ -112,12 +118,20 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	}
 
 	// Send to all channels in parallel without holding the lock
-	// This prevents O(N) delay accumulation from blocking clients
+	// This prevents O(N) delay accumulation from blocking clients.
+	// Clamp poolSize to at least 1 so a misconfigured/test-overridden cap can't
+	// deadlock the loop: with capacity 0, sem <- struct{}{} would block forever
+	// because the receiving goroutine is launched only after the send returns.
+	poolSize := max(maxConcurrentBroadcasts, 1)
+	sem := make(chan struct{}, poolSize)
+
 	var wg sync.WaitGroup
 	for _, ch := range channels {
 		wg.Add(1)
+		sem <- struct{}{} // blocks if pool is full — caps in-flight goroutines
 		go func(ch chan []byte) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			timer := time.NewTimer(time.Second)
 			defer func() {
 				// Ensure timer resources are released promptly when the send succeeds.

@@ -340,18 +340,32 @@ type AddTxBatchColumnarRequest struct {
 	//   - Transaction 1: 4 parent hashes (hashes 3-6)
 	//   - Transaction 2: 3 parent hashes (hashes 7-9)
 	ParentTxOffsets []uint32 `protobuf:"varint,7,rep,packed,name=parent_tx_offsets,json=parentTxOffsets,proto3" json:"parent_tx_offsets,omitempty"`
-	// All parent vout indices for all transactions, flattened and concatenated.
-	// These are the Idxs from TxInpoints (the uint32 indices for each parent hash).
-	// Use vout_idx_offsets to identify boundaries.
-	ParentVoutIndices []uint32 `protobuf:"varint,8,rep,packed,name=parent_vout_indices,json=parentVoutIndices,proto3" json:"parent_vout_indices,omitempty"`
-	// Offsets into parent_vout_indices for each parent hash.
-	// Length must be exactly (total number of parent hashes) + 1.
-	// This creates a 2-level offset structure:
-	//  1. parent_tx_offsets identifies which parent hashes belong to each transaction
-	//  2. vout_idx_offsets identifies which vout indices belong to each parent hash
-	VoutIdxOffsets []uint32 `protobuf:"varint,9,rep,packed,name=vout_idx_offsets,json=voutIdxOffsets,proto3" json:"vout_idx_offsets,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// All parent vout indices for all transactions in the count-prefixed packed
+	// layout consumed directly by go-subtree.TxInpoints. For each parent (in
+	// parent_tx_hashes_packed order) one uint32 count word is followed by that
+	// many uint32 vout-value words, concatenated end-to-end across all txs.
+	//
+	// This is the exact shape TxInpoints.voutIdxs stores internally, so the
+	// Server aliases a per-tx slice of this buffer straight into a TxInpoints
+	// with zero copy (NewTxInpointsFromPacked). The buffer's lifetime is bound
+	// to the request; gRPC keeps it alive until every TxInpoints derived from
+	// it is no longer referenced.
+	//
+	// Assigned a fresh field number (10) rather than reusing the old field 8
+	// because the old field carried different semantics and the wire types
+	// match — silent misinterpretation under version skew would otherwise be
+	// possible.
+	VoutIdxsPacked []uint32 `protobuf:"varint,10,rep,packed,name=vout_idxs_packed,json=voutIdxsPacked,proto3" json:"vout_idxs_packed,omitempty"`
+	// Offsets into vout_idxs_packed for each transaction.
+	// Length must be exactly transaction_count + 1.
+	// Each offset is an index into vout_idxs_packed (in uint32 units).
+	// Example: [0, 5, 8] represents 2 transactions, the first occupying
+	// vout_idxs_packed[0:5] and the second occupying vout_idxs_packed[5:8].
+	//
+	// Assigned a fresh field number (11) — see note on field 10.
+	VoutIdxsTxOffsets []uint32 `protobuf:"varint,11,rep,packed,name=vout_idxs_tx_offsets,json=voutIdxsTxOffsets,proto3" json:"vout_idxs_tx_offsets,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AddTxBatchColumnarRequest) Reset() {
@@ -419,16 +433,16 @@ func (x *AddTxBatchColumnarRequest) GetParentTxOffsets() []uint32 {
 	return nil
 }
 
-func (x *AddTxBatchColumnarRequest) GetParentVoutIndices() []uint32 {
+func (x *AddTxBatchColumnarRequest) GetVoutIdxsPacked() []uint32 {
 	if x != nil {
-		return x.ParentVoutIndices
+		return x.VoutIdxsPacked
 	}
 	return nil
 }
 
-func (x *AddTxBatchColumnarRequest) GetVoutIdxOffsets() []uint32 {
+func (x *AddTxBatchColumnarRequest) GetVoutIdxsTxOffsets() []uint32 {
 	if x != nil {
-		return x.VoutIdxOffsets
+		return x.VoutIdxsTxOffsets
 	}
 	return nil
 }
@@ -1204,15 +1218,17 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
-	"txRequests\"\xa5\x02\n" +
+	"txRequests\"\xd9\x02\n" +
 	"\x19AddTxBatchColumnarRequest\x12!\n" +
 	"\ftxids_packed\x18\x01 \x01(\fR\vtxidsPacked\x12\x12\n" +
 	"\x04fees\x18\x02 \x03(\x04R\x04fees\x12\x14\n" +
 	"\x05sizes\x18\x03 \x03(\x04R\x05sizes\x125\n" +
 	"\x17parent_tx_hashes_packed\x18\x06 \x01(\fR\x14parentTxHashesPacked\x12*\n" +
-	"\x11parent_tx_offsets\x18\a \x03(\rR\x0fparentTxOffsets\x12.\n" +
-	"\x13parent_vout_indices\x18\b \x03(\rR\x11parentVoutIndices\x12(\n" +
-	"\x10vout_idx_offsets\x18\t \x03(\rR\x0evoutIdxOffsets\"E\n" +
+	"\x11parent_tx_offsets\x18\a \x03(\rR\x0fparentTxOffsets\x12(\n" +
+	"\x10vout_idxs_packed\x18\n" +
+	" \x03(\rR\x0evoutIdxsPacked\x12/\n" +
+	"\x14vout_idxs_tx_offsets\x18\v \x03(\rR\x11voutIdxsTxOffsetsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"R\x13parent_vout_indicesR\x10vout_idx_offsets\"E\n" +
 	"\x19GetMiningCandidateRequest\x12(\n" +
 	"\x0fincludeSubtrees\x18\x01 \x01(\bR\x0fincludeSubtrees\"%\n" +
 	"\x0fRemoveTxRequest\x12\x12\n" +

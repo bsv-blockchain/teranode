@@ -129,6 +129,22 @@ type IgnoreFlags struct {
 	IgnoreLocked      bool
 }
 
+// ConflictingChildRemoval identifies one (parent, child) pair that should be
+// scrubbed from the parent's conflictingChildren list.
+// Used with utxo.Store.RemoveFromConflictingChildren.
+type ConflictingChildRemoval struct {
+	ParentHash *chainhash.Hash
+	ChildHash  *chainhash.Hash
+}
+
+// BlockIDsRemoval identifies the set of block IDs to strip from one
+// transaction's blockIDs membership.
+// Used with utxo.Store.RemoveBlockIDs.
+type BlockIDsRemoval struct {
+	TxHash   *chainhash.Hash
+	BlockIDs []uint32
+}
+
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
 	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
@@ -335,6 +351,29 @@ type Store interface {
 
 	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
 	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
+
+	// RemoveFromConflictingChildren removes each child hash from its parent's
+	// conflictingChildren list. Used by repair tooling when child transactions
+	// are deleted and must no longer appear in any surviving parent's
+	// conflictingChildren field. The call is idempotent — missing parents,
+	// missing list bins, and missing list entries are silently tolerated.
+	// Implementations must use the backend's batch API (e.g. Aerospike
+	// BatchOperate) so large removals stay fast.
+	RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error
+
+	// RemoveBlockIDs trims the supplied block IDs from each transaction's
+	// blockIDs membership without deleting the transaction record. Used by
+	// repair tooling when transactions are referenced by multiple blocks and
+	// only a subset is being removed. Idempotent.
+	// Implementations must batch across removals using the backend's batch
+	// API.
+	RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error
+
+	// GetConflictingTxIterator returns an iterator over transactions currently
+	// marked conflicting=true. Complements GetUnminedTxIterator, which filters
+	// out conflicting records. Used by repair tooling to purge losing-side
+	// transactions during a rewind.
+	GetConflictingTxIterator() (UnminedTxIterator, error)
 
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error

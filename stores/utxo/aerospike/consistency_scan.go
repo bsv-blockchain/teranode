@@ -33,7 +33,7 @@ type consistencyScanIterator struct {
 // all records to find unmined_since inconsistencies.
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	numPartitionQueries, err := calculatePartitionQueries(s)

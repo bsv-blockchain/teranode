@@ -496,6 +496,21 @@ func (s *Store) useExpressionSpend() bool {
 //  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
 	// Use expression-based implementation only when each Aerospike record holds a single
 	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
 	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which

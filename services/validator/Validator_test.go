@@ -37,13 +37,16 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -57,6 +60,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -304,6 +308,97 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 }
 
 func TestValidate_InValidDoubleSpendTx(t *testing.T) {
+}
+
+func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+	tSettings.BatcherDrainMode = false
+	tSettings.UtxoStore.SpendBatcherSize = 2
+	tSettings.UtxoStore.SpendBatcherDurationMillis = 5_000
+	tSettings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///validator_duplicate_outpoint_batch")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, utxoStore.SetBlockHeight(100))
+	require.NoError(t, utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("DUPLICATE_SPEND_BATCH_TEST_KEY!!"))
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(1, "/duplicate spend batch test/"),
+		transactions.WithP2PKHOutputs(1, 100_000, publicKey),
+	)
+	_, err = utxoStore.Create(ctx, parentTx, 1)
+	require.NoError(t, err)
+
+	txA := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 90_000, publicKey),
+	)
+	txB := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 80_000, publicKey),
+	)
+	require.NotEqual(t, txA.TxID(), txB.TxID())
+
+	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil)
+	require.NoError(t, server.Init(ctx))
+
+	createConflicting := true
+	skipPolicyChecks := true
+	skipTxMetaPublishing := true
+	addTxToBlockAssembly := false
+	resp, err := server.ValidateTransactionBatch(ctx, &validator_api.ValidateTransactionBatchRequest{
+		Transactions: []*validator_api.ValidateTransactionRequest{
+			{
+				TransactionData:      txA.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+			{
+				TransactionData:      txB.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Errors, 2)
+
+	var successCount, conflictingCount int
+	for _, errReason := range resp.Errors {
+		if errReason == nil {
+			successCount++
+			continue
+		}
+		require.Equal(t, errors.ERR_TX_CONFLICTING, errReason.GetCode())
+		conflictingCount++
+	}
+	require.Equal(t, 1, successCount)
+	require.Equal(t, 1, conflictingCount)
+
+	var txAData, txBData meta.Data
+	errA := utxoStore.GetMeta(ctx, txA.TxIDChainHash(), &txAData)
+	errB := utxoStore.GetMeta(ctx, txB.TxIDChainHash(), &txBData)
+	require.NoError(t, errA)
+	require.NoError(t, errB)
+	require.ElementsMatch(t, []bool{false, true}, []bool{txAData.Conflicting, txBData.Conflicting})
 }
 
 func TestValidate_TxMetaStoreError(t *testing.T) {
@@ -1397,6 +1492,134 @@ func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
 	}
 }
 
+// Test_serializeTxMetaBatchV2 verifies the byte layout of the v2 wire format
+// against the spec documented on serializeTxMetaBatchV2 and the symmetric
+// parser in services/subtreevalidation/txmetaHandler.go.
+func Test_serializeTxMetaBatchV2(t *testing.T) {
+	h1 := chainhash.Hash{}
+	copy(h1[:], bytes.Repeat([]byte{0xAA}, 32))
+	h2 := chainhash.Hash{}
+	copy(h2[:], bytes.Repeat([]byte{0xBB}, 32))
+
+	items := []txmetaItemWithHash{
+		{item: &txmetaBatchItem{hash: &h1, metaBytes: []byte("meta-1"), isDelete: false}, h: 0xDEADBEEFCAFEBABE},
+		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
+	}
+
+	data := serializeTxMetaBatchV2(items)
+
+	assert.Equal(t, byte(0xFF), data[0], "magic byte")
+	assert.Equal(t, byte(0x02), data[1], "version byte")
+	assert.Equal(t, byte(0x00), data[2], "reserved")
+	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
+
+	// Entry 1 (ADD).
+	off := 8
+	assert.Equal(t, uint64(0xDEADBEEFCAFEBABE), binary.LittleEndian.Uint64(data[off:]), "entry 1 xxhash")
+	off += 8
+	assert.Equal(t, h1[:], data[off:off+32], "entry 1 hash")
+	off += 32
+	assert.Equal(t, txmetaActionADD, data[off], "entry 1 action")
+	off++
+	assert.Equal(t, uint32(6), binary.LittleEndian.Uint32(data[off:]), "entry 1 content length")
+	off += 4
+	assert.Equal(t, []byte("meta-1"), data[off:off+6], "entry 1 content")
+	off += 6
+
+	// Entry 2 (DELETE).
+	assert.Equal(t, uint64(0x0102030405060708), binary.LittleEndian.Uint64(data[off:]), "entry 2 xxhash")
+	off += 8
+	assert.Equal(t, h2[:], data[off:off+32], "entry 2 hash")
+	off += 32
+	assert.Equal(t, txmetaActionDELETE, data[off], "entry 2 action")
+	off++
+	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(data[off:]), "entry 2 content length (DELETE => 0)")
+	off += 4
+
+	assert.Equal(t, len(data), off, "no trailing bytes")
+}
+
+// Test_sendTxMetaBatchV2_PartitionRouting verifies items are placed on the
+// partition derived from xxhash(hash) according to the documented rule:
+//
+//	partition = (xxhash(hash) % BucketsCount) / (BucketsCount / NumPartitions)
+//
+// Items whose hashes land in the same partition's bucket range must share a
+// single Kafka record; items in different ranges must be split.
+func Test_sendTxMetaBatchV2_PartitionRouting(t *testing.T) {
+	// Pick a numPartitions that divides BucketsCount under every build tag.
+	// Production builds run BucketsCount=8192 so 32 partitions is realistic;
+	// the testtxmetacache build tag uses BucketsCount=8 so we cap at that to
+	// keep bucketsPerPartition >= 1 and avoid divide-by-zero in the routing
+	// math. Cap value is 2 (the minimum needed to verify two-record output).
+	numPartitions := 32
+	if numPartitions > txmetacache.BucketsCount {
+		numPartitions = txmetacache.BucketsCount
+	}
+	if numPartitions < 2 {
+		t.Skipf("BucketsCount=%d too small to verify partition routing", txmetacache.BucketsCount)
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+
+	// Find two hashes whose xxhash lands in different partitions.
+	var h1, h2 chainhash.Hash
+	var p1, p2 = -1, -1
+	for seed := uint64(0); ; seed++ {
+		var h chainhash.Hash
+		binary.LittleEndian.PutUint64(h[:], seed)
+		bucket := int(xxhash.Sum64(h[:]) % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p1 < 0 {
+			h1 = h
+			p1 = p
+			continue
+		}
+		if p != p1 {
+			h2 = h
+			p2 = p
+			break
+		}
+	}
+
+	captured := make(map[int32]*kafka.Message)
+	publish := func(m *kafka.Message) {
+		captured[m.Partition] = m
+	}
+
+	v := &Validator{
+		settings: &settings.Settings{
+			Validator: settings.ValidatorSettings{
+				TxMetaWireFormat:    "v2",
+				TxMetaNumPartitions: numPartitions,
+			},
+		},
+		txmetaKafkaProducerClient: &fakeAsyncProducer{publish: publish},
+	}
+
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("a"), isDelete: false},
+		{hash: &h2, metaBytes: []byte("b"), isDelete: false},
+	}
+	v.sendTxMetaBatchV2(batch)
+
+	require.Len(t, captured, 2, "expected one Kafka record per non-empty partition")
+	assert.Contains(t, captured, int32(p1))                                            //nolint:gosec // p1<NumPartitions
+	assert.Contains(t, captured, int32(p2))                                            //nolint:gosec // p2<NumPartitions
+	assert.Equal(t, byte(0xFF), captured[int32(p1)].Value[0], "v2 magic byte present") //nolint:gosec
+	assert.Equal(t, byte(0xFF), captured[int32(p2)].Value[0], "v2 magic byte present") //nolint:gosec
+}
+
+// fakeAsyncProducer is a no-op KafkaAsyncProducerI used by the partition
+// routing test to capture published messages without spinning up a real
+// producer or broker. Only Publish is exercised.
+type fakeAsyncProducer struct {
+	kafka.KafkaAsyncProducerI
+	publish func(*kafka.Message)
+}
+
+func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
+
 func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
 	ctx := context.Background()
 
@@ -1482,15 +1705,29 @@ func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeigh
 		return nil, err
 	}
 
-	// Corrupt TxInpoints: add an extra parent hash without a corresponding Idxs entry.
-	// This causes TxInpoints.Serialize() to return ErrParentTxHashesMismatch,
-	// which makes MetaBytes() fail inside sendTxMetaToKafka.
-	metaData.TxInpoints.ParentTxHashes = append(metaData.TxInpoints.ParentTxHashes, chainhash.Hash{0xDE, 0xAD})
+	// Corrupt TxInpoints: append extra parent hashes so that ParentTxHashes is
+	// strictly longer than the internal packed vout layout (one count + per-parent
+	// vouts). go-subtree v1.4.1's Serialize fails fast with ErrParentTxHashesMismatch
+	// when len(voutIdxs) < len(ParentTxHashes); v1.3.x checked an exact equality,
+	// so a single appended hash used to suffice. Adding three keeps the test
+	// portable across both checks.
+	metaData.TxInpoints.ParentTxHashes = append(
+		metaData.TxInpoints.ParentTxHashes,
+		chainhash.Hash{0xDE, 0xAD},
+		chainhash.Hash{0xBE, 0xEF},
+		chainhash.Hash{0xCA, 0xFE},
+	)
+
 	return metaData, nil
 }
 
 func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *testing.T) {
 	tracing.SetupMockTracer()
+	// sendTxMetaToKafka records to prometheusValidatorSendToBlockValidationKafka,
+	// which is registered lazily via sync.Once in initPrometheusMetrics. Without
+	// this call the histogram is nil and .Observe panics when the test is the
+	// first (or only) Validator test in the run.
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)

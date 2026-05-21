@@ -138,8 +138,12 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		assert.Nil(t, metaGet.Tx) // Tx should be nil as it is not set in the cache
 		assert.Equal(t, len(metaData.TxInpoints.ParentTxHashes), len(metaGet.TxInpoints.ParentTxHashes))
 		assert.Equal(t, metaData.TxInpoints.ParentTxHashes[0], metaGet.TxInpoints.ParentTxHashes[0])
-		assert.Equal(t, len(metaData.TxInpoints.Idxs), len(metaGet.TxInpoints.Idxs))
-		assert.Equal(t, metaData.TxInpoints.Idxs[0], metaGet.TxInpoints.Idxs[0])
+
+		origVouts, err := metaData.TxInpoints.GetParentVoutsAtIndex(0)
+		require.NoError(t, err)
+		gotVouts, err := metaGet.TxInpoints.GetParentVoutsAtIndex(0)
+		require.NoError(t, err)
+		assert.Equal(t, origVouts, gotVouts)
 	})
 }
 
@@ -828,10 +832,15 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("b6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 
 	// Create test metadata
+	in1 := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in1.PreviousTxIDAdd(hash1))
+	ti1, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in1})
+	require.NoError(t, err)
+
 	testMeta1 := &meta.Data{
 		Fee:         100,
 		SizeInBytes: 250,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash1}, Idxs: [][]uint32{{0}}},
+		TxInpoints:  ti1,
 		BlockIDs:    []uint32{1},
 	}
 

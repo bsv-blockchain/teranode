@@ -323,6 +323,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeDeDuplicator:         NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
 			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
+				// Return pooled []Node backing slices to the per-class pool
+				// BEFORE closing the subtree. PutNodeSlice is cap-classified, so
+				// mmap-backed subtrees (whose nodes are not pool-sourced) are
+				// silently discarded — safe but ineffective, which is what we
+				// want.
+				releaseBlockNodes(block)
+
 				// Close mmap-backed subtrees when block expires from cache
 				for _, st := range block.SubtreeSlices {
 					if st != nil {
@@ -1238,6 +1245,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 	)
 	defer deferFn()
 
+	// Install the pooled NodeAllocator so each subtree's []Node is drawn from
+	// the size-class pool defined in pools.go. Only the heap-backed
+	// (non-mmap) deserialize path consults the allocator; mmap subtrees are
+	// loaded outside GetAndValidateSubtrees and bypass the pool.
+	block.SetNodeAllocator(NodeAllocFromPool)
+
 	// Use helper to ensure block is validated only once
 	blockHash := block.Hash()
 	return u.runOncePerBlock(blockHash, opts, func(opts *ValidateBlockOptions) error {
@@ -1506,6 +1519,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
+					// Block will not be cached on the optimistic-mining failure path —
+					// return pooled []Node slices before re-validation or invalidation.
+					releaseBlockNodes(block)
+
 					if errors.Is(err, errors.ErrBlockInvalid) {
 						reason := p2pconstants.ReasonInvalidBlock.String()
 						if err = u.markBlockAsInvalid(decoupledCtx, block, reason); err != nil {
@@ -1524,6 +1541,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// check the old block IDs and invalidate the block if needed
 				if err = u.checkOldBlockIDs(decoupledCtx, oldBlockIDsMap, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
+
+					// Block will not be cached on the optimistic-mining failure path.
+					releaseBlockNodes(block)
 
 					if errors.Is(err, errors.ErrBlockInvalid) {
 						if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
@@ -1547,8 +1567,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// This sends the BlockSubtreesSet notification which triggers setMined
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
-					// Clean up cache since DAH update failed
+					// Clean up cache since DAH update failed. Delete bypasses the
+					// eviction function so we must release pooled []Node slices
+					// explicitly here.
 					u.lastValidatedBlocks.Delete(*block.Hash())
+					releaseBlockNodes(block)
 					// Trigger revalidation to ensure block is retried
 					// This is consistent with other error handling in this goroutine
 					u.ReValidateBlock(block, baseURL)
@@ -1585,6 +1608,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					reason = err.Error()
 				}
 
+				// Block will not be cached — return pooled []Node slices now so
+				// the next block can reuse the same backing storage.
+				releaseBlockNodes(block)
+
 				// Check if we had an infrastructure error (storage, service, or processing);
 				// if so do not mark the block as invalid - these are transient issues
 				if errors.Is(err, errors.ErrStorageError) ||
@@ -1601,6 +1628,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			if iterationError := u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); iterationError != nil {
+				// Block will not be cached on this path either.
+				releaseBlockNodes(block)
+
 				if errors.Is(iterationError, errors.ErrBlockInvalid) && !opts.IsRevalidation {
 					reason := iterationError.Error()
 					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
@@ -1626,6 +1656,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				defer storeCancel()
 
 				if err = u.blockchainClient.RevalidateBlock(storeCtx, block.Header.Hash()); err != nil {
+					releaseBlockNodes(block)
 					return errors.NewServiceError("[ValidateBlock][%s] failed to clear invalid flag after successful revalidation", block.Hash().String(), err)
 				}
 			} else {
@@ -1642,6 +1673,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				addBlockOpts := u.buildAddBlockOpts(block)
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
+					releaseBlockNodes(block)
 					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 				}
 			}
@@ -1685,8 +1717,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			// This sends the BlockSubtreesSet notification which triggers setMined
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				// Clean up cache since DAH update failed
+				// Clean up cache since DAH update failed. Delete bypasses the
+				// eviction function so we must release pooled []Node slices
+				// explicitly here.
 				u.lastValidatedBlocks.Delete(*block.Hash())
+				releaseBlockNodes(block)
 				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 			}
 		}

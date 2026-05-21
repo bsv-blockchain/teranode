@@ -80,6 +80,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -1188,15 +1189,33 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 }
 
 // BatchPreviousOutputsDecorate fetches previous output information for inputs across
-// multiple transactions. The Aerospike implementation delegates to per-tx PreviousOutputsDecorate
-// which already uses an internal batcher for efficiency.
+// multiple transactions, fanning the per-tx decorations out across goroutines so the
+// shared outpoint batcher fills by size from concurrent pushes instead of idling at
+// its per-tx duration timer.
+//
+// A serial per-tx loop was correct but pathologically slow during legacy sync: a
+// typical tx contributes ~2 inputs - far below OutpointBatcherSize - so each call
+// waited the full OutpointBatcherDurationMillis before the batch fired, making wall
+// time scale as O(N_tx * duration) - e.g. 2856 tx x 5 ms ~= 14 s observed in
+// production.
+//
+// Fan-out is bounded by UtxoStore.OutpointBatcherSize to keep memory predictable
+// on large blocks and to mirror the Phase 1 errgroup bound in the legacy caller
+// (services/legacy/netsync/handle_block.go). Throughput is not affected by the
+// bound: the actual ceiling is BatcherMaxConcurrent aerospike batches in flight,
+// not the goroutine count, since producers are mostly parked on errChan receives.
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, s.settings.UtxoStore.OutpointBatcherSize)
+
 	for _, tx := range txs {
-		if err := s.PreviousOutputsDecorate(ctx, tx); err != nil {
-			return err
-		}
+		tx := tx
+		g.Go(func() error {
+			return s.PreviousOutputsDecorate(gCtx, tx)
+		})
 	}
-	return nil
+
+	return g.Wait()
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
