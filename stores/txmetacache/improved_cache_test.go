@@ -1,6 +1,7 @@
 package txmetacache
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func init() {
@@ -239,38 +242,45 @@ func TestImprovedCache_SetMulti_BucketPathConcurrent(t *testing.T) {
 	const goroutines = 8
 	const perGoroutine = 512
 
-	var wg sync.WaitGroup
+	// require.*/t.FailNow may only be called from the test goroutine. Workers
+	// return their first error and we assert in the main goroutine.
+	var g errgroup.Group
 
-	wg.Add(goroutines)
+	for gi := 0; gi < goroutines; gi++ {
+		gi := gi
 
-	for g := 0; g < goroutines; g++ {
-		g := g
-
-		go func() {
-			defer wg.Done()
-
+		g.Go(func() error {
 			keys := make([][]byte, perGoroutine)
 			values := make([][]byte, perGoroutine)
 
 			for i := range keys {
 				keys[i] = make([]byte, 32)
 				// Disjoint key space per goroutine to make ownership unambiguous.
-				binary.LittleEndian.PutUint32(keys[i][:4], uint32(g*perGoroutine+i))
+				binary.LittleEndian.PutUint32(keys[i][:4], uint32(gi*perGoroutine+i))
 				values[i] = make([]byte, 16)
-				binary.LittleEndian.PutUint32(values[i][:4], uint32(g))
+				binary.LittleEndian.PutUint32(values[i][:4], uint32(gi))
 			}
 
-			require.NoError(t, cache.SetMulti(keys, values))
+			if err := cache.SetMulti(keys, values); err != nil {
+				return errors.NewProcessingError("goroutine=%d SetMulti", gi, err)
+			}
 
 			for i, key := range keys {
 				var got []byte
-				require.NoError(t, cache.Get(&got, key))
-				require.Equal(t, values[i], got, "goroutine=%d idx=%d", g, i)
+				if err := cache.Get(&got, key); err != nil {
+					return errors.NewProcessingError("goroutine=%d idx=%d Get", gi, i, err)
+				}
+
+				if !bytes.Equal(got, values[i]) {
+					return errors.NewProcessingError("goroutine=%d idx=%d: got %x, want %x", gi, i, got, values[i])
+				}
 			}
-		}()
+
+			return nil
+		})
 	}
 
-	wg.Wait()
+	require.NoError(t, g.Wait())
 }
 
 // TestImprovedCache_New tests the New function with various configurations
