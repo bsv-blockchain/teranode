@@ -4739,7 +4739,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 			}
 		}
 
-		if err := stp.parallelBuildRemainderSubtrees(kept, skipNotification); err != nil {
+		if err := stp.parallelBuildRemainderSubtrees(ctx, kept, skipNotification); err != nil {
 			return errors.NewProcessingError("[processRemainderTxHashes] parallel build error", err)
 		}
 	} else {
@@ -4782,7 +4782,12 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 // of the ~57 1 M-leaf subtree completions forced a serial RootHash() merkle
 // build inside the per-node loop. Building all of them in parallel collapses
 // that to ~max(per-subtree wall time) ≈ 1 s.
-func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(kept []subtreepkg.Node, skipNotification bool) error {
+//
+// ctx is propagated into the errgroup so a moveForwardBlock cancellation
+// (shutdown, reorg abort) terminates pending workers promptly; running workers
+// finish their current chunk (≤ leafCount inserts, bounded ≤ 100 ms) before
+// the next gCtx-aware sibling returns.
+func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context, kept []subtreepkg.Node, skipNotification bool) error {
 	if len(kept) == 0 {
 		return nil
 	}
@@ -4847,12 +4852,24 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(kept []subtreepkg.No
 	// Parallel leaf insertion + eager merkle build. Each goroutine owns its
 	// destination subtree, so AddSubtreeNodeWithoutLock is safe; merkle build
 	// inside the worker amortises the cost across cores.
-	g, _ := errgroup.WithContext(context.Background())
+	//
+	// errgroup carries the caller's ctx: once it is cancelled (shutdown, reorg
+	// abort), workers that have not yet started exit immediately, and running
+	// workers complete their bounded ≤ leafCount-leaf chunk before the next
+	// scheduled worker sees the cancellation and returns. We do not poll ctx
+	// inside the leaf-insert loop — at ~100 ns per leaf, the worst case is one
+	// chunk's ~100 ms of post-cancel work, which is below the typical block-
+	// movement wall-time floor.
+	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	for i := range chunks {
 		i := i
 		g.Go(func() error {
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
+
 			c := chunks[i]
 			for j := range c.nodes {
 				if err := c.subtree.AddSubtreeNodeWithoutLock(c.nodes[j]); err != nil {
