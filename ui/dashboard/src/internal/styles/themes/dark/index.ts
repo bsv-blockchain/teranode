@@ -51,8 +51,37 @@ export const dark = {
         color: 'rgba(40, 41, 51, 0.7)',
       },
     },
+    border: {
+      color: 'rgba(255, 255, 255, 0.12)',
+    },
+    subtle: {
+      bg: {
+        color: 'rgba(255, 255, 255, 0.08)',
+      },
+    },
+    overlay: {
+      color: 'rgba(255, 255, 255, 0.10)',
+      strong: {
+        color: 'rgba(255, 255, 255, 0.18)',
+      },
+    },
   },
   comp: { ...comp },
+  json: {
+    display: {
+      color: '#b4b4b4',
+      key: { color: '#a8c0ff' },
+      string: { color: '#98c379' },
+      number: { color: '#d19a66' },
+      boolean: { color: '#56b6c2' },
+      null: { color: '#abb2bf' },
+    },
+    tree: {
+      string: { color: '#15b241' },
+      string2: { color: '#9917ff' },
+      boolean: { color: '#1a6bd4' },
+    },
+  },
   // banner: { ...banner },
   footer: { ...footer },
   input: { ...input },
@@ -63,4 +92,9 @@ export const dark = {
   msgbox: { ...msgbox },
   switch: { ...switchh },
   tab: { ...tab },
+  toggle: {
+    bg: {
+      color: '#33373c',
+    },
+  },
 }

@@ -4,7 +4,7 @@ All services accept settings through a centralized Settings object that allows l
 
 Please review the following documents for more information on how to deploy the settings:
 
-- [Developer Setup](../tutorials/developers/developerSetup.md)
+- [Developer Setup](../howto/developerSetup.md)
 - [Test Setup](../howto/miners/docker/minersHowToConfigureTheNode.md)
 - [Production Setup](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 

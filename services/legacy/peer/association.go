@@ -148,7 +148,7 @@ func (a *Association) HasRecentActivity(timeout time.Duration) bool {
 }
 
 // GenerateAssociationID generates a new association ID in the format
-// used by Bitcoin SV: [0x00 type byte (UUID)][16 random UUID bytes] = 17 bytes.
+// used by SV Node: [0x00 type byte (UUID)][16 random UUID bytes] = 17 bytes.
 func GenerateAssociationID() ([]byte, error) {
 	id := make([]byte, 17)
 	id[0] = 0x00 // IDType::UUID

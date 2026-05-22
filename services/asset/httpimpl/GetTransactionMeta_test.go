@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -16,10 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	transactionMeta = &meta.Data{
+func newTransactionMeta() *meta.Data {
+	parent := testBlockHeader.Hash()
+
+	in := &bt.Input{PreviousTxOutIndex: 1}
+	if err := in.PreviousTxIDAdd(parent); err != nil {
+		panic(err)
+	}
+
+	ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in})
+	if err != nil {
+		panic(err)
+	}
+
+	return &meta.Data{
 		Tx:          nil,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*testBlockHeader.Hash()}, Idxs: [][]uint32{{1}}},
+		TxInpoints:  ti,
 		BlockIDs:    []uint32{1, 2, 3},
 		SubtreeIdxs: []int{0, 0, 0}, // Add subtree indices
 		Fee:         123,
@@ -27,7 +40,9 @@ var (
 		IsCoinbase:  false,
 		LockTime:    500000,
 	}
-)
+}
+
+var transactionMeta = newTransactionMeta()
 
 func TestGetTransactionMeta(t *testing.T) {
 	initPrometheusMetrics()

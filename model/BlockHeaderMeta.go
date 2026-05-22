@@ -9,23 +9,24 @@ import (
 )
 
 type BlockHeaderMeta struct {
-	ID          uint32     `json:"id"`            // ID of the block in the internal blockchain DB.
-	Height      uint32     `json:"height"`        // Height of the block in the blockchain.
-	TxCount     uint64     `json:"tx_count"`      // Number of transactions in the block.
-	SizeInBytes uint64     `json:"size_in_bytes"` // Size of the block in bytes.
-	Miner       string     `json:"miner"`         // Miner
-	PeerID      string     `json:"peer_id"`       // Peer ID of the miner that mined the block.
-	BlockTime   uint32     `json:"block_time"`    // Time of the block.
-	Timestamp   uint32     `json:"timestamp"`     // Timestamp of creation of the block in the db.
-	ChainWork   []byte     `json:"chainwork"`     // ChainWork of the block.
-	MinedSet    bool       `json:"mined_set"`     // Whether the block is in the mined set.
-	SubtreesSet bool       `json:"subtrees_set"`  // Whether the block has its subtrees set.
-	Invalid     bool       `json:"invalid"`       // Whether the block is marked as invalid.
-	ProcessedAt *time.Time `json:"processed_at"`  // Timestamp when the block was processed (nullable).
+	ID             uint32     `json:"id"`               // ID of the block in the internal blockchain DB.
+	Height         uint32     `json:"height"`           // Height of the block in the blockchain.
+	TxCount        uint64     `json:"tx_count"`         // Number of transactions in the block.
+	SizeInBytes    uint64     `json:"size_in_bytes"`    // Size of the block in bytes.
+	Miner          string     `json:"miner"`            // Miner
+	PeerID         string     `json:"peer_id"`          // Peer ID of the miner that mined the block.
+	BlockTime      uint32     `json:"block_time"`       // Time of the block.
+	Timestamp      uint32     `json:"timestamp"`        // Timestamp of creation of the block in the db.
+	MedianTimePast uint32     `json:"median_time_past"` // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+	ChainWork      []byte     `json:"chainwork"`        // ChainWork of the block.
+	MinedSet       bool       `json:"mined_set"`        // Whether the block is in the mined set.
+	SubtreesSet    bool       `json:"subtrees_set"`     // Whether the block has its subtrees set.
+	Invalid        bool       `json:"invalid"`          // Whether the block is marked as invalid.
+	ProcessedAt    *time.Time `json:"processed_at"`     // Timestamp when the block was processed (nullable).
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {
-	capacity := 1 + 4 + 4 + 8 + 8 + 4 + 4 + 4 + len(m.ChainWork) + 4 + len(m.Miner) + 4 + len(m.PeerID)
+	capacity := 1 + 4 + 4 + 8 + 8 + 4 + 4 + 4 + 4 + len(m.ChainWork) + 4 + len(m.Miner) + 4 + len(m.PeerID)
 	if m.ProcessedAt != nil {
 		capacity += 8
 	}
@@ -68,6 +69,9 @@ func (m *BlockHeaderMeta) Bytes() []byte {
 	binary.LittleEndian.PutUint32(b32, m.Timestamp)
 	b = append(b, b32...)
 
+	binary.LittleEndian.PutUint32(b32, m.MedianTimePast)
+	b = append(b, b32...)
+
 	len32, _ := safe.IntToUint32(len(m.ChainWork))
 	binary.LittleEndian.PutUint32(b32, len32)
 	b = append(b, b32...)
@@ -95,8 +99,8 @@ func (m *BlockHeaderMeta) Bytes() []byte {
 }
 
 func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
-	// 4 for ID, Height; 8 for TxCount, SizeInBytes; 4 for BlockTime, Timestamp; 4 for ChainWork length
-	if len(b) < 4+4+8+8+4+4+4 {
+	// 4 for ID, Height; 8 for TxCount, SizeInBytes; 4 for BlockTime, Timestamp, MedianTimePast; 4 for ChainWork length
+	if len(b) < 4+4+8+8+4+4+4+4 {
 		return nil, errors.NewProcessingError("invalid length for BlockHeaderMeta: %d", len(b))
 	}
 
@@ -118,16 +122,17 @@ func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
 	m.SizeInBytes = binary.LittleEndian.Uint64(b[16:24])
 	m.BlockTime = binary.LittleEndian.Uint32(b[24:28])
 	m.Timestamp = binary.LittleEndian.Uint32(b[28:32])
+	m.MedianTimePast = binary.LittleEndian.Uint32(b[32:36])
 
 	// read in the chainwork length
-	len32 := binary.LittleEndian.Uint32(b[32:36])
+	len32 := binary.LittleEndian.Uint32(b[36:40])
 
 	if len32 > 0 {
 		m.ChainWork = make([]byte, len32)
-		copy(m.ChainWork, b[36:36+len32])
+		copy(m.ChainWork, b[40:40+len32])
 	}
 
-	offset := 36 + len32
+	offset := 40 + len32
 
 	// read in the miner string
 	if len(b) < int(offset+4) {

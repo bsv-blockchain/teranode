@@ -265,6 +265,7 @@ func TestKafkaProducerConfigValidation(t *testing.T) {
 type mockAsyncLogger struct {
 	debugCount int
 	infoCount  int
+	warnCount  int
 	errorCount int
 	fatalCount int
 }
@@ -273,8 +274,8 @@ func (m *mockAsyncLogger) Debug()                                               
 func (m *mockAsyncLogger) Debugf(string, ...interface{})                        { m.debugCount++ }
 func (m *mockAsyncLogger) Info()                                                { m.infoCount++ }
 func (m *mockAsyncLogger) Infof(string, ...interface{})                         { m.infoCount++ }
-func (m *mockAsyncLogger) Warn()                                                {}
-func (m *mockAsyncLogger) Warnf(string, ...interface{})                         {}
+func (m *mockAsyncLogger) Warn()                                                { m.warnCount++ }
+func (m *mockAsyncLogger) Warnf(string, ...interface{})                         { m.warnCount++ }
 func (m *mockAsyncLogger) Error(...interface{})                                 { m.errorCount++ }
 func (m *mockAsyncLogger) Errorf(string, ...interface{})                        { m.errorCount++ }
 func (m *mockAsyncLogger) Fatal(...interface{})                                 { m.fatalCount++ }
@@ -326,11 +327,15 @@ func TestKafkaAsyncProducerBrokersURLParsing(t *testing.T) {
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)
 	require.NoError(t, err)
 
+	// In-memory producers return nil from BrokersURL() since there are no real brokers
 	brokers := producer.BrokersURL()
-	assert.Len(t, brokers, 3)
-	assert.Equal(t, "broker1:9092", brokers[0])
-	assert.Equal(t, "broker2:9092", brokers[1])
-	assert.Equal(t, "broker3:9092", brokers[2])
+	assert.Nil(t, brokers)
+
+	// But the config still has the parsed broker URLs
+	assert.Len(t, producer.Config.BrokersURL, 3)
+	assert.Equal(t, "broker1:9092", producer.Config.BrokersURL[0])
+	assert.Equal(t, "broker2:9092", producer.Config.BrokersURL[1])
+	assert.Equal(t, "broker3:9092", producer.Config.BrokersURL[2])
 }
 
 func TestKafkaAsyncProducerWithMultipleBrokers(t *testing.T) {
@@ -404,29 +409,39 @@ func TestClampBatchMaxBytes(t *testing.T) {
 		want       int32
 	}{
 		{
-			name:       "small value clamped to minimum 512",
+			name:       "small value uses default 1MiB",
 			flushBytes: 64,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "zero clamped to minimum 512",
+			name:       "zero uses default 1MiB",
 			flushBytes: 0,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "negative clamped to minimum 512",
+			name:       "negative uses default 1MiB",
 			flushBytes: -1,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "exactly minimum unchanged",
+			name:       "512 uses default 1MiB",
 			flushBytes: 512,
-			want:       512,
+			want:       defaultBatchMaxBytes,
 		},
 		{
-			name:       "valid value unchanged",
+			name:       "1024 uses default 1MiB",
+			flushBytes: 1024,
+			want:       defaultBatchMaxBytes,
+		},
+		{
+			name:       "exactly 1MiB uses default",
 			flushBytes: 1024 * 1024,
-			want:       1024 * 1024,
+			want:       defaultBatchMaxBytes,
+		},
+		{
+			name:       "above 1MiB respected as explicit override",
+			flushBytes: 2 * 1024 * 1024,
+			want:       2 * 1024 * 1024,
 		},
 		{
 			name:       "max int32 unchanged",

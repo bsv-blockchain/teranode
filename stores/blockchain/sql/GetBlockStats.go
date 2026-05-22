@@ -72,7 +72,9 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 		tweak = "'\\x00'::bytea"
 	}
 
-	q := fmt.Sprintf(`
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = fmt.Sprintf(`
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
 			 id
@@ -95,7 +97,7 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
 		)
-		SELECT 
+		SELECT
 			COALESCE(count(1), 0),
 			COALESCE(sum(tx_count), 0),
 			COALESCE(max(height), 0),
@@ -107,6 +109,28 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 		FROM ChainBlocks
 		WHERE id > 0
 	`, tweak)
+	} else {
+		// Mirror the original CTE's behaviour exactly:
+		//   - id > 0 excludes genesis (the caller adds 1 for genesis via blockStats.BlockCount += 1)
+		//   - parent_id != 0 excludes the block at height 1 (parent = genesis, parent_id = 0)
+		//     because the original CTE's "WHERE b.parent_id != 0" guard (needed to prevent
+		//     infinite recursion at genesis) also inadvertently skips height-1 blocks.
+		q = fmt.Sprintf(`
+		SELECT
+			COALESCE(count(1), 0),
+			COALESCE(sum(tx_count), 0),
+			COALESCE(max(height), 0),
+			COALESCE(avg(size_in_bytes), 0),
+			COALESCE(avg(tx_count), 0),
+			COALESCE(min(block_time), 0),
+			COALESCE(max(block_time), 0),
+			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), %s)
+		FROM blocks
+		WHERE on_main_chain = true
+		  AND id > 0
+		  AND parent_id != 0
+	`, tweak)
+	}
 
 	blockStats := &model.BlockStats{}
 

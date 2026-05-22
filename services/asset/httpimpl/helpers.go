@@ -12,6 +12,8 @@ import (
 
 // Pagination represents pagination metadata for API responses that return lists of items.
 // It provides information about the current page and total available records.
+//
+// swagger:model Pagination
 type Pagination struct {
 	// Offset indicates the starting position in the full dataset
 	Offset int `json:"offset"`
@@ -23,6 +25,8 @@ type Pagination struct {
 
 // ExtendedResponse wraps API response data with pagination information.
 // It's used for endpoints that return lists of items requiring pagination.
+//
+// swagger:model ExtendedResponse
 type ExtendedResponse struct {
 	// Data contains the actual response payload
 	Data interface{} `json:"data"`

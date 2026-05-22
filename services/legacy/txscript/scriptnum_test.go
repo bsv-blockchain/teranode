@@ -7,6 +7,7 @@ package txscript
 import (
 	"bytes"
 	"encoding/hex"
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-wire"
@@ -76,6 +77,10 @@ func TestScriptNumBytes(t *testing.T) {
 		{-72057594037927935, hexToBytes("ffffffffffffff80")},
 		{9223372036854775807, hexToBytes("ffffffffffffff7f")},
 		{-9223372036854775807, hexToBytes("ffffffffffffffff")},
+
+		// math.MinInt64 must not panic and must encode as a 9-byte
+		// little-endian value with an explicit sign byte.
+		{math.MinInt64, hexToBytes("000000000000008080")},
 	}
 
 	for _, test := range tests {
@@ -141,10 +146,19 @@ func TestMakeScriptNum(t *testing.T) {
 		{hexToBytes("ffffffffff"), -549755813887, 5, true, nil},
 		{hexToBytes("ffffffffffffff7f"), 9223372036854775807, 8, true, nil},
 		{hexToBytes("ffffffffffffffff"), -9223372036854775807, 8, true, nil},
-		{hexToBytes("ffffffffffffffff7f"), -1, 9, true, nil},
-		{hexToBytes("ffffffffffffffffff"), 1, 9, true, nil},
-		{hexToBytes("ffffffffffffffffff7f"), -1, 10, true, nil},
-		{hexToBytes("ffffffffffffffffffff"), 1, 10, true, nil},
+		// Inputs longer than 8 bytes are now rejected outright — they
+		// cannot fit in an int64 and previously triggered a uint8 shift
+		// wrap that produced bogus values (and a reachable Bytes() panic).
+		{hexToBytes("ffffffffffffffff7f"), 0, 9, true, errNumTooBig},
+		{hexToBytes("ffffffffffffffffff"), 0, 9, true, errNumTooBig},
+		{hexToBytes("ffffffffffffffffff7f"), 0, 10, true, errNumTooBig},
+		{hexToBytes("ffffffffffffffffffff"), 0, 10, true, errNumTooBig},
+
+		// The exploit shape from the audit: 40 bytes with v[7]=0x80
+		// previously decoded to math.MinInt64 (because v[39]=0x00
+		// bypassed the sign-mask branch) and made Bytes() panic on the
+		// empty result slice. It must now be rejected.
+		{hexToBytes("00000000000000800000000000000000000000000000000000000000000000000000000000000000"), 0, 40, false, errNumTooBig},
 
 		// Minimally encoded values that are out of range for data that
 		// is interpreted as script numbers with the minimal encoding

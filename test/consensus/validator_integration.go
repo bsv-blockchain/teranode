@@ -6,7 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/services/validator"
+	validatorservice "github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -15,8 +15,6 @@ import (
 type ValidatorType string
 
 const (
-	ValidatorGoBT  ValidatorType = "go-bt"
-	ValidatorGoSDK ValidatorType = "go-sdk"
 	ValidatorGoBDK ValidatorType = "go-bdk"
 )
 
@@ -29,90 +27,63 @@ type ValidatorResult struct {
 	ErrorMessage  string
 }
 
-// ValidatorIntegration provides access to different script validators
+// ValidatorIntegration provides access to different transaction validators.
 type ValidatorIntegration struct {
-	logger ulogger.Logger
-	policy *settings.PolicySettings
-	params *chaincfg.Params
+	logger   ulogger.Logger
+	settings *settings.Settings
 }
 
 // NewValidatorIntegration creates a new validator integration
 func NewValidatorIntegration() *ValidatorIntegration {
+	testSettings := settings.NewSettings()
+	testSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	return &ValidatorIntegration{
-		logger: ulogger.TestLogger{},
-		policy: settings.NewPolicySettings(),
-		params: &chaincfg.MainNetParams,
+		logger:   ulogger.TestLogger{},
+		settings: testSettings,
 	}
 }
 
-// ValidateScript validates a script using the specified validator
-func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) ValidatorResult {
+// ValidateTransaction validates a transaction using the specified validator.
+func (vi *ValidatorIntegration) ValidateTransaction(validatorType ValidatorType, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) ValidatorResult {
 	result := ValidatorResult{
 		ValidatorType: validatorType,
 		Success:       true,
 	}
 
-	var scriptInterpreter validator.TxScriptInterpreter
-
-	// Get the appropriate validator from the factory
 	switch validatorType {
-	case ValidatorGoBT:
-		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBT]
-		if !exists {
-			result.Success = false
-			result.Error = errors.NewProcessingError("go-bt validator not registered")
-			return result
-		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
-
-	case ValidatorGoSDK:
-		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoSDK]
-		if !exists {
-			result.Success = false
-			result.Error = errors.NewProcessingError("go-sdk validator not registered")
-			return result
-		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
-
 	case ValidatorGoBDK:
-		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBDK]
-		if !exists {
+		if err := vi.validateGoBDKTransaction(tx, blockHeight, utxoHeights); err != nil {
 			result.Success = false
-			result.Error = errors.NewProcessingError("go-bdk validator not registered")
-			return result
+			result.Error = err
+			result.ErrorMessage = err.Error()
 		}
-		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
+
+		return result
 
 	default:
 		result.Success = false
 		result.Error = errors.NewProcessingError("unknown validator type: %s", validatorType)
 		return result
 	}
-
-	// Run the validation
-	err := scriptInterpreter.VerifyScript(tx, blockHeight, true, utxoHeights)
-	if err != nil {
-		result.Success = false
-		result.Error = err
-		result.ErrorMessage = err.Error()
-		// TODO: Extract error code from error if available
-	}
-
-	return result
 }
 
 // ValidateWithAllValidators runs validation with all available validators
 func (vi *ValidatorIntegration) ValidateWithAllValidators(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) map[ValidatorType]ValidatorResult {
 	results := make(map[ValidatorType]ValidatorResult)
 
-	// Test with all validators
-	// Only use GoBDK validator - go-bt and go-sdk disabled
 	validators := []ValidatorType{ValidatorGoBDK}
 	for _, v := range validators {
-		results[v] = vi.ValidateScript(v, tx, blockHeight, utxoHeights)
+		results[v] = vi.ValidateTransaction(v, tx, blockHeight, utxoHeights)
 	}
 
 	return results
+}
+
+func (vi *ValidatorIntegration) validateGoBDKTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error {
+	txValidator := validatorservice.NewTxValidator(vi.logger, vi.settings)
+
+	return txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &validatorservice.Options{SkipPolicyChecks: true})
 }
 
 // CompareResults compares validation results from different validators

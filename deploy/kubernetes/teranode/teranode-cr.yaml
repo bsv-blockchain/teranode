@@ -3,7 +3,7 @@ kind: Cluster
 metadata:
   name: teranode-cluster
 spec:
-  image: ghcr.io/bsv-blockchain/teranode:v0.13.1
+  image: ghcr.io/bsv-blockchain/teranode:v0.14.4
   alertSystem:
     enabled: true
     spec:

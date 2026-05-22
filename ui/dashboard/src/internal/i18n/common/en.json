@@ -54,6 +54,10 @@
       "3m": {
         "label": "3M",
         "tooltip": "90 Days"
+      },
+      "all": {
+        "label": "All",
+        "tooltip": "All available data"
       }
     },
     "msgbox": {

@@ -229,9 +229,9 @@ When enabled, skips scheduled deletion of blob store data (transactions and subt
 
 **Environment Variable**: `pruner_blobDeletionSafetyWindow`
 
-**Description**: Number of blocks to wait after Block Persister height before deleting blobs
+**Description**: Number of blocks behind the triggering block height (mined or persisted, depending on `pruner_block_trigger`) before deleting blobs
 
-Provides a safety margin to ensure persisted blocks are stable before deleting their associated blobs.
+Provides a safety margin by only deleting blobs whose delete-at-height is at least this many blocks behind the triggering block height. When the triggering height has not yet exceeded the safety window, all blob deletions are skipped. Prevents deletion of data that might be needed during reorg scenarios.
 
 ### pruner_blobDeletionBatchSize
 

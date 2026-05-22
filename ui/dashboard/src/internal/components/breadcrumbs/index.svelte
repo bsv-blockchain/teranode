@@ -78,11 +78,11 @@
   }
 
   .tui-breadcrumbs .crumb {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
   .tui-breadcrumbs .crumb:hover,
   .tui-breadcrumbs .crumb.selected {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 700;
   }
 </style>

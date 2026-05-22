@@ -16,7 +16,7 @@ For general information on how the configuration system works, see the [Settings
 
 For deployment-specific information, see:
 
-- [Developer Setup](../tutorials/developers/developerSetup.md)
+- [Developer Setup](../howto/developerSetup.md)
 - [Docker Configuration](../howto/miners/docker/minersHowToConfigureTheNode.md)
 - [Kubernetes Configuration](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 
@@ -47,7 +47,7 @@ Context resolution strips suffixes from right to left until a match is found. Th
 Base contexts:
 
 | Context | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `dev` | Local development |
 | `test` | Unit/integration test runs |
 | `docker` | Docker Compose deployments |
@@ -56,7 +56,7 @@ Base contexts:
 Contexts support dot-notation suffixes to target specific deployment sub-configurations:
 
 | Suffix | Meaning | Example |
-|--------|---------|---------|
+| -------- | --------- | --------- |
 | `.m` | Multi-node Docker Compose setup | `KAFKA_HOSTS.docker.m` |
 | `.ss.teranode1` | Single-service deployment, first instance | `KAFKA_BLOCKS.docker.ss.teranode1` |
 | `.testrunner` | CI test runner environment | `DATADIR.docker.context.testrunner` |
@@ -73,7 +73,7 @@ Settings can be configured as environment variables using the exact setting key 
 
 For detailed service-specific configuration documentation, see:
 
-- **[Alert Service](settings/services/alert_settings.md)** - Bitcoin SV alert system configuration
+- **[Alert Service](settings/services/alert_settings.md)** - BSV Blockchain alert system configuration
 - **[Asset Server](settings/services/asset_settings.md)** - HTTP/WebSocket interface configuration
 - **[Block Assembly](settings/services/blockassembly_settings.md)** - Block assembly service configuration
 - **[Blockchain](settings/services/blockchain_settings.md)** - Blockchain state management configuration

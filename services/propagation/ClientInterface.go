@@ -1,5 +1,5 @@
 /*
-Package propagation provides Bitcoin SV transaction propagation functionality for the Teranode system.
+Package propagation provides BSV Blockchain transaction propagation functionality for the Teranode system.
 
 This file defines the core interface for the propagation client, providing the contract
 that all propagation client implementations must fulfill. The ClientInterface type establishes

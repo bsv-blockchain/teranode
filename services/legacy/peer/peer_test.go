@@ -846,7 +846,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		}
 	}()
 
-	// Read version message sent to remote peer
+	// Read version message sent to remote peer.
 	select {
 	case msg := <-outboundMessages:
 		if _, ok := msg.(*wire.MsgVersion); !ok {
@@ -856,16 +856,9 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		t.Fatal("Peer did not send version message")
 	}
 
-	select {
-	case msg := <-outboundMessages:
-		if _, ok := msg.(*wire.MsgVerAck); !ok {
-			t.Fatalf("Expected verack message, got [%s]", msg.Command())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Peer did not send verack message")
-	}
-
-	// Remote peer writes version message advertising invalid protocol version 1
+	// Remote peer writes version message advertising invalid protocol version 1.
+	// Per Bitcoin protocol, VERACK is a reply to the remote VERSION, so the
+	// outbound peer must wait for this message before sending VERACK.
 	invalidVersionMsg := wire.NewMsgVersion(remoteNA, localNA, 0, 0)
 	invalidVersionMsg.ProtocolVersion = 1
 
@@ -902,6 +895,108 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Timeout waiting for remote reader to close")
 	}
+}
+
+// TestOutboundHandshakeOrder verifies that an outbound peer strictly follows
+// the Bitcoin wire protocol handshake order: VERSION -> (receive remote
+// VERSION) -> VERACK. VERACK must not be sent before the remote VERSION has
+// been received. Standard BSV nodes close the connection with a broken pipe
+// error when VERACK arrives before they have sent their own VERSION.
+func TestOutboundHandshakeOrder(t *testing.T) {
+	peerCfg := &peer.Config{
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               0,
+		TrickleInterval:        time.Second * 10,
+		TstAllowSelfConnection: true,
+	}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	localNA := wire.NewNetAddressIPPort(
+		net.ParseIP("10.0.0.1"),
+		uint16(8333),
+		wire.SFNodeNetwork,
+	)
+	remoteNA := wire.NewNetAddressIPPort(
+		net.ParseIP("10.0.0.2"),
+		uint16(8333),
+		wire.SFNodeNetwork,
+	)
+	localConn, remoteConn := pipe(
+		&conn{laddr: "10.0.0.1:8333", raddr: "10.0.0.2:8333"},
+		&conn{laddr: "10.0.0.2:8333", raddr: "10.0.0.1:8333"},
+	)
+
+	p, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.1:8333")
+	if err != nil {
+		t.Fatalf("NewOutboundPeer: unexpected err - %v\n", err)
+	}
+
+	p.AssociateConnection(localConn)
+
+	outboundMessages := make(chan wire.Message, 4)
+	go func() {
+		for {
+			_, msg, _, readErr := wire.ReadMessageN(
+				remoteConn,
+				p.ProtocolVersion(),
+				peerCfg.ChainParams.Net,
+			)
+			if readErr != nil {
+				close(outboundMessages)
+				return
+			}
+			outboundMessages <- msg
+		}
+	}()
+
+	// The first outbound message must be VERSION.
+	select {
+	case msg := <-outboundMessages:
+		if _, ok := msg.(*wire.MsgVersion); !ok {
+			t.Fatalf("Expected VERSION as first message, got [%s]", msg.Command())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Peer did not send VERSION")
+	}
+
+	// No further outbound messages must arrive before the remote sends its
+	// VERSION. If we receive anything (e.g. a premature VERACK), the outbound
+	// handshake is broken.
+	select {
+	case msg := <-outboundMessages:
+		t.Fatalf("Peer sent [%s] before remote VERSION was delivered; expected VERACK only after remote VERSION", msg.Command())
+	case <-time.After(100 * time.Millisecond):
+		// Expected: peer is blocked reading our VERSION.
+	}
+
+	// Send the remote VERSION.
+	remoteVer := wire.NewMsgVersion(remoteNA, localNA, 0, 0)
+	remoteVer.ProtocolVersion = int32(peerCfg.ProtocolVersion)
+	if remoteVer.ProtocolVersion == 0 {
+		remoteVer.ProtocolVersion = int32(wire.ProtocolVersion)
+	}
+	if _, err = wire.WriteMessageN(
+		remoteConn.Writer,
+		remoteVer,
+		uint32(remoteVer.ProtocolVersion),
+		peerCfg.ChainParams.Net,
+	); err != nil {
+		t.Fatalf("wire.WriteMessageN: unexpected err - %v\n", err)
+	}
+
+	// Only now may VERACK be sent.
+	select {
+	case msg := <-outboundMessages:
+		if _, ok := msg.(*wire.MsgVerAck); !ok {
+			t.Fatalf("Expected VERACK after remote VERSION, got [%s]", msg.Command())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Peer did not send VERACK after remote VERSION")
+	}
+
+	p.DisconnectWithInfo("test complete")
 }
 
 // TestDuplicateVersionMsg ensures that receiving a version message after one

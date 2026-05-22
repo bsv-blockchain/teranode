@@ -336,7 +336,20 @@ func (b *BanList) notifySubscribersAsync(event BanEvent) {
 	}
 }
 
+// Advisory lock ID for banlist schema creation serialization across pods.
+const banlistSchemaLockID int64 = 7_265_726_098 // "tera" + "bl" in ASCII-ish
+
 func (b *BanList) createTables(ctx context.Context) error {
+	if b.engine == util.Postgres {
+		return usql.WithAdvisoryLock(ctx, b.db, banlistSchemaLockID, func() error {
+			return b.createTablesUnlocked(ctx)
+		})
+	}
+
+	return b.createTablesUnlocked(ctx)
+}
+
+func (b *BanList) createTablesUnlocked(ctx context.Context) error {
 	_, err := b.db.ExecContext(ctx, `
         CREATE TABLE IF NOT EXISTS bans (
             key TEXT PRIMARY KEY,

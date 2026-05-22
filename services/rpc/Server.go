@@ -3,7 +3,7 @@
 // The rpc package provides a full-featured and standards-compliant Bitcoin JSON-RPC server
 // implementation that enables external clients to interact with the Teranode node
 // using established protocols. The service implements both standard Bitcoin Core RPC methods
-// and Bitcoin SV specific extensions, supporting operations such as:
+// and BSV Blockchain specific extensions, supporting operations such as:
 //
 // - Blockchain data retrieval (blocks, transactions, chain state)
 // - Transaction submission and broadcast
@@ -610,7 +610,7 @@ func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <
 //
 // The server implements a two-tier authentication system that separates administrative
 // capabilities from limited-user operations, providing security through proper authorization.
-// It supports standard Bitcoin Core RPC methods and Bitcoin SV extensions for
+// It supports standard Bitcoin Core RPC methods and BSV Blockchain extensions for
 // compatibility with existing tools while enhancing functionality.
 //
 // The RPCServer is designed for concurrent operation, employing synchronization mechanisms

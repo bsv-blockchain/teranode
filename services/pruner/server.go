@@ -136,10 +136,10 @@ func (s *Server) Init(ctx context.Context) error {
 
 	// Blob deletion is now managed by blockchain service - no local DB needed
 
-	// Subscribe to blockchain notifications for event-driven pruning:
-	// - BlockPersisted: Triggers pruning when block persister completes (primary)
-	// - Block: Waits for mined_set=true and triggers if persister not running (fallback)
-	// Also tracks persisted height for coordination with store-level pruner safety checks
+	// Subscribe to blockchain notifications for event-driven pruning.
+	// The pruner_block_trigger setting controls which notification type is used:
+	// - OnBlockPersisted mode: uses BlockPersisted notifications (block persister is running)
+	// - OnBlockMined mode: uses Block notifications and waits for mined_set=true (no persister)
 	subscriptionCh, err := s.blockchainClient.Subscribe(ctx, blockchain.SubscriberPruner)
 	if err != nil {
 		return errors.NewServiceError("failed to subscribe to blockchain notifications", err)
@@ -266,6 +266,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Wait for blockchain FSM to be ready
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[Pruner Service] Shutting down during FSM wait")
+			return err
+		}
+		s.logger.Errorf("[Pruner Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
 
@@ -315,6 +320,49 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	switch blockTrigger {
 	case settings.PrunerBlockTriggerOnBlockPersisted:
 		currentHeight = s.lastPersistedHeight.Load()
+		// Look up the actual block hash for the persisted height using headers only.
+		// GetBlockHeadersByHeight walks the main chain (highest chainwork), so this
+		// remains fork-safe while avoiding full block reconstruction/transfer when
+		// only the hash is needed for the initial pruning signal.
+		// Retries with backoff to handle transient blockchain-client unavailability
+		// during startup, since in OnBlockPersisted mode there may be no subsequent
+		// notification to trigger pruning if this fails.
+		if currentHeight > 0 {
+			const (
+				maxHeaderLookupAttempts = 3
+				headerLookupBackoff     = 500 * time.Millisecond
+			)
+
+			for attempt := 1; attempt <= maxHeaderLookupAttempts; attempt++ {
+				headers, _, err := s.blockchainClient.GetBlockHeadersByHeight(ctx, currentHeight, currentHeight)
+				if err == nil && len(headers) > 0 && headers[0] != nil {
+					blockHash = *headers[0].Hash()
+					break
+				}
+
+				if err != nil {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): %v", currentHeight, attempt, maxHeaderLookupAttempts, err)
+				} else if len(headers) == 0 {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): header not found", currentHeight, attempt, maxHeaderLookupAttempts)
+				} else {
+					s.logger.Warnf("[pruner] failed to get block header at persisted height %d for initial pruning (attempt %d/%d): header was nil", currentHeight, attempt, maxHeaderLookupAttempts)
+				}
+
+				if attempt == maxHeaderLookupAttempts {
+					return
+				}
+
+				timer := time.NewTimer(headerLookupBackoff)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
+			}
+		}
 	case settings.PrunerBlockTriggerOnBlockMined:
 		tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil || tipHeader == nil || tipMeta == nil {

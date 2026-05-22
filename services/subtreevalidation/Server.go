@@ -6,6 +6,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -99,10 +99,6 @@ type Server struct {
 	// Used to retrieve block information and validate chain state
 	blockchainClient blockchain.ClientI
 
-	// blockAssemblyClient interfaces with the block assembly service
-	// Used to check local tx availability before fetching subtree_data from peers
-	blockAssemblyClient blockassembly.ClientI
-
 	// subtreeConsumerClient consumes subtree-related Kafka messages
 	// Handles incoming subtree validation requests from other services
 	subtreeConsumerClient kafka.KafkaConsumerGroupI
@@ -161,8 +157,6 @@ type Server struct {
 //   - blockchainClient: Client for blockchain interaction
 //   - subtreeConsumerClient: Kafka consumer for subtree-related messages
 //   - txmetaConsumerClient: Kafka consumer for transaction metadata messages
-//   - p2pClient: Client for P2P peer communication (byte tracking, peer info)
-//   - blockAssemblyClient: Client for block assembly service (local tx availability check)
 //
 // Returns:
 //   - *Server: Fully initialized server instance ready for starting
@@ -179,7 +173,6 @@ func New(
 	subtreeConsumerClient kafka.KafkaConsumerGroupI,
 	txmetaConsumerClient kafka.KafkaConsumerGroupI,
 	p2pClient P2PClientI,
-	blockAssemblyClient blockassembly.ClientI,
 ) (*Server, error) {
 	u := &Server{
 		logger:                            logger,
@@ -193,7 +186,6 @@ func New(
 		prioritySubtreeCheckActiveMap:     map[string]bool{},
 		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
 		blockchainClient:                  blockchainClient,
-		blockAssemblyClient:               blockAssemblyClient,
 		subtreeConsumerClient:             subtreeConsumerClient,
 		txmetaConsumerClient:              txmetaConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
@@ -227,11 +219,12 @@ func New(
 
 	// create a caching tx meta store
 	if tSettings.SubtreeValidation.TxMetaCacheEnabled {
-		logger.Infof("Using cached version of tx meta store")
+		bucketType := resolveTxMetaCacheBucketType(logger, tSettings.SubtreeValidation.TxMetaCacheBucketType)
+		logger.Infof("Using cached version of tx meta store (bucket type: %s)", tSettings.SubtreeValidation.TxMetaCacheBucketType)
 
 		var err error
 
-		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
+		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, bucketType)
 		if err != nil {
 			logger.Errorf("Failed to create tx meta cache: %v", err)
 		}
@@ -249,8 +242,7 @@ func New(
 		if err != nil {
 			logger.Errorf("Failed to create Kafka producer for invalid subtrees: %v", err)
 		} else {
-			// Start the producer with a message channel
-			go u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
+			u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
 		}
 	} else {
 		logger.Infof("No Kafka topic configured for invalid subtrees")
@@ -510,8 +502,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			u.logger.Infof("[Subtree Validation Service] Shutting down during FSM wait")
+			return err
+		}
 		u.logger.Errorf("[Subtree Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -558,6 +553,12 @@ func (u *Server) Stop(_ context.Context) error {
 	if u.txmetaConsumerClient != nil {
 		if err := u.txmetaConsumerClient.Close(); err != nil {
 			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+		}
+	}
+
+	if u.invalidSubtreeKafkaProducer != nil {
+		if err := u.invalidSubtreeKafkaProducer.Stop(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to stop invalid subtree kafka producer gracefully: %v", err)
 		}
 	}
 
@@ -886,6 +887,26 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 		}
 
 		u.logger.Infof("[CheckSubtreeFromBlock] Processed %d orphaned transactions after subtree validation", processedOrphans.Load())
+	}
+}
+
+// resolveTxMetaCacheBucketType maps the subtreevalidation_txMetaCacheBucketType
+// setting (string) to the txmetacache.BucketType enum. Unknown values fall
+// back to Unallocated and log a warning so a typo never silently changes the
+// deployed allocator on a flag-day style flip.
+func resolveTxMetaCacheBucketType(logger ulogger.Logger, raw string) txmetacache.BucketType {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "unallocated":
+		return txmetacache.Unallocated
+	case "preallocated":
+		return txmetacache.Preallocated
+	case "trimmed":
+		return txmetacache.Trimmed
+	case "native":
+		return txmetacache.Native
+	default:
+		logger.Warnf("[SubtreeValidation] unknown txMetaCacheBucketType %q; falling back to unallocated", raw)
+		return txmetacache.Unallocated
 	}
 }
 

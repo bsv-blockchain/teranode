@@ -59,7 +59,7 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 	// First, mine txA0 so its outputs can be spent
 	// 0 -> 1 ... 101 -> 102a [parentTx] -> 103a [txA0]
 	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0),
 		"Failed to process block103a")
 
 	td.WaitForBlockHeight(t, block103a, blockWait, true)
@@ -95,7 +95,7 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 	// Create block 104a with chain A external transactions
 	subtree104a, block104a := td.CreateTestBlock(t, block103a, 10401, txA1, txA2, txA3, txA4)
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy", 0),
 		"Failed to process block104a")
 
 	td.WaitForBlockHeight(t, block104a, blockWait, true)
@@ -131,7 +131,7 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 
 	// Create block103b with chain B external transactions (forks from 102a)
 	_, block103b := td.CreateTestBlock(t, block102aRefetch, 10302, txB0, txB1, txB2, txB3)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0),
 		"Failed to process block103b")
 
 	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA4] (*)
@@ -143,11 +143,11 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 
 	// Switch forks by mining 104b and 105b to make chain B longer
 	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy", 0),
 		"Failed to process block104b")
 
 	_, block105b := td.CreateTestBlock(t, block104b, 10502) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy", 0),
 		"Failed to process block105b")
 
 	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA4]

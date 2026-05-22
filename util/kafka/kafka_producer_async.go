@@ -67,6 +67,16 @@ type KafkaProducerConfig struct {
 
 	// Debug logging
 	EnableDebugLogging bool // Enable verbose debug logging
+
+	// Transfer rate monitoring
+	SlowTransfer SlowTransferConfig // Thresholds for slow-send detection (zero value uses defaults)
+
+	// ManualPartitioning routes every record to Message.Partition without any
+	// hashing or sticky-batching by franz-go. Callers MUST set Partition on
+	// every Message they publish — there is no fallback. Used by the validator
+	// when emitting v2-format txmeta messages so each Kafka message lands on a
+	// partition aligned with the receiver's cache bucket range.
+	ManualPartitioning bool
 }
 
 // MessageStatus represents the status of a produced message.
@@ -77,9 +87,18 @@ type MessageStatus struct {
 }
 
 // Message represents a Kafka message with key and value.
+//
+// Partition is honored only when the producer was created with
+// KafkaProducerConfig.ManualPartitioning=true. In that mode the producer is
+// registered with kgo.ManualPartitioner, which writes the record to exactly
+// the partition number specified — there is no fallback, so callers MUST set
+// Partition explicitly for every Message. With ManualPartitioning=false the
+// field is ignored (franz-go's default StickyKeyPartitioner picks the
+// partition from Key).
 type Message struct {
-	Key   []byte
-	Value []byte
+	Key       []byte
+	Value     []byte
+	Partition int32
 }
 
 // KafkaAsyncProducer implements asynchronous Kafka producer functionality using franz-go.
@@ -87,7 +106,9 @@ type KafkaAsyncProducer struct {
 	Config         KafkaProducerConfig // Producer configuration
 	client         *kgo.Client         // Underlying franz-go client
 	publishChannel chan *Message       // Channel for publishing messages
+	shuttingDown   atomic.Bool         // Flag indicating shutdown has started (reject new publishes)
 	closed         atomic.Bool         // Flag indicating if producer is closed
+	adaptiveSlow   atomic.Bool         // Flag enabling adaptive batching during constrained bandwidth
 	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
 	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
 
@@ -96,8 +117,22 @@ type KafkaAsyncProducer struct {
 	isInMemory       bool
 }
 
+// ProducerOption mutates the KafkaProducerConfig built from a URL before the
+// underlying client is constructed. Use with NewKafkaAsyncProducerFromURL to
+// override flags that aren't expressible in the URL (e.g. ManualPartitioning).
+type ProducerOption func(*KafkaProducerConfig)
+
+// WithManualPartitioning switches the producer to franz-go's ManualPartitioner.
+// Every Message.Partition is honored verbatim; there is no fallback for
+// records without an explicit partition. Use when the caller wants strict
+// control over partition routing (e.g. the validator emitting v2 txmeta
+// messages aligned to receiver-side cache bucket ranges).
+func WithManualPartitioning() ProducerOption {
+	return func(c *KafkaProducerConfig) { c.ManualPartitioning = true }
+}
+
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
-func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings, opts ...ProducerOption) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := safeconversion.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
@@ -139,6 +174,10 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		EnableDebugLogging:    enableDebugLogging,
 	}
 
+	for _, opt := range opts {
+		opt(&producerConfig)
+	}
+
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
 		return NewKafkaAsyncProducer(logger, producerConfig)
 	}, retry.WithMessage(fmt.Sprintf("[P2P] error starting kafka async producer for topic %s", producerConfig.Topic)))
@@ -150,17 +189,25 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 	return producer, nil
 }
 
-// clampBatchMaxBytes clamps the given flush bytes value to the valid range for
-// franz-go's ProducerBatchMaxBytes (int32). The minimum is 512 bytes (Kafka
-// protocol minimum for a record batch). Small flush_bytes values (e.g. 64) were
-// valid with sarama as a flush threshold but are too small for franz-go.
+// defaultBatchMaxBytes is the default max batch size for franz-go, matching the
+// Kafka broker default for max.message.bytes (1 MiB). This must not be derived
+// from flush_bytes, which was a Sarama flush-trigger threshold, not a size limit.
+const defaultBatchMaxBytes int32 = 1_048_576
+
+// clampBatchMaxBytes returns a safe ProducerBatchMaxBytes value. The flush_bytes
+// config parameter controlled flush timing in Sarama, not max batch size. In
+// franz-go, ProducerBatchMaxBytes is a hard limit — setting it too low causes
+// Redpanda/Kafka to reject messages with MESSAGE_TOO_LARGE.
+//
+// When flush_bytes <= defaultBatchMaxBytes (which includes all legacy configs like
+// flush_bytes=64 or flush_bytes=1024), we use the 1 MiB default. Only when
+// flush_bytes explicitly exceeds 1 MiB do we respect it as a batch size override.
 func clampBatchMaxBytes(flushBytes int) int32 {
-	const minBatchMaxBytes = 512
-	if flushBytes < minBatchMaxBytes {
-		flushBytes = minBatchMaxBytes
+	if flushBytes <= int(defaultBatchMaxBytes) {
+		return defaultBatchMaxBytes
 	}
 	if flushBytes > math.MaxInt32 {
-		flushBytes = math.MaxInt32
+		return math.MaxInt32
 	}
 	return int32(flushBytes) //nolint:gosec // bounds checked above
 }
@@ -168,6 +215,10 @@ func clampBatchMaxBytes(flushBytes int) int32 {
 // NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
+
+	producer := &KafkaAsyncProducer{
+		Config: cfg,
+	}
 
 	if cfg.URL != nil && cfg.URL.Scheme == memoryScheme {
 		broker := inmemorykafka.GetSharedBroker()
@@ -200,6 +251,10 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		kgo.DisableIdempotentWrite(),
 	}
 
+	if cfg.ManualPartitioning {
+		opts = append(opts, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	}
+
 	// Configure TLS if enabled
 	if cfg.EnableTLS {
 		tlsConfig, err := buildFranzTLSConfig(cfg.EnableTLS, cfg.TLSSkipVerify, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -214,6 +269,22 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		opts = append(opts, kgo.WithLogger(&franzLoggerAdapter{logger: logger}))
 	}
 
+	// Wire transfer-rate monitoring hooks
+	slowCfg := cfg.SlowTransfer
+	if slowCfg.ThresholdBps == 0 {
+		slowCfg = DefaultSlowTransferConfig()
+	}
+	hook := newProducerMetricsHook(logger, cfg.Topic, slowCfg)
+	hook.setSlowStateHandler(func(slow bool, rateBps float64) {
+		producer.adaptiveSlow.Store(slow)
+		if slow {
+			logger.Infof("[kafka] enabling adaptive batching on topic %s (observed %.1f KB/s)", cfg.Topic, rateBps/1024)
+			return
+		}
+		logger.Infof("[kafka] restoring normal batching on topic %s", cfg.Topic)
+	})
+	opts = append(opts, kgo.WithHooks(hook))
+
 	// Create the franz-go client
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
@@ -226,12 +297,78 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		return nil, err
 	}
 
-	producer := &KafkaAsyncProducer{
-		Config: cfg,
-		client: client,
-	}
+	producer.client = client
 
 	return producer, nil
+}
+
+func (c *KafkaAsyncProducer) currentBatchLinger() time.Duration {
+	if c.adaptiveSlow.Load() {
+		linger := c.Config.FlushFrequency * 4
+		if linger < 200*time.Millisecond {
+			linger = 200 * time.Millisecond
+		}
+		if linger > 5*time.Second {
+			linger = 5 * time.Second
+		}
+		return linger
+	}
+	if c.Config.FlushFrequency <= 0 {
+		return 10 * time.Second
+	}
+	return c.Config.FlushFrequency
+}
+
+func (c *KafkaAsyncProducer) currentBatchSize() int {
+	base := c.Config.FlushMessages
+	if base <= 0 {
+		base = 1000
+	}
+	if c.adaptiveSlow.Load() {
+		sz := base * 4
+		if sz < 100 {
+			sz = 100
+		}
+		if sz > 20000 {
+			sz = 20000
+		}
+		return sz
+	}
+	if base < 1 {
+		return 1
+	}
+	return base
+}
+
+func (c *KafkaAsyncProducer) currentBackpressureThreshold() int {
+	threshold := c.currentBatchSize() * 2
+	if threshold < 200 {
+		return 200
+	}
+	return threshold
+}
+
+func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered []*Message) {
+	for _, msgBytes := range buffered {
+		if c.closed.Load() || c.shuttingDown.Load() {
+			return
+		}
+		record := &kgo.Record{
+			Topic: c.Config.Topic,
+			Key:   msgBytes.Key,
+			Value: msgBytes.Value,
+		}
+		if c.Config.ManualPartitioning {
+			record.Partition = msgBytes.Partition
+		}
+		c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
+			if err != nil {
+				c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %x", r.Topic, err, r.Key)
+			} else {
+				c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
+			}
+		})
+	}
 }
 
 // Start begins the async producer operation.
@@ -239,6 +376,8 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
+	c.shuttingDown.Store(false)
+	c.closed.Store(false)
 
 	// Handle in-memory case
 	if c.isInMemory {
@@ -266,30 +405,131 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			ch := c.publishChannel
 			c.channelMu.RUnlock()
 
-			for msgBytes := range ch {
-				if c.closed.Load() {
-					break
-				}
+			buffered := make([]*Message, 0, 256)
+			backpressureLogged := false
+			bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
+			backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
+			bufferedGauge.Set(0)
 
-				record := &kgo.Record{
-					Topic: c.Config.Topic,
-					Key:   msgBytes.Key,
-					Value: msgBytes.Value,
-				}
+			slowMode := c.adaptiveSlow.Load()
+			linger := c.currentBatchLinger()
+			maxBatch := c.currentBatchSize()
+			backpressureThreshold := c.currentBackpressureThreshold()
 
-				if c.closed.Load() {
-					break
-				}
+			const metricsUpdateInterval = 64
+			metricTick := 0
 
-				// Produce asynchronously with callback
-				c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
-					if err != nil {
-						c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %x", r.Topic, err, r.Key)
-					} else {
-						c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
+			var lingerTimer *time.Timer
+			var lingerCh <-chan time.Time
+			defer func() {
+				if lingerTimer == nil {
+					return
+				}
+				if !lingerTimer.Stop() {
+					select {
+					case <-lingerTimer.C:
+					default:
 					}
-				})
+				}
+			}()
+
+			resetLingerTimer := func(d time.Duration) {
+				if lingerTimer == nil {
+					lingerTimer = time.NewTimer(d)
+				} else {
+					if !lingerTimer.Stop() {
+						select {
+						case <-lingerTimer.C:
+						default:
+						}
+					}
+					lingerTimer.Reset(d)
+				}
+				lingerCh = lingerTimer.C
 			}
+
+			flushBufferedFinal := func() {
+				if len(buffered) == 0 {
+					return
+				}
+				// Use a fresh context so final drain still runs after parent cancellation.
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer flushCancel()
+				c.flushBuffered(flushCtx, buffered)
+				buffered = buffered[:0]
+				bufferedGauge.Set(0)
+			}
+
+			for {
+				if c.closed.Load() || c.shuttingDown.Load() {
+					break
+				}
+
+				newSlowMode := c.adaptiveSlow.Load()
+				if newSlowMode != slowMode {
+					slowMode = newSlowMode
+					linger = c.currentBatchLinger()
+					maxBatch = c.currentBatchSize()
+					backpressureThreshold = c.currentBackpressureThreshold()
+				}
+
+				metricTick++
+				if metricTick >= metricsUpdateInterval {
+					bufferedGauge.Set(float64(len(buffered)))
+					metricTick = 0
+				}
+
+				if len(buffered) > backpressureThreshold {
+					if !backpressureLogged {
+						backpressureLogged = true
+						backpressureCounter.Inc()
+						c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
+							c.Config.Topic, len(buffered), backpressureThreshold)
+					}
+				} else {
+					backpressureLogged = false
+				}
+
+				if len(buffered) == 0 {
+					msgBytes, ok := <-ch
+					if !ok {
+						break
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+					continue
+				}
+
+				if len(buffered) >= maxBatch {
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+					continue
+				}
+
+				resetLingerTimer(linger)
+
+				select {
+				case msgBytes, ok := <-ch:
+					if !ok {
+						flushBufferedFinal()
+						return
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+				case <-lingerCh:
+					lingerCh = nil
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+				case <-internalCtx.Done():
+					flushBufferedFinal()
+					return
+				}
+			}
+
 		}()
 
 		signals := make(chan os.Signal, 1)
@@ -382,11 +622,15 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
-	if c.closed.Load() {
+	if c.shuttingDown.Load() {
 		return nil
 	}
 
-	c.closed.Store(true)
+	c.shuttingDown.Store(true)
+
+	if c.closed.Load() {
+		return nil
+	}
 
 	c.channelMu.Lock()
 	ch := c.publishChannel
@@ -397,6 +641,7 @@ func (c *KafkaAsyncProducer) Stop() error {
 	c.channelMu.Unlock()
 
 	c.publishWg.Wait()
+	c.closed.Store(true)
 
 	if c.isInMemory {
 		if c.inMemoryProducer != nil {
@@ -418,8 +663,13 @@ func (c *KafkaAsyncProducer) Stop() error {
 }
 
 // BrokersURL returns the list of configured Kafka broker URLs.
+// Returns nil for in-memory producers since there are no real brokers.
 func (c *KafkaAsyncProducer) BrokersURL() []string {
 	if c == nil {
+		return nil
+	}
+
+	if c.inMemoryProducer != nil {
 		return nil
 	}
 
@@ -431,7 +681,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.channelMu.RLock()
 	defer c.channelMu.RUnlock()
 
-	if c.closed.Load() || c.publishChannel == nil {
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 

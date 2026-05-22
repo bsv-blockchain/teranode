@@ -185,15 +185,21 @@ This periodic announcement complements the size-based announcements, ensuring:
 
 ### 2.3.1 Dynamic Subtree Size Adjustment
 
-The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
+When enabled via `UseDynamicSubtreeSize`, the Block Assembly service re-evaluates the subtree size **once per processed block**. The algorithm is utilization-driven (based on the average fill of recent subtrees in a small ring buffer), with a velocity check applied only on the increase path.
 
-- The system targets a rate of approximately one subtree per second under high throughput conditions
-- If subtrees are being created too quickly, the size is automatically increased
-- If subtrees are being created too slowly, the size is decreased
-- Adjustments are always made to a power of 2 and constrained by minimum and maximum bounds
-- Size increases are capped at 2x per block to prevent wild oscillations
+**Three-zone decision based on average subtree utilization:**
 
-Importantly, the system maintains a minimum subtree size threshold, configured via `minimum_merkle_items_per_subtree`. In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement. This means that during periods of low network usage, the target rate of one subtree per second may not be achieved, as the system prioritizes reaching the minimum subtree size before sending.
+- **Under 10%:** size halves. The new size is `currentSize × 0.5`, rounded up to a power of two, then floored at `MinimumMerkleItemsPerSubtree`. This is the only path that decreases size; the per-evaluation decrease cap is 0.5×.
+- **10–80%:** no change. The size is left as-is.
+- **Over 80%:** size may grow. Growth is gated:
+    - If recent average fill is below an anti-creep threshold (derived from `MinimumMerkleItemsPerSubtree`), no increase is applied — this prevents size creep when subtrees are tiny in absolute terms even though they appear "full" relative to current size.
+    - Otherwise the new size is computed from the ratio of target subtree interval (1 second) to the observed average interval, rounded up to a power of two, then capped in order: at 2× the current size, at `MaximumMerkleItemsPerSubtree`, and finally at a usage-based ceiling that limits growth to roughly twice the largest recent fill (this last cap is implementation tuning and is not a stable contract).
+
+**Goal.** Under sustained high throughput, hold the rate of completed subtrees near one per second. Under low traffic, shrink toward the minimum and stay there.
+
+**Floor behavior.** `MinimumMerkleItemsPerSubtree` is enforced after every adjustment. In low-volume periods the system prioritizes reaching the minimum fill over hitting the one-subtree-per-second target — subtrees are held back until they reach the floor or the periodic-announcement timer fires.
+
+**Power-of-two invariant.** All sizes are powers of two. The shrink path's `ceil(log2)` rounding is intentional (biases shrinks slightly conservative) and is benign in normal operation where the input is already a power of two.
 
 ![block_assembly_dynamic_subtree.svg](img/plantuml/blockassembly/block_assembly_dynamic_subtree.svg)
 

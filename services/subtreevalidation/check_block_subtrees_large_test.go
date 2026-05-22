@@ -182,6 +182,11 @@ func (v *TopologicalOrderValidator) GetMedianBlockTime() uint32 {
 // TriggerBatcher implements validator.Interface (no-op).
 func (v *TopologicalOrderValidator) TriggerBatcher() {}
 
+// EnsureMTPLoaded implements validator.Interface (no-op).
+func (v *TopologicalOrderValidator) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
+}
+
 // TestCheckBlockSubtreesLevelBasedLargeBlock benchmarks CheckBlockSubtrees with level-based processor
 // using 10 million transactions across 10 subtrees.
 func TestCheckBlockSubtreesLevelBasedLargeBlock(t *testing.T) {

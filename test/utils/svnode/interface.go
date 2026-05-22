@@ -3,6 +3,8 @@ package svnode
 import (
 	"context"
 	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 const (
@@ -14,7 +16,7 @@ const (
 	DefaultDockerImage = "bitcoinsv/bitcoin-sv:1.2.0"
 )
 
-// SVNodeI defines the interface for interacting with a Bitcoin SV node
+// SVNodeI defines the interface for interacting with a BSV Blockchain node
 type SVNodeI interface {
 	// Lifecycle
 	Start(ctx context.Context) error
@@ -35,6 +37,11 @@ type SVNodeI interface {
 
 	// Block generation
 	Generate(numBlocks int) ([]string, error)
+	SubmitBlock(blockHex string) (string, error)
+	GetBlockHeader(blockHash string, verbose bool) (interface{}, error)
+
+	// Regtest time control (test-only)
+	SetMockTime(timestamp int64) error
 
 	// Network
 	GetPeerInfo() ([]map[string]interface{}, error)
@@ -45,6 +52,9 @@ type SVNodeI interface {
 
 	// Transactions
 	SendRawTransaction(txHex string) (string, error)
+	SendToAddress(address string, amount float64) (string, error)
+	GetRawTransaction(txid string) (*bt.Tx, error)
+	GetRawTransactionVerbose(txid string) (map[string]interface{}, error)
 
 	// Waiting helpers
 	WaitForBlockHeight(ctx context.Context, height int, timeout time.Duration) error
@@ -75,7 +85,7 @@ type Options struct {
 	KeepRunning bool
 	// ConnectTo specifies addresses to connect to at startup via -connect flag.
 	// Unlike addnode, -connect creates regular outbound connections that are
-	// used for initial block download in Bitcoin SV.
+	// used for initial block download in SV Node.
 	ConnectTo []string
 	// AdditionalArgs specifies extra command-line flags to pass to bitcoind.
 	// Example: []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}

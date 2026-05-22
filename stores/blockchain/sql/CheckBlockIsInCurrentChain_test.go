@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -185,7 +186,10 @@ func TestCheckBlockIsInCurrentChain_InvalidatedBlock(t *testing.T) {
 	assert.False(t, result, "Invalidated block should be off-chain")
 }
 
-// newStoreWithInMemoryChainCheck creates a SQL store with useInMemoryChainCheck enabled.
+// newStoreWithInMemoryChainCheck creates a SQL store with useInMemoryChainCheck enabled
+// and waits for the startup rebuild goroutine to complete before returning. Tests that
+// rely on the in-memory chain check being authoritative (e.g. DB-independence tests)
+// must run after the startup guard has been released.
 func newStoreWithInMemoryChainCheck(t *testing.T) *SQL {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
@@ -195,7 +199,25 @@ func newStoreWithInMemoryChainCheck(t *testing.T) *SQL {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
+
+	waitForStartupRebuild(t, s)
 	return s
+}
+
+// waitForStartupRebuild blocks until the startup rebuild goroutine has released
+// its guard, or fails the test after 5 seconds. Use this in tests that need
+// deterministic behaviour from the fast-path (guard == 0) or that call Close()
+// and want to avoid noisy "database is closed" logs from the still-running
+// startup goroutine.
+func waitForStartupRebuild(t *testing.T, s *SQL) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.mainChainRebuilding.Load() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("startup rebuild did not complete within 5 seconds")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestCheckBlockIsInCurrentChain_InMemory_SingleBlockInChain(t *testing.T) {

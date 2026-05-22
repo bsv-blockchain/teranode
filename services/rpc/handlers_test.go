@@ -142,7 +142,7 @@ func TestHandleGetRawTransaction(t *testing.T) {
 	assert.Equal(t, uint32(0x0), txResult.LockTime)
 	assert.Equal(t, 1, len(txResult.Vin))
 	assert.Equal(t, 1, len(txResult.Vout))
-	assert.Equal(t, float64(5000000000), txResult.Vout[0].Value)
+	assert.Equal(t, bsvjson.BTCValue(50), txResult.Vout[0].Value)
 
 	// Test case 3: Error when asset URL is not set
 	s.assetHTTPURL = nil

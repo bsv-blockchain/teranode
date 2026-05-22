@@ -29,4 +29,4 @@ fi
 # Run docker compose with service-specific info
 docker_service_run "${1:-up}" "deploy/docker/kafka" "Kafka and Kafka Console (ephemeral - no persistent data)" \
     "Kafka broker: kafka-shared:9092" \
-    "Kafka Console UI: http://localhost:8082"
+    "Kafka Console UI: http://localhost:9095"

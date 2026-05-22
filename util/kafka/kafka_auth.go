@@ -6,89 +6,9 @@ import (
 	"crypto/x509"
 	"os"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 )
-
-// configureKafkaAuthFromFields applies TLS security settings to a Sarama config using individual field values.
-// This version doesn't depend on the settings package, allowing kafka package to be decoupled from settings.
-func configureKafkaAuthFromFields(config *sarama.Config, enableTLS bool, tlsSkipVerify bool, tlsCAFile string, tlsCertFile string, tlsKeyFile string) error {
-	if enableTLS {
-		config.Net.TLS.Enable = true
-
-		// #nosec G402 -- InsecureSkipVerify is configurable and may be needed for testing environments
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: tlsSkipVerify,
-		}
-
-		if tlsCAFile != "" {
-			caCert, err := os.ReadFile(tlsCAFile)
-			if err != nil {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to read TLS CA file: "+tlsCAFile, err)
-			}
-
-			if tlsConfig.RootCAs == nil {
-				tlsConfig.RootCAs = x509.NewCertPool()
-			}
-
-			if !tlsConfig.RootCAs.AppendCertsFromPEM(caCert) {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to append CA certificate to RootCAs from file: "+tlsCAFile)
-			}
-		}
-
-		if tlsCertFile != "" && tlsKeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
-			if err != nil {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to load TLS certificate/key pair (cert: "+tlsCertFile+", key: "+tlsKeyFile+")", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-		}
-
-		config.Net.TLS.Config = tlsConfig
-	}
-
-	return nil
-}
-
-// configureKafkaAuth applies TLS security settings to a Sarama config
-func configureKafkaAuth(config *sarama.Config, kafkaSettings *settings.KafkaSettings) error {
-	if kafkaSettings.EnableTLS {
-		config.Net.TLS.Enable = true
-
-		// #nosec G402 -- InsecureSkipVerify is configurable and may be needed for testing environments
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: kafkaSettings.TLSSkipVerify,
-		}
-
-		if kafkaSettings.TLSCAFile != "" {
-			caCert, err := os.ReadFile(kafkaSettings.TLSCAFile)
-			if err != nil {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to read TLS CA file: "+kafkaSettings.TLSCAFile, err)
-			}
-
-			if tlsConfig.RootCAs == nil {
-				tlsConfig.RootCAs = x509.NewCertPool()
-			}
-
-			if !tlsConfig.RootCAs.AppendCertsFromPEM(caCert) {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to append CA certificate to RootCAs from file: "+kafkaSettings.TLSCAFile)
-			}
-		}
-
-		if kafkaSettings.TLSCertFile != "" && kafkaSettings.TLSKeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(kafkaSettings.TLSCertFile, kafkaSettings.TLSKeyFile)
-			if err != nil {
-				return errors.New(errors.ERR_CONFIGURATION, "failed to load TLS certificate/key pair (cert: "+kafkaSettings.TLSCertFile+", key: "+kafkaSettings.TLSKeyFile+")", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-		}
-
-		config.Net.TLS.Config = tlsConfig
-	}
-
-	return nil
-}
 
 // ValidateKafkaAuthSettings validates the TLS configuration
 func ValidateKafkaAuthSettings(kafkaSettings *settings.KafkaSettings) error {

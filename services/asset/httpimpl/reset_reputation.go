@@ -8,12 +8,16 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// ResetReputationRequest represents the JSON request body
+// ResetReputationRequest represents the JSON request body.
+//
+// swagger:model ResetReputationRequest
 type ResetReputationRequest struct {
 	PeerID string `json:"peer_id"` // Empty string means reset all peers
 }
 
-// ResetReputationResponse represents the JSON response
+// ResetReputationResponse represents the JSON response.
+//
+// swagger:model ResetReputationResponse
 type ResetReputationResponse struct {
 	OK         bool  `json:"ok"`
 	PeersReset int32 `json:"peers_reset"`

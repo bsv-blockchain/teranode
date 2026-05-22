@@ -141,7 +141,7 @@ The Validator Service checks transactions against network rules and updates thei
 - Go programming language
 - gRPC for service communication
 - Kafka for message queuing (optional)
-- BSV libraries for transaction validation
+- BSV Blockchain libraries for transaction validation
 
 You can read more about this service in the [Validator Service documentation](../services/validator.md).
 
@@ -339,7 +339,7 @@ The UTXO Persister maintains an up-to-date record of all unspent transaction out
 
 - Go programming language
 - Blob store for file storage
-- Bitcoin SV libraries for blockchain operations
+- BSV Blockchain libraries for blockchain operations
 
 You can read more about this service in the [UTXO Persister Service documentation](../services/utxoPersister.md).
 
@@ -370,7 +370,7 @@ You can read more about this service in the [P2P Service documentation](../servi
 
 ### 3.4 Legacy Service
 
-The Legacy Service facilitates communication between Teranode and traditional Bitcoin SV nodes.
+The Legacy Service facilitates communication between Teranode and traditional BSV Blockchain nodes.
 
 ![P2P_Legacy_Container_Diagram.png](../services/img/Legacy_Container_Diagram.png)
 

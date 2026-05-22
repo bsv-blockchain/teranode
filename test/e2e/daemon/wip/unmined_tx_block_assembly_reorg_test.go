@@ -146,7 +146,7 @@ func testUnminedTransactionInBlockAssemblyAfterReorg(t *testing.T, utxoStore str
 
 	// Process and Validate the block manually
 	t.Log("Processing and validating block3A...")
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3A, block3A.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3A, block3A.Height, "", "legacy", 0)
 	require.NoError(t, err, "Failed to process block3A")
 
 	err = td.BlockValidationClient.ValidateBlock(td.Ctx, block3A, nil)
@@ -167,7 +167,7 @@ func testUnminedTransactionInBlockAssemblyAfterReorg(t *testing.T, utxoStore str
 	t.Logf("Created fork block3B at height 3: %s", block3B.Header.Hash().String())
 
 	// Process and validate block3B
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3B, block3B.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3B, block3B.Height, "", "legacy", 0)
 	require.NoError(t, err, "Failed to process block3B")
 
 	err = td.BlockValidationClient.ValidateBlock(td.Ctx, block3B, nil)
@@ -180,7 +180,7 @@ func testUnminedTransactionInBlockAssemblyAfterReorg(t *testing.T, utxoStore str
 	t.Logf("Created block4B at height 4: %s", block4B.Header.Hash().String())
 
 	// Process and validate block4B
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4B, block4B.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4B, block4B.Height, "", "legacy", 0)
 	require.NoError(t, err, "Failed to process block4B")
 
 	err = td.BlockValidationClient.ValidateBlock(td.Ctx, block4B, nil)

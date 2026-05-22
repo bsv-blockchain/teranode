@@ -19,17 +19,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	teranodeblockchain "github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -44,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -711,10 +710,10 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 
 	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		sm.logger.Debugf("Error getting FSM current state: %v", err)
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", err)
 	}
 
-	if *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
+	if state != nil && *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
 		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
 
@@ -1236,6 +1235,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
+			return nil
 		} else if errors.Is(err, errors.ErrBlockNotFound) {
 			// We don't have the parent of this block/header, so we'll request it.
 			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
@@ -1263,9 +1263,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			return nil
-		} else if errors.Is(err, context.Canceled) {
-			return nil
 		} else {
+			if errors.Is(err, context.Canceled) || errors.IsContextError(err) {
+				return nil
+			}
+
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
@@ -1273,8 +1275,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
 
-			// TODO TEMPORARY: we should not panic here, but return the error
-			panic(err)
+			// Never panic in sync processing goroutines; bubble error to caller.
+			return err
 		}
 	}
 
@@ -1453,9 +1455,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
-	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
-	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
+	// describe. Size the InvList to maxBlocks rather than headerList.Len()
+	// because the loop below breaks at maxBlocks — sizing to headerList.Len()
+	// (often 2000) caused large repeated allocations (~16 KB) when only a
+	// handful of slots ever get used (maxBlocks shrinks to 1 for >2 GB blocks).
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(maxBlocks)) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {
@@ -1928,8 +1932,17 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable
-	maxBlockQueue := 10_000
+	// TODO make this configurable.
+	//
+	// This buffer pins one *wire.MsgBlock per slot. Each MsgBlock carries
+	// its go-wire decode arena (≥4 MiB per block today), so the previous
+	// 10_000-deep queue could pin ~40 GiB of arena memory ahead of the
+	// sequential processor. On a memory-constrained box that turns into
+	// the dominant live-heap source and starves the GC. Cap at a small
+	// value: enough to absorb processor-stall jitter, far below anything
+	// that would meaningfully pin memory. The downloader naturally
+	// back-pressures via TCP when the queue is full.
+	maxBlockQueue := 100
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
@@ -2255,12 +2268,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplication[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
+	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
 
 		// process the batch
 		sm.peerNotifier.AnnounceNewTransactions(batch)
-	}, true)
+	}, true,
+		batcher.WithName("netsync_tx_announce"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
+	)
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
@@ -2405,55 +2423,9 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "txmeta.legacy"+"."+sm.settings.ClientName, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
-	// Listen to blockchain notifications for subtree announcements
-	go func() {
-		// will never return an error
-		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, teranodeblockchain.SubscriberLegacy)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-blockchainSubscription:
-				if notification == nil {
-					continue
-				}
-
-				// check if the notification is a new subtree
-				if notification.Type == model.NotificationType_Subtree {
-					// we just got notified of a new subtree internally, announce all the transactions to our peers
-					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
-
-					subtreeReader, err := sm.subtreeStore.GetIoReader(ctx, notification.Hash, fileformat.FileTypeSubtree)
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
-						continue
-					}
-
-					subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
-					_ = subtreeReader.Close()
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
-						continue
-					}
-
-					// announce all the transactions in the subtree
-					// the batcher should de-duplicate the transactions that have already been sent in the last minute
-					for _, subtreeNode := range subtree.Nodes {
-						if subtreeNode.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-							continue
-						}
-
-						sm.txAnnounceBatcher.Put(&TxHashAndFee{
-							TxHash: subtreeNode.Hash,
-							Fee:    subtreeNode.Fee,
-							Size:   subtreeNode.SizeInBytes,
-						})
-					}
-				}
-			}
-		}
-	}()
+	// Tx announcements to legacy peers are handled entirely by the txmeta Kafka path.
+	// Subtree notifications are NOT used for tx announcements — they caused all txs in
+	// reorganized subtrees to be re-announced to peers after every new block.
 
 	// Control block listeners based on blockControlChan
 	go func() {
@@ -2558,73 +2530,84 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	const (
-		txmetaActionADD    = byte(0)
-		txmetaActionDELETE = byte(1)
-	)
-
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		data := msg.Value
-		if len(data) < 4 {
+		return sm.processTXmetaBatchMessage(msg.Value)
+	}, &sm.settings.Kafka)
+}
+
+const (
+	txmetaActionADD    = byte(0)
+	txmetaActionDELETE = byte(1)
+)
+
+// processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
+// It parses the batch format, deserializes metadata for ADD entries, and announces
+// non-coinbase transactions to peers via the txAnnounceBatcher.
+// Coinbase transactions are intentionally skipped to avoid peer bans.
+func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
+	if len(data) < 4 {
+		return nil
+	}
+
+	offset := 0
+
+	// Read entry count
+	entryCount := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+
+	// Process each entry
+	for i := uint32(0); i < entryCount; i++ {
+		// Check minimum bytes for hash + action + length
+		if offset+32+1+4 > len(data) {
+			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
 			return nil
 		}
 
-		offset := 0
+		// Read hash (32 bytes)
+		var hash chainhash.Hash
+		copy(hash[:], data[offset:offset+32])
+		offset += 32
 
-		// Read entry count
-		entryCount := binary.LittleEndian.Uint32(data[offset:])
+		// Read action (1 byte)
+		action := data[offset]
+		offset++
+
+		// Read content length (4 bytes)
+		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		// Process each entry
-		for i := uint32(0); i < entryCount; i++ {
-			// Check minimum bytes for hash + action + length
-			if offset+32+1+4 > len(data) {
-				sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
+		if action == txmetaActionADD {
+			// Handle ADD
+			if offset+int(contentLen) > len(data) {
+				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
 			}
 
-			// Read hash (32 bytes)
-			var hash chainhash.Hash
-			copy(hash[:], data[offset:offset+32])
-			offset += 32
+			content := data[offset : offset+int(contentLen)]
+			offset += int(contentLen)
 
-			// Read action (1 byte)
-			action := data[offset]
-			offset++
+			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 
-			// Read content length (4 bytes)
-			contentLen := binary.LittleEndian.Uint32(data[offset:])
-			offset += 4
-
-			if action == txmetaActionADD {
-				// Handle ADD
-				if offset+int(contentLen) > len(data) {
-					sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
-					return nil
-				}
-
-				content := data[offset : offset+int(contentLen)]
-				offset += int(contentLen)
-
-				sm.logger.Debugf("Received tx message from Kafka: %v", hash)
-
-				var txMeta meta.Data
-				if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
-					sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
-					continue
-				}
-
-				sm.txAnnounceBatcher.Put(&TxHashAndFee{
-					TxHash: hash,
-					Fee:    txMeta.Fee,
-					Size:   txMeta.SizeInBytes,
-				})
-			} else {
-				// Skip DELETE entries (no action needed for peer announcements)
+			var txMeta meta.Data
+			if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
+				sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
 				continue
 			}
-		}
 
-		return nil
-	}, &sm.settings.Kafka)
+			if txMeta.IsCoinbase {
+				continue
+			}
+
+			sm.txAnnounceBatcher.Put(&TxHashAndFee{
+				TxHash: hash,
+				Fee:    txMeta.Fee,
+				Size:   txMeta.SizeInBytes,
+			})
+		} else {
+			offset += int(contentLen)
+			continue
+		}
+	}
+
+	return nil
 }

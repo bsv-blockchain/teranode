@@ -63,20 +63,18 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		return
 	}
 
-	// Safety check: respect persisted height
-	persistedHeight := s.lastPersistedHeight.Load()
+	// Apply safety window: only delete blobs that are safetyWindow blocks behind the triggering height
 	safetyWindow := s.settings.Pruner.BlobDeletionSafetyWindow
-	safeHeight := blockHeight
-
-	if persistedHeight > 0 && safetyWindow > 0 {
-		if blockHeight > persistedHeight+safetyWindow {
-			s.logger.Debugf("Skipping blob deletion at height %d (persisted: %d, safety: %d)",
-				blockHeight, persistedHeight, safetyWindow)
+	if safetyWindow > 0 {
+		if blockHeight <= safetyWindow {
+			s.logger.Debugf("[pruner][%s:%d] blob deletion: skipped - block height not yet past safety window %d", blockHashStr, blockHeight, safetyWindow)
 			return
 		}
-		if persistedHeight > safetyWindow {
-			safeHeight = persistedHeight - safetyWindow
-		}
+	}
+
+	safeHeight := blockHeight
+	if safetyWindow > 0 {
+		safeHeight = blockHeight - safetyWindow
 	}
 
 	batchSize := s.settings.Pruner.BlobDeletionBatchSize

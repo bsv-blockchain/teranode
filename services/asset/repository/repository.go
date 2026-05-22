@@ -54,9 +54,12 @@ type Interface interface {
 	GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
+	GetSubtreePage(ctx context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error)
 	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error)
 	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
@@ -65,6 +68,7 @@ type Interface interface {
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
+	GetMiningCandidateLegacyBlockReader(ctx context.Context, header []byte, coinbaseTx []byte, subtreeHashes [][]byte, txCount uint64) (*io.PipeReader, error)
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
 	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 	GetBlockchainClient() blockchain.ClientI
@@ -93,6 +97,7 @@ type Repository struct {
 	semGetTransactionMeta     *semaphore.Weighted
 	semGetSubtreeData         *semaphore.Weighted
 	semGetSubtreeDataReader   *semaphore.Weighted
+	semSubtreeDataCreate      *semaphore.Weighted
 	semGetSubtreeTransactions *semaphore.Weighted
 	semGetSubtreeExists       *semaphore.Weighted
 	semGetSubtreeHead         *semaphore.Weighted
@@ -151,6 +156,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	repo.semGetTransactionMeta = initSemaphore(tSettings.Asset.ConcurrencyGetTransactionMeta, "GetTransactionMeta")
 	repo.semGetSubtreeData = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeData, "GetSubtreeData")
 	repo.semGetSubtreeDataReader = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeDataReader, "GetSubtreeDataReader")
+	repo.semSubtreeDataCreate = initSemaphore(tSettings.Asset.ConcurrencySubtreeDataCreate, "SubtreeDataCreate")
 	repo.semGetSubtreeTransactions = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeTransactions, "GetSubtreeTransactions")
 	repo.semGetSubtreeExists = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeExists, "GetSubtreeExists")
 	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
@@ -196,6 +202,17 @@ func releaseSemaphorePermit(sem *semaphore.Weighted) {
 	if sem != nil {
 		sem.Release(1)
 	}
+}
+
+// tryAcquireSemaphorePermit acquires a permit without blocking.
+// If sem is nil (unlimited concurrency), returns true.
+// Returns false if the semaphore is at capacity — callers should treat this as a
+// "service unavailable" condition and surface it to clients (HTTP 503), not retry locally.
+func tryAcquireSemaphorePermit(sem *semaphore.Weighted) bool {
+	if sem == nil {
+		return true
+	}
+	return sem.TryAcquire(1)
 }
 
 // Health performs health checks on the repository and its dependencies.
@@ -777,6 +794,10 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 	transactionMap := make(map[chainhash.Hash]*bt.Tx, len(subtreeData.Txs))
 
 	for _, tx := range subtreeData.Txs {
+		if tx == nil {
+			continue
+		}
+
 		transactionMap[*tx.TxIDChainHash()] = tx
 	}
 

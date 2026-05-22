@@ -395,7 +395,7 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		subtreeHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
 		subtrees := []*chainhash.Hash{subtreeHash}
 
-		proof, flags, err := generateBlockMerkleProof(subtrees, 0)
+		proof, flags, err := GenerateBlockMerkleProof(subtrees, 0)
 		require.NoError(t, err)
 
 		// Single subtree should have empty proof
@@ -409,7 +409,7 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		subtrees := []*chainhash.Hash{subtreeHash1, subtreeHash2}
 
 		// Get proof for first subtree
-		proof, flags, err := generateBlockMerkleProof(subtrees, 0)
+		proof, flags, err := GenerateBlockMerkleProof(subtrees, 0)
 		require.NoError(t, err)
 
 		assert.Len(t, proof, 1)
@@ -418,7 +418,7 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		assert.Equal(t, 1, flags[0]) // subtreeHash2 is on the right
 
 		// Get proof for second subtree
-		proof, flags, err = generateBlockMerkleProof(subtrees, 1)
+		proof, flags, err = GenerateBlockMerkleProof(subtrees, 1)
 		require.NoError(t, err)
 
 		assert.Len(t, proof, 1)
@@ -435,7 +435,7 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		subtrees := []*chainhash.Hash{subtreeHash1, subtreeHash2, subtreeHash3, subtreeHash4}
 
 		// Get proof for third subtree (index 2)
-		proof, flags, err := generateBlockMerkleProof(subtrees, 2)
+		proof, flags, err := GenerateBlockMerkleProof(subtrees, 2)
 		require.NoError(t, err)
 
 		// Should have 2 proofs (one at each level)
@@ -460,7 +460,7 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		subtrees := []*chainhash.Hash{subtreeHash1, subtreeHash2, subtreeHash3}
 
 		// Get proof for third subtree (index 2) - odd node
-		proof, flags, err := generateBlockMerkleProof(subtrees, 2)
+		proof, flags, err := GenerateBlockMerkleProof(subtrees, 2)
 		require.NoError(t, err)
 
 		// Should have 2 proofs

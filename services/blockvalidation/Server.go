@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -91,7 +91,7 @@ type processBlockCatchup struct {
 	peerID string
 }
 
-// Server implements a high-performance block validation service for Bitcoin SV.
+// Server implements a high-performance block validation service for BSV Blockchain.
 // It coordinates block validation, subtree management, and transaction metadata processing
 // across multiple subsystems while maintaining chain consistency. The server supports
 // both synchronous and asynchronous validation modes, with automatic catchup capabilities
@@ -522,19 +522,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// Only create a new BlockValidation if one wasn't already set (for testing)
 	if u.blockValidation == nil {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
-	}
-
-	// if our FSM state is CATCHINGBLOCKS, this is probably a remnant of a crash, put the node back in RUNNING state
-	isCatchingBlocks, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateCATCHINGBLOCKS)
-	if err != nil {
-		u.logger.Errorf("[Init] failed to check if FSM currently catching blocks: %v", err)
-	}
-
-	if isCatchingBlocks {
-		u.logger.Infof("[Init] FSM is in CATCHINGBLOCKS state, setting it to RUNNING")
-		if err = u.blockchainClient.Run(ctx, "blockvalidation"); err != nil {
-			return errors.NewServiceError("[Init] failed to set FSM state to RUNNING", err)
-		}
 	}
 
 	go u.processBlockNotify.Start()
@@ -1030,6 +1017,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		// Blocks until the FSM transitions from the IDLE state
 		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
 		if err != nil {
+			if errors.IsContextError(err) {
+				u.logger.Infof("[Block Validation Service] Shutting down during FSM wait")
+				return err
+			}
 			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 			return err
 		}
@@ -1260,6 +1251,13 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	block.Height = height
+
+	// If a block ID was pre-assigned by the caller (e.g. legacy netsync in LEGACYSYNCING mode),
+	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
+	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	if request.BlockId != 0 {
+		block.ID = request.BlockId
+	}
 
 	baseURL := request.BaseUrl
 	if baseURL == "" {

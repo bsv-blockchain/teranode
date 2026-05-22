@@ -2,7 +2,7 @@
 //
 // The subtree validation service is responsible for validating transaction subtrees, which are
 // groups of interdependent transactions that are processed together to maintain blockchain integrity.
-// This package ensures that all transactions within a subtree are valid according to Bitcoin SV
+// This package ensures that all transactions within a subtree are valid according to Bitcoin
 // consensus rules before they are committed to the blockchain.
 //
 // Key features and capabilities:

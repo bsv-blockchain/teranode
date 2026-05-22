@@ -43,6 +43,9 @@ jobs:
             bench_filter: "BenchmarkSubtreeSizes|BenchmarkBlockSizeScaling|BenchmarkSubtreeAllocations|BenchmarkSubtreeProcessor|BenchmarkStreamingProcessor"
           - group: blockchain
             packages: ./services/blockchain/work
+          - group: blockchain-sql
+            packages: ./stores/blockchain/sql
+            bench_filter: "BenchmarkStoreBlock"
           - group: utxo
             packages: >-
               ./stores/utxo

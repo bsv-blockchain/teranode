@@ -4,9 +4,11 @@
 
 - [Overview](#overview)
 - [Operating System](#operating-system)
-- [Docker Compose Requirements](#docker-compose-requirements)
+- [Docker Quickstart Requirements](#docker-quickstart-requirements)
     - [Mainnet](#mainnet)
     - [Testnet](#testnet)
+    - [Teratestnet](#teratestnet)
+    - [Regtest](#regtest)
 - [Kubernetes Requirements](#kubernetes-requirements)
     - [Mainnet](#kubernetes-mainnet)
     - [Testnet](#kubernetes-testnet)
@@ -18,8 +20,8 @@
 
 This document outlines the system requirements for running Teranode. Requirements differ based on:
 
-1. **Network**: Mainnet vs Testnet
-2. **Deployment type**: Docker Compose (single-node) vs Kubernetes (multi-node)
+1. **Network**: Mainnet, testnet, teratestnet, or regtest
+2. **Deployment type**: Docker quickstart (single-host) vs Kubernetes (multi-node)
 
 All specifications assume a **seeded, pruned node** with default retention settings. Requirements may increase if:
 
@@ -33,14 +35,14 @@ All specifications assume a **seeded, pruned node** with default retention setti
 
 Both Docker and Kubernetes deployments should work on other Linux distributions, but this is untested. Ubuntu 24.04 LTS is the recommended and tested platform.
 
-## Docker Compose Requirements
+## Docker Quickstart Requirements
 
-Docker Compose deployments run all services on a single node. This is suitable for production workloads but you lose the ability to scale individual services independently. For horizontal scaling of specific services, use Kubernetes.
+Docker quickstart deployments run all services on a single host with Docker Compose. This is the recommended path for testing, network participation, and operational evaluation on one machine. For horizontal scaling, high availability, or production deployments, use Kubernetes.
 
 ### Mainnet
 
 | Resource | Minimum | Recommended |
-|----------|---------|-------------|
+| --- | --- | --- |
 | CPU | 8 cores | 16 cores |
 | RAM | 128 GB | 256 GB |
 | Storage | 1 TB | 2 TB |
@@ -51,11 +53,29 @@ Docker Compose deployments run all services on a single node. This is suitable f
 ### Testnet
 
 | Resource | Minimum | Recommended |
-|----------|---------|-------------|
+| --- | --- | --- |
 | CPU | 4 cores | 8 cores |
 | RAM | 16 GB | 32 GB |
 | Storage | 64 GB | 128 GB |
 | Storage Type | SSD | NVMe SSD |
+
+### Teratestnet
+
+| Resource | Minimum | Recommended |
+| --- | --- | --- |
+| CPU | 8 cores | 8+ cores |
+| RAM | 16 GB | 32 GB |
+| Storage | 100 GB | 100 GB+ |
+| Storage Type | SSD | NVMe SSD |
+
+### Regtest
+
+| Resource | Minimum | Recommended |
+| --- | --- | --- |
+| CPU | 4 cores | 4+ cores |
+| RAM | 4 GB | 8 GB |
+| Storage | 20 GB | 20 GB+ |
+| Storage Type | SSD | SSD |
 
 ## Kubernetes Requirements
 
@@ -68,7 +88,7 @@ Kubernetes deployments allow horizontal scaling of individual services. External
 *Service names match those used in teranode-operator managed CRs. CPU and memory requirements should be monitored and adjusted based on network activity. These values are highly dependent on transaction volume and block sizes on the blockchain network.*
 
 | Service | CPU Request | Memory Request |
-|---------|-------------|----------------|
+| --- | --- | --- |
 | alertSystem | 1 | 1Gi |
 | asset | 1 | 1Gi |
 | blockAssembly | 1 | 4Gi |
@@ -85,7 +105,7 @@ Kubernetes deployments allow horizontal scaling of individual services. External
 **External Dependencies:**
 
 | Component | CPU | Memory | Storage |
-|-----------|-----|--------|---------|
+| --- | --- | --- | --- |
 | Aerospike | 4 cores | 32 GB | 400 GB NVMe |
 | PostgreSQL | 2 cores | 4 GB | 50 GB SSD |
 | Kafka | 2 cores | 4 GB | 50 GB SSD |
@@ -101,7 +121,7 @@ A baseline of 100m CPU / 512Mi memory should be sufficient for all services on t
 **External Dependencies:**
 
 | Component | CPU | Memory | Storage |
-|-----------|-----|--------|---------|
+| --- | --- | --- | --- |
 | Aerospike | 2 cores | 8 GB | 50 GB NVMe |
 | PostgreSQL | 1 core | 2 GB | 20 GB SSD |
 | Kafka | 1 core | 2 GB | 20 GB SSD |
@@ -115,7 +135,7 @@ Understanding where storage is consumed helps with capacity planning.
 **Mainnet reference (seeded, pruned, default retention):**
 
 | Component | Storage Used | Description |
-|-----------|--------------|-------------|
+| --- | --- | --- |
 | Aerospike | ~400 GB | UTXO set (~340M records) |
 | Blob Storage | ~600 GB | Transactions and subtrees |
 | PostgreSQL | < 1 GB | Block headers and chain state |
@@ -152,7 +172,7 @@ sudo sysctl --system
 **For Kubernetes deployments:** Apply these settings to all worker nodes in your cluster, or configure via a DaemonSet that runs a privileged init container.
 
 | Parameter | Value | Description |
-|-----------|-------|-------------|
+| --- | --- | --- |
 | `net.core.rmem_max` | 7500000 | Maximum UDP receive buffer size (~7.5 MB) |
 | `net.core.wmem_max` | 7500000 | Maximum UDP send buffer size (~7.5 MB) |
 
@@ -168,4 +188,4 @@ sudo sysctl --system
 
 4. **Aerospike Memory**: Aerospike stores its primary index in memory. The ~20 GB RAM requirement for mainnet UTXO index will grow as the UTXO set grows.
 
-5. **Docker Compose vs Kubernetes**: Docker Compose runs all services on a single node and is suitable for production workloads at current mainnet transaction volumes. However, you cannot scale individual services independently. For horizontal scaling or high-availability deployments, use Kubernetes.
+5. **Docker quickstart vs Kubernetes**: Docker quickstart runs all services on one host and does not scale individual services independently. For horizontal scaling, high availability, or production deployments, use Kubernetes.

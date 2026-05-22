@@ -14,7 +14,7 @@ export enum MediaSize {
 export const mediaSize = writable<MediaSize>(MediaSize.lg)
 
 // theme
-export const theme = localStore('theme', 'light')
+export const theme = localStore('theme', 'dark')
 export const themeNs = localStore('themeNs', '')
 
 // i18n

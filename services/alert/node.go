@@ -1,4 +1,4 @@
-// Package alert implements the Bitcoin SV alert system server and related functionality.
+// Package alert implements the BSV Blockchain alert system server and related functionality.
 //
 // The node.go file contains the Node implementation that provides integration
 // with the Bitcoin network for the alert system. It enables interactions with

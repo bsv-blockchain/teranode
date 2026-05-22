@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -36,7 +36,8 @@ type Interface interface {
 	BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error
 
 	// ProcessBlock validates and processes a complete block at the specified height.
-	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error
+	// blockID is the pre-assigned block ID from the caller (0 = not pre-assigned, blockchain will auto-assign).
+	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error
 
 	// ValidateBlock validates a block using the provided request, but does not update any state or database tables.
 	// This is useful for validating blocks without committing them to the database.
@@ -63,7 +64,7 @@ func (mv *MockBlockValidation) BlockFound(ctx context.Context, blockHash *chainh
 	return nil
 }
 
-func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
 	return nil
 }
 

@@ -1,0 +1,4146 @@
+{
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json",
+    "application/octet-stream",
+    "text/plain"
+  ],
+  "schemes": [
+    "http",
+    "https"
+  ],
+  "swagger": "2.0",
+  "info": {
+    "description": "REST API for accessing blockchain data including blocks, transactions,\nsubtrees, UTXOs, and merkle proofs. Supports JSON, hexadecimal, and\nbinary response formats.",
+    "title": "Teranode Asset Service API.",
+    "license": {
+      "name": "Open BSV License",
+      "url": "https://github.com/bsv-blockchain/teranode/blob/master/LICENSE"
+    },
+    "version": "1.0.0"
+  },
+  "basePath": "/api/v1",
+  "paths": {
+    "/alive": {
+      "get": {
+        "description": "Returns uptime information.",
+        "tags": [
+          "health"
+        ],
+        "summary": "Check if the Asset service is running.",
+        "operationId": "alive",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/aliveResponse"
+          }
+        }
+      }
+    },
+    "/api/p2p/reset-reputation": {
+      "post": {
+        "tags": [
+          "peers"
+        ],
+        "summary": "Reset reputation metrics for a peer or all peers (requires authentication).",
+        "operationId": "resetReputation",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/ResetReputationRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/resetReputationResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "503": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/bestblockheader": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get the best (tip) block header in binary format.",
+        "operationId": "getBestBlockHeader",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/bestblockheader/hex": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get the best (tip) block header in hexadecimal format.",
+        "operationId": "getBestBlockHeaderHex",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/bestblockheader/json": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get the best (tip) block header in JSON format.",
+        "operationId": "getBestBlockHeaderJSON",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockHeaderResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/invalidate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mark a block as invalid (requires authentication).",
+        "operationId": "invalidateBlock",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "blockHash": {
+                  "description": "Block hash in hexadecimal format",
+                  "type": "string",
+                  "x-go-name": "BlockHash"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockOperationResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/revalidate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revalidate a previously invalidated block (requires authentication).",
+        "operationId": "revalidateBlock",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "blockHash": {
+                  "description": "Block hash in hexadecimal format",
+                  "type": "string",
+                  "x-go-name": "BlockHash"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockOperationResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a block by hash in binary format.",
+        "operationId": "getBlockByHash",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}/forks": {
+      "get": {
+        "description": "Returns a hierarchical tree of blocks showing forks.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get the fork tree for a block.",
+        "operationId": "getBlockForks",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockForksResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}/hex": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a block by hash in hexadecimal format.",
+        "operationId": "getBlockByHashHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}/json": {
+      "get": {
+        "description": "Returns block data with the next block hash.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a block by hash in JSON format.",
+        "operationId": "getBlockByHashJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockExtendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}/nearestforks": {
+      "get": {
+        "description": "Finds the closest blocks with multiple children in each direction.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get the nearest fork heights relative to a block.",
+        "operationId": "getNearestForkHeights",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/nearestForksResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block/{hash}/subtrees/json": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get paginated subtree metadata for a block in JSON format.",
+        "operationId": "getBlockSubtrees",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/extendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block_legacy/{hash}": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a legacy format block by hash in binary format.",
+        "operationId": "getLegacyBlock",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/block_locator": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get block locator hashes for chain synchronization.",
+        "operationId": "getBlockLocator",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Starting block hash",
+            "name": "hash",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Height",
+            "description": "Starting block height",
+            "name": "height",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockLocatorResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blockgraphdata/{period}": {
+      "get": {
+        "description": "Period can be: hour, day, week, month.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get block data points for charting.",
+        "operationId": "getBlockGraphData",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Period",
+            "description": "Time period: hour, day, week, month",
+            "name": "period",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockGraphDataResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blocks": {
+      "get": {
+        "description": "Returns blocks with pagination metadata.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a paginated list of blocks.",
+        "operationId": "getBlocks",
+        "parameters": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Offset",
+            "description": "Number of items to skip",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Limit",
+            "description": "Maximum number of items to return (max 100)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/extendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blocks/invalid": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get a list of recently invalidated blocks.",
+        "operationId": "getLastNInvalidBlocks",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/invalidBlocksResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blocks/{hash}": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get N blocks starting from hash in binary format.",
+        "operationId": "getNBlocks",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blocks/{hash}/hex": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get N blocks starting from hash in hexadecimal format.",
+        "operationId": "getNBlocksHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blocks/{hash}/json": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get N blocks starting from hash in JSON format.",
+        "operationId": "getNBlocksJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/extendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/blockstats": {
+      "get": {
+        "description": "Returns block count, transaction count, average sizes, and timestamps.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get aggregate blockchain statistics.",
+        "operationId": "getBlockStats",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockStatsResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/catchup/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get the current catchup synchronization status.",
+        "operationId": "getCatchupStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/catchupStatusResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/chainparams": {
+      "get": {
+        "tags": [
+          "chain"
+        ],
+        "summary": "Get blockchain network parameters.",
+        "operationId": "getChainParams",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/chainParamsResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/fsm/events": {
+      "get": {
+        "tags": [
+          "fsm"
+        ],
+        "summary": "Get available FSM events for the current state.",
+        "operationId": "getFSMEvents",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/fsmStateResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/fsm/state": {
+      "get": {
+        "tags": [
+          "fsm"
+        ],
+        "summary": "Get the current FSM state of the node.",
+        "operationId": "getFSMState",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/fsmStateResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "fsm"
+        ],
+        "summary": "Send an FSM event to transition state (requires authentication).",
+        "operationId": "sendFSMEvent",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "event": {
+                  "description": "FSM event name",
+                  "type": "string",
+                  "x-go-name": "Event"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/fsmStateResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/fsm/states": {
+      "get": {
+        "tags": [
+          "fsm"
+        ],
+        "summary": "Get all possible FSM states.",
+        "operationId": "getFSMStates",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/fsmStateResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/header/{hash}": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get a single block header by hash in binary format.",
+        "operationId": "getBlockHeader",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/header/{hash}/hex": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get a single block header by hash in hexadecimal format.",
+        "operationId": "getBlockHeaderHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/header/{hash}/json": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get a single block header by hash in JSON format.",
+        "operationId": "getBlockHeaderJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockHeaderResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers/{hash}": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers starting from hash in binary format.",
+        "operationId": "getBlockHeaders",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers/{hash}/hex": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers starting from hash in hexadecimal format.",
+        "operationId": "getBlockHeadersHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers/{hash}/json": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers starting from hash in JSON format.",
+        "operationId": "getBlockHeadersJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockHeaderListResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_from_common_ancestor/{hash}": {
+      "get": {
+        "description": "Used for chain synchronization.",
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers from the common ancestor in binary format.",
+        "operationId": "getBlockHeadersFromCommonAncestor",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_from_common_ancestor/{hash}/hex": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers from the common ancestor in hexadecimal format.",
+        "operationId": "getBlockHeadersFromCommonAncestorHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_from_common_ancestor/{hash}/json": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers from the common ancestor in JSON format.",
+        "operationId": "getBlockHeadersFromCommonAncestorJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockHeaderListResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_to_common_ancestor/{hash}": {
+      "get": {
+        "description": "Used for chain synchronization.",
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers to the common ancestor in binary format.",
+        "operationId": "getBlockHeadersToCommonAncestor",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_to_common_ancestor/{hash}/hex": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers to the common ancestor in hexadecimal format.",
+        "operationId": "getBlockHeadersToCommonAncestorHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/headers_to_common_ancestor/{hash}/json": {
+      "get": {
+        "tags": [
+          "header"
+        ],
+        "summary": "Get block headers to the common ancestor in JSON format.",
+        "operationId": "getBlockHeadersToCommonAncestorJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/blockHeaderListResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/lastblocks": {
+      "get": {
+        "description": "Returns recent blocks ordered by height descending.",
+        "tags": [
+          "block"
+        ],
+        "summary": "Get the last N blocks.",
+        "operationId": "getLastNBlocks",
+        "parameters": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Offset",
+            "description": "Number of items to skip",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Limit",
+            "description": "Maximum number of items to return (max 100)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/lastNBlocksResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/merkle_proof/{hash}": {
+      "get": {
+        "tags": [
+          "proof"
+        ],
+        "summary": "Get a merkle proof for a transaction in BUMP binary format (BRC-74).",
+        "operationId": "getMerkleProof",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/merkle_proof/{hash}/hex": {
+      "get": {
+        "tags": [
+          "proof"
+        ],
+        "summary": "Get a merkle proof for a transaction in BUMP hexadecimal format.",
+        "operationId": "getMerkleProofHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/merkle_proof/{hash}/json": {
+      "get": {
+        "tags": [
+          "proof"
+        ],
+        "summary": "Get a merkle proof for a transaction in BUMP JSON format.",
+        "operationId": "getMerkleProofJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/merkleProofResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/peers": {
+      "get": {
+        "description": "Returns connection status, catchup metrics, and reputation scores.",
+        "tags": [
+          "peers"
+        ],
+        "summary": "Get the current peer registry.",
+        "operationId": "getPeers",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/peersResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "503": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "description": "Finds blocks, transactions, and subtrees.",
+        "tags": [
+          "search"
+        ],
+        "summary": "Search for a blockchain entity by hash or block height.",
+        "operationId": "search",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Q",
+            "description": "Search query: 64-character hex hash or numeric block height",
+            "name": "q",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/searchResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/service/heights": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get the current block heights reported by each service.",
+        "operationId": "getServiceHeights",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/serviceHeightsResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get all node settings with sensitive values redacted (requires authentication).",
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/settingsResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/settings/categories": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get the list of settings categories (requires authentication).",
+        "operationId": "getSettingsCategories",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/settingsCategoriesResponse"
+          },
+          "401": {
+            "description": ""
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree/{hash}": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get a subtree by hash in binary format.",
+        "operationId": "getSubtree",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree/{hash}/hex": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get a subtree by hash in hexadecimal format.",
+        "operationId": "getSubtreeHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree/{hash}/json": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get a subtree by hash in JSON format with pagination.",
+        "operationId": "getSubtreeJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/extendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree/{hash}/txs": {
+      "post": {
+        "description": "Returns concatenated raw transaction bytes.",
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get transactions from a subtree by posting a list of transaction hashes.",
+        "operationId": "getTransactions",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Subtree hash",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree/{hash}/txs/json": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get paginated transaction details from a subtree in JSON format.",
+        "operationId": "getSubtreeTxs",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Offset",
+            "description": "Number of items to skip",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Limit",
+            "description": "Maximum number of items to return (max 100)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/extendedResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/subtree_data/{hash}": {
+      "get": {
+        "tags": [
+          "subtree"
+        ],
+        "summary": "Get raw subtree data as a binary stream.",
+        "operationId": "getSubtreeData",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/tx": {
+      "post": {
+        "description": "Proxies to the propagation service.",
+        "tags": [
+          "transaction"
+        ],
+        "summary": "Submit a raw transaction for propagation.",
+        "operationId": "submitTransaction",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/tx/{hash}": {
+      "get": {
+        "description": "Returns the raw transaction bytes.",
+        "tags": [
+          "transaction"
+        ],
+        "summary": "Get a transaction by hash in binary format.",
+        "operationId": "getTransaction",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/tx/{hash}/hex": {
+      "get": {
+        "tags": [
+          "transaction"
+        ],
+        "summary": "Get a transaction by hash in hexadecimal format.",
+        "operationId": "getTransactionHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/tx/{hash}/json": {
+      "get": {
+        "tags": [
+          "transaction"
+        ],
+        "summary": "Get a transaction by hash in JSON format.",
+        "operationId": "getTransactionJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/txmeta/{hash}/json": {
+      "get": {
+        "description": "Returns transaction metadata with block and subtree context.",
+        "tags": [
+          "txmeta"
+        ],
+        "summary": "Get enriched transaction metadata in JSON format.",
+        "operationId": "getTransactionMeta",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/transactionMetaResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/txmeta_raw/{hash}": {
+      "get": {
+        "tags": [
+          "txmeta"
+        ],
+        "summary": "Get raw transaction metadata in binary format.",
+        "operationId": "getTxMetaByTxID",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/txmeta_raw/{hash}/hex": {
+      "get": {
+        "tags": [
+          "txmeta"
+        ],
+        "summary": "Get raw transaction metadata in hexadecimal format.",
+        "operationId": "getTxMetaByTxIDHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/txmeta_raw/{hash}/json": {
+      "get": {
+        "tags": [
+          "txmeta"
+        ],
+        "summary": "Get raw transaction metadata in JSON format.",
+        "operationId": "getTxMetaByTxIDJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/txs": {
+      "post": {
+        "description": "Proxies to the propagation service.",
+        "tags": [
+          "transaction"
+        ],
+        "summary": "Submit multiple raw transactions for propagation.",
+        "operationId": "submitTransactions",
+        "parameters": [
+          {
+            "name": "Body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/utxo/{hash}": {
+      "get": {
+        "description": "Requires vout query parameter.",
+        "tags": [
+          "utxo"
+        ],
+        "summary": "Get a UTXO by transaction hash and output index in binary format.",
+        "operationId": "getUTXO",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Transaction hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Vout",
+            "description": "Output index",
+            "name": "vout",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/utxo/{hash}/hex": {
+      "get": {
+        "tags": [
+          "utxo"
+        ],
+        "summary": "Get a UTXO by transaction hash and output index in hexadecimal format.",
+        "operationId": "getUTXOHex",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Transaction hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Vout",
+            "description": "Output index",
+            "name": "vout",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/hexResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/utxo/{hash}/json": {
+      "get": {
+        "tags": [
+          "utxo"
+        ],
+        "summary": "Get a UTXO by transaction hash and output index in JSON format.",
+        "operationId": "getUTXOJSON",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Transaction hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "x-go-name": "Vout",
+            "description": "Output index",
+            "name": "vout",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/utxos/{hash}/json": {
+      "get": {
+        "description": "Returns detailed UTXO information for each output.",
+        "tags": [
+          "utxo"
+        ],
+        "summary": "Get all UTXOs for a transaction in JSON format.",
+        "operationId": "getUTXOsByTxID",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Transaction hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/utxosByTxIDResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Check the health of the Asset service and its dependencies.",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/healthResponse"
+          },
+          "500": {
+            "$ref": "#/responses/healthResponse"
+          }
+        }
+      }
+    },
+    "/rest/block/{hash}.bin": {
+      "get": {
+        "tags": [
+          "block"
+        ],
+        "summary": "Get a legacy format block by hash in binary (REST interface).",
+        "operationId": "getRestLegacyBlock",
+        "parameters": [
+          {
+            "type": "string",
+            "x-go-name": "Hash",
+            "description": "Block, transaction, or subtree hash in hexadecimal format",
+            "name": "hash",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/binaryResponse"
+          },
+          "400": {
+            "$ref": "#/responses/errorResponse"
+          },
+          "404": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    },
+    "/v1/policy": {
+      "get": {
+        "tags": [
+          "policy"
+        ],
+        "summary": "Get the node's mining policy in ARC-compatible format.",
+        "operationId": "getPolicy",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/policyResponse"
+          },
+          "500": {
+            "$ref": "#/responses/errorResponse"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Block": {
+      "type": "object",
+      "properties": {
+        "coinbase_tx": {
+          "$ref": "#/definitions/Tx"
+        },
+        "header": {
+          "$ref": "#/definitions/BlockHeader"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "ID"
+        },
+        "size_in_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "SizeInBytes"
+        },
+        "subtrees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Hash"
+          },
+          "x-go-name": "Subtrees"
+        },
+        "transaction_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TransactionCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "BlockDataPoints": {
+      "type": "object",
+      "properties": {
+        "data_points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DataPoint"
+          },
+          "x-go-name": "DataPoints"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "BlockExtended": {
+      "description": "This structure extends the standard Block model to provide additional blockchain traversal\ncapabilities by including a reference to the next block in the chain. This is particularly\nuseful for blockchain explorers and analysis tools that need to navigate the chain in\na forward direction.\n\nThe structure preserves all fields from the base Block model through embedding, while\nadding the NextBlock field that can be used for chain traversal. This approach maintains\ncompatibility with existing Block-based code while extending functionality.\n\nFields:\nBlock: Embedded Block model containing all standard block data including header, transactions, etc.\nNextBlock: Hash of the next block in the chain, or nil if this is the tip of the chain",
+      "type": "object",
+      "title": "BlockExtended represents a block with additional information about the next block\nin the blockchain. It embeds the base Block model and adds the next block hash.",
+      "properties": {
+        "coinbase_tx": {
+          "$ref": "#/definitions/Tx"
+        },
+        "header": {
+          "$ref": "#/definitions/BlockHeader"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "ID"
+        },
+        "nextblock": {
+          "$ref": "#/definitions/Hash"
+        },
+        "size_in_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "SizeInBytes"
+        },
+        "subtrees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Hash"
+          },
+          "x-go-name": "Subtrees"
+        },
+        "transaction_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TransactionCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "BlockFoundRequest": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "x-go-name": "BaseUrl"
+        },
+        "hash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Hash"
+        },
+        "peer_id": {
+          "type": "string",
+          "x-go-name": "PeerId"
+        },
+        "wait_to_complete": {
+          "type": "boolean",
+          "x-go-name": "WaitToComplete"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "BlockHeader": {
+      "type": "object",
+      "properties": {
+        "bits": {
+          "$ref": "#/definitions/NBit"
+        },
+        "hash_merkle_root": {
+          "$ref": "#/definitions/Hash"
+        },
+        "hash_prev_block": {
+          "$ref": "#/definitions/Hash"
+        },
+        "nonce": {
+          "description": "Nonce used to generate the block.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Nonce"
+        },
+        "timestamp": {
+          "description": "Time the block was created im unix time.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Timestamp"
+        },
+        "version": {
+          "description": "Version of the block.  This is not the same as the protocol version.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "BlockInfo": {
+      "type": "object",
+      "properties": {
+        "block_header": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "BlockHeader"
+        },
+        "coinbase_value": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "CoinbaseValue"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "miner": {
+          "type": "string",
+          "x-go-name": "Miner"
+        },
+        "orphaned": {
+          "type": "boolean",
+          "x-go-name": "Orphaned"
+        },
+        "seen_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Size"
+        },
+        "transaction_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TransactionCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "BlockStats": {
+      "type": "object",
+      "properties": {
+        "avg_block_size": {
+          "type": "number",
+          "format": "double",
+          "x-go-name": "AvgBlockSize"
+        },
+        "avg_tx_count_per_block": {
+          "type": "number",
+          "format": "double",
+          "x-go-name": "AvgTxCountPerBlock"
+        },
+        "block_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "BlockCount"
+        },
+        "chain_work": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "ChainWork"
+        },
+        "first_block_time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "FirstBlockTime"
+        },
+        "last_block_time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "LastBlockTime"
+        },
+        "max_height": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "MaxHeight"
+        },
+        "tx_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TxCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "CatchupStatusResponse": {
+      "type": "object",
+      "properties": {
+        "blocks_fetched": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "BlocksFetched"
+        },
+        "blocks_validated": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "BlocksValidated"
+        },
+        "common_ancestor_hash": {
+          "type": "string",
+          "x-go-name": "CommonAncestorHash"
+        },
+        "common_ancestor_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "CommonAncestorHeight"
+        },
+        "current_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "CurrentHeight"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "DurationMs"
+        },
+        "fork_depth": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "ForkDepth"
+        },
+        "is_catching_up": {
+          "type": "boolean",
+          "x-go-name": "IsCatchingUp"
+        },
+        "peer_id": {
+          "type": "string",
+          "x-go-name": "PeerId"
+        },
+        "peer_url": {
+          "type": "string",
+          "x-go-name": "PeerUrl"
+        },
+        "previous_attempt": {
+          "$ref": "#/definitions/PreviousCatchupAttempt"
+        },
+        "start_time": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "StartTime"
+        },
+        "target_block_hash": {
+          "type": "string",
+          "x-go-name": "TargetBlockHash"
+        },
+        "target_block_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "TargetBlockHeight"
+        },
+        "total_blocks": {
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "TotalBlocks"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ChainParamsResponse": {
+      "type": "object",
+      "title": "ChainParamsResponse contains the blockchain network parameters.",
+      "properties": {
+        "legacyPubKeyHashAddrID": {
+          "type": "integer",
+          "format": "uint8",
+          "x-go-name": "LegacyPubKeyHashAddrID"
+        },
+        "legacyScriptHashAddrID": {
+          "type": "integer",
+          "format": "uint8",
+          "x-go-name": "LegacyScriptHashAddrID"
+        },
+        "name": {
+          "type": "string",
+          "x-go-name": "Name"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "ChainTip": {
+      "type": "object",
+      "properties": {
+        "branchlen": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Branchlen"
+        },
+        "hash": {
+          "type": "string",
+          "x-go-name": "Hash"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "status": {
+          "type": "string",
+          "x-go-name": "Status"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "DataPoint": {
+      "type": "object",
+      "properties": {
+        "timestamp": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Timestamp"
+        },
+        "tx_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TxCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "ERR": {
+      "type": "integer",
+      "format": "int32",
+      "x-go-package": "github.com/bsv-blockchain/teranode/errors"
+    },
+    "EmptyMessage": {
+      "type": "object",
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ExtendedResponse": {
+      "description": "It's used for endpoints that return lists of items requiring pagination.",
+      "type": "object",
+      "title": "ExtendedResponse wraps API response data with pagination information.",
+      "properties": {
+        "data": {
+          "description": "Data contains the actual response payload",
+          "x-go-name": "Data"
+        },
+        "pagination": {
+          "$ref": "#/definitions/Pagination"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "FeeAmount": {
+      "type": "object",
+      "title": "FeeAmount represents the mining fee as satoshis per bytes.",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Bytes"
+        },
+        "satoshis": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Satoshis"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "GetBlockHeadersFromCommonAncestor": {
+      "type": "object",
+      "properties": {
+        "blockLocatorHashes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "x-go-name": "BlockLocatorHashes"
+        },
+        "maxHeaders": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "MaxHeaders"
+        },
+        "targetHash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "TargetHash"
+        }
+      },
+      "x-go-name": "GetBlockHeadersFromCommonAncestorRequest",
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+    },
+    "GetBlockHeadersToCommonAncestorRequest": {
+      "type": "object",
+      "properties": {
+        "blockLocatorHashes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "x-go-name": "BlockLocatorHashes"
+        },
+        "maxHeaders": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "MaxHeaders"
+        },
+        "targetHash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "TargetHash"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+    },
+    "GetBlockHeightResponse": {
+      "description": "GetBlockHeightResponse provides the current block height",
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "GetMedianBlockTimeResponse": {
+      "description": "GetMedianBlockTimeResponse provides the median time of recent blocks",
+      "type": "object",
+      "properties": {
+        "median_time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "MedianTime"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "Hash": {
+      "description": "Hash is used in several of the bitcoin messages and common structures.  It\ntypically represents the double sha256 of data.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8"
+      },
+      "x-go-package": "github.com/bsv-blockchain/go-bt/v2/chainhash"
+    },
+    "HealthResponse": {
+      "description": "HealthResponse provides health check information",
+      "type": "object",
+      "properties": {
+        "details": {
+          "type": "string",
+          "x-go-name": "Details"
+        },
+        "ok": {
+          "type": "boolean",
+          "x-go-name": "Ok"
+        },
+        "timestamp": {
+          "$ref": "#/definitions/Timestamp"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "Input": {
+      "description": "DO NOT CHANGE ORDER - Optimized for memory via maligned",
+      "type": "object",
+      "title": "Input is a representation of a transaction input",
+      "properties": {
+        "PreviousTxOutIndex": {
+          "type": "integer",
+          "format": "uint32"
+        },
+        "PreviousTxSatoshis": {
+          "type": "integer",
+          "format": "uint64"
+        },
+        "PreviousTxScript": {
+          "$ref": "#/definitions/Script"
+        },
+        "SequenceNumber": {
+          "type": "integer",
+          "format": "uint32"
+        },
+        "UnlockingScript": {
+          "$ref": "#/definitions/Script"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/go-bt/v2"
+    },
+    "LegacyMerkleProofResponse": {
+      "type": "object",
+      "title": "LegacyMerkleProofResponse is kept for reference but no longer used.",
+      "properties": {
+        "blockHash": {
+          "type": "string",
+          "x-go-name": "BlockHash"
+        },
+        "blockHeight": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "BlockHeight"
+        },
+        "blockProof": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "BlockProof"
+        },
+        "completePath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "CompletePath"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "x-go-name": "Flags"
+        },
+        "merkleRoot": {
+          "type": "string",
+          "x-go-name": "MerkleRoot"
+        },
+        "subtreeIndex": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "SubtreeIndex"
+        },
+        "subtreeProof": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "SubtreeProof"
+        },
+        "subtreeRoot": {
+          "type": "string",
+          "x-go-name": "SubtreeRoot"
+        },
+        "txIndexInSubtree": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "TxIndexInSubtree"
+        },
+        "txid": {
+          "type": "string",
+          "x-go-name": "TxID"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "MiningCandidate": {
+      "type": "object",
+      "properties": {
+        "coinbase_value": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "CoinbaseValue"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "id": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Id"
+        },
+        "merkle_proof": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "x-go-name": "MerkleProof"
+        },
+        "nBits": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "NBits"
+        },
+        "num_txs": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "NumTxs"
+        },
+        "previous_hash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "PreviousHash"
+        },
+        "size_without_coinbase": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "SizeWithoutCoinbase"
+        },
+        "subtreeCount": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "SubtreeCount"
+        },
+        "subtree_hashes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "x-go-name": "SubtreeHashes"
+        },
+        "time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Time"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "MiningSolution": {
+      "type": "object",
+      "properties": {
+        "blockHash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "BlockHash"
+        },
+        "coinbase": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Coinbase"
+        },
+        "id": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Id"
+        },
+        "nonce": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Nonce"
+        },
+        "time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Time"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "NBit": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8"
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "NotificationMetadata": {
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "description": "define a map of string to string",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "x-go-name": "Metadata"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "Output": {
+      "description": "Output is a representation of a transaction output",
+      "type": "object",
+      "properties": {
+        "locking_script": {
+          "$ref": "#/definitions/Script"
+        },
+        "satoshis": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Satoshis"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/go-bt/v2"
+    },
+    "Pagination": {
+      "description": "It provides information about the current page and total available records.",
+      "type": "object",
+      "title": "Pagination represents pagination metadata for API responses that return lists of items.",
+      "properties": {
+        "limit": {
+          "description": "Limit indicates the maximum number of items per page",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Limit"
+        },
+        "offset": {
+          "description": "Offset indicates the starting position in the full dataset",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Offset"
+        },
+        "totalRecords": {
+          "description": "TotalRecords indicates the total number of available records",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "TotalRecords"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "PeerInfoResponse": {
+      "type": "object",
+      "title": "PeerInfoResponse represents the JSON response for a single peer.",
+      "properties": {
+        "ban_score": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "BanScore"
+        },
+        "block_hash": {
+          "type": "string",
+          "x-go-name": "BlockHash"
+        },
+        "bytes_received": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "BytesReceived"
+        },
+        "catchup_attempts": {
+          "description": "Catchup metrics",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupAttempts"
+        },
+        "catchup_avg_response_ms": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupAvgResponseTime"
+        },
+        "catchup_failures": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupFailures"
+        },
+        "catchup_last_attempt": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupLastAttempt"
+        },
+        "catchup_last_failure": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupLastFailure"
+        },
+        "catchup_last_success": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupLastSuccess"
+        },
+        "catchup_malicious_count": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupMaliciousCount"
+        },
+        "catchup_reputation_score": {
+          "type": "number",
+          "format": "double",
+          "x-go-name": "CatchupReputationScore"
+        },
+        "catchup_successes": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "CatchupSuccesses"
+        },
+        "client_name": {
+          "type": "string",
+          "x-go-name": "ClientName"
+        },
+        "connected_at": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "ConnectedAt"
+        },
+        "data_hub_url": {
+          "type": "string",
+          "x-go-name": "DataHubURL"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "id": {
+          "type": "string",
+          "x-go-name": "ID"
+        },
+        "is_banned": {
+          "type": "boolean",
+          "x-go-name": "IsBanned"
+        },
+        "is_connected": {
+          "type": "boolean",
+          "x-go-name": "IsConnected"
+        },
+        "last_block_time": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "LastBlockTime"
+        },
+        "last_catchup_error": {
+          "type": "string",
+          "x-go-name": "LastCatchupError"
+        },
+        "last_catchup_error_time": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "LastCatchupErrorTime"
+        },
+        "last_message_time": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "LastMessageTime"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "PeersResponse": {
+      "type": "object",
+      "title": "PeersResponse represents the JSON response containing all peers.",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Count"
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PeerInfoResponse"
+          },
+          "x-go-name": "Peers"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "Policy": {
+      "type": "object",
+      "title": "Policy contains the node's policy settings in ARC format.",
+      "properties": {
+        "maxscriptsizepolicy": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "MaxScriptSizePolicy"
+        },
+        "maxtxsigopscountspolicy": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "MaxTxSigopsCountsPolicy"
+        },
+        "maxtxsizepolicy": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "MaxTxSizePolicy"
+        },
+        "miningFee": {
+          "$ref": "#/definitions/FeeAmount"
+        },
+        "standardFormatSupported": {
+          "type": "boolean",
+          "x-go-name": "StandardFormatSupported"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "PolicyResponse": {
+      "type": "object",
+      "title": "PolicyResponse is the response format for GET /v1/policy.",
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/Policy"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "Timestamp"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "PreviousCatchupAttempt": {
+      "type": "object",
+      "properties": {
+        "attempt_time": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "AttemptTime"
+        },
+        "blocks_validated": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "BlocksValidated"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "DurationMs"
+        },
+        "error_message": {
+          "type": "string",
+          "x-go-name": "ErrorMessage"
+        },
+        "error_type": {
+          "type": "string",
+          "x-go-name": "ErrorType"
+        },
+        "peer_id": {
+          "type": "string",
+          "x-go-name": "PeerId"
+        },
+        "peer_url": {
+          "type": "string",
+          "x-go-name": "PeerUrl"
+        },
+        "target_block_hash": {
+          "type": "string",
+          "x-go-name": "TargetBlockHash"
+        },
+        "target_block_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "TargetBlockHeight"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ProcessBlockRequest": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "x-go-name": "BaseUrl"
+        },
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Block"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "peer_id": {
+          "type": "string",
+          "x-go-name": "PeerId"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ResetReputationRequest": {
+      "type": "object",
+      "title": "ResetReputationRequest represents the JSON request body.",
+      "properties": {
+        "peer_id": {
+          "type": "string",
+          "x-go-name": "PeerID"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "ResetReputationResponse": {
+      "type": "object",
+      "title": "ResetReputationResponse represents the JSON response.",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "x-go-name": "OK"
+        },
+        "peers_reset": {
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "PeersReset"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "RevalidateBlockRequest": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Hash"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "Script": {
+      "description": "Script type",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8"
+      },
+      "x-go-package": "github.com/bsv-blockchain/go-bt/v2/bscript"
+    },
+    "SettingMetadata": {
+      "type": "object",
+      "title": "SettingMetadata contains metadata about a single configuration setting.",
+      "properties": {
+        "category": {
+          "type": "string",
+          "x-go-name": "Category"
+        },
+        "currentValue": {
+          "type": "string",
+          "x-go-name": "CurrentValue"
+        },
+        "defaultValue": {
+          "type": "string",
+          "x-go-name": "DefaultValue"
+        },
+        "description": {
+          "type": "string",
+          "x-go-name": "Description"
+        },
+        "key": {
+          "type": "string",
+          "x-go-name": "Key"
+        },
+        "longDescription": {
+          "type": "string",
+          "x-go-name": "LongDescription"
+        },
+        "name": {
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "type": {
+          "type": "string",
+          "x-go-name": "Type"
+        },
+        "usageHint": {
+          "type": "string",
+          "x-go-name": "UsageHint"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/settings"
+    },
+    "SettingsResponse": {
+      "type": "object",
+      "title": "SettingsResponse represents the API response for settings.",
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Categories"
+        },
+        "commit": {
+          "type": "string",
+          "x-go-name": "Commit"
+        },
+        "filtered": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Filtered"
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SettingMetadata"
+          },
+          "x-go-name": "Settings"
+        },
+        "total": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Total"
+        },
+        "version": {
+          "type": "string",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "SpendingData": {
+      "type": "object",
+      "title": "SpendingData contains information about a transaction that spends a UTXO.",
+      "properties": {
+        "txId": {
+          "$ref": "#/definitions/Hash"
+        },
+        "vin": {
+          "description": "Vin is the input index in the spending transaction",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Vin"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+    },
+    "SubtreeMeta": {
+      "type": "object",
+      "title": "SubtreeMeta represents metadata for a single subtree within a block.",
+      "properties": {
+        "fee": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Fee"
+        },
+        "hash": {
+          "type": "string",
+          "x-go-name": "Hash"
+        },
+        "index": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Index"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Size"
+        },
+        "txCount": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "TxCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "SubtreeTx": {
+      "type": "object",
+      "title": "SubtreeTx represents a transaction within a subtree.",
+      "properties": {
+        "fee": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Fee"
+        },
+        "index": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Index"
+        },
+        "inputsCount": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "InputsCount"
+        },
+        "outputsCount": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "OutputsCount"
+        },
+        "size": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Size"
+        },
+        "txid": {
+          "type": "string",
+          "x-go-name": "TxID"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "SuitableBlock": {
+      "type": "object",
+      "properties": {
+        "chain_work": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "ChainWork"
+        },
+        "hash": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Hash"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "nBits": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "NBits"
+        },
+        "time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Time"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/model"
+    },
+    "TError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/ERR"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Data"
+        },
+        "file": {
+          "type": "string",
+          "x-go-name": "File"
+        },
+        "function": {
+          "type": "string",
+          "x-go-name": "Function"
+        },
+        "line": {
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "Line"
+        },
+        "message": {
+          "type": "string",
+          "x-go-name": "Message"
+        },
+        "wrappedError": {
+          "$ref": "#/definitions/TError"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/errors"
+    },
+    "Timestamp": {
+      "description": "All minutes are 60 seconds long. Leap seconds are \"smeared\" so that no leap\nsecond table is needed for interpretation, using a [24-hour linear\nsmear](https://developers.google.com/time/smear).\n\nThe range is from 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999999999Z. By\nrestricting to that range, we ensure that we can convert to and from [RFC\n3339](https://www.ietf.org/rfc/rfc3339.txt) date strings.\n\n# Examples\n\nExample 1: Compute Timestamp from POSIX `time()`.\n\nTimestamp timestamp;\ntimestamp.set_seconds(time(NULL));\ntimestamp.set_nanos(0);\n\nExample 2: Compute Timestamp from POSIX `gettimeofday()`.\n\nstruct timeval tv;\ngettimeofday(\u0026tv, NULL);\n\nTimestamp timestamp;\ntimestamp.set_seconds(tv.tv_sec);\ntimestamp.set_nanos(tv.tv_usec * 1000);\n\nExample 3: Compute Timestamp from Win32 `GetSystemTimeAsFileTime()`.\n\nFILETIME ft;\nGetSystemTimeAsFileTime(\u0026ft);\nUINT64 ticks = (((UINT64)ft.dwHighDateTime) \u003c\u003c 32) | ft.dwLowDateTime;\n\nA Windows tick is 100 nanoseconds. Windows epoch 1601-01-01T00:00:00Z\nis 11644473600 seconds before Unix epoch 1970-01-01T00:00:00Z.\nTimestamp timestamp;\ntimestamp.set_seconds((INT64) ((ticks / 10000000) - 11644473600LL));\ntimestamp.set_nanos((INT32) ((ticks % 10000000) * 100));\n\nExample 4: Compute Timestamp from Java `System.currentTimeMillis()`.\n\nlong millis = System.currentTimeMillis();\n\nTimestamp timestamp = Timestamp.newBuilder().setSeconds(millis / 1000)\n.setNanos((int) ((millis % 1000) * 1000000)).build();\n\nExample 5: Compute Timestamp from Java `Instant.now()`.\n\nInstant now = Instant.now();\n\nTimestamp timestamp =\nTimestamp.newBuilder().setSeconds(now.getEpochSecond())\n.setNanos(now.getNano()).build();\n\nExample 6: Compute Timestamp from current time in Python.\n\ntimestamp = Timestamp()\ntimestamp.GetCurrentTime()\n\n# JSON Mapping\n\nIn JSON format, the Timestamp type is encoded as a string in the\n[RFC 3339](https://www.ietf.org/rfc/rfc3339.txt) format. That is, the\nformat is \"{year}-{month}-{day}T{hour}:{min}:{sec}[.{frac_sec}]Z\"\nwhere {year} is always expressed using four digits while {month}, {day},\n{hour}, {min}, and {sec} are zero-padded to two digits each. The fractional\nseconds, which can go up to 9 digits (i.e. up to 1 nanosecond resolution),\nare optional. The \"Z\" suffix indicates the timezone (\"UTC\"); the timezone\nis required. A proto3 JSON serializer should always use UTC (as indicated by\n\"Z\") when printing the Timestamp type and a proto3 JSON parser should be\nable to accept both UTC and other timezones (as indicated by an offset).\n\nFor example, \"2017-01-15T01:30:15.01Z\" encodes 15.01 seconds past\n01:30 UTC on January 15, 2017.\n\nIn JavaScript, one can convert a Date object to this format using the\nstandard\n[toISOString()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toISOString)\nmethod. In Python, a standard `datetime.datetime` object can be converted\nto this format using\n[`strftime`](https://docs.python.org/2/library/time.html#time.strftime) with\nthe time format spec '%Y-%m-%dT%H:%M:%S.%fZ'. Likewise, in Java, one can use\nthe Joda Time's [`ISODateTimeFormat.dateTime()`](\nhttp://joda-time.sourceforge.net/apidocs/org/joda/time/format/ISODateTimeFormat.html#dateTime()\n) to obtain a formatter capable of generating timestamps in this format.",
+      "type": "object",
+      "title": "A Timestamp represents a point in time independent of any time zone or local\ncalendar, encoded as a count of seconds and fractions of seconds at\nnanosecond resolution. The count is relative to an epoch at UTC midnight on\nJanuary 1, 1970, in the proleptic Gregorian calendar which extends the\nGregorian calendar backwards to year one.",
+      "properties": {
+        "nanos": {
+          "description": "Non-negative fractions of a second at nanosecond resolution. This field is\nthe nanosecond portion of the duration, not an alternative to seconds.\nNegative second values with fractions must still have non-negative nanos\nvalues that count forward in time. Must be between 0 and 999,999,999\ninclusive.",
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "Nanos"
+        },
+        "seconds": {
+          "description": "Represents seconds of UTC time since Unix epoch 1970-01-01T00:00:00Z. Must\nbe between -315576000000 and 315576000000 inclusive (which corresponds to\n0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z).",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Seconds"
+        }
+      },
+      "x-go-package": "google.golang.org/protobuf/types/known/timestamppb"
+    },
+    "Tx": {
+      "description": "DO NOT CHANGE ORDER - Optimized memory via malign",
+      "type": "object",
+      "title": "Tx wraps a bitcoin transaction",
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Input"
+          },
+          "x-go-name": "Inputs"
+        },
+        "locktime": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "LockTime"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Output"
+          },
+          "x-go-name": "Outputs"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/go-bt/v2"
+    },
+    "UTXOItem": {
+      "description": "It contains both the output details and its current status in the UTXO set.",
+      "type": "object",
+      "title": "UTXOItem represents detailed information about an Unspent Transaction Output (UTXO).",
+      "properties": {
+        "lockTime": {
+          "description": "LockTime specifies when this UTXO becomes spendable.\nOnly present if the UTXO has a time lock.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "LockTime"
+        },
+        "lockingScript": {
+          "$ref": "#/definitions/Script"
+        },
+        "satoshis": {
+          "description": "Satoshis represents the amount of this output in satoshis",
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Satoshis"
+        },
+        "spendingData": {
+          "$ref": "#/definitions/SpendingData"
+        },
+        "status": {
+          "description": "Status indicates the current state of the UTXO (e.g., \"SPENT\", \"NOT_FOUND\")",
+          "type": "string",
+          "x-go-name": "Status"
+        },
+        "txid": {
+          "$ref": "#/definitions/Hash"
+        },
+        "utxoHash": {
+          "$ref": "#/definitions/Hash"
+        },
+        "vout": {
+          "description": "Vout is the index of this output in the creating transaction",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Vout"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "ValidateBlockRequest": {
+      "type": "object",
+      "properties": {
+        "block": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Block"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "is_revalidation": {
+          "type": "boolean",
+          "x-go-name": "IsRevalidation"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ValidateBlockResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "x-go-name": "Message"
+        },
+        "ok": {
+          "type": "boolean",
+          "x-go-name": "Ok"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+    },
+    "ValidateTransactionBatchRequest": {
+      "description": "ValidateTransactionBatchRequest contains multiple transactions for batch validation",
+      "type": "object",
+      "properties": {
+        "transactions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ValidateTransactionRequest"
+          },
+          "x-go-name": "Transactions"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "ValidateTransactionBatchResponse": {
+      "description": "ValidateTransactionBatchResponse provides batch validation results",
+      "type": "object",
+      "properties": {
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TError"
+          },
+          "x-go-name": "Errors"
+        },
+        "metadata": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "x-go-name": "Metadata"
+        },
+        "valid": {
+          "type": "boolean",
+          "x-go-name": "Valid"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "ValidateTransactionRequest": {
+      "description": "ValidateTransactionRequest contains data for transaction validation",
+      "type": "object",
+      "properties": {
+        "add_tx_to_block_assembly": {
+          "type": "boolean",
+          "x-go-name": "AddTxToBlockAssembly"
+        },
+        "block_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "BlockHeight"
+        },
+        "create_conflicting": {
+          "type": "boolean",
+          "x-go-name": "CreateConflicting"
+        },
+        "skip_policy_checks": {
+          "type": "boolean",
+          "x-go-name": "SkipPolicyChecks"
+        },
+        "skip_txmeta_publishing": {
+          "type": "boolean",
+          "x-go-name": "SkipTxmetaPublishing"
+        },
+        "skip_utxo_creation": {
+          "description": "validation options",
+          "type": "boolean",
+          "x-go-name": "SkipUtxoCreation"
+        },
+        "transaction_data": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "TransactionData"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "ValidateTransactionResponse": {
+      "description": "ValidateTransactionResponse provides transaction validation results",
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Metadata"
+        },
+        "reason": {
+          "type": "string",
+          "x-go-name": "Reason"
+        },
+        "txid": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8"
+          },
+          "x-go-name": "Txid"
+        },
+        "valid": {
+          "type": "boolean",
+          "x-go-name": "Valid"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/validator/validator_api"
+    },
+    "aerospikeRecord": {
+      "type": "object",
+      "properties": {
+        "bins": {
+          "type": "object",
+          "additionalProperties": {},
+          "x-go-name": "Bins"
+        },
+        "digest": {
+          "type": "string",
+          "x-go-name": "Digest"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Generation"
+        },
+        "key": {
+          "type": "string",
+          "x-go-name": "Key"
+        },
+        "namespace": {
+          "type": "string",
+          "x-go-name": "Namespace"
+        },
+        "node": {
+          "type": "string",
+          "x-go-name": "Node"
+        },
+        "set": {
+          "type": "string",
+          "x-go-name": "SetName"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "blockHeaderResponse": {
+      "description": "blockHeaderResponse represents a formatted block header response that includes\nadditional metadata beyond the basic block header information. It embeds the\nBlockHeader model and adds fields for presentation purposes.",
+      "type": "object",
+      "properties": {
+        "bits": {
+          "$ref": "#/definitions/NBit"
+        },
+        "hash": {
+          "type": "string",
+          "x-go-name": "Hash"
+        },
+        "hash_merkle_root": {
+          "$ref": "#/definitions/Hash"
+        },
+        "hash_prev_block": {
+          "$ref": "#/definitions/Hash"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "invalid": {
+          "type": "boolean",
+          "x-go-name": "Invalid"
+        },
+        "miner": {
+          "type": "string",
+          "x-go-name": "Miner"
+        },
+        "nonce": {
+          "description": "Nonce used to generate the block.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Nonce"
+        },
+        "processed_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "ProcessedAt"
+        },
+        "size_in_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "SizeInBytes"
+        },
+        "timestamp": {
+          "description": "Time the block was created im unix time.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Timestamp"
+        },
+        "tx_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TxCount"
+        },
+        "version": {
+          "description": "Version of the block.  This is not the same as the protocol version.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Version"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "errorResponse": {
+      "description": "It provides a consistent format that includes both HTTP and application-level error details.",
+      "type": "object",
+      "title": "errorResponse defines the standard error response structure used across all API endpoints.",
+      "required": [
+        "status",
+        "code",
+        "error"
+      ],
+      "properties": {
+        "code": {
+          "description": "Code contains the application-specific error code",
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "Code",
+          "example": 1001
+        },
+        "error": {
+          "description": "Err contains the human-readable error message",
+          "type": "string",
+          "x-go-name": "Err",
+          "example": "\"invalid block hash format\""
+        },
+        "status": {
+          "description": "Status contains the HTTP status code",
+          "type": "integer",
+          "format": "int32",
+          "x-go-name": "Status",
+          "example": 400
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "forks": {
+      "description": "It encapsulates the entire fork hierarchy starting from a given block.",
+      "type": "object",
+      "title": "forks represents the root structure for the block fork tree response.",
+      "properties": {
+        "tree": {
+          "$ref": "#/definitions/forksTree"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "forksLink": {
+      "description": "Used for visual representation of block relationships.",
+      "type": "object",
+      "title": "forksLink represents connection information between blocks in the fork tree.",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "x-go-name": "Direction"
+        },
+        "name": {
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "nodeName": {
+          "type": "string",
+          "x-go-name": "NodeName"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "forksTree": {
+      "description": "It contains block information and maintains parent-child relationships.",
+      "type": "object",
+      "title": "forksTree represents a node in the block fork tree structure.",
+      "properties": {
+        "block_time": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "BlockTime"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/forksTree"
+          },
+          "x-go-name": "Children"
+        },
+        "hash": {
+          "type": "string",
+          "x-go-name": "Hash"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "ID"
+        },
+        "link": {
+          "$ref": "#/definitions/forksLink"
+        },
+        "miner": {
+          "type": "string",
+          "x-go-name": "Miner"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "Size"
+        },
+        "timestamp": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Timestamp"
+        },
+        "tx_count": {
+          "type": "integer",
+          "format": "uint64",
+          "x-go-name": "TxCount"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "nearestForkInfo": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "Height"
+        },
+        "parent_hash": {
+          "type": "string",
+          "x-go-name": "ParentHash"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "nearestForksResponse": {
+      "type": "object",
+      "properties": {
+        "current_height": {
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "CurrentHeight"
+        },
+        "next_fork": {
+          "$ref": "#/definitions/nearestForkInfo"
+        },
+        "prev_fork": {
+          "$ref": "#/definitions/nearestForkInfo"
+        }
+      },
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    },
+    "searchResult": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "x-go-name": "Hash"
+        },
+        "type": {
+          "type": "string",
+          "x-go-name": "Type"
+        }
+      },
+      "x-go-name": "res",
+      "x-go-package": "github.com/bsv-blockchain/teranode/services/asset/httpimpl"
+    }
+  },
+  "responses": {
+    "aliveResponse": {
+      "description": "Alive check"
+    },
+    "binaryResponse": {
+      "description": "Binary data response",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "format": "uint8"
+        }
+      }
+    },
+    "blockExtendedResponse": {
+      "description": "Block with next block hash",
+      "schema": {
+        "$ref": "#/definitions/BlockExtended"
+      }
+    },
+    "blockForksResponse": {
+      "description": "Block forks tree",
+      "schema": {
+        "$ref": "#/definitions/forks"
+      }
+    },
+    "blockGraphDataResponse": {
+      "description": "Block graph data points",
+      "schema": {
+        "$ref": "#/definitions/BlockDataPoints"
+      }
+    },
+    "blockHeaderListResponse": {
+      "description": "Block header list in JSON format",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/blockHeaderResponse"
+        }
+      }
+    },
+    "blockHeaderResponse": {
+      "description": "Block header in JSON format",
+      "schema": {
+        "$ref": "#/definitions/blockHeaderResponse"
+      }
+    },
+    "blockLocatorResponse": {
+      "description": "Block locator hashes",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "blockOperationResponse": {
+      "description": "Block operation success",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "blockStatsResponse": {
+      "description": "Block statistics",
+      "schema": {
+        "$ref": "#/definitions/BlockStats"
+      }
+    },
+    "blockSubtreesResponse": {
+      "description": "Subtree metadata list",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/SubtreeMeta"
+        }
+      }
+    },
+    "catchupStatusResponse": {
+      "description": "Catchup status",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "chainParamsResponse": {
+      "description": "Chain parameters",
+      "schema": {
+        "$ref": "#/definitions/ChainParamsResponse"
+      }
+    },
+    "errorResponse": {
+      "description": "Error response",
+      "schema": {
+        "$ref": "#/definitions/errorResponse"
+      }
+    },
+    "extendedResponse": {
+      "description": "Paginated response with data and pagination metadata",
+      "schema": {
+        "$ref": "#/definitions/ExtendedResponse"
+      }
+    },
+    "fsmStateResponse": {
+      "description": "FSM state",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "healthResponse": {
+      "description": "Health check"
+    },
+    "hexResponse": {
+      "description": "Hex string response"
+    },
+    "invalidBlocksResponse": {
+      "description": "Invalid blocks list",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "lastNBlocksResponse": {
+      "description": "Last N blocks response",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/BlockInfo"
+        }
+      }
+    },
+    "merkleProofResponse": {
+      "description": "Merkle proof response",
+      "schema": {}
+    },
+    "nearestForksResponse": {
+      "description": "Nearest fork heights",
+      "schema": {
+        "$ref": "#/definitions/nearestForksResponse"
+      }
+    },
+    "peersResponse": {
+      "description": "Peers list",
+      "schema": {
+        "$ref": "#/definitions/PeersResponse"
+      }
+    },
+    "policyResponse": {
+      "description": "Policy response (ARC-compatible)",
+      "schema": {
+        "$ref": "#/definitions/PolicyResponse"
+      }
+    },
+    "resetReputationResponse": {
+      "description": "Reputation reset result",
+      "schema": {
+        "$ref": "#/definitions/ResetReputationResponse"
+      }
+    },
+    "searchResponse": {
+      "description": "Search result",
+      "schema": {
+        "$ref": "#/definitions/searchResult"
+      }
+    },
+    "serviceHeightsResponse": {
+      "description": "Service heights",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "settingsCategoriesResponse": {
+      "description": "Settings categories",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "settingsResponse": {
+      "description": "Settings response",
+      "schema": {
+        "$ref": "#/definitions/SettingsResponse"
+      }
+    },
+    "transactionMetaResponse": {
+      "description": "Transaction meta enriched",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    },
+    "utxosByTxIDResponse": {
+      "description": "UTXO list by transaction",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/UTXOItem"
+        }
+      }
+    }
+  }
+}

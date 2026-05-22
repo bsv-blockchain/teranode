@@ -223,12 +223,34 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	return blockIDsMap, err
 }
 
-func (s *Store) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
-	return s.store.GetUnminedTxIterator(false)
+func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return s.store.GetUnminedTxIterator()
+}
+
+func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return s.store.ScanInconsistentUnminedTxs()
 }
 
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	return s.store.GetPrunableUnminedTxIterator(cutoffBlockHeight)
+}
+
+func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return s.store.GetConflictingTxIterator()
+}
+
+func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	err := s.store.RemoveFromConflictingChildren(ctx, removals)
+	s.logger.Debugf("[UTXOStore][logger][RemoveFromConflictingChildren] count %d err %v : %s", len(removals), err, caller())
+
+	return err
+}
+
+func (s *Store) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	err := s.store.RemoveBlockIDs(ctx, removals)
+	s.logger.Debugf("[UTXOStore][logger][RemoveBlockIDs] count %d err %v : %s", len(removals), err, caller())
+
+	return err
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {

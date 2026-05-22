@@ -243,8 +243,8 @@ The UTXO set is persisted using a _FileStorer_, which writes the data to a blob 
     - Go (Golang): The entire service is written in Go.
 
 2. **Blockchain-specific Libraries:**
-    - github.com/bsv-blockchain/go-bt/v2: A Bitcoin SV library for Go, used for handling Bitcoin transactions and blocks.
-    - github.com/bsv-blockchain/teranode: Custom package for Bitcoin SV operations.
+    - github.com/bsv-blockchain/go-bt/v2: A BSV Blockchain library for Go, used for handling Bitcoin transactions and blocks.
+    - github.com/bsv-blockchain/teranode: Custom package for BSV Blockchain operations.
 
 3. **Storage:**
     - Blob Store: Used for reading block data, subtrees, and UTXO diff files, and for writing UTXO Set files.
@@ -311,7 +311,7 @@ For comprehensive configuration documentation including all settings, defaults, 
 These settings control the I/O performance and memory usage patterns of the UTXO Persister service.
 
 | Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| --------- | ------ | --------- | ------------- | -------- |
 | `utxoPersister_buffer_size` | string | `"4KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
 
 #### Performance Tuning Interactions and Dependencies
@@ -329,7 +329,7 @@ For high-throughput environments with fast storage systems (like SSDs), larger b
 These settings control how UTXO data is stored and retained.
 
 | Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| --------- | ------ | --------- | ------------- | -------- |
 | `blockpersister_skipUTXODelete` | bool | `false` | When true, previous block's UTXO sets aren't deleted after processing | Controls storage usage and retention policy for historical UTXO sets |
 | `blockstore` | *url.URL | `"file://./data/blockstore"` | Specifies the URL for the block storage backend | Determines where block data, including UTXO sets, are stored |
 | `txstore` | *url.URL | `""` | Specifies the URL for the transaction storage backend | Determines where transaction data is stored for block processing |
@@ -351,7 +351,7 @@ Storage requirements grow significantly when keeping historical UTXO sets, as ea
 These settings control how the UTXO Persister interacts with other components in the system.
 
 | Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| --------- | ------ | --------- | ------------- | -------- |
 | `direct` | bool | `true` | Controls whether the service connects directly to the blockchain store or uses the client interface | Affects performance and deployment architecture |
 
 #### Deployment Architecture Interactions and Dependencies
@@ -368,7 +368,7 @@ This setting has significant implications for system design and deployment flexi
 These settings control general operational aspects of the service.
 
 | Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| --------- | ------ | --------- | ------------- | -------- |
 | `network` | string | `"mainnet"` | Specifies the blockchain network (mainnet, testnet, regtest) | Determines genesis hash and chain parameters used for validation |
 
 #### Operational Controls Interactions and Dependencies

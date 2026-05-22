@@ -86,7 +86,7 @@ Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependen
 
 Container_Boundary(external_services, "External Services") {
 
-Container(bsv_network, "BSV P2P Network", "P2P", "Legacy Bitcoin SV network")
+Container(bsv_network, "BSV P2P Network", "P2P", "Legacy BSV Blockchain network")
 
 Container(blockchain, "Blockchain Service", "Go", "Teranode blockchain state management")
 
