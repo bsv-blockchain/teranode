@@ -99,22 +99,12 @@ func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 }
 
 // GetSubtreeExists checks if a subtree exists in the local storage.
-//
-// This method queries the local storage to determine whether a specific subtree
-// has already been processed and stored. It's used to optimize processing by
-// avoiding duplicate work on subtrees that have already been validated.
-//
-// Parameters:
-//   - ctx: Context for cancellation and request-scoped values
-//   - subtreeHash: The hash identifier of the subtree to check
-//
-// Returns:
-//   - bool: Always false in the current implementation
-//   - error: Always nil in the current implementation
-//
-// TODO: Implement actual local storage lookup for subtree existence.
-func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
-	return false, nil
+func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if u.subtreeStore == nil {
+		return false, nil
+	}
+
+	return u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 }
 
 // txMetaCacheOps defines the interface for transaction metadata cache operations.
