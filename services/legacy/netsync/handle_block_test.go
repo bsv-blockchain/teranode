@@ -644,7 +644,10 @@ func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[ch
 	}
 	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	// No size limit: callers (e.g. the _NilParentTx test) re-Set an existing
+	// key, and txmap.SyncedMap evicts a random entry on update once len == limit,
+	// which can drop the child and turn the test into a flake.
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper]()
 	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
 	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
 
@@ -722,7 +725,10 @@ func buildInRangeFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMa
 	}
 	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	// No size limit: callers (e.g. the _NilParentTx test) re-Set an existing
+	// key, and txmap.SyncedMap evicts a random entry on update once len == limit,
+	// which can drop the child and turn the test into a flake.
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper]()
 	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
 	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
 
