@@ -7,9 +7,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
-	"errors" //nolint:depguard
-	"fmt"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/merkleproof"
 )
 
@@ -59,12 +59,20 @@ const (
 	FlagTxID = 0x02
 )
 
+// hashToDisplayHex returns the hash as a display-order hex string (big-endian / byte-reversed),
+// which is the standard representation used in BRC-74 JSON and the go-bc reference implementation.
+// The binary BUMP format stores hashes in internal (little-endian) order; the conversion from
+// display order to internal order happens in EncodeBinary.
+func hashToDisplayHex(h chainhash.Hash) string {
+	return h.String()
+}
+
 // ConvertToBUMP converts a standard merkle proof to BUMP format.
 // This function takes the existing Teranode merkle proof structure and converts
 // it to the standardized BUMP format for compatibility with BSV ecosystem tools.
 func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 	if proof == nil {
-		return nil, errors.New("proof cannot be nil")
+		return nil, errors.NewInvalidArgumentError("proof cannot be nil")
 	}
 
 	bump := &Format{
@@ -85,10 +93,10 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		// Determine sibling offset (adjacent node)
 		siblingOffset := offset ^ 1 // Flip the last bit to get sibling
 
-		// Add the sibling node with its hash
+		// Add the sibling node with its hash in display order (BRC-74 convention)
 		level = append(level, Node{
 			Offset: siblingOffset,
-			Hash:   siblingHash.String(),
+			Hash:   hashToDisplayHex(siblingHash),
 		})
 
 		bump.Path = append(bump.Path, level)
@@ -107,13 +115,33 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		// Determine sibling offset
 		siblingOffset := blockLevelOffset ^ 1
 
-		// Add the sibling node with its hash
+		// Add the sibling node with its hash in display order (BRC-74 convention)
 		level = append(level, Node{
 			Offset: siblingOffset,
-			Hash:   siblingHash.String(),
+			Hash:   hashToDisplayHex(siblingHash),
 		})
 
 		bump.Path = append(bump.Path, level)
+	}
+
+	// BRC-74 requires level 0 to include the target txid (flag 0x02) alongside its sibling.
+	// Without this, go-bc's CalculateRootGivenTxid cannot find the starting transaction.
+	var zeroHash chainhash.Hash
+	if proof.TxID != zeroHash && len(bump.Path) > 0 {
+		txidNode := Node{
+			Offset: uint32(proof.TxIndexInSubtree),
+			Hash:   hashToDisplayHex(proof.TxID),
+			TxID:   true,
+		}
+
+		level0 := bump.Path[0]
+		if uint32(proof.TxIndexInSubtree)%2 == 0 {
+			// Even index: txid is on the left, prepend
+			bump.Path[0] = append(Level{txidNode}, level0...)
+		} else {
+			// Odd index: txid is on the right, append
+			bump.Path[0] = append(level0, txidNode)
+		}
 	}
 
 	return bump, nil
@@ -129,28 +157,28 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 
 	// Write block height as VarInt
 	if err := writeVarInt(&buf, uint64(b.BlockHeight)); err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to write block height: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to write block height", err)
 	}
 
 	// Write tree height (number of levels)
 	treeHeight := uint8(len(b.Path))
 
 	if err := buf.WriteByte(treeHeight); err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to write tree height: %s", err.Error()))
+		return nil, errors.NewProcessingError("failed to write tree height", err)
 	}
 
 	// Write each level
 	for levelIdx, level := range b.Path {
 		// Write number of leaf nodes at this level
 		if err := writeVarInt(&buf, uint64(len(level))); err != nil {
-			return nil, errors.New(fmt.Sprintf("failed to write level %d node count: %s", levelIdx, err.Error()))
+			return nil, errors.NewProcessingError("failed to write level %d node count", levelIdx, err)
 		}
 
 		// Write each node in the level
 		for nodeIdx, node := range level {
 			// Write offset as VarInt
 			if err := writeVarInt(&buf, uint64(node.Offset)); err != nil {
-				return nil, errors.New(fmt.Sprintf("failed to write offset for level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+				return nil, errors.NewProcessingError("failed to write offset for level %d, node %d", levelIdx, nodeIdx, err)
 			}
 
 			// Determine and write flags
@@ -165,26 +193,23 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 			}
 
 			if err := buf.WriteByte(flag); err != nil {
-				return nil, errors.New(fmt.Sprintf("failed to write flag for level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+				return nil, errors.NewProcessingError("failed to write flag for level %d, node %d", levelIdx, nodeIdx, err)
 			}
 
 			// Write hash data if present (flags 0x00 and 0x02 include hash)
 			if flag == FlagData || flag == FlagTxID {
 				if node.Hash == "" {
-					return nil, errors.New(fmt.Sprintf("hash required for flag %02x at level %d, node %d", flag, levelIdx, nodeIdx))
+					return nil, errors.NewProcessingError("hash required for flag %02x at level %d, node %d", flag, levelIdx, nodeIdx)
 				}
 
-				hashBytes, err := hex.DecodeString(node.Hash)
+				h, err := chainhash.NewHashFromStr(node.Hash)
 				if err != nil {
-					return nil, errors.New(fmt.Sprintf("invalid hash hex at level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+					return nil, errors.NewProcessingError("invalid hash at level %d, node %d", levelIdx, nodeIdx, err)
 				}
 
-				if len(hashBytes) != 32 {
-					return nil, errors.New(fmt.Sprintf("hash must be 32 bytes at level %d, node %d, got %d bytes", levelIdx, nodeIdx, len(hashBytes)))
-				}
-
-				if _, err := buf.Write(hashBytes); err != nil {
-					return nil, errors.New(fmt.Sprintf("failed to write hash for level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+				// chainhash.NewHashFromStr converts display-order hex to internal (little-endian) byte order
+				if _, err := buf.Write(h[:]); err != nil {
+					return nil, errors.NewProcessingError("failed to write hash for level %d, node %d", levelIdx, nodeIdx, err)
 				}
 			}
 		}
@@ -197,7 +222,7 @@ func (b *Format) EncodeBinary() ([]byte, error) {
 func (b *Format) EncodeHex() (string, error) {
 	binaryData, err := b.EncodeBinary()
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("failed to encode binary: %s", err.Error()))
+		return "", errors.NewProcessingError("failed to encode binary", err)
 	}
 
 	return hex.EncodeToString(binaryData), nil
@@ -232,38 +257,38 @@ func writeVarInt(buf *bytes.Buffer, value uint64) error {
 // Validate validates that a BUMP structure is correctly formatted.
 func Validate(bump *Format) error {
 	if bump == nil {
-		return errors.New("BUMP structure cannot be nil")
+		return errors.NewInvalidArgumentError("BUMP structure cannot be nil")
 	}
 
 	if len(bump.Path) == 0 {
-		return errors.New("BUMP path cannot be empty")
+		return errors.NewInvalidArgumentError("BUMP path cannot be empty")
 	}
 
 	if len(bump.Path) > 64 {
-		return errors.New(fmt.Sprintf("BUMP path too long: %d levels (max 64)", len(bump.Path)))
+		return errors.NewInvalidArgumentError("BUMP path too long: %d levels (max 64)", len(bump.Path))
 	}
 
 	for levelIdx, level := range bump.Path {
 		if len(level) == 0 {
-			return errors.New(fmt.Sprintf("level %d cannot be empty", levelIdx))
+			return errors.NewInvalidArgumentError("level %d cannot be empty", levelIdx)
 		}
 
 		for nodeIdx, node := range level {
 			// Validate hash format if present
 			if node.Hash != "" {
 				if len(node.Hash) != 64 {
-					return errors.New(fmt.Sprintf("invalid hash length at level %d, node %d: expected 64 chars, got %d",
-						levelIdx, nodeIdx, len(node.Hash)))
+					return errors.NewInvalidArgumentError("invalid hash length at level %d, node %d: expected 64 chars, got %d",
+						levelIdx, nodeIdx, len(node.Hash))
 				}
 
 				if _, err := hex.DecodeString(node.Hash); err != nil {
-					return errors.New(fmt.Sprintf("invalid hash hex at level %d, node %d: %s", levelIdx, nodeIdx, err.Error()))
+					return errors.NewInvalidArgumentError("invalid hash hex at level %d, node %d", levelIdx, nodeIdx, err)
 				}
 			}
 
 			// Validate flag combinations
 			if node.Duplicate && node.Hash != "" {
-				return errors.New(fmt.Sprintf("duplicate flag cannot be combined with hash at level %d, node %d", levelIdx, nodeIdx))
+				return errors.NewInvalidArgumentError("duplicate flag cannot be combined with hash at level %d, node %d", levelIdx, nodeIdx)
 			}
 		}
 	}

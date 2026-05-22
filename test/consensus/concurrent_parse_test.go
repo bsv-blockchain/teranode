@@ -203,7 +203,7 @@ func TestConcurrentScriptValidation(t *testing.T) {
 							goroutineID, j, k)
 						continue
 					}
-					result := validator.ValidateScript(tc.validator, tx, tc.blockHeight, nil)
+					result := validator.ValidateTransaction(tc.validator, tx, tc.blockHeight, nil)
 
 					// Check result
 					if tc.expectedSuccess && !result.Success {

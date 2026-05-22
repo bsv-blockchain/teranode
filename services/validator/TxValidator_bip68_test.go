@@ -1,19 +1,42 @@
 package validator
 
 import (
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
+// bip68TestSettings returns settings suitable for exercising BIP68 enforcement.
+// It overrides GenesisActivationHeight to the maximum value so the post-Genesis
+// short-circuit in sequenceLocks() does not pre-empt the logic under test.
+// Tests that specifically verify the post-Genesis bypass should NOT use this
+// helper — they should use test.CreateBaseTestSettings(t) and rely on the
+// regtest Genesis activation height (10000).
+func bip68TestSettings(t testing.TB) *settings.Settings {
+	t.Helper()
+	tSettings := test.CreateBaseTestSettings(t)
+	// int32 max, not uint32 max — ScriptVerifierGoBDK casts this to int32 and
+	// rejects zero/negative values, so MaxUint32 wraps to -1 and panics.
+	tSettings.ChainCfgParams.GenesisActivationHeight = math.MaxInt32
+	return tSettings
+}
+
+func newBIP68TxValidator(logger ulogger.Logger, tSettings *settings.Settings) *TxValidator {
+	txValidator := NewTxValidator(logger, tSettings)
+	txValidator.bdk = noopBDKValidator{}
+	return txValidator
+}
+
 // TestSequenceLocks_BeforeCSVHeight verifies that BIP68 is not enforced before CSVHeight.
 func TestSequenceLocks_BeforeCSVHeight(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	// Create a transaction with sequence number that would fail BIP68 if it were active
 	tx := bt.NewTx()
@@ -39,8 +62,8 @@ func TestSequenceLocks_BeforeCSVHeight(t *testing.T) {
 // TestSequenceLocks_Version1Transaction verifies that version 1 transactions bypass BIP68.
 func TestSequenceLocks_Version1Transaction(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -66,8 +89,8 @@ func TestSequenceLocks_Version1Transaction(t *testing.T) {
 // TestSequenceLocks_DisabledFlag verifies that the disable flag bypasses BIP68.
 func TestSequenceLocks_DisabledFlag(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -92,8 +115,8 @@ func TestSequenceLocks_DisabledFlag(t *testing.T) {
 // TestSequenceLocks_HeightBased_Success verifies successful height-based relative lock-time.
 func TestSequenceLocks_HeightBased_Success(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -121,8 +144,8 @@ func TestSequenceLocks_HeightBased_Success(t *testing.T) {
 // TestSequenceLocks_HeightBased_Failure verifies failed height-based relative lock-time.
 func TestSequenceLocks_HeightBased_Failure(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -151,8 +174,8 @@ func TestSequenceLocks_HeightBased_Failure(t *testing.T) {
 // TestSequenceLocks_TimeBased_Success verifies successful time-based relative lock-time.
 func TestSequenceLocks_TimeBased_Success(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -181,8 +204,8 @@ func TestSequenceLocks_TimeBased_Success(t *testing.T) {
 // TestSequenceLocks_TimeBased_Failure verifies failed time-based relative lock-time.
 func TestSequenceLocks_TimeBased_Failure(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -211,8 +234,8 @@ func TestSequenceLocks_TimeBased_Failure(t *testing.T) {
 // TestSequenceLocks_MultipleInputs verifies sequence locks with multiple inputs.
 func TestSequenceLocks_MultipleInputs(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	// Add multiple inputs with different sequence numbers
@@ -249,8 +272,8 @@ func TestSequenceLocks_MultipleInputs(t *testing.T) {
 // TestSequenceLocks_MultipleInputs_Failure verifies failure with multiple inputs.
 func TestSequenceLocks_MultipleInputs_Failure(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 50))
@@ -281,8 +304,8 @@ func TestSequenceLocks_MultipleInputs_Failure(t *testing.T) {
 // TestSequenceLocks_MaxValue verifies behavior with maximum sequence number.
 func TestSequenceLocks_MaxValue(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -310,8 +333,8 @@ func TestSequenceLocks_MaxValue(t *testing.T) {
 // TestSequenceLocks_NotEnforcedInMempool verifies that BIP68 is only enforced during block validation.
 func TestSequenceLocks_NotEnforcedInMempool(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -334,8 +357,8 @@ func TestSequenceLocks_NotEnforcedInMempool(t *testing.T) {
 // (inclusive), matching BSV C++: if (pindex_->GetHeight() >= consensusParams.CSVHeight).
 func TestSequenceLocks_AtExactCSVHeight(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	blockHeight := tSettings.ChainCfgParams.CSVHeight
 	utxoMTPs := []uint32{1000000}
@@ -374,8 +397,8 @@ func TestSequenceLocks_AtExactCSVHeight(t *testing.T) {
 // TestSequenceLocks_MixedTypes verifies transaction with mixed sequence lock types.
 func TestSequenceLocks_MixedTypes(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	// Add 4 inputs with different sequence lock types
@@ -417,8 +440,8 @@ func TestSequenceLocks_MixedTypes(t *testing.T) {
 // TestSequenceLocks_MixedTypes_Failure verifies failure when any mixed lock type fails.
 func TestSequenceLocks_MixedTypes_Failure(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 50))
@@ -447,8 +470,8 @@ func TestSequenceLocks_MixedTypes_Failure(t *testing.T) {
 // TestSequenceLocks_ZeroValue verifies behavior with zero sequence number.
 func TestSequenceLocks_ZeroValue(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -474,8 +497,8 @@ func TestSequenceLocks_ZeroValue(t *testing.T) {
 // TestSequenceLocks_JustBelowDisableFlag verifies sequence number just below disable flag.
 func TestSequenceLocks_JustBelowDisableFlag(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -503,8 +526,8 @@ func TestSequenceLocks_JustBelowDisableFlag(t *testing.T) {
 // TestSequenceLocks_TypeFlagOnly verifies type flag set with zero lock value.
 func TestSequenceLocks_TypeFlagOnly(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
@@ -531,8 +554,8 @@ func TestSequenceLocks_TypeFlagOnly(t *testing.T) {
 // TestSequenceLocks_AllInputsDisabled verifies transaction with all inputs disabled.
 func TestSequenceLocks_AllInputsDisabled(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	txValidator := NewTxValidator(logger, tSettings)
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 30))
@@ -556,4 +579,90 @@ func TestSequenceLocks_AllInputsDisabled(t *testing.T) {
 	require.NoError(t, err, "All inputs disabled should bypass all sequence lock checks")
 	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "All inputs disabled should bypass all sequence lock checks")
+}
+
+// TestSequenceLocks_PostGenesis_BypassesBIP68 verifies that BSV Genesis disables
+// BIP68 enforcement. Post-Genesis, nSequence reverts to its original meaning
+// (RBF signalling only) and relative lock-time constraints are not enforced.
+//
+// Regression guard for the testnet sync halt observed on block 1,518,114:
+// the block contained a transaction with a non-zero sequence number that
+// would have been rejected by the height-based BIP68 check, but testnet's
+// Genesis activation (1,344,302) was already past, so the reference
+// implementation accepts the block.
+//
+// See bitcoin-sv/bitcoin-sv policy/policy.h::StandardNonFinalVerifyFlags
+// and validation.cpp::CheckSequenceLocks.
+func TestSequenceLocks_PostGenesis_BypassesBIP68(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	// Pin CSVHeight below GenesisActivationHeight so the only short-circuit
+	// the test can take is the Genesis bypass under test. Without this, a
+	// chain-params change where CSVHeight > GenesisActivationHeight would let
+	// the test pass via the unrelated `blockHeight < CSVHeight` early return.
+	tSettings.ChainCfgParams.CSVHeight = 1
+	txValidator := newBIP68TxValidator(logger, tSettings)
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
+
+	tx.Version = 2
+	// A large height-based sequence that would clearly fail BIP68 if it were
+	// still enforced: requires utxoHeight + 100 - 1 blocks to pass.
+	tx.Inputs[0].SequenceNumber = 100
+
+	// utxoHeight == blockHeight-50, so the pre-Genesis check would compute
+	// minHeight = blockHeight-50 + 100 - 1 = blockHeight+49, which is
+	// >= blockHeight → rejected. Post-Genesis we must accept.
+	blockHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 100
+	utxoHeights := []uint32{blockHeight - 50}
+	utxoMTPs := []uint32{1000000}
+	blockMTP := uint32(1000100)
+
+	require.Greater(t, blockHeight, tSettings.ChainCfgParams.GenesisActivationHeight,
+		"test precondition: blockHeight must be post-Genesis")
+	require.GreaterOrEqual(t, blockHeight, tSettings.ChainCfgParams.CSVHeight,
+		"test precondition: blockHeight must be at/after CSVHeight (otherwise the CSV early-return would mask the Genesis bypass)")
+
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "BIP68 must not be enforced post-Genesis (height-based)")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
+	require.NoError(t, err, "BIP68 must not be enforced post-Genesis (height-based)")
+
+	// Same check, time-based: a large time-based sequence that would fail the
+	// BIP68 time check pre-Genesis must also be accepted post-Genesis.
+	tx.Inputs[0].SequenceNumber = SequenceLockTimeTypeFlag | 100
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
+	require.NoError(t, err, "BIP68 must not be enforced post-Genesis (time-based)")
+}
+
+// TestSequenceLocks_AtGenesisActivationHeight verifies that the boundary block
+// (blockHeight == GenesisActivationHeight) is treated as post-Genesis, matching
+// the BSV reference IsGenesisEnabled() which uses >= for the comparison.
+func TestSequenceLocks_AtGenesisActivationHeight(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	// Pin CSVHeight below GenesisActivationHeight so the CSV early-return
+	// cannot mask the Genesis boundary check we're validating here.
+	tSettings.ChainCfgParams.CSVHeight = 1
+	txValidator := newBIP68TxValidator(logger, tSettings)
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
+
+	tx.Version = 2
+	tx.Inputs[0].SequenceNumber = 100 // would fail BIP68 if enforced
+
+	blockHeight := tSettings.ChainCfgParams.GenesisActivationHeight // exact boundary
+	utxoHeights := []uint32{blockHeight - 50}
+	utxoMTPs := []uint32{1000000}
+	blockMTP := uint32(1000100)
+
+	require.GreaterOrEqual(t, blockHeight, tSettings.ChainCfgParams.CSVHeight,
+		"test precondition: blockHeight must be at/after CSVHeight so the CSV early-return does not mask the Genesis boundary check")
+
+	err := txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
+	require.NoError(t, err, "block at exact GenesisActivationHeight must be treated as post-Genesis")
 }

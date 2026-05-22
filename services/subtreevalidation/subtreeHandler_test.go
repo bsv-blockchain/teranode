@@ -25,6 +25,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -391,4 +392,119 @@ func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T)
 
 	time.Sleep(100 * time.Millisecond)
 	assert.False(t, validateSubtreeCalled.Load(), "ValidateSubtreeInternal should not be called when FSM is CATCHINGBLOCKS")
+}
+
+// newMalformedTestServer builds a minimal Server suitable for exercising the malformed-message
+// drop paths in subtreeMessageHandler. The blockchain client returns RUNNING so we reach the
+// proto/hash/url parsing stages; tests that drop earlier (nil, too-short) never call it.
+func newMalformedTestServer(t *testing.T) *testServer {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.SubtreeValidation.BlocksOnly = false
+
+	blockchainClient := &blockchain.Mock{}
+	runningState := blockchain.FSMStateRUNNING
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	return &testServer{
+		Server: Server{
+			logger:           ulogger.TestLogger{},
+			settings:         tSettings,
+			blockchainClient: blockchainClient,
+		},
+	}
+}
+
+// TestSubtreeMessageHandler_MalformedMetric verifies that each silent-drop path in
+// subtreeMessageHandler increments prometheusSubtreeKafkaMalformed with the correct reason
+// label, while still returning nil (preserving drop semantics — see issue #4585).
+func TestSubtreeMessageHandler_MalformedMetric(t *testing.T) {
+	InitPrometheusMetrics()
+
+	subtreeHash, err := chainhash.NewHashFromStr("d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf")
+	require.NoError(t, err)
+
+	validProtoBytes, err := proto.Marshal(&kafkamessage.KafkaSubtreeTopicMessage{
+		Hash:   subtreeHash.String(),
+		URL:    "http://localhost:8000",
+		PeerId: "peer1",
+	})
+	require.NoError(t, err)
+
+	badHashBytes, err := proto.Marshal(&kafkamessage.KafkaSubtreeTopicMessage{
+		Hash:   "not-a-hex-hash",
+		URL:    "http://localhost:8000",
+		PeerId: "peer1",
+	})
+	require.NoError(t, err)
+
+	badURLBytes, err := proto.Marshal(&kafkamessage.KafkaSubtreeTopicMessage{
+		Hash:   subtreeHash.String(),
+		URL:    "http://\x00bad-url",
+		PeerId: "peer1",
+	})
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, len(validProtoBytes), 32, "valid proto bytes should clear too-short check")
+	require.GreaterOrEqual(t, len(badHashBytes), 32, "bad-hash proto bytes should clear too-short check")
+	require.GreaterOrEqual(t, len(badURLBytes), 32, "bad-url proto bytes should clear too-short check")
+
+	// 32 bytes of 0xFF is well-formed at the byte level (clears the < 32 check)
+	// but does not parse as a KafkaSubtreeTopicMessage.
+	unparseable := make([]byte, 32)
+	for i := range unparseable {
+		unparseable[i] = 0xFF
+	}
+
+	tests := []struct {
+		name   string
+		reason string
+		msg    *kafka.KafkaMessage
+	}{
+		{
+			name:   "nil_message",
+			reason: "nil_message",
+			msg:    nil,
+		},
+		{
+			name:   "too_short",
+			reason: "too_short",
+			msg:    &kafka.KafkaMessage{Value: make([]byte, 31)},
+		},
+		{
+			name:   "unmarshal_failure",
+			reason: "unmarshal_failure",
+			msg:    &kafka.KafkaMessage{Value: unparseable},
+		},
+		{
+			name:   "bad_hash",
+			reason: "bad_hash",
+			msg:    &kafka.KafkaMessage{Value: badHashBytes},
+		},
+		{
+			name:   "bad_url",
+			reason: "bad_url",
+			msg:    &kafka.KafkaMessage{Value: badURLBytes},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newMalformedTestServer(t)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			counter := prometheusSubtreeKafkaMalformed.WithLabelValues(tt.reason)
+			before := testutil.ToFloat64(counter)
+
+			handler := server.subtreeMessageHandler(ctx)
+			handlerErr := handler(tt.msg)
+			require.NoError(t, handlerErr, "malformed messages must drop, not error")
+
+			after := testutil.ToFloat64(counter)
+			require.Equal(t, before+1, after, "counter for reason %q should increment by 1", tt.reason)
+		})
+	}
 }

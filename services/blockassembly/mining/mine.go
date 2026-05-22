@@ -1,14 +1,12 @@
-// Package mining provides functionality for Bitcoin mining operations in Teranode.
+// Package mining provides stateless helpers for Bitcoin mining operations in
+// Teranode's block assembly service. It contains two pure functions:
+//   - Mine: a proof-of-work nonce search against a mining candidate.
+//   - BuildBlockHeader: assembles the wire-format block header bytes from a
+//     (candidate, solution) pair.
 //
-// The mining package implements critical components for the Bitcoin mining process:
-//   - Block header construction and validation
-//   - Mining candidate preparation
-//   - Proof-of-work calculation and verification
-//   - Mining solution processing
-//
-// This package serves as the interface between the block assembly service and
-// the mining process, translating assembled transactions into mineable block
-// templates and verifying mining solutions against the consensus rules.
+// Mining-candidate preparation, fee/coinbase-value calculation, JobStore
+// tracking, and solution validation all live in the parent block assembly
+// package — not here.
 
 package mining
 

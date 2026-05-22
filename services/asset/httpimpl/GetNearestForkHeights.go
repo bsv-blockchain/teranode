@@ -10,11 +10,13 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// swagger:model nearestForkInfo
 type nearestForkInfo struct {
 	Height     uint32 `json:"height"`
 	ParentHash string `json:"parent_hash"`
 }
 
+// swagger:model nearestForksResponse
 type nearestForksResponse struct {
 	CurrentHeight uint32           `json:"current_height"`
 	PrevFork      *nearestForkInfo `json:"prev_fork"`

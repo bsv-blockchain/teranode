@@ -2,14 +2,12 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -31,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,12 +37,16 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -57,6 +60,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -306,6 +310,97 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 func TestValidate_InValidDoubleSpendTx(t *testing.T) {
 }
 
+func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+	tSettings.BatcherDrainMode = false
+	tSettings.UtxoStore.SpendBatcherSize = 2
+	tSettings.UtxoStore.SpendBatcherDurationMillis = 5_000
+	tSettings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///validator_duplicate_outpoint_batch")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, utxoStore.SetBlockHeight(100))
+	require.NoError(t, utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("DUPLICATE_SPEND_BATCH_TEST_KEY!!"))
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(1, "/duplicate spend batch test/"),
+		transactions.WithP2PKHOutputs(1, 100_000, publicKey),
+	)
+	_, err = utxoStore.Create(ctx, parentTx, 1)
+	require.NoError(t, err)
+
+	txA := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 90_000, publicKey),
+	)
+	txB := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 80_000, publicKey),
+	)
+	require.NotEqual(t, txA.TxID(), txB.TxID())
+
+	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil)
+	require.NoError(t, server.Init(ctx))
+
+	createConflicting := true
+	skipPolicyChecks := true
+	skipTxMetaPublishing := true
+	addTxToBlockAssembly := false
+	resp, err := server.ValidateTransactionBatch(ctx, &validator_api.ValidateTransactionBatchRequest{
+		Transactions: []*validator_api.ValidateTransactionRequest{
+			{
+				TransactionData:      txA.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+			{
+				TransactionData:      txB.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Errors, 2)
+
+	var successCount, conflictingCount int
+	for _, errReason := range resp.Errors {
+		if errReason == nil {
+			successCount++
+			continue
+		}
+		require.Equal(t, errors.ERR_TX_CONFLICTING, errReason.GetCode())
+		conflictingCount++
+	}
+	require.Equal(t, 1, successCount)
+	require.Equal(t, 1, conflictingCount)
+
+	var txAData, txBData meta.Data
+	errA := utxoStore.GetMeta(ctx, txA.TxIDChainHash(), &txAData)
+	errB := utxoStore.GetMeta(ctx, txB.TxIDChainHash(), &txBData)
+	require.NoError(t, errA)
+	require.NoError(t, errB)
+	require.ElementsMatch(t, []bool{false, true}, []bool{txAData.Conflicting, txBData.Conflicting})
+}
+
 func TestValidate_TxMetaStoreError(t *testing.T) {
 }
 
@@ -400,10 +495,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -431,10 +523,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -462,10 +551,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -490,10 +576,7 @@ func TestValidateTx7f4244335dec8d941e3fc1847ac3d020fac9347a0c0335294bf56ede8aa58
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{1553030, 1550102}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{1553030, 1550102}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -582,10 +665,7 @@ func TestValidateTransactions(t *testing.T) {
 		ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 		defer endSpan()
 
-		err = v.validateTransaction(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{})
-		require.NoError(t, err)
-
-		err = v.validateTransactionScripts(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
+		err = v.validateTransaction(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", testData.TxID))
 	}
 }
@@ -611,10 +691,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -639,10 +716,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -734,10 +808,7 @@ func Benchmark_validateInternal(b *testing.B) {
 	}
 
 	for i := 0; i < b.N; i++ {
-		err = v.validateTransaction(context.Background(), tx, 740975, nil, &Options{})
-		require.NoError(b, err)
-
-		err = v.validateTransactionScripts(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
+		err = v.validateTransaction(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(b, err)
 	}
 }
@@ -972,7 +1043,7 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err := v.validateTransactionScripts(ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
+	err := v.validateTransaction(ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
 	require.Error(t, err)
 }
 
@@ -1421,6 +1492,134 @@ func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
 	}
 }
 
+// Test_serializeTxMetaBatchV2 verifies the byte layout of the v2 wire format
+// against the spec documented on serializeTxMetaBatchV2 and the symmetric
+// parser in services/subtreevalidation/txmetaHandler.go.
+func Test_serializeTxMetaBatchV2(t *testing.T) {
+	h1 := chainhash.Hash{}
+	copy(h1[:], bytes.Repeat([]byte{0xAA}, 32))
+	h2 := chainhash.Hash{}
+	copy(h2[:], bytes.Repeat([]byte{0xBB}, 32))
+
+	items := []txmetaItemWithHash{
+		{item: &txmetaBatchItem{hash: &h1, metaBytes: []byte("meta-1"), isDelete: false}, h: 0xDEADBEEFCAFEBABE},
+		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
+	}
+
+	data := serializeTxMetaBatchV2(items)
+
+	assert.Equal(t, byte(0xFF), data[0], "magic byte")
+	assert.Equal(t, byte(0x02), data[1], "version byte")
+	assert.Equal(t, byte(0x00), data[2], "reserved")
+	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
+
+	// Entry 1 (ADD).
+	off := 8
+	assert.Equal(t, uint64(0xDEADBEEFCAFEBABE), binary.LittleEndian.Uint64(data[off:]), "entry 1 xxhash")
+	off += 8
+	assert.Equal(t, h1[:], data[off:off+32], "entry 1 hash")
+	off += 32
+	assert.Equal(t, txmetaActionADD, data[off], "entry 1 action")
+	off++
+	assert.Equal(t, uint32(6), binary.LittleEndian.Uint32(data[off:]), "entry 1 content length")
+	off += 4
+	assert.Equal(t, []byte("meta-1"), data[off:off+6], "entry 1 content")
+	off += 6
+
+	// Entry 2 (DELETE).
+	assert.Equal(t, uint64(0x0102030405060708), binary.LittleEndian.Uint64(data[off:]), "entry 2 xxhash")
+	off += 8
+	assert.Equal(t, h2[:], data[off:off+32], "entry 2 hash")
+	off += 32
+	assert.Equal(t, txmetaActionDELETE, data[off], "entry 2 action")
+	off++
+	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(data[off:]), "entry 2 content length (DELETE => 0)")
+	off += 4
+
+	assert.Equal(t, len(data), off, "no trailing bytes")
+}
+
+// Test_sendTxMetaBatchV2_PartitionRouting verifies items are placed on the
+// partition derived from xxhash(hash) according to the documented rule:
+//
+//	partition = (xxhash(hash) % BucketsCount) / (BucketsCount / NumPartitions)
+//
+// Items whose hashes land in the same partition's bucket range must share a
+// single Kafka record; items in different ranges must be split.
+func Test_sendTxMetaBatchV2_PartitionRouting(t *testing.T) {
+	// Pick a numPartitions that divides BucketsCount under every build tag.
+	// Production builds run BucketsCount=8192 so 32 partitions is realistic;
+	// the testtxmetacache build tag uses BucketsCount=8 so we cap at that to
+	// keep bucketsPerPartition >= 1 and avoid divide-by-zero in the routing
+	// math. Cap value is 2 (the minimum needed to verify two-record output).
+	numPartitions := 32
+	if numPartitions > txmetacache.BucketsCount {
+		numPartitions = txmetacache.BucketsCount
+	}
+	if numPartitions < 2 {
+		t.Skipf("BucketsCount=%d too small to verify partition routing", txmetacache.BucketsCount)
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+
+	// Find two hashes whose xxhash lands in different partitions.
+	var h1, h2 chainhash.Hash
+	var p1, p2 = -1, -1
+	for seed := uint64(0); ; seed++ {
+		var h chainhash.Hash
+		binary.LittleEndian.PutUint64(h[:], seed)
+		bucket := int(xxhash.Sum64(h[:]) % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p1 < 0 {
+			h1 = h
+			p1 = p
+			continue
+		}
+		if p != p1 {
+			h2 = h
+			p2 = p
+			break
+		}
+	}
+
+	captured := make(map[int32]*kafka.Message)
+	publish := func(m *kafka.Message) {
+		captured[m.Partition] = m
+	}
+
+	v := &Validator{
+		settings: &settings.Settings{
+			Validator: settings.ValidatorSettings{
+				TxMetaWireFormat:    "v2",
+				TxMetaNumPartitions: numPartitions,
+			},
+		},
+		txmetaKafkaProducerClient: &fakeAsyncProducer{publish: publish},
+	}
+
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("a"), isDelete: false},
+		{hash: &h2, metaBytes: []byte("b"), isDelete: false},
+	}
+	v.sendTxMetaBatchV2(batch)
+
+	require.Len(t, captured, 2, "expected one Kafka record per non-empty partition")
+	assert.Contains(t, captured, int32(p1))                                            //nolint:gosec // p1<NumPartitions
+	assert.Contains(t, captured, int32(p2))                                            //nolint:gosec // p2<NumPartitions
+	assert.Equal(t, byte(0xFF), captured[int32(p1)].Value[0], "v2 magic byte present") //nolint:gosec
+	assert.Equal(t, byte(0xFF), captured[int32(p2)].Value[0], "v2 magic byte present") //nolint:gosec
+}
+
+// fakeAsyncProducer is a no-op KafkaAsyncProducerI used by the partition
+// routing test to capture published messages without spinning up a real
+// producer or broker. Only Publish is exercised.
+type fakeAsyncProducer struct {
+	kafka.KafkaAsyncProducerI
+	publish func(*kafka.Message)
+}
+
+func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
+
 func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
 	ctx := context.Background()
 
@@ -1506,15 +1705,29 @@ func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeigh
 		return nil, err
 	}
 
-	// Corrupt TxInpoints: add an extra parent hash without a corresponding Idxs entry.
-	// This causes TxInpoints.Serialize() to return ErrParentTxHashesMismatch,
-	// which makes MetaBytes() fail inside sendTxMetaToKafka.
-	metaData.TxInpoints.ParentTxHashes = append(metaData.TxInpoints.ParentTxHashes, chainhash.Hash{0xDE, 0xAD})
+	// Corrupt TxInpoints: append extra parent hashes so that ParentTxHashes is
+	// strictly longer than the internal packed vout layout (one count + per-parent
+	// vouts). go-subtree v1.4.1's Serialize fails fast with ErrParentTxHashesMismatch
+	// when len(voutIdxs) < len(ParentTxHashes); v1.3.x checked an exact equality,
+	// so a single appended hash used to suffice. Adding three keeps the test
+	// portable across both checks.
+	metaData.TxInpoints.ParentTxHashes = append(
+		metaData.TxInpoints.ParentTxHashes,
+		chainhash.Hash{0xDE, 0xAD},
+		chainhash.Hash{0xBE, 0xEF},
+		chainhash.Hash{0xCA, 0xFE},
+	)
+
 	return metaData, nil
 }
 
 func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *testing.T) {
 	tracing.SetupMockTracer()
+	// sendTxMetaToKafka records to prometheusValidatorSendToBlockValidationKafka,
+	// which is registered lazily via sync.Once in initPrometheusMetrics. Without
+	// this call the histogram is nil and .Observe panics when the test is the
+	// first (or only) Validator test in the run.
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -1571,4 +1784,313 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 	err = realStore.GetMeta(ctx, txs[1].TxIDChainHash(), storedMeta)
 	require.NoError(t, err)
 	assert.False(t, storedMeta.Locked, "tx should be unlocked after 2PC completes despite txmeta serialization failure")
+}
+
+// TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces verifies that two concurrent
+// EnsureMTPLoaded callers at the same blockHeight do not race on mtpStore.
+//
+// Prior to the mutex fix, the race detector reported a data race here because both
+// goroutines simultaneously read len(v.mtpStore)==0 and then both appended to it.
+// The test must be run with -race to catch the regression.
+func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
+	const blockHeight = uint32(1_000_000) // well above RegressionNet CSVHeight=576
+
+	// Build a dense MTP slice that GetMedianTimePastRange would return.
+	// The range fetched is [0, blockHeight], so length = blockHeight+1.
+	mtpValues := make([]uint32, blockHeight+1)
+	for i := range mtpValues {
+		mtpValues[i] = uint32(1_700_000_000 + i) // plausible unix timestamps
+	}
+
+	// slowBlockchainClient introduces a brief pause so that both goroutines are
+	// likely inside EnsureMTPLoaded concurrently when the race would occur.
+	// Once() asserts that exactly one fetch is issued: the second concurrent
+	// caller must fast-path out under the mutex without re-fetching, which is
+	// the production failure mode this test guards against.
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), blockHeight).
+		After(5*time.Millisecond).
+		Return(mtpValues, nil).Once()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: mockClient,
+		stats:            gocore.NewStat("validator_test"),
+	}
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+
+	// Launch two concurrent EnsureMTPLoaded calls, mirroring the production scenario
+	// where two CheckSubtreeFromBlock RPCs arrive before the first has populated mtpStore.
+	for i := range 2 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = v.EnsureMTPLoaded(ctx, blockHeight)
+		}(i)
+	}
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	// After both calls complete the store must be fully populated.
+	require.Equal(t, int(blockHeight+1), len(v.mtpStore),
+		"mtpStore must have exactly blockHeight+1 entries after concurrent load")
+
+	// Spot-check a few values to confirm correct data (not a corrupted merge).
+	require.Equal(t, uint32(1_700_000_000), v.mtpStore[0])
+	require.Equal(t, uint32(1_700_000_000+blockHeight), v.mtpStore[blockHeight])
+
+	// Asserts exactly-one fetch (Once() above). Without the mutex both callers
+	// would each issue a 1.45 M-entry fetch — the production CPU peg.
+	mockClient.AssertExpectations(t)
+}
+
+// TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace verifies that
+// readers using the same pattern as validateTransaction (RLock + indexing)
+// can run concurrently with an EnsureMTPLoaded extension for a later block
+// without the race detector firing. The append in EnsureMTPLoaded may
+// re-allocate the backing array and the overlap patch mutates entries
+// in-place, so unsynchronised readers would race on slice-header / cell
+// reads.
+//
+// This guards the cross-block scenario raised in PR review: block N's
+// per-transaction goroutines are still reading mtpStore when block N+1's
+// EnsureMTPLoaded runs.
+func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
+	const (
+		initialHeight  = uint32(1_000_000)
+		extendedHeight = uint32(1_000_500)
+	)
+
+	initialMTPs := make([]uint32, initialHeight+1)
+	for i := range initialMTPs {
+		initialMTPs[i] = uint32(1_700_000_000 + i)
+	}
+
+	// Second call refetches an mtpReorgOverlap-deep tail and the new heights:
+	//   fromHeight = (initialHeight+1) - mtpReorgOverlap
+	//   range     = [fromHeight, extendedHeight], so length = extendedHeight - fromHeight + 1.
+	extendFrom := (initialHeight + 1) - mtpReorgOverlap
+	extendedLen := extendedHeight - extendFrom + 1
+	extendedMTPs := make([]uint32, extendedLen)
+	for i := range extendedMTPs {
+		extendedMTPs[i] = uint32(1_700_000_000) + extendFrom + uint32(i)
+	}
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), initialHeight).
+		Return(initialMTPs, nil).Once()
+	mockClient.On("GetMedianTimePastRange", mock.Anything, extendFrom, extendedHeight).
+		After(2*time.Millisecond).
+		Return(extendedMTPs, nil).Once()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: mockClient,
+		stats:            gocore.NewStat("validator_test"),
+	}
+
+	ctx := context.Background()
+
+	// Prime the store at the initial height so the second EnsureMTPLoaded
+	// hits the extension path (overlap patch + append).
+	require.NoError(t, v.EnsureMTPLoaded(ctx, initialHeight))
+
+	const readers = 8
+	const readsPerGoroutine = 200
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < readsPerGoroutine; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Mimic validateTransaction's read pattern: take RLock,
+				// snapshot len, index a few entries.
+				v.mtpMu.RLock()
+				storeLen := uint32(len(v.mtpStore))
+				if storeLen > 0 {
+					_ = v.mtpStore[0]
+					_ = v.mtpStore[storeLen-1]
+					_ = v.mtpStore[storeLen/2]
+				}
+				v.mtpMu.RUnlock()
+			}
+		}()
+	}
+
+	// Concurrently extend the store to a later block height. Without the
+	// reader-side RLock this append/patch races with the readers.
+	var extendErr error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// require.* uses runtime.Goexit which only stops the goroutine it runs
+		// in; capture and assert from the main test goroutine after wg.Wait.
+		extendErr = v.EnsureMTPLoaded(ctx, extendedHeight)
+	}()
+
+	wg.Wait()
+	close(stop)
+
+	require.NoError(t, extendErr)
+	require.GreaterOrEqual(t, len(v.mtpStore), int(extendedHeight+1))
+
+	// Asserts the initial-load + extension pair both fired exactly once
+	// (each .Once() above) — defends against accidental over-fetch.
+	mockClient.AssertExpectations(t)
+}
+
+// TestReadMTPsLocked_HappyPath verifies the reader helper returns the per-input
+// MTP values and the block MTP correctly when mtpStore is fully populated.
+func TestReadMTPsLocked_HappyPath(t *testing.T) {
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		mtpStore: []uint32{
+			1_700_000_000, // height 0
+			1_700_000_010, // height 1
+			1_700_000_020, // height 2
+			1_700_000_030, // height 3
+			1_700_000_040, // height 4
+		},
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(4, []uint32{0, 2, 3})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
+	require.Equal(t, uint32(1_700_000_040), blockMTP)
+}
+
+// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that utxoHeights at or above
+// the store length fall back to the blockMTP value (matches the production
+// behaviour for unconfirmed parents whose effective height is blockState.Height+1
+// and may exceed blockMTPHeight).
+func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		mtpStore: []uint32{
+			1_700_000_000,
+			1_700_000_010,
+			1_700_000_020,
+		},
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(2, []uint32{0, 99, 1})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_010}, utxoMTPs)
+	require.Equal(t, uint32(1_700_000_020), blockMTP)
+}
+
+// TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
+// through the SkipPolicyChecks BIP68 branch with a populated mtpStore. The
+// goal is coverage on the MTP-reading code path (`readMTPsLocked` call,
+// error wiring, ValidateBIP68 invocation) — the actual BIP68 lock-time
+// arithmetic is exercised by the dedicated TxValidator_bip68 tests.
+func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
+	initPrometheusMetrics()
+
+	// Mainnet sets CSVHeight = 419328; choose a height comfortably above so
+	// the BIP68 gate at the top of validateTransaction lets us through.
+	const blockHeight = uint32(500_000)
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+	require.True(t, tx.IsExtended())
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	// blockchainClient just needs to be non-nil for the gate at the top of
+	// validateTransaction; mtpStore is pre-populated so readMTPsLocked finds
+	// the values it needs without a fetch.
+	mtpStore := make([]uint32, blockHeight+1)
+	for i := range mtpStore {
+		mtpStore[i] = uint32(1_700_000_000 + i)
+	}
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
+		blockchainClient: &blockchain.Mock{},
+		stats:            gocore.NewStat("validator_test"),
+		mtpStore:         mtpStore,
+	}
+	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	// utxoHeight at blockHeight-1 is well within the populated range so the
+	// per-input MTP lookup uses mtpStore[h] (the in-range branch).
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+}
+
+// TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore drives
+// validateTransaction with SkipPolicyChecks=true and an empty mtpStore. The
+// readMTPsLocked guard must fire and surface a processing error to the
+// caller via span.RecordError + return.
+func TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore(t *testing.T) {
+	initPrometheusMetrics()
+
+	const blockHeight = uint32(500_000)
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
+		blockchainClient: &blockchain.Mock{},
+		stats:            gocore.NewStat("validator_test"),
+		// mtpStore intentionally empty
+	}
+	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "MTP store not loaded up to height")
+}
+
+// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the guard returns a
+// processing error when EnsureMTPLoaded has not populated the store up to the
+// requested blockMTPHeight (in normal operation this cannot happen because
+// Server.go calls EnsureMTPLoaded before per-tx goroutines start).
+func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
+	v := &Validator{
+		logger:   ulogger.TestLogger{},
+		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
+	}
+
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(5, []uint32{0})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
+	require.Nil(t, utxoMTPs)
+	require.Equal(t, uint32(0), blockMTP)
 }

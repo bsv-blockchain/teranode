@@ -6,7 +6,7 @@ This guide will walk you through the process of generating Protobuf files for th
 
 Before proceeding, make sure the following tools and resources are available:
 
-1. **Protobuf Compiler (`protoc`)**: Ensure you have the `protoc` tool installed. If you have followed the [Installation Guide for Developers and Contributors](../tutorials/developers/developerSetup.md), you are ready to use it. For more information, you can follow the [official guide](https://grpc.io/docs/protoc-installation/) too.
+1. **Protobuf Compiler (`protoc`)**: Ensure you have the `protoc` tool installed. If you have followed the [Installation Guide for Developers and Contributors](./developerSetup.md), you are ready to use it. For more information, you can follow the [official guide](https://grpc.io/docs/protoc-installation/) too.
 2. **Makefile**: This project uses the Teranode `Makefile` to manage protobuf compilation tasks. Familiarity with running `make` commands is useful.
 
 ## Step-by-Step: Generating Protobuf Files

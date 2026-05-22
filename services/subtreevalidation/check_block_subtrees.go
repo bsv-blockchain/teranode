@@ -211,7 +211,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree from the peer
 					url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
 
-					subtreeNodeBytes, err := util.DoHTTPRequest(gCtx, url)
+					// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
+					// malicious peer can't OOM us by streaming oversized responses. This must be
+					// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
+					// controls what *this node* assembles; peers may legitimately produce larger subtrees.
+					maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
+					subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
 					if err != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
 					}
@@ -223,7 +229,17 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 						}
 					}
 
-					subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(len(subtreeNodeBytes) / chainhash.HashSize)
+					// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
+					// peers may legitimately produce subtrees larger than the local assembly policy. The
+					// bounded HTTP read already enforces this, but we keep the explicit check as a guard
+					// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
+					leafCount := len(subtreeNodeBytes) / chainhash.HashSize
+					maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
+					if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
+						return err
+					}
+
+					subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
 					if err != nil {
 						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
 					}
@@ -271,7 +287,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					// get the subtree data from the peer and process it directly
 					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
 
-					body, subtreeDataErr := util.DoHTTPRequestBodyReader(gCtx, url)
+					// Retry on 503 — peer's asset service may reject under admission control
+					// while it generates the file on-demand from Aerospike.
+					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(gCtx, url)
 					if subtreeDataErr != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 					}
@@ -355,62 +373,11 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, (totalSubtrees+subtreesBatchSize-1)/subtreesBatchSize)
 
-	// Subtree validation continues regardless of whether we processed transactions
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
-
-	var revalidateSubtreesMutex sync.Mutex
-	revalidateSubtrees := make([]chainhash.Hash, 0, len(missingSubtrees))
-
-	// validate all the subtrees in parallel, since we already validated all transactions
-	for _, subtreeHash := range missingSubtrees {
-		subtreeHash := subtreeHash
-
-		g.Go(func() (err error) {
-			// This line is only reached when the base URL is not "legacy"
-			v := ValidateSubtree{
-				SubtreeHash:   subtreeHash,
-				BaseURL:       request.BaseUrl,
-				AllowFailFast: false,
-				PeerID:        peerID,
-			}
-
-			subtree, err := u.ValidateSubtreeInternal(
-				gCtx,
-				v,
-				block.Height,
-				blockIds,
-				validator.WithSkipPolicyChecks(true),
-				validator.WithCreateConflicting(true),
-				validator.WithIgnoreLocked(true),
-			)
-			if err != nil {
-				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
-				revalidateSubtreesMutex.Lock()
-				revalidateSubtrees = append(revalidateSubtrees, subtreeHash)
-				revalidateSubtreesMutex.Unlock()
-
-				return nil
-			}
-
-			// Remove validated transactions from orphanage
-			for _, node := range subtree.Nodes {
-				u.orphanage.Delete(node.Hash)
-			}
-
-			return nil
-		})
-	}
-
-	// Wait for all parallel validations to complete
-	if err = g.Wait(); err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed during parallel subtree validation", err))
-	}
-
-	// Now validate the subtrees, in order, which should be much faster since we already validated all transactions
-	// and they should have been added to the internal cache
-	for _, subtreeHash := range revalidateSubtrees {
-		// This line is only reached when the base URL is not "legacy"
+	// validateSubtree is the per-subtree action used by both the parallel and
+	// sequential passes below. Extracted as a closure so the phase-2/phase-3
+	// ordering logic (validateMissingSubtreesWithOrderedRetry) can be unit tested
+	// against a stub validator without requiring full subtree data infrastructure.
+	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error) {
 		v := ValidateSubtree{
 			SubtreeHash:   subtreeHash,
 			BaseURL:       request.BaseUrl,
@@ -418,8 +385,8 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			PeerID:        peerID,
 		}
 
-		subtree, err := u.ValidateSubtreeInternal(
-			ctx,
+		return u.ValidateSubtreeInternal(
+			validateCtx,
 			v,
 			block.Height,
 			blockIds,
@@ -427,14 +394,10 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
 		)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err))
-		}
+	}
 
-		// Remove validated transactions from orphanage
-		for _, node := range subtree.Nodes {
-			u.orphanage.Delete(node.Hash)
-		}
+	if err := u.validateMissingSubtreesWithOrderedRetry(ctx, missingSubtrees, validateSubtree); err != nil {
+		return nil, errors.WrapGRPC(err)
 	}
 
 	u.processOrphans(ctx, *block.Header.Hash(), block.Height, blockIds)
@@ -442,6 +405,102 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	return &subtreevalidation_api.CheckBlockSubtreesResponse{
 		Blessed: true,
 	}, nil
+}
+
+// validateMissingSubtreesWithOrderedRetry runs phase-2 parallel validation and
+// phase-3 ordered sequential revalidation.
+//
+// Phase 2 — parallel: every subtree in missingSubtrees is validated concurrently
+// (bounded by CheckBlockSubtreesConcurrency). Failures are recorded positionally
+// in a []bool indexed by the subtree's position in missingSubtrees (block order)
+// so the retry pass sees them in block order rather than in goroutine-completion
+// order.
+//
+// Phase 3 — sequential: the failed subtrees are revalidated one at a time in
+// missingSubtrees order. Because transactions within a block can depend on
+// transactions in earlier subtrees of the same block (cross-subtree parents),
+// walking the failures in block order guarantees that by the time subtree N is
+// retried, every earlier subtree has already been validated successfully — so
+// the cache contains every parent subtree N could depend on. One ordered pass
+// is therefore sufficient; any remaining failure is a real validation error,
+// not an ordering artefact, and is returned to the caller.
+//
+// The validateFn parameter is the per-subtree action. Injecting it keeps this
+// function small enough to unit-test the phase-2/phase-3 interaction against a
+// stub validator without needing real subtree data, peer HTTP, or a full store.
+func (u *Server) validateMissingSubtreesWithOrderedRetry(
+	ctx context.Context,
+	missingSubtrees []chainhash.Hash,
+	validateFn func(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error),
+) error {
+	// Phase 2: Parallel validation. Failures are collected positionally so the
+	// sequential revalidation pass below walks them in block-subtree order.
+	// Cross-subtree parent dependencies within a block only resolve
+	// left-to-right; arbitrary goroutine-completion order would leave children
+	// ahead of their parents.
+	failedParallel := make([]bool, len(missingSubtrees))
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
+
+	for i, subtreeHash := range missingSubtrees {
+		i, subtreeHash := i, subtreeHash
+
+		g.Go(func() error {
+			subtree, err := validateFn(gCtx, subtreeHash)
+			if err != nil {
+				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
+				failedParallel[i] = true
+
+				return nil
+			}
+
+			// Remove validated transactions from orphanage
+			if subtree != nil {
+				for _, node := range subtree.Nodes {
+					u.orphanage.Delete(node.Hash)
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed during parallel subtree validation", err)
+	}
+
+	// Phase 3: Sequential revalidation in block-subtree order.
+	//
+	// Transactions within a block can depend on transactions in earlier
+	// subtrees of the same block (cross-subtree parents). The parallel pass
+	// above races on these dependencies and fails children whose parents
+	// haven't populated the cache yet. Walking the failures in block order
+	// resolves them in a single pass: subtree N's validation populates the
+	// cache for subtrees > N.
+	//
+	// If a subtree still fails here it is a real error (not an ordering
+	// artefact), because all earlier subtrees in the block have already been
+	// validated successfully — either in the parallel pass, or in this loop.
+	for i, subtreeHash := range missingSubtrees {
+		if !failedParallel[i] {
+			continue
+		}
+
+		subtree, err := validateFn(ctx, subtreeHash)
+		if err != nil {
+			return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
+		}
+
+		// Remove validated transactions from orphanage
+		if subtree != nil {
+			for _, node := range subtree.Nodes {
+				u.orphanage.Delete(node.Hash)
+			}
+		}
+	}
+
+	return nil
 }
 
 // extractAndCollectTransactions extracts all transactions from a subtree's data file
@@ -716,8 +775,9 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// Track validation results
 	var (
-		errorsFound      atomic.Uint64
-		addedToOrphanage atomic.Uint64
+		errorsFound         atomic.Uint64
+		missingParentErrors atomic.Uint64
+		addedToOrphanage    atomic.Uint64
 	)
 
 	// Track successfully validated transactions per level for parent metadata
@@ -807,6 +867,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 					// Handle missing parent transactions by adding to orphanage
 					if errors.Is(err, errors.ErrTxMissingParent) {
+						missingParentErrors.Add(1)
 						isRunning, runningErr := u.blockchainClient.IsFSMCurrentState(gCtx, blockchain.FSMStateRUNNING)
 						if runningErr == nil && isRunning {
 							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage", tx.TxIDChainHash().String())
@@ -819,12 +880,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, but FSM not in RUNNING state - not adding to orphanage", tx.TxIDChainHash().String())
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
-						// Log truly invalid transactions
+						// Truly invalid (non-policy) transactions fail the level — no deferral
+						// possible because phase 3 revalidation can't resolve these.
 						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v", tx.TxIDChainHash().String(), err)
-
-						if errors.Is(err, errors.ErrTxInvalid) {
-							return err
-						}
+						return err
 					} else {
 						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
 					}
@@ -865,7 +924,19 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	}
 
 	if errorsFound.Load() > 0 {
-		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors, %d transactions added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
+		// When every error is a missing-parent error, defer the failure to the
+		// caller's sequential revalidation pass instead of aborting this batch.
+		// A tx's parent can live in a later batch (not yet processed); once all
+		// batches are complete and the sequential pass re-validates the failed
+		// subtrees in block order, the parent is in the UTXO store and the
+		// child resolves. Failing fatally here would skip that recovery and
+		// stall the block (observed on teratestnet at block 15,631 where
+		// 1,305 of 9,216 txs had cross-subtree parents).
+		if errorsFound.Load() == missingParentErrors.Load() {
+			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation), %d added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
+			return nil
+		}
+		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent), %d transactions added to orphanage", errorsFound.Load(), missingParentErrors.Load(), addedToOrphanage.Load())
 	}
 
 	u.logger.Debugf("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
@@ -964,4 +1035,17 @@ func extendTxWithInBlockParents(tx *bt.Tx, parentMap map[chainhash.Hash]*bt.Tx) 
 	}
 
 	return extendedCount
+}
+
+// validateSubtreeLeafCount rejects peer-supplied leaf counts that exceed the
+// configured policy cap before they reach allocation paths such as
+// subtreepkg.NewIncompleteTreeByLeafCount, where the capacity argument would
+// otherwise drive an unbounded make() backed by attacker-controlled bytes.
+func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax int) error {
+	if leafCount > policyMax {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
+			subtreeHash.String(), policyMax, leafCount)
+	}
+
+	return nil
 }

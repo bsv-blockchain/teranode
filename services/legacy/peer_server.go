@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -30,6 +29,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -933,6 +933,14 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		err = <-sp.blockProcessed
 		if err != nil {
 			sp.server.logger.Errorf("block processing failed: %v", err)
+
+			// Only disconnect on block validation failures, not on local
+			// infrastructure issues (database, Kafka, etc.) which would
+			// just cause unnecessary sync peer rotation.
+			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
+				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", block.Hash()))
+				return
+			}
 		}
 	}
 }
@@ -1495,6 +1503,11 @@ func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
 func (s *server) AnnounceNewTransactions(txns []*netsync.TxHashAndFee) {
 	// check listen mode - if listen_only or silent, don't announce new transactions
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return
+	}
+
+	// Suppress tx relay while the node is not in RUNNING state. See canRelayTx.
+	if !s.canRelayTx() {
 		return
 	}
 
@@ -2211,16 +2224,16 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		// TODO: duplicate oneshots?
 		// Limit max number of total peers.
 		if state.Count() >= cfg.MaxPeers {
-			msg.reply <- errors.New("max peers reached")
+			msg.reply <- errors.NewProcessingError("max peers reached")
 			return
 		}
 
 		for _, persistentPeer := range state.persistentPeers.Range() {
 			if persistentPeer.Addr() == msg.addr {
 				if msg.permanent {
-					msg.reply <- errors.New("peer already connected")
+					msg.reply <- errors.NewProcessingError("peer already connected")
 				} else {
-					msg.reply <- errors.New("peer exists as a permanent peer")
+					msg.reply <- errors.NewProcessingError("peer exists as a permanent peer")
 				}
 
 				return
@@ -2253,7 +2266,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		if found {
 			msg.reply <- nil
 		} else {
-			msg.reply <- errors.New("peer not found")
+			msg.reply <- errors.NewProcessingError("peer not found")
 		}
 	case getOutboundGroup:
 		count, ok := state.outboundGroups.Get(msg.key)
@@ -2301,7 +2314,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			return
 		}
 
-		msg.reply <- errors.New("peer not found")
+		msg.reply <- errors.NewProcessingError("peer not found")
 	}
 }
 
@@ -2582,11 +2595,38 @@ func (s *server) BanPeer(sp *serverPeer) {
 	s.banPeers <- sp
 }
 
+// canRelayTx reports whether the legacy server may emit transaction inventory
+// to its peers. Transactions must only be relayed once the node is fully
+// synced (FSM RUNNING). While syncing (LEGACYSYNCING/CATCHINGBLOCKS) the local
+// chain tip may sit below the Genesis activation height, in which case the
+// validator accepts pre-Genesis-only outputs such as P2SH. Re-broadcasting
+// those to post-Genesis peers earns an instant ban for `bad-txns-vout-p2sh`.
+//
+// The check is cheap: blockchain.Client serves GetFSMCurrentState from a
+// locally-cached atomic, so callers may invoke this per-inv without RPC cost.
+// Fails closed: any error reading the state suppresses relay.
+func (s *server) canRelayTx() bool {
+	if s.blockchainClient == nil {
+		return true
+	}
+	running, err := s.blockchainClient.IsFSMCurrentState(s.ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return false
+	}
+	return running
+}
+
 // RelayInventory relays the passed inventory vector to all connected peers
 // that are not already known to have it.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	// check listen mode - if listen_only or silent, don't relay inventory
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return
+	}
+
+	// Suppress tx invs while the node is not in RUNNING state. Block invs
+	// are still relayed (block sync is gated separately in netsync.manager).
+	if invVect != nil && invVect.Type == wire.InvTypeTx && !s.canRelayTx() {
 		return
 	}
 
@@ -3040,13 +3080,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		}
 
 		if len(listeners) == 0 {
-			return nil, errors.New("no valid listen address")
+			return nil, errors.NewProcessingError("no valid listen address")
 		}
 	}
 
 	banList, banChan, err := p2p.GetBanList(ctx, logger, tSettings)
 	if err != nil {
-		return nil, errors.New("can't get banList")
+		return nil, errors.NewProcessingError("can't get banList")
 	}
 
 	s := server{
@@ -3167,7 +3207,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 				return addrStringToNetAddr(addrString)
 			}
 
-			return nil, errors.New("no valid connect address")
+			return nil, errors.NewProcessingError("no valid connect address")
 		}
 	}
 

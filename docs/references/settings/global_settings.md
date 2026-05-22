@@ -263,4 +263,4 @@ clientName.docker.host.teranode1 = teranode1          # Priority 2 (wins)
 
 ## Related Documentation
 
-- [Developer Setup](../../tutorials/developers/developerSetup.md)
+- [Developer Setup](../../howto/developerSetup.md)

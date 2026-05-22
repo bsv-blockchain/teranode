@@ -1,0 +1,52 @@
+[
+  {
+    "index": 1,
+    "peer_id": "12D3KooWAFXWuxgdJoRsaA4J4RRRr8yu6WCrAPf8FaS7UfZg3ceG",
+    "private_key_hex": "c8a1b91ae120878d91a04c904e0d565aa44b2575c1bb30a729bd3e36e2a1d5e6067216fa92b1a1a7e30d0aaabe288e25f1efc0830f309152638b61d84be6b71d"
+  },
+  {
+    "index": 2,
+    "peer_id": "12D3KooWG6aCkDmi5tqx4G4AvVDTQdSVvTSzzQvk1vh9CtSR8KEW",
+    "private_key_hex": "89a2d8acf5b2e60fd969914c326c63cde50675a47897c0eaacc02eb6ff8665585d4d059f977910472bcb75040617632019cc0749443fdc66d331b61c8cfb4b0f"
+  },
+  {
+    "index": 3,
+    "peer_id": "12D3KooWHHeTM3aK4s9DKS6DQ7SbBb7czNyJsPZtQiUKa4fduMB9",
+    "private_key_hex": "d77a7cac7833f2c0263ed7b9aaeb8dda1effaf8af948d570ed8f7a93bd3c418d6efee7bdd82ddb80484be84ba0c78ea07251a3ba2b45b2b3367fd5e2f0284e7c"
+  },
+  {
+    "index": 4,
+    "peer_id": "12D3KooWKaonijwoeeJ98oJy6V9DTnpcL5mVNkf2BogLSHep7REg",
+    "private_key_hex": "10f9f23a6dc7934b7b4f04eb2f4403305c9ae42b6dd296e321e9f56de38d00ed911bb4f5c7f91d5dcf76954e598990d26bb4dc98d2f400d20d4e5fb943ba4cf9"
+  },
+  {
+    "index": 5,
+    "peer_id": "12D3KooWR92AbzmdKmcJAgFWubcqYigoMdDpLWFDpoDPHwotfMmU",
+    "private_key_hex": "73ef2d383bbf79c3a13bd7774e9fd03481ed96ad6de3773dd9d81690522726a8e3a6b8f33ae364869f8620edc7f1d78fd16cc5d18c2c9920f235811fb28da743"
+  },
+  {
+    "index": 6,
+    "peer_id": "12D3KooWFANYyPFc6rutGfz1FkxyZuKZHy3oiyP8TsnXaiMWvma8",
+    "private_key_hex": "14efea62a397b877e08abaa446ba402d82d55723ff5932da8519eb3337f560de4f6a7bf19bb732c0ea0b6f7c3b791eb49efdfd7502be6461d12c6ae8d9421209"
+  },
+  {
+    "index": 7,
+    "peer_id": "12D3KooWAXD23G59y4J742tyKKpzH6EXhtPDqvk17ZjGLBUnDPgi",
+    "private_key_hex": "753c685d291a773331020325c53e5759d0949fdfc83ed5b17907118f5ced3f8a0a767796afeb10cd0adf69e4da227630fa8de559128e65641054746dd01420a7"
+  },
+  {
+    "index": 8,
+    "peer_id": "12D3KooWDS2aAiFpYyQnxnkLVogYkfBjwA9gNCmTfy3nF8ydasZo",
+    "private_key_hex": "6c980de85a4b18e0fe4963f1cc2f20dba0fb26383980a53de91f20ff8037ea3035b5cffe91055671481ae7b840973cf87238f663200d156d14248c612c6bb89e"
+  },
+  {
+    "index": 9,
+    "peer_id": "12D3KooWPgMkTtBviRuz3NRqDc72oEWZKFaWxVWTPrfyEfr3zBfA",
+    "private_key_hex": "2f6e95290dc6ac4f9c607c990c9dd261c87fbeab47c0bbbfb432e3502146925dcdf67f45b99da892c81ba86dec55513f68012df746305d092686f7c651769ab5"
+  },
+  {
+    "index": 10,
+    "peer_id": "12D3KooWG4CvhVpwctma2tCu7dGnsjGFHSzavpPCrrdafZcpkw9M",
+    "private_key_hex": "9cb97db2871f0314cd55a7aecf38ac608e149ddbc58345d5d444736eeda9efce5cb1cd804e176d29a7e04e4f9daa252fb6286dbfbe5002a9f2ed73a3a804a304"
+  }
+]

@@ -145,7 +145,7 @@
     align-items: center;
     gap: 8px;
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
   }
 
   #vis {

@@ -39,8 +39,12 @@ service BlockAssemblyAPI {
   // Includes all necessary components for miners to begin work.
   rpc GetMiningCandidate (GetMiningCandidateRequest) returns (model.MiningCandidate) {}
 
-  // GetCurrentDifficulty retrieves the current network mining difficulty.
-  // Used by miners to understand the current mining requirements.
+  // GetCurrentDifficulty retrieves the difficulty required for the NEXT block,
+  // not the current tip's difficulty. Computed against the current chain tip
+  // and the current wall-clock time, so the value reflects any retargeting that
+  // would apply to a block produced now. The returned BlockHash is the current
+  // tip's hash, provided as context. Despite the name, this is effectively
+  // "GetNextRequiredDifficulty"; the original name is retained for compatibility.
   rpc GetCurrentDifficulty (EmptyMessage) returns (GetCurrentDifficultyResponse) {}
 
   // SubmitMiningSolution submits a solved block to the network.
@@ -86,6 +90,13 @@ service BlockAssemblyAPI {
   // This provides visibility into the transactions that are candidates for inclusion in the next block.
   // NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
   rpc GetBlockAssemblyTxs (EmptyMessage) returns (GetBlockAssemblyTxsResponse) {}
+
+  // GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+  // Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+  // coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+  // The response contains everything needed to assemble a standard Bitcoin wire format block.
+  // Returns NotFound if the candidate ID has expired or is invalid.
+  rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -132,6 +143,14 @@ message AddTxBatchRequest {
 // and sent in columnar format. This shifts deserialization work away from the single-machine Server.
 // The Server reconstructs TxInpoints directly from columnar data WITHOUT deserialization overhead.
 message AddTxBatchColumnarRequest {
+  // Fields 8 and 9 previously held parent_vout_indices + vout_idx_offsets
+  // (per-parent) with different semantics from the current packed layout.
+  // They are reserved to prevent silent misinterpretation under version skew:
+  // an old client sending field 8/9 to a new server would otherwise decode
+  // as the new fields with corrupt content. The new fields are 10/11 below.
+  reserved 8, 9;
+  reserved "parent_vout_indices", "vout_idx_offsets";
+
   // All transaction IDs concatenated (each exactly 32 bytes).
   // Total length must be divisible by 32.
   // Transaction count = len(txids_packed) / 32
@@ -159,17 +178,31 @@ message AddTxBatchColumnarRequest {
   //   - Transaction 2: 3 parent hashes (hashes 7-9)
   repeated uint32 parent_tx_offsets = 7;
 
-  // All parent vout indices for all transactions, flattened and concatenated.
-  // These are the Idxs from TxInpoints (the uint32 indices for each parent hash).
-  // Use vout_idx_offsets to identify boundaries.
-  repeated uint32 parent_vout_indices = 8;
+  // All parent vout indices for all transactions in the count-prefixed packed
+  // layout consumed directly by go-subtree.TxInpoints. For each parent (in
+  // parent_tx_hashes_packed order) one uint32 count word is followed by that
+  // many uint32 vout-value words, concatenated end-to-end across all txs.
+  //
+  // This is the exact shape TxInpoints.voutIdxs stores internally, so the
+  // Server aliases a per-tx slice of this buffer straight into a TxInpoints
+  // with zero copy (NewTxInpointsFromPacked). The buffer's lifetime is bound
+  // to the request; gRPC keeps it alive until every TxInpoints derived from
+  // it is no longer referenced.
+  //
+  // Assigned a fresh field number (10) rather than reusing the old field 8
+  // because the old field carried different semantics and the wire types
+  // match — silent misinterpretation under version skew would otherwise be
+  // possible.
+  repeated uint32 vout_idxs_packed = 10;
 
-  // Offsets into parent_vout_indices for each parent hash.
-  // Length must be exactly (total number of parent hashes) + 1.
-  // This creates a 2-level offset structure:
-  //   1. parent_tx_offsets identifies which parent hashes belong to each transaction
-  //   2. vout_idx_offsets identifies which vout indices belong to each parent hash
-  repeated uint32 vout_idx_offsets = 9;
+  // Offsets into vout_idxs_packed for each transaction.
+  // Length must be exactly transaction_count + 1.
+  // Each offset is an index into vout_idxs_packed (in uint32 units).
+  // Example: [0, 5, 8] represents 2 transactions, the first occupying
+  // vout_idxs_packed[0:5] and the second occupying vout_idxs_packed[5:8].
+  //
+  // Assigned a fresh field number (11) — see note on field 10.
+  repeated uint32 vout_idxs_tx_offsets = 11;
 }
 
 // Request for retrieving a mining candidate block template.
@@ -220,10 +253,11 @@ message StateMessage {
   repeated string subtrees = 10; // the hashes of the current subtrees
 }
 
-// Response containing the current difficulty of the blockchain.
+// Response containing the difficulty required for the next block (not the
+// current tip's difficulty).
 message GetCurrentDifficultyResponse {
-  double difficulty = 1; // the current difficulty of the blockchain
-  bytes blockHash = 2; // the hash of the block at which the difficulty is measured
+  double difficulty = 1; // the difficulty the NEXT block must satisfy
+  bytes blockHash = 2;   // the hash of the current chain tip, provided as context
 }
 
 // Request for generating a block.
@@ -242,4 +276,17 @@ message GetBlockAssemblyBlockCandidateResponse {
 message GetBlockAssemblyTxsResponse {
   uint64 txCount = 1; // the number of transactions in the block assembly
   repeated string txs = 2; // the transactions currently being assembled in the block assembly
+}
+
+// Request for retrieving block data for an existing mining candidate.
+message GetCandidateBlockRequest {
+  bytes id = 1; // the mining candidate ID (from a prior GetMiningCandidate call)
+}
+
+// Response containing all data needed to assemble a standard Bitcoin wire format block.
+message GetCandidateBlockResponse {
+  bytes header = 1;                    // 80-byte block header (version + prevhash + merkle root + time + bits + nonce=0)
+  bytes coinbase_tx = 2;               // serialized coinbase transaction
+  repeated bytes subtree_hashes = 3;   // subtree hashes for streaming transactions from the subtree store
+  uint64 transaction_count = 4;        // total number of transactions including coinbase
 }

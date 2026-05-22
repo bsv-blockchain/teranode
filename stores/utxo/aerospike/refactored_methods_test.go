@@ -3,10 +3,12 @@ package aerospike
 import (
 	"testing"
 
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test handleBatchRecordError logic without aerospike dependencies
@@ -41,7 +43,7 @@ func TestHandleBatchRecordError_Logic(t *testing.T) {
 				return
 			}
 
-			err := s.handleBatchRecordError(tt.err, hash)
+			err := s.handleBatchRecordError(tt.err, hash, false)
 			if tt.expectNilErr {
 				assert.Nil(t, err)
 			} else {
@@ -50,6 +52,26 @@ func TestHandleBatchRecordError_Logic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleBatchRecordError_KeyNotFound verifies the invariant fix: a missing
+// record must be a hard error during normal set-mined (the tx MUST exist and be
+// tagged with the block ID), but is a tolerated no-op during unset-mined.
+func TestHandleBatchRecordError_KeyNotFound(t *testing.T) {
+	s := &Store{}
+	hash := &chainhash.Hash{}
+	keyNotFound := &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+
+	t.Run("normal set-mined returns TxNotFoundError", func(t *testing.T) {
+		err := s.handleBatchRecordError(keyNotFound, hash, false /*unsetMined*/)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "transaction not found")
+	})
+
+	t.Run("unset-mined tolerates missing record", func(t *testing.T) {
+		err := s.handleBatchRecordError(keyNotFound, hash, true /*unsetMined*/)
+		assert.NoError(t, err)
+	})
 }
 
 // Test error creation functions

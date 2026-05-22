@@ -14,7 +14,6 @@
     i18n as i18nStore,
     tippy,
   } from '$lib/stores/media'
-  import { dark as darkTheme } from '$internal/styles/themes/dark'
   import { sm, md, lg, xl } from '$lib/styles/breakpoints'
   import GlobalStyle from '$lib/styles/GlobalStyle.svelte'
   import Spinner from '$lib/components/spinner/index.svelte'
@@ -62,23 +61,6 @@
     },
   })
   $injectedLogos = logos
-
-  $theme = 'dark'
-  // $theme = 'light'
-
-  let customThemeProps = {}
-
-  $: {
-    switch ($theme) {
-      case 'dark':
-        customThemeProps = darkTheme
-        break
-      case 'light':
-        customThemeProps = {}
-        break
-      default:
-    }
-  }
 
   $pageLinks = {
     type: 'page-links',
@@ -186,7 +168,7 @@
   }
 </script>
 
-<GlobalStyle theme={$theme} themeNs={$themeNs} {customThemeProps}>
+<GlobalStyle theme={$theme} themeNs={$themeNs}>
   <slot />
 </GlobalStyle>
 

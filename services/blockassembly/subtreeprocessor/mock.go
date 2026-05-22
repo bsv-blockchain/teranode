@@ -101,8 +101,8 @@ func (m *MockSubtreeProcessor) GetChainedSubtrees() []*subtree.Subtree {
 	return args.Get(0).([]*subtree.Subtree)
 }
 
-func (m *MockSubtreeProcessor) GetSubtreeHashes() []chainhash.Hash {
-	args := m.Called()
+func (m *MockSubtreeProcessor) GetSubtreeHashes(ctx context.Context) []chainhash.Hash {
+	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil
 	}
@@ -212,6 +212,11 @@ func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks
 func (m *MockSubtreeProcessor) Remove(ctx context.Context, hash chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
+}
+
+// DrainQueue implements Interface.DrainQueue
+func (m *MockSubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) {
+	m.Called(dropHashes)
 }
 
 // GetCompletedSubtreesForMiningCandidate implements Interface.GetCompletedSubtreesForMiningCandidate

@@ -150,7 +150,7 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 //   - blockHeight: Expected chain height for the block
 //
 // Returns an error if block processing fails
-func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return err
@@ -161,6 +161,7 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 		Height:  blockHeight,
 		PeerId:  peerID,
 		BaseUrl: baseURL,
+		BlockId: blockID,
 	}
 
 	_, err = s.apiClient.ProcessBlock(ctx, req)

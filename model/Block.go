@@ -72,6 +72,7 @@ type Block struct {
 	SubtreeSlices    []*subtreepkg.Subtree `json:"-"`
 	Height           uint32                `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 	ID               uint32                `json:"id"`
+	CoinbaseBUMP     HexBytes              `json:"coinbase_bump,omitempty"`
 
 	// local
 	hash            atomic.Pointer[chainhash.Hash]
@@ -79,6 +80,29 @@ type Block struct {
 	subtreeSlicesMu sync.RWMutex
 	txMap           txmap.TxMap
 	medianTimestamp uint32
+	// nodeAllocator, if non-nil, supplies pooled backing slices for the
+	// per-subtree Node arrays during GetAndValidateSubtrees. Only the
+	// blockvalidation service sets this (via SetNodeAllocator); model-internal
+	// callers leave it nil and behaviour matches legacy make() allocation.
+	nodeAllocator subtreepkg.NodeAllocator
+}
+
+// SetNodeAllocator installs a caller-supplied allocator that
+// GetAndValidateSubtrees will pass to subtree.DeserializeFromReaderWithAllocator
+// for each fetched subtree. The blockvalidation service uses this to pool the
+// large per-subtree []Node arrays across blocks. Passing nil restores default
+// (make-backed) allocation. Safe to call before any goroutine reads the block.
+func (b *Block) SetNodeAllocator(alloc subtreepkg.NodeAllocator) {
+	b.subtreeSlicesMu.Lock()
+	b.nodeAllocator = alloc
+	b.subtreeSlicesMu.Unlock()
+}
+
+// NodeAllocator returns the currently-installed NodeAllocator (or nil).
+func (b *Block) NodeAllocator() subtreepkg.NodeAllocator {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+	return b.nodeAllocator
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32) (*Block, error) {
@@ -299,6 +323,23 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("error converting block height to uint32", err)
 	}
 
+	const maxCoinbaseBUMPSize = 1 << 20 // 1MB upper bound for coinbase BUMP
+
+	bumpLen, err := wire.ReadVarInt(buf, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, errors.NewBlockInvalidError("error reading coinbase bump length", err)
+	}
+	if bumpLen > maxCoinbaseBUMPSize {
+		return nil, errors.NewBlockInvalidError("coinbase bump length exceeds maximum", nil)
+	}
+	if bumpLen > 0 {
+		bumpBytes := make([]byte, bumpLen)
+		if _, err = io.ReadFull(buf, bumpBytes); err != nil {
+			return nil, errors.NewBlockInvalidError("error reading coinbase bump", err)
+		}
+		block.CoinbaseBUMP = bumpBytes
+	}
+
 	return block, nil
 }
 
@@ -493,24 +534,32 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 11. Check that there are no duplicate transactions in the block.
-	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
-	if subtreeStore != nil {
-		// this creates the txMap for the block that is also used in the validOrderAndBlessed check
-		err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
-		if err != nil {
-			return false, err
-		}
+	// CVE-2012-2459 guard — runs unconditionally so future callers passing nil subtreeStore
+	// don't silently skip dedup. checkDuplicateTransactions iterates SubtreeSlices in memory
+	// and does not need the subtree store directly.
+	//
+	// b.txMap is allocated inside checkDuplicateTransactions (possibly mid-execution
+	// when a worker fails). The deferred releaseTxMap below ensures the pooled
+	// in-memory variant is returned to the pool on *every* exit path — including
+	// errors from checkDuplicateTransactions, the flush below, and
+	// validOrderAndBlessed. releaseTxMap is nil-safe, idempotent, and handles
+	// all three b.txMap variants (disk-backed, pooled in-memory, generic Closer).
+	defer b.releaseTxMap()
 
-		// flush disk-backed txMap so all writes are readable before phase 2
-		if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
-			if flushErr := flusher.Flush(); flushErr != nil {
-				return false, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
-			}
-		}
+	err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
+	if err != nil {
+		return false, err
+	}
 
-		if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
-			ReportTxMapStats(diskMap.Stats())
+	// flush disk-backed txMap so all writes are readable before phase 2
+	if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
+		if flushErr := flusher.Flush(); flushErr != nil {
+			return false, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
 		}
+	}
+
+	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
+		ReportTxMapStats(diskMap.Stats())
 	}
 
 	// 12. Check that all transactions are in the valid order and blessed
@@ -530,17 +579,36 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 	}
 
-	// close and release the txMap
+	return true, nil
+}
+
+// releaseTxMap returns b.txMap to the pool (in-memory variant) or closes the
+// disk-backed map, then nils b.txMap. Idempotent and nil-safe: safe to call
+// multiple times or before b.txMap is ever assigned. Invoked via defer from
+// Block.Valid so the pooled map is reclaimed on every exit path, including
+// errors during checkDuplicateTransactions or validOrderAndBlessed.
+func (b *Block) releaseTxMap() {
+	if b.txMap == nil {
+		return
+	}
+
 	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
 		ReportTxMapStats(diskMap.Stats())
 		_ = diskMap.Close()
 		ClearTxMapStats()
+	} else if poolable, ok := b.txMap.(*txmap.SplitSwissMapUint64); ok {
+		// Return the pooled in-memory map for reuse on the next block.
+		// b.TransactionCount was set in GetAndValidateSubtrees before
+		// checkDuplicateTransactions ran, so it matches the value used at
+		// GetTxMap time and the map lands in the correct size-class pool.
+		if n, err := safeconversion.Uint64ToUint32(b.TransactionCount); err == nil {
+			PutTxMap(poolable, n)
+		}
 	} else if closer, ok := b.txMap.(io.Closer); ok {
 		_ = closer.Close()
 	}
-	b.txMap = nil
 
-	return true, nil
+	b.txMap = nil
 }
 
 // https://en.bitcoin.it/wiki/BIP_0034
@@ -621,7 +689,10 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
+		// Draw the txMap from a size-class pool so the (potentially multi-GB)
+		// backing storage is reused across blocks. PutTxMap is called at
+		// release time below, keyed by the same transactionCountUint32.
+		b.txMap = GetTxMap(transactionCountUint32)
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -654,13 +725,13 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
 	var idx64 uint64
 
-	// Calculate the base index for this subtree by summing sizes of all previous subtrees.
-	// We cannot use (subIdx * subtreeSize) because the last subtree may be smaller.
-	// Per Block.go:1192: "all subtrees need to be the same size as the first tree, except the last one"
-	baseIdx := 0
-	for i := 0; i < subIdx; i++ {
-		baseIdx += b.SubtreeSlices[i].Size()
-	}
+	// All subtrees before subIdx are full-size (the per-block invariant enforced by
+	// validateAndSetTransactionCount allows only the last subtree to be smaller), so the
+	// base index is subIdx*subtreeSize. Summing the prior subtree sizes via Size() would
+	// be O(N) per subtree and O(N^2) per block, with every Size() call taking the
+	// subtree's RWMutex; on blocks with hundreds of thousands of subtrees that contention
+	// pins every worker on atomic ops instead of doing useful dedup work.
+	baseIdx := subIdx * subtreeSize
 
 	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
 		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -669,7 +740,6 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		// Calculate the global transaction index as baseIdx + txIdx
 		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
@@ -724,7 +794,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			ClearParentSpendsMapStats()
 		}()
 	} else {
-		psMap = NewSplitSyncedParentMap(4096, b.TransactionCount*3)
+		// Draw the parent-spends map from a size-class pool. Released via
+		// defer below, keyed by the same expectedInpoints value.
+		expectedInpoints := b.TransactionCount * 3
+		pooled := GetParentSpendsMap(expectedInpoints)
+		psMap = pooled
+		defer PutParentSpendsMap(pooled, expectedInpoints)
 	}
 
 	validationCtx := &validationContext{
@@ -1101,6 +1176,11 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
 
+	// Snapshot the node allocator under the lock we already hold so deserialize
+	// goroutines can read it without further synchronisation. nodeAlloc may be
+	// nil, in which case DeserializeFromReaderWithAllocator falls back to make.
+	nodeAlloc := b.nodeAllocator
+
 	var (
 		sizeInBytes atomic.Uint64
 		txCount     atomic.Uint64
@@ -1171,9 +1251,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					bufioReaderPool.Put(bufferedReader)
 				}()
 
-				if err = subtree.DeserializeFromReader(bufferedReader); err != nil {
+				if err = subtree.DeserializeFromReaderWithAllocator(bufferedReader, nodeAlloc); err != nil {
 					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
-						return struct{}{}, subtree.DeserializeFromReader(bufferedReader)
+						return struct{}{}, subtree.DeserializeFromReaderWithAllocator(bufferedReader, nodeAlloc)
 					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash)))
 
 					if err != nil {
@@ -1312,13 +1392,79 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	case len(hashes) == 1:
 		calculatedMerkleRootHash = &hashes[0]
 	case len(hashes) > 0:
-		// Create a new subtree with the hashes of the subtrees
+		// The first subtree must be complete (production invariant under Strategy A).
+		// Its Length() therefore equals its serialized leaf count both in-memory and
+		// after a disk round-trip, making it a stable signal for the block's
+		// intended subtree capacity. Subtree.Height is correct for the lift step
+		// because for a complete subtree Height = Ceil(Log2(Length)) and that
+		// relationship is preserved by deserialization (which re-derives Height
+		// from numLeaves).
+		targetLength := b.SubtreeSlices[0].Length()
+		targetHeight := b.SubtreeSlices[0].Height
+
+		// Lift correctness depends on the first subtree's leaf count being a power
+		// of two — that's what makes the partitioned top-tree composition match
+		// the canonical flat merkle root. Without this guard a peer can craft a
+		// non-power-of-two first subtree (e.g. lengths [3, 2]) and produce a
+		// merkle root that a canonical SV Node validator would not agree with.
+		if !subtreepkg.IsPowerOfTwo(targetLength) {
+			return errors.NewBlockInvalidError(
+				"[BLOCK][%s] first subtree leaf count is not a power of two: %d",
+				b.String(), targetLength,
+			)
+		}
+
+		for i, sub := range b.SubtreeSlices {
+			isLast := i == len(b.SubtreeSlices)-1
+
+			if !isLast && sub.Length() != targetLength {
+				return errors.NewBlockInvalidError(
+					"[BLOCK][%s] only the final subtree may be incomplete (index %d, length %d, targetLength %d)",
+					b.String(), i, sub.Length(), targetLength,
+				)
+			}
+
+			if isLast && sub.Length() > targetLength {
+				return errors.NewBlockInvalidError(
+					"[BLOCK][%s] final subtree exceeds first subtree size (length %d, targetLength %d)",
+					b.String(), sub.Length(), targetLength,
+				)
+			}
+		}
+
+		// If the final subtree is shorter than the target length, lift its root
+		// to the target height so it occupies the slot of a same-capacity subtree
+		// in the top-level merkle tree. The final subtree's leaf count does NOT
+		// need to be a power of two: BuildMerkleTreeStoreFromBytes already applies
+		// the duplicate-when-odd rule at every internal level, so the subtree's
+		// own RootHash() naturally lives at height ceil(log2(Length)) and matches
+		// what the canonical flat tree produces for that segment. Allowing
+		// non-power-of-two final subtrees is what lets the legacy-block
+		// partitioner stay at maxItems instead of degenerating to tiny subtrees
+		// for adversarial transaction counts — see issue #901.
+		if last := b.SubtreeSlices[len(b.SubtreeSlices)-1]; last.Length() < targetLength {
+			liftedRoot, err := last.RootHashPadded(targetHeight)
+			if err != nil {
+				return errors.NewProcessingError("[BLOCK][%s] failed lifting final subtree", b.String(), err)
+			}
+
+			hashes[len(hashes)-1] = *liftedRoot
+		}
+
 		st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(b.Subtrees))
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.String(), err)
 		}
 
+		seen := make(map[chainhash.Hash]struct{}, len(hashes))
+
 		for _, hash := range hashes {
+			if _, dup := seen[hash]; dup {
+				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
+			}
+
+			seen[hash] = struct{}{}
+
 			err = st.AddNode(hash, 1, 0)
 			if err != nil {
 				return errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", b.String(), err)
@@ -1460,6 +1606,16 @@ func (b *Block) Bytes() ([]byte, error) {
 	err = wire.WriteVarInt(buf, 0, uint64(b.Height))
 	if err != nil {
 		return nil, errors.NewProcessingError("[BLOCK][%s] error writing height", b.String(), err)
+	}
+
+	err = wire.WriteVarInt(buf, 0, uint64(len(b.CoinbaseBUMP)))
+	if err != nil {
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase bump length", b.String(), err)
+	}
+	if len(b.CoinbaseBUMP) > 0 {
+		if _, err := buf.Write(b.CoinbaseBUMP); err != nil {
+			return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase bump", b.String(), err)
+		}
 	}
 
 	return buf.Bytes(), nil

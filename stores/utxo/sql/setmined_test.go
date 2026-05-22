@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -279,13 +280,47 @@ func TestStore_SetMinedMulti_EmptyHashes(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestStore_SetMinedMultiChunk_NoExistingTransactions verifies the
+// SetMinedMulti postcondition (see stores/utxo/Interface.go): when !UnsetMined
+// and ANY submitted hash is missing from the transactions table the store MUST
+// return TxNotFoundError rather than silently dropping the hash from the
+// returned map. This brings the SQL backend into parity with the Aerospike
+// KEY_NOT_FOUND handling.
 func TestStore_SetMinedMultiChunk_NoExistingTransactions(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	store, mock := CreateMockStore(logger)
 	defer func() { _ = mock.ExpectationsWereMet() }()
 
 	hashes := CreateTestHashes(2)
+	minedInfo := CreateTestMinedBlockInfo() // UnsetMined: false
+
+	mock.ExpectBegin()
+	existsRows := sqlmock.NewRows([]string{"hash"})
+	mock.ExpectQuery(`SELECT hash FROM transactions WHERE hash IN`).
+		WillReturnRows(existsRows)
+	mock.ExpectRollback() // the postcondition error triggers the deferred rollback
+
+	ctx := context.Background()
+	result, err := store.setMinedMultiChunk(ctx, hashes, minedInfo)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction not found")
+	assert.True(t, errors.Is(err, errors.ErrTxNotFound), "must wrap ErrTxNotFound so callers can branch on it")
+	assert.Nil(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestStore_SetMinedMultiChunk_NoExistingTransactions_UnsetMined verifies the
+// counterpart to the postcondition: when UnsetMined is true the store tolerates
+// missing rows (the tx is already gone, so unset-mined is a no-op).
+func TestStore_SetMinedMultiChunk_NoExistingTransactions_UnsetMined(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	store, mock := CreateMockStore(logger)
+	defer func() { _ = mock.ExpectationsWereMet() }()
+
+	hashes := CreateTestHashes(2)
 	minedInfo := CreateTestMinedBlockInfo()
+	minedInfo.UnsetMined = true
 
 	mock.ExpectBegin()
 	existsRows := sqlmock.NewRows([]string{"hash"})
@@ -296,9 +331,38 @@ func TestStore_SetMinedMultiChunk_NoExistingTransactions(t *testing.T) {
 	ctx := context.Background()
 	result, err := store.setMinedMultiChunk(ctx, hashes, minedInfo)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 0, len(result))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestStore_SetMinedMultiChunk_PartiallyMissing covers the partial-miss case:
+// some submitted hashes exist in transactions and some don't. The postcondition
+// must still fail closed — silently inserting block_ids for only the existing
+// subset is exactly the silent-drop bug the new contract is closing.
+func TestStore_SetMinedMultiChunk_PartiallyMissing(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	store, mock := CreateMockStore(logger)
+	defer func() { _ = mock.ExpectationsWereMet() }()
+
+	hashes := CreateTestHashes(3)
+	minedInfo := CreateTestMinedBlockInfo() // UnsetMined: false
+
+	mock.ExpectBegin()
+	existsRows := sqlmock.NewRows([]string{"hash"})
+	existsRows.AddRow(hashes[0][:]) // only the first hash exists; hashes[1] and hashes[2] do not
+	mock.ExpectQuery(`SELECT hash FROM transactions WHERE hash IN`).
+		WillReturnRows(existsRows)
+	mock.ExpectRollback()
+
+	ctx := context.Background()
+	result, err := store.setMinedMultiChunk(ctx, hashes, minedInfo)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction not found")
+	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+	assert.Nil(t, result)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

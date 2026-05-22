@@ -161,12 +161,28 @@ func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 	return nil, nil
 }
 
-func (m *NullStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (m *NullStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	return nil, nil
 }
 
 func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	return nil, nil
+}
+
+func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
 }
 
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {

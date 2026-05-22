@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,20 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" && !pprofRegistered.Load() {
 		pprofRegistered.Store(true)
+
+		// Enable block / mutex profiling when configured. Both are disabled by
+		// default (rate/fraction == 0) and incur negligible overhead at the
+		// recommended on-cluster sampling values. Required to capture
+		// wait-time data that CPU profiles cannot expose.
+		if rate := appSettings.BlockProfileRate; rate > 0 {
+			runtime.SetBlockProfileRate(rate)
+			logger.Infof("runtime.SetBlockProfileRate(%d) enabled — /debug/pprof/block now collecting", rate)
+		}
+
+		if frac := appSettings.MutexProfileFraction; frac > 0 {
+			runtime.SetMutexProfileFraction(frac)
+			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
+		}
 
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
@@ -413,6 +428,15 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 	// Create ban list for the Asset service
 	banList := createBanList(ctx, createLogger("asset_banlist"), appSettings)
 
+	// Create block assembly client for the Asset service (for mining candidate legacy block endpoint)
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(
+		ctx, createLogger(loggerBlockAssembly), appSettings,
+	)
+	if err != nil {
+		// Non-fatal: the mining candidate legacy block endpoint will return 501 if unavailable
+		blockAssemblyClient = nil
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -425,6 +449,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockvalidationClient,
 		p2pClient,
 		banList,
+		blockAssemblyClient,
 	))
 }
 

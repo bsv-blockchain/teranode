@@ -6,8 +6,10 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -25,6 +27,49 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
+
+// waitForAerospikeWritesReady polls the test namespace until it accepts
+// writes. Aerospike can return FAIL_FORBIDDEN ("Operation not allowed at
+// this time") for a few seconds after the service port opens while the
+// namespace finishes coming up. We retry a trivial CREATE_ONLY write on a
+// sentinel key; once that succeeds the cluster is ready for the rest of the
+// test to proceed.
+func waitForAerospikeWritesReady(client *uaerospike.Client) error {
+	const (
+		attempts = 60
+		delay    = 200 * time.Millisecond
+	)
+
+	sentinelKey, err := aerospike.NewKey(aerospikeNamespace, aerospikeSet, []byte("__readiness_probe__"))
+	if err != nil {
+		return err
+	}
+
+	writePolicy := aerospike.NewWritePolicy(0, 0)
+	writePolicy.RecordExistsAction = aerospike.REPLACE
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		err := client.Put(writePolicy, sentinelKey, aerospike.BinMap{"ready": true})
+		if err == nil {
+			_, _ = client.Delete(writePolicy, sentinelKey)
+			return nil
+		}
+
+		aErr, ok := err.(*aerospike.AerospikeError)
+		if ok && aErr.ResultCode == types.FAIL_FORBIDDEN {
+			// Namespace not yet accepting writes — retry.
+			lastErr = err
+			time.Sleep(delay)
+			continue
+		}
+
+		// Any other error is unexpected; surface it immediately.
+		return err
+	}
+
+	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v: %w", aerospikeNamespace, time.Duration(attempts)*delay, lastErr)
+}
 
 const (
 	aerospikeHost           = "localhost" // "localhost"
@@ -180,6 +225,14 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := uaerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
+
+	// Wait for the Aerospike namespace to accept writes. testcontainers
+	// returns as soon as the service port responds, but Aerospike briefly
+	// rejects writes with FAIL_FORBIDDEN ("Operation not allowed at this
+	// time") during the tail of namespace bring-up. Retry a trivial
+	// CREATE_ONLY write until it succeeds (or we give up and let the test
+	// fail with a clearer error).
+	require.NoError(t, waitForAerospikeWritesReady(client))
 
 	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&block_retention=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeBlockRetention)
 	aeroURL, err := url.Parse(aerospikeContainerURL)

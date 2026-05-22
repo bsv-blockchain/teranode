@@ -207,6 +207,7 @@ type AddBlockRequest struct {
 	OptionSubtreesSet bool                   `protobuf:"varint,9,opt,name=optionSubtreesSet,proto3" json:"optionSubtreesSet,omitempty"`                       // Option to mark subtrees as set
 	OptionInvalid     bool                   `protobuf:"varint,10,opt,name=optionInvalid,proto3" json:"optionInvalid,omitempty"`                              // Option to invalidate block when adding
 	OptionID          uint64                 `protobuf:"varint,11,opt,name=optionID,proto3" json:"optionID,omitempty"`                                        // Optional block ID
+	CoinbaseBump      []byte                 `protobuf:"bytes,12,opt,name=coinbase_bump,json=coinbaseBump,proto3" json:"coinbase_bump,omitempty"`             // Coinbase BUMP (BRC-74 merkle proof)
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -316,6 +317,13 @@ func (x *AddBlockRequest) GetOptionID() uint64 {
 		return x.OptionID
 	}
 	return 0
+}
+
+func (x *AddBlockRequest) GetCoinbaseBump() []byte {
+	if x != nil {
+		return x.CoinbaseBump
+	}
+	return nil
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
@@ -659,6 +667,7 @@ type GetBlockResponse struct {
 	SubtreeHashes    [][]byte               `protobuf:"bytes,5,rep,name=subtree_hashes,json=subtreeHashes,proto3" json:"subtree_hashes,omitempty"`           // Merkle tree subtree hashes
 	SizeInBytes      uint64                 `protobuf:"varint,6,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"`              // Total block size in bytes
 	Id               uint32                 `protobuf:"varint,7,opt,name=id,proto3" json:"id,omitempty"`                                                     // Block identifier
+	CoinbaseBump     []byte                 `protobuf:"bytes,8,opt,name=coinbase_bump,json=coinbaseBump,proto3" json:"coinbase_bump,omitempty"`              // Coinbase BUMP (BRC-74 merkle proof)
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -740,6 +749,13 @@ func (x *GetBlockResponse) GetId() uint32 {
 		return x.Id
 	}
 	return 0
+}
+
+func (x *GetBlockResponse) GetCoinbaseBump() []byte {
+	if x != nil {
+		return x.CoinbaseBump
+	}
+	return nil
 }
 
 // GetFullBlockResponse contains a complete serialized block.
@@ -5350,7 +5366,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x8f\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xb4\x03\n" +
 	"\x0fAddBlockRequest\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12%\n" +
 	"\x0esubtree_hashes\x18\x02 \x03(\fR\rsubtreeHashes\x12\x1f\n" +
@@ -5364,7 +5380,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x11optionSubtreesSet\x18\t \x01(\bR\x11optionSubtreesSet\x12$\n" +
 	"\roptionInvalid\x18\n" +
 	" \x01(\bR\roptionInvalid\x12\x1a\n" +
-	"\boptionID\x18\v \x01(\x04R\boptionID\"%\n" +
+	"\boptionID\x18\v \x01(\x04R\boptionID\x12#\n" +
+	"\rcoinbase_bump\x18\f \x01(\fR\fcoinbaseBump\"%\n" +
 	"\x0fGetBlockRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\"<\n" +
 	"\x10GetBlocksRequest\x12\x12\n" +
@@ -5381,7 +5398,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\"GetBlockInChainByHeightHashRequest\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\rR\x06height\x12\x1d\n" +
 	"\n" +
-	"start_hash\x18\x02 \x01(\fR\tstartHash\"\xeb\x01\n" +
+	"start_hash\x18\x02 \x01(\fR\tstartHash\"\x90\x02\n" +
 	"\x10GetBlockResponse\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1f\n" +
@@ -5390,7 +5407,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x11transaction_count\x18\x04 \x01(\x04R\x10transactionCount\x12%\n" +
 	"\x0esubtree_hashes\x18\x05 \x03(\fR\rsubtreeHashes\x12\"\n" +
 	"\rsize_in_bytes\x18\x06 \x01(\x04R\vsizeInBytes\x12\x0e\n" +
-	"\x02id\x18\a \x01(\rR\x02id\"@\n" +
+	"\x02id\x18\a \x01(\rR\x02id\x12#\n" +
+	"\rcoinbase_bump\x18\b \x01(\fR\fcoinbaseBump\"@\n" +
 	"\x14GetFullBlockResponse\x12(\n" +
 	"\x10full_block_bytes\x18\x01 \x01(\fR\x0efullBlockBytes\"?\n" +
 	"\x18GetBlockGraphDataRequest\x12#\n" +

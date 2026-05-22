@@ -44,6 +44,16 @@ func (m *Mock) GetLegacyBlockReader(_ context.Context, hash *chainhash.Hash, _ .
 	return args.Get(0).(*io.PipeReader), args.Error(1)
 }
 
+func (m *Mock) GetMiningCandidateLegacyBlockReader(_ context.Context, _ []byte, _ []byte, _ [][]byte, _ uint64) (*io.PipeReader, error) {
+	args := m.Called()
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*io.PipeReader), args.Error(1)
+}
+
 func (m *Mock) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "", nil
 }
@@ -212,6 +222,26 @@ func (m *Mock) GetSubtreeTxIDsReader(_ context.Context, hash *chainhash.Hash) (i
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
+func (m *Mock) GetSubtreeNodeHashesReader(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	args := m.Called(hash)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *Mock) GetSubtreeNodesPage(_ context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error) {
+	args := m.Called(hash, offset, limit)
+
+	if args.Error(2) != nil {
+		return nil, 0, args.Error(2)
+	}
+
+	return args.Get(0).([]subtree.Node), args.Int(1), args.Error(2)
+}
+
 func (m *Mock) GetSubtreeDataReaderFromBlockPersister(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	args := m.Called(hash)
 
@@ -240,6 +270,16 @@ func (m *Mock) GetSubtree(_ context.Context, hash *chainhash.Hash) (*subtree.Sub
 	}
 
 	return args.Get(0).(*subtree.Subtree), args.Error(1)
+}
+
+func (m *Mock) GetSubtreePage(_ context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error) {
+	args := m.Called(hash, offset, limit)
+
+	if args.Error(3) != nil {
+		return nil, 0, 0, args.Error(3)
+	}
+
+	return args.Get(0).(*subtree.Subtree), args.Int(1), args.Int(2), args.Error(3)
 }
 
 func (m *Mock) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {

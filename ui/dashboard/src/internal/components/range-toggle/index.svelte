@@ -44,6 +44,11 @@
           tooltip: t(`${baseKey}.3m.tooltip`),
           value: '3m',
         },
+        {
+          label: t(`${baseKey}.all.label`),
+          tooltip: t(`${baseKey}.all.tooltip`),
+          value: 'all',
+        },
       ]
     : []
 

@@ -156,7 +156,7 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 	}
 
 	// Generate proof from subtree root to block merkle root
-	blockProof, flags, err := generateBlockMerkleProof(block.Subtrees, subtreeIdx)
+	blockProof, flags, err := GenerateBlockMerkleProof(block.Subtrees, subtreeIdx)
 	if err != nil {
 		return nil, terr.NewProcessingError("failed to generate block merkle proof", err)
 	}
@@ -244,7 +244,7 @@ func ConstructSubtreeMerkleProof(subtreeHash *chainhash.Hash, repo MerkleProofCo
 	}
 
 	// Generate proof from subtree root to block merkle root
-	blockProof, flags, err := generateBlockMerkleProof(block.Subtrees, subtreeIdx)
+	blockProof, flags, err := GenerateBlockMerkleProof(block.Subtrees, subtreeIdx)
 	if err != nil {
 		return nil, terr.NewProcessingError("failed to generate block merkle proof", err)
 	}
@@ -382,7 +382,7 @@ func VerifyMerkleProofForCoinbase(proof *MerkleProof) (bool, *chainhash.Hash, er
 	return VerifyMerkleProof(proof)
 }
 
-// generateBlockMerkleProof generates the merkle proof from a subtree to the block's merkle root.
+// GenerateBlockMerkleProof generates the merkle proof from a subtree to the block's merkle root.
 // It builds a merkle tree from all subtree roots and returns the proof path for the specified subtree.
 //
 // Parameters:
@@ -393,7 +393,7 @@ func VerifyMerkleProofForCoinbase(proof *MerkleProof) (bool, *chainhash.Hash, er
 //   - []*chainhash.Hash: Array of sibling hashes forming the proof path
 //   - []int: Flags indicating if each hash is a left (0) or right (1) sibling
 //   - error: Any error encountered during proof generation
-func generateBlockMerkleProof(subtrees []*chainhash.Hash, subtreeIndex int) ([]*chainhash.Hash, []int, error) {
+func GenerateBlockMerkleProof(subtrees []*chainhash.Hash, subtreeIndex int) ([]*chainhash.Hash, []int, error) {
 	if len(subtrees) == 0 {
 		return nil, nil, terr.NewProcessingError("no subtrees in block")
 	}

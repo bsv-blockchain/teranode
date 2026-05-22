@@ -27,7 +27,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -38,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	legacypeer "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -228,47 +228,6 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		checks = append(checks, health.Check{Name: "BlockAssembly", Check: s.blockAssemblyClient.Health})
 	}
 
-	// Add custom check for peer connection
-	checks = append(checks, health.Check{
-		Name: "PeerConnection",
-		Check: func(ctx context.Context, checkLiveness bool) (int, string, error) {
-			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
-			if err != nil {
-				return http.StatusServiceUnavailable, "Failed to get peers for health check", err
-			}
-			peers := peersResp.GetPeers()
-			if len(peers) == 0 {
-				return http.StatusServiceUnavailable, "No connected peers", nil
-			}
-			return http.StatusOK, fmt.Sprintf("Connected to %d peers", len(peers)), nil
-		},
-	})
-
-	// Add custom check for recent peer activity
-	checks = append(checks, health.Check{
-		Name: "PeerActivity",
-		Check: func(ctx context.Context, checkLiveness bool) (int, string, error) {
-			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
-			if err != nil {
-				return http.StatusServiceUnavailable, "Failed to get peers for activity check", err
-			}
-			peers := peersResp.GetPeers()
-			currentTime := time.Now().Unix()
-			recentActivityThreshold := currentTime - 120 // 2 minutes in seconds
-			hasRecentActivity := false
-			for _, p := range peers {
-				if p.GetLastRecv() >= recentActivityThreshold {
-					hasRecentActivity = true
-					break
-				}
-			}
-			if !hasRecentActivity {
-				return http.StatusServiceUnavailable, "No peer activity in the last 2 minutes", nil
-			}
-			return http.StatusOK, "Recent peer activity detected", nil
-		},
-	})
-
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
@@ -294,6 +253,17 @@ func (s *Server) Init(ctx context.Context) error {
 	var err error
 
 	wire.SetLimits(4000000000)
+
+	// Stream-decode incoming "block" messages straight from the socket
+	// instead of buffering the full payload first. On multi-GB blocks the
+	// default ReadMessageWithEncodingN path allocated a fresh []byte the
+	// size of the entire block, ~2.86 GB of inuse heap at peak per the
+	// 2026-05-16 fat-block capture. The wire-level DoubleHash checksum
+	// is not preserved on this path; payload integrity is enforced by
+	// the existing downstream validation in netsync.HandleBlockDirect
+	// (PoW, merkle reconstruction, per-tx parse). See the doc comment
+	// on streamingBlockHandler for the full rationale.
+	legacypeer.RegisterStreamingBlockHandler()
 
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
@@ -647,8 +617,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[Legacy Server] Shutting down during FSM wait")
+			return err
+		}
 		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 

@@ -1,4 +1,6 @@
 // Package httpimpl provides HTTP REST API endpoints for blockchain data access.
+//
+//go:generate swagger generate spec -m -o swagger.json -w .
 package httpimpl
 
 import (
@@ -7,11 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ui/dashboard"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -31,12 +35,13 @@ var AssetStat = gocore.NewStat("Asset")
 //
 // Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
-	logger     ulogger.Logger
-	settings   *settings.Settings
-	repository repository.Interface
-	e          *echo.Echo
-	startTime  time.Time
-	privKey    crypto.PrivKey
+	logger              ulogger.Logger
+	settings            *settings.Settings
+	repository          repository.Interface
+	blockAssemblyClient blockassembly.ClientI
+	e                   *echo.Echo
+	startTime           time.Time
+	privKey             crypto.PrivKey
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -103,7 +108,7 @@ type HTTP struct {
 //   - Custom request logging in debug mode
 //   - Prometheus metrics
 //   - Statistical tracking with reset capability
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface) (*HTTP, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface, blockAssemblyClient ...blockassembly.ClientI) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -142,7 +147,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		MaxAge:           86400,
 	}))
 
-	e.Use(middleware.Gzip())
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
+	}))
 
 	e.Use(securityHeadersMiddleware())
 
@@ -156,6 +163,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		repository: repo,
 		e:          e,
 		startTime:  time.Now(),
+	}
+
+	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
+		h.blockAssemblyClient = blockAssemblyClient[0]
 	}
 
 	// add the private key for signing responses
@@ -206,8 +217,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		if err != nil {
 			logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", tSettings.Asset.PropagationProxyAddress, err)
 		} else {
-			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget))
-			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget))
+			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget, "/tx"))
+			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget, "/txs"))
 		}
 	}
 
@@ -249,7 +260,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
 	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM (also supports ?type=miningcandidate)
 
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
@@ -407,6 +418,31 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	return h, nil
+}
+
+func shouldSkipGzipForLargeBinaryAssetResponse(c echo.Context) bool {
+	path := c.Path()
+	if path == "" && c.Request() != nil && c.Request().URL != nil {
+		path = c.Request().URL.Path
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		switch part {
+		case "subtree_data":
+			return true
+		case "subtree":
+			tail := parts[i+1:]
+			if len(tail) == 1 {
+				return true
+			}
+			if len(tail) == 2 && tail[1] == "txs" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func AdaptStdHandler(handler func(w http.ResponseWriter, r *http.Request)) echo.HandlerFunc {
