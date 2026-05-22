@@ -929,6 +929,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 
+	// Single inbound tx per call, passed downstream to the validator. Stays
+	// on the standard heap path — no arena amortisation possible for a
+	// one-shot decode where the tx must outlive this function frame.
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
 	if err != nil {
 		sm.logger.Errorf("Failed to create transaction from bytes: %v", err)

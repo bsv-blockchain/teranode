@@ -172,6 +172,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 		// Load transactions for this batch of subtrees in parallel
 		subtreeTxs := make([][]*bt.Tx, len(batchSubtrees))
+		batchArenas := make([]*bt.Arena, len(batchSubtrees))
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
 
@@ -278,6 +279,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				// PHASE 2: Exact pre-allocation
 				subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, subtreeToCheck.Length())
 
+				// Allocate a per-subtree arena for zero-copy script decoding.
+				// The arena is stored in batchArenas[subtreeIdx] so it can be released
+				// after processTransactionsInLevels consumes the batch's txs.
+				arena := getSubtreeArena()
+				batchArenas[subtreeIdx] = arena
+
 				subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 				if err != nil {
 					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
@@ -302,7 +309,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					}
 
 					// Process transactions directly from the stream while storing to disk
-					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah)
+					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
 					_ = countingBody.Close()
 
 					// Track bytes downloaded from peer after stream is consumed
@@ -320,7 +327,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					}
 				} else {
 					// SubtreeData exists, extract transactions from stored file
-					err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx])
+					err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx], arena)
 					if err != nil {
 						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
 					}
@@ -331,6 +338,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 
 		if err = g.Wait(); err != nil {
+			// Release arenas allocated by goroutines that completed before the error.
+			for i := range batchArenas {
+				if batchArenas[i] != nil {
+					putSubtreeArena(batchArenas[i])
+				}
+			}
 			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to get subtree tx hashes for batch %d", batchNum, err)
 		}
 
@@ -358,6 +371,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		// Process transactions for this batch
 		if batchTxCount > 0 {
 			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, blockIds); err != nil {
+				// Release arenas before returning — txs won't be consumed further.
+				for i := range batchArenas {
+					if batchArenas[i] != nil {
+						putSubtreeArena(batchArenas[i])
+					}
+				}
 				return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in batch %d", batchNum, err)
 			}
 			totalProcessedTxs += batchTxCount
@@ -366,6 +385,17 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			// Transactions are now in UTXO store and validator cache, original slice no longer needed
 			allTransactions = nil //nolint:ineffassign // Intentional early GC hint
 		}
+
+		// Release per-subtree arenas: all *bt.Tx pointers were consumed by
+		// processTransactionsInLevels above, so the arena-backed script slices
+		// are no longer referenced and the arenas can be returned to the pool.
+		for i := range batchArenas {
+			if batchArenas[i] != nil {
+				putSubtreeArena(batchArenas[i])
+				batchArenas[i] = nil
+			}
+		}
+		batchArenas = nil //nolint:ineffassign // Intentional early GC hint
 
 		batchSubtrees = nil //nolint:ineffassign // Intentional early GC hint for batch slice view
 		u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d complete for block %s (%d txs processed, %d total), memory reclaimed", batchNum, totalBatches, block.Hash().String(), batchTxCount, totalProcessedTxs)
@@ -504,8 +534,9 @@ func (u *Server) validateMissingSubtreesWithOrderedRetry(
 }
 
 // extractAndCollectTransactions extracts all transactions from a subtree's data file
-// and adds them to the shared collection for block-wide processing
-func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *subtreepkg.Subtree, subtreeTransactions *[]*bt.Tx) error {
+// and adds them to the shared collection for block-wide processing.
+// When arena is non-nil, script bytes are arena-allocated (caller owns arena lifetime).
+func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *subtreepkg.Subtree, subtreeTransactions *[]*bt.Tx, arena *bt.Arena) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "extractAndCollectTransactions",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[extractAndCollectTransactions] called for subtree %s", subtree.RootHash().String()),
@@ -528,7 +559,7 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *sub
 	}()
 
 	// Read transactions directly into the shared collection
-	txCount, err := u.readTransactionsFromSubtreeDataStream(subtree, bufferedReader, subtreeTransactions)
+	txCount, err := u.readTransactionsFromSubtreeDataStream(subtree, bufferedReader, subtreeTransactions, arena)
 	if err != nil {
 		return errors.NewProcessingError("[extractAndCollectTransactions] failed to read transactions from subtreeData", err)
 	}
@@ -544,8 +575,9 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *sub
 
 // processSubtreeDataStream downloads subtreeData and simultaneously stores to disk while parsing transactions.
 // PHASE 1: Concurrent streaming - eliminates storage read-back by writing to disk while parsing.
+// When arena is non-nil, script bytes are arena-allocated (caller owns arena lifetime).
 func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreepkg.Subtree,
-	body io.ReadCloser, allTransactions *[]*bt.Tx, dah uint32) error {
+	body io.ReadCloser, allTransactions *[]*bt.Tx, dah uint32, arena *bt.Arena) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processSubtreeDataStream",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[processSubtreeDataStream] called for subtree %s", subtree.RootHash().String()),
@@ -581,7 +613,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 	}()
 
 	// Parse transactions while writing to storage
-	txCount, parseErr := u.readTransactionsFromSubtreeDataStream(subtree, bufferedReader, allTransactions)
+	txCount, parseErr := u.readTransactionsFromSubtreeDataStream(subtree, bufferedReader, allTransactions, arena)
 
 	// Close the pipe writer to signal completion to storage goroutine
 	// Use CloseWithError if parsing failed to properly signal the storage goroutine
@@ -614,19 +646,24 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 	return nil
 }
 
-// readTransactionsFromSubtreeDataStream reads transactions directly from subtreeData stream
-// This follows the same pattern as go-subtree's serializeFromReader but appends directly to the shared collection
-func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtree, reader io.Reader, subtreeTransactions *[]*bt.Tx) (int, error) {
+// readTransactionsFromSubtreeDataStream reads transactions directly from subtreeData stream.
+// When arena is non-nil, per-script byte slices are drawn from the arena (caller must keep
+// the arena alive for as long as the returned *bt.Tx values are in use, and call
+// putSubtreeArena only after the txs are fully consumed). When arena is nil, scripts are
+// heap-allocated via the standard tx.ReadFrom path.
+func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtree, reader io.Reader, subtreeTransactions *[]*bt.Tx, arena *bt.Arena) (int, error) {
 	txIndex := 0
 
 	if len(subtree.Nodes) > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 		txIndex = 1
 	}
 
+	var hashScratch []byte
+
 	for {
 		tx := &bt.Tx{}
 
-		_, err := tx.ReadFrom(reader)
+		_, err := tx.ReadFromWithArena(reader, arena)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// End of stream reached
@@ -641,7 +678,9 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 			txIndex = 0
 		}
 
-		tx.SetTxHash(tx.TxIDChainHash()) // Cache the transaction hash to avoid recomputing it
+		var h chainhash.Hash
+		h, hashScratch = tx.HashTxIDInto(hashScratch)
+		tx.SetTxHash(&h)
 
 		// Basic sanity check: ensure the transaction hash matches the expected hash from the subtree
 		if txIndex < subtree.Length() {

@@ -144,6 +144,12 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("failed to serialize coinbase", err)
 	}
 
+	// Single coinbase decode per block, retained into the teranodeBlock model
+	// for downstream use; stays on the standard heap path. The arena variant
+	// would require Put before return, at which point coinbaseTx's scripts
+	// would alias soon-to-be-reused memory. Per-block tx loops in legacy
+	// ingestion live in bsvutil/subtree-assembly, which works with
+	// bsvutil.Tx (not bt.Tx) and never round-trips through go-bt decode.
 	coinbaseTx, err := bt.NewTxFromBytes(coinbase.Bytes())
 	if err != nil {
 		return errors.NewProcessingError("failed to create bt.Tx for coinbase", err)
