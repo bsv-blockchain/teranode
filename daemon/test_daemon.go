@@ -130,6 +130,10 @@ type TestOptions struct {
 	// Log format: [TestName:serviceName] LEVEL: message
 	// This provides consistent formatting and ensures all logs are captured by go test.
 	UseUnifiedLogger bool
+	// WaitForHealthReadiness waits for the readiness endpoint after daemon startup.
+	// By default tests only wait for liveness because some narrow daemon configurations
+	// intentionally start without every readiness dependency.
+	WaitForHealthReadiness bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -507,7 +511,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
-	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	if opts.WaitForHealthReadiness {
+		require.NoError(t, WaitForHealthReadiness(ports, 10*time.Second))
+	} else {
+		require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	}
 
 	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
 	// Aerospike may accept connections but still reject operations immediately after multiple
@@ -1775,13 +1783,22 @@ func (td *TestDaemon) GetTxStore() (blob.Store, error) {
 
 // WaitForHealthLiveness waits for the health liveness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/liveness")
+}
+
+// WaitForHealthReadiness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+func WaitForHealthReadiness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/readiness")
+}
+
+func waitForHealthEndpoint(ports []int, timeout time.Duration, path string) error {
 	timeoutElapsed := time.After(timeout)
 	localHealthClient := &http.Client{Timeout: time.Second}
 
 	var err error
 
 	for _, port := range ports {
-		healthLivenessEndpoint := fmt.Sprintf("http://localhost:%d/health/liveness", port)
+		healthEndpoint := fmt.Sprintf("http://localhost:%d%s", port, path)
 
 	out:
 		for {
@@ -1789,7 +1806,7 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 			case <-timeoutElapsed:
 				return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 			default:
-				resp, requestErr := localHealthClient.Get(healthLivenessEndpoint)
+				resp, requestErr := localHealthClient.Get(healthEndpoint)
 				if resp != nil && resp.Body != nil {
 					_ = resp.Body.Close()
 				}
@@ -1805,7 +1822,6 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 
 					continue
 				}
-				err = nil
 
 				break out
 			}

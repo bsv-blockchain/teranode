@@ -317,7 +317,6 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 
 				continue
 			}
-			err = nil
 
 			return nil
 		}
