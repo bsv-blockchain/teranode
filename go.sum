@@ -198,8 +198,8 @@ github.com/bsv-blockchain/go-subtree v1.4.2 h1:T6a6r051eTAuYs8D01O8MM8wzRnfkhush
 github.com/bsv-blockchain/go-subtree v1.4.2/go.mod h1:ef+NCE9gION7YIOHdguW3thOlIyyuuxrfDEwv0Ywc3Q=
 github.com/bsv-blockchain/go-tx-map v1.3.7 h1:59LVYW2bvax/WbyM1eUNkrojXNrVu9f0lAuKbNryEbQ=
 github.com/bsv-blockchain/go-tx-map v1.3.7/go.mod h1:QJo02rdqFTHaimSTCgl6mLMLwIDtykwWTC1lt7nrhY8=
-github.com/bsv-blockchain/go-wire v1.2.5 h1:A29P4pwvZEnr3u5PxNkog/K7Bx3YvBlR5/nmq7+ijcI=
-github.com/bsv-blockchain/go-wire v1.2.5/go.mod h1:iPJctM+SdFfeLYqMGnmoSIAWeKName4dxMWx/FMmYeQ=
+github.com/bsv-blockchain/go-wire v1.2.6 h1:DWMXerY6o9QIYV55blLmdCYOxDq8oRpbNqfiD0jzTfA=
+github.com/bsv-blockchain/go-wire v1.2.6/go.mod h1:iPJctM+SdFfeLYqMGnmoSIAWeKName4dxMWx/FMmYeQ=
 github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2 h1:wuQkh6oGYkHDEPDFA+MDsgYrXdibzrwZxx277ZBevZ4=
 github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2/go.mod h1:KlSRfAvk+qsKyCXeF8qEAijNC4H8zhWOnmNkP2wIwQk=
 github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd h1:R/opQEbFEy9JGkIguV40SvRY1uliPX8ifOvi6ICsFCw=

@@ -1932,8 +1932,17 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable
-	maxBlockQueue := 10_000
+	// TODO make this configurable.
+	//
+	// This buffer pins one *wire.MsgBlock per slot. Each MsgBlock carries
+	// its go-wire decode arena (≥4 MiB per block today), so the previous
+	// 10_000-deep queue could pin ~40 GiB of arena memory ahead of the
+	// sequential processor. On a memory-constrained box that turns into
+	// the dominant live-heap source and starves the GC. Cap at a small
+	// value: enough to absorb processor-stall jitter, far below anything
+	// that would meaningfully pin memory. The downloader naturally
+	// back-pressures via TCP when the queue is full.
+	maxBlockQueue := 100
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)

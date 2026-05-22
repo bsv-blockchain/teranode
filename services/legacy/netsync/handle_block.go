@@ -182,15 +182,28 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// process any orphan transactions that are now valid in background
-	// this will also remove the transactions from the orphan pool
+	// this will also remove the transactions from the orphan pool.
+	//
+	// Pre-extract the tx hashes here, before launching the goroutine, so the
+	// background work does not keep `block` (and therefore the wire.MsgBlock
+	// + its decode arena) reachable for the lifetime of orphan processing.
+	// Copy the hash *values* (not the *chainhash.Hash pointers returned by
+	// tx.Hash(), which alias into the bsvutil.Tx wrapper and would pin it).
+	wireTxs := block.Transactions()
+	txHashes := make([]chainhash.Hash, len(wireTxs))
+	for i, tx := range wireTxs {
+		txHashes[i] = *tx.Hash()
+	}
+	blockHashStr := block.Hash().String()
+
 	go func() {
 		acceptedTxs := make([]*TxHashAndFee, 0)
-		for _, tx := range block.Transactions() {
-			sm.processOrphanTransactions(ctx, tx.Hash(), &acceptedTxs)
+		for i := range txHashes {
+			sm.processOrphanTransactions(ctx, &txHashes[i], &acceptedTxs)
 		}
 
 		if len(acceptedTxs) > 0 {
-			sm.logger.Infof("[HandleBlockDirect][%s %d] accepted %d orphan transactions", block.Hash().String(), blockHeight, len(acceptedTxs))
+			sm.logger.Infof("[HandleBlockDirect][%s %d] accepted %d orphan transactions", blockHashStr, blockHeight, len(acceptedTxs))
 			sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
 		}
 	}()
@@ -1312,8 +1325,13 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
-			tx.SetTxHash(wireTx.Hash())
-			txMap.Set(*tx.TxIDChainHash(), &TxMapWrapper{Tx: tx})
+			// Copy the hash value out of the bsvutil.Tx wrapper. bt.Tx.SetTxHash
+			// stores the pointer, so passing wireTx.Hash() directly would keep
+			// the wrapping wire.MsgTx (and its decode arena) alive through this
+			// bt.Tx and the TxMapWrapper it lands in.
+			hashCopy := *wireTx.Hash()
+			tx.SetTxHash(&hashCopy)
+			txMap.Set(hashCopy, &TxMapWrapper{Tx: tx})
 		}
 	}
 
@@ -1483,8 +1501,16 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *
 	return nil
 }
 
-// WireTxToGoBtTx converts a wire.Tx to a bt.Tx
-// This does not use the bytes methods, but directly uses the fields of the wire.Tx
+// WireTxToGoBtTx converts a wire.Tx to a bt.Tx.
+//
+// Script bytes are *copied* (not aliased) so the resulting bt.Tx is fully
+// independent of the source wire.MsgBlock's decode arena. This is the
+// load-bearing fix for legacy-sync GC pressure: aliasing kept the arena's
+// 4 MiB chunks reachable for the entire downstream pipeline lifetime
+// (subtree prep, validation, persistence, the orphan goroutine below), so
+// arenas piled up across all in-flight blocks and dominated the live heap.
+// Copying lets the arena and its containing MsgBlock be reclaimed as soon
+// as this function (and any other consumers in HandleBlockDirect) returns.
 func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 	wTx := wireTx.MsgTx()
 
@@ -1499,7 +1525,7 @@ func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 			SequenceNumber:     in.Sequence,
 		}
 		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
-		*tx.Inputs[i].UnlockingScript = in.SignatureScript
+		*tx.Inputs[i].UnlockingScript = bytes.Clone(in.SignatureScript)
 	}
 
 	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
@@ -1508,7 +1534,7 @@ func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 			Satoshis:      uint64(out.Value),
 			LockingScript: &bscript.Script{},
 		}
-		*tx.Outputs[i].LockingScript = out.PkScript
+		*tx.Outputs[i].LockingScript = bytes.Clone(out.PkScript)
 	}
 
 	return nil

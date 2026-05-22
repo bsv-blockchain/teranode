@@ -557,7 +557,10 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 	// zeroed wholesale; keys/values are nil'd only for the buckets we actually
 	// populated (cheap walk via counts).
 	defer func() {
-		for i, n := range s.counts {
+		// Range over slice views to avoid copying the underlying fixed-size
+		// arrays ([BucketsCount]int = 64 KB, [BucketsCount][][]byte ≈ 192 KB)
+		// on every call.
+		for i, n := range s.counts[:] {
 			if n > 0 {
 				s.keys[i] = nil
 				s.values[i] = nil
@@ -583,8 +586,9 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 		s.counts[h%BucketsCount]++
 	}
 
-	// Pre-size each non-empty bucket sub-slice exactly.
-	for i, n := range s.counts {
+	// Pre-size each non-empty bucket sub-slice exactly. Range over the slice
+	// view so the loop does not copy the 64 KB counts array.
+	for i, n := range s.counts[:] {
 		if n == 0 {
 			continue
 		}
@@ -603,7 +607,9 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 
 	g := errgroup.Group{}
 
-	for bucketIdx := range s.keys {
+	// Range over the slice view so the loop does not copy the 192 KB keys
+	// array.
+	for bucketIdx := range s.keys[:] {
 		if s.counts[bucketIdx] == 0 {
 			continue
 		}
