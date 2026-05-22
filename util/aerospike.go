@@ -366,8 +366,17 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 
 	logger.Debugf("url %s policy %#v\n", url, policy)
 
+	// Apply the aerospike_semaphore_multiplier setting to the in-process
+	// uaerospike connection-semaphore. 1.0 (default) preserves prior
+	// behavior; 0 disables the semaphore so concurrency is governed only by
+	// the underlying aerospike-client-go connection pool. See
+	// util/uaerospike.WithSemaphoreMultiplier for the precise contract.
+	clientOpts := []uaerospike.ClientOption{
+		uaerospike.WithSemaphoreMultiplier(tSettings.Aerospike.SemaphoreMultiplier),
+	}
+
 	// policy = aerospike.NewClientPolicy()
-	client, err := uaerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHostOpts(policy, hosts, clientOpts)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package uaerospike
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,11 @@ const (
 
 	// minSemaphoreTimeout is the minimum timeout for semaphore acquisition
 	minSemaphoreTimeout = 100 * time.Millisecond
+
+	// defaultSemaphoreMultiplier preserves the original semaphore sizing
+	// (one slot per ConnectionQueueSize-derived permit) when no option is
+	// supplied by the caller.
+	defaultSemaphoreMultiplier = 1.0
 )
 
 // getConnectionQueueSize returns the connection queue size from the given policy
@@ -32,6 +38,73 @@ func getConnectionQueueSize(policy *aerospike.ClientPolicy) int {
 		return policy.ConnectionQueueSize
 	}
 	return DefaultConnectionQueueSize
+}
+
+// clientConfig holds optional construction-time settings for Client. Populated
+// by applying ClientOption values; obtain a defaults-applied instance via
+// newClientConfig.
+type clientConfig struct {
+	// semaphoreMultiplier scales the connection-queue-derived semaphore
+	// capacity. A value of 0 (or negative) disables the semaphore entirely
+	// — every acquirePermit becomes a no-op and the underlying aerospike
+	// client governs concurrency on its own. Default: 1.0.
+	semaphoreMultiplier float64
+}
+
+// ClientOption configures a Client at construction time.
+type ClientOption func(*clientConfig)
+
+// WithSemaphoreMultiplier scales the connection-queue-derived semaphore
+// capacity for the constructed Client.
+//
+//	multiplier <= 0  disables the semaphore entirely. All permit acquires
+//	                 become no-ops; only the underlying aerospike client's
+//	                 own connection pool governs concurrency.
+//	multiplier  > 0  scales the queue size derived from the policy (or
+//	                 DefaultConnectionQueueSize):
+//	                     scaledQueue = max(1, round(queueSize * multiplier))
+//	                 e.g. 2.0 doubles capacity, 0.5 halves it.
+//
+// Typical uses:
+//   - 0 to opt out of the in-process throttle when the workload is already
+//     bounded upstream and the parking overhead is undesirable.
+//   - <1 to over-restrict (sharing the aerospike server with other clients).
+//   - >1 when the deployment has been verified to handle more concurrent
+//     operations than the default queue size implies.
+func WithSemaphoreMultiplier(multiplier float64) ClientOption {
+	return func(c *clientConfig) {
+		c.semaphoreMultiplier = multiplier
+	}
+}
+
+func newClientConfig(opts []ClientOption) *clientConfig {
+	cfg := &clientConfig{
+		semaphoreMultiplier: defaultSemaphoreMultiplier,
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
+	return cfg
+}
+
+// buildConnSemaphore returns the buffered channel used as the connection
+// semaphore, or nil when the multiplier disables it. nil is the documented
+// signal to acquirePermit / releasePermit that the throttle is off.
+func buildConnSemaphore(queueSize int, multiplier float64) chan struct{} {
+	if multiplier <= 0 {
+		return nil
+	}
+
+	scaled := int(math.Round(float64(queueSize) * multiplier))
+	if scaled < 1 {
+		scaled = 1
+	}
+
+	return make(chan struct{}, scaled)
 }
 
 // ClientStats holds the statistics for Aerospike operations
@@ -59,11 +132,14 @@ type Client struct {
 }
 
 // NewClient creates a new Aerospike client with the specified hostname and port.
-func NewClient(hostname string, port int) (*Client, error) {
+// Optional ClientOptions (e.g. WithSemaphoreMultiplier) tune behaviour.
+func NewClient(hostname string, port int, opts ...ClientOption) (*Client, error) {
 	client, err := aerospike.NewClient(hostname, port)
 	if err != nil {
 		return nil, err
 	}
+
+	cfg := newClientConfig(opts)
 
 	// Get queue size from default policy
 	policy := aerospike.NewClientPolicy()
@@ -71,13 +147,22 @@ func NewClient(hostname string, port int) (*Client, error) {
 
 	return &Client{
 		Client:        client,
-		connSemaphore: make(chan struct{}, queueSize),
+		connSemaphore: buildConnSemaphore(queueSize, cfg.semaphoreMultiplier),
 		stats:         NewClientStats(),
 	}, nil
 }
 
 // NewClientWithPolicyAndHost creates a new Aerospike client with the specified policy and hosts.
+// Optional ClientOptions (e.g. WithSemaphoreMultiplier) tune behaviour and must be supplied via
+// NewClientWithPolicyAndHostOpts to keep the existing variadic-host signature intact.
 func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerospike.Host) (*Client, aerospike.Error) {
+	return NewClientWithPolicyAndHostOpts(policy, hosts, nil)
+}
+
+// NewClientWithPolicyAndHostOpts is the option-aware variant of
+// NewClientWithPolicyAndHost. hosts and opts are accepted as explicit slices
+// (rather than variadic) so the two slice arguments don't collide.
+func NewClientWithPolicyAndHostOpts(policy *aerospike.ClientPolicy, hosts []*aerospike.Host, opts []ClientOption) (*Client, aerospike.Error) {
 	var (
 		client *aerospike.Client
 		err    aerospike.Error
@@ -126,11 +211,12 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 		return nil, err
 	}
 
+	cfg := newClientConfig(opts)
 	queueSize := getConnectionQueueSize(policy)
 
 	return &Client{
 		Client:        client,
-		connSemaphore: make(chan struct{}, queueSize),
+		connSemaphore: buildConnSemaphore(queueSize, cfg.semaphoreMultiplier),
 		stats:         NewClientStats(),
 	}, nil
 }
@@ -304,7 +390,15 @@ func (c *Client) GetConnectionQueueSize() int {
 //
 // Accepts any Aerospike policy type (BasePolicy, WritePolicy, BatchPolicy) as they all
 // embed BasePolicy which contains TotalTimeout.
+//
+// When the client was constructed with WithSemaphoreMultiplier(0) (or any
+// non-positive multiplier) the semaphore is disabled and acquirePermit is
+// an unconditional no-op — releasePermit mirrors that and skips the receive.
 func (c *Client) acquirePermit(policy any) aerospike.Error {
+	if c.connSemaphore == nil {
+		return nil
+	}
+
 	totalTimeout := time.Duration(0)
 
 	// Extract timeout from policy if available
@@ -349,8 +443,13 @@ func (c *Client) acquirePermit(policy any) aerospike.Error {
 	}
 }
 
-// releasePermit releases a permit back to the connection semaphore.
+// releasePermit releases a permit back to the connection semaphore. No-op
+// when the semaphore was disabled at construction time (multiplier <= 0).
 func (c *Client) releasePermit() {
+	if c.connSemaphore == nil {
+		return
+	}
+
 	<-c.connSemaphore
 }
 

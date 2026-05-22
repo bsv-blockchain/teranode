@@ -8,6 +8,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClient_Put(t *testing.T) {
@@ -198,6 +199,76 @@ func TestGetConnectionQueueSize(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestBuildConnSemaphore(t *testing.T) {
+	tests := []struct {
+		name        string
+		queueSize   int
+		multiplier  float64
+		expectNil   bool
+		expectedCap int
+	}{
+		{name: "default multiplier preserves queue size", queueSize: 128, multiplier: 1.0, expectNil: false, expectedCap: 128},
+		{name: "zero multiplier disables semaphore", queueSize: 128, multiplier: 0, expectNil: true},
+		{name: "negative multiplier disables semaphore", queueSize: 128, multiplier: -1, expectNil: true},
+		{name: "fractional multiplier scales down with rounding", queueSize: 128, multiplier: 0.5, expectNil: false, expectedCap: 64},
+		{name: "fractional multiplier rounds half up", queueSize: 5, multiplier: 0.5, expectNil: false, expectedCap: 3},
+		{name: "double multiplier scales up", queueSize: 128, multiplier: 2.0, expectNil: false, expectedCap: 256},
+		{name: "tiny positive multiplier clamps to 1", queueSize: 128, multiplier: 0.001, expectNil: false, expectedCap: 1},
+		{name: "large multiplier passes through", queueSize: 256, multiplier: 8.0, expectNil: false, expectedCap: 2048},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := buildConnSemaphore(tt.queueSize, tt.multiplier)
+			if tt.expectNil {
+				assert.Nil(t, ch, "expected nil channel when multiplier <= 0")
+				return
+			}
+
+			require.NotNil(t, ch)
+			assert.Equal(t, tt.expectedCap, cap(ch))
+		})
+	}
+}
+
+// TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp verifies that constructing
+// a Client with WithSemaphoreMultiplier(0) leaves the semaphore unset and that
+// acquirePermit / releasePermit are no-ops — i.e. arbitrary numbers of
+// concurrent callers can proceed without parking on the semaphore.
+func TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp(t *testing.T) {
+	c := &Client{
+		Client:        nil,
+		connSemaphore: buildConnSemaphore(128, 0),
+	}
+	assert.Nil(t, c.connSemaphore)
+	assert.Equal(t, 0, c.GetConnectionQueueSize(), "disabled semaphore reports 0 capacity")
+
+	// Acquire many "permits" in sequence — none of these should block or
+	// panic because the semaphore is disabled.
+	for i := 0; i < 1000; i++ {
+		err := c.acquirePermit(nil)
+		require.Nil(t, err)
+		c.releasePermit()
+	}
+}
+
+// TestWithSemaphoreMultiplier_Scaling verifies the option overrides the
+// default 1.0 multiplier when applied via newClientConfig.
+func TestWithSemaphoreMultiplier_Scaling(t *testing.T) {
+	cfg := newClientConfig([]ClientOption{WithSemaphoreMultiplier(4.0)})
+	assert.InDelta(t, 4.0, cfg.semaphoreMultiplier, 0)
+
+	cfg = newClientConfig(nil)
+	assert.InDelta(t, defaultSemaphoreMultiplier, cfg.semaphoreMultiplier, 0)
+
+	cfg = newClientConfig([]ClientOption{WithSemaphoreMultiplier(0)})
+	assert.InDelta(t, 0.0, cfg.semaphoreMultiplier, 0)
+
+	// nil option entries are tolerated.
+	cfg = newClientConfig([]ClientOption{nil, WithSemaphoreMultiplier(0.25), nil})
+	assert.InDelta(t, 0.25, cfg.semaphoreMultiplier, 0)
 }
 
 func TestClient_ConcurrentOperations(t *testing.T) {
