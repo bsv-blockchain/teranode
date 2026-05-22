@@ -722,7 +722,10 @@ func buildInRangeFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMa
 	}
 	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	// No size limit: callers (e.g. the NilParentTx tests) re-Set entries on this
+	// map, and SyncedMap's limit semantics evict a *random* key when len >= limit,
+	// which would non-deterministically drop the child and turn the test flaky.
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper]()
 	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
 	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
 

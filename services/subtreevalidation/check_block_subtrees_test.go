@@ -877,7 +877,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 		// Test extraction
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, allTransactions, 2)
@@ -903,7 +903,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get subtreeData from store")
 	})
@@ -927,7 +927,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to read transactions from subtreeData")
 	})
@@ -963,7 +963,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.NoError(t, err)
 
 		// Verify transactions were collected
@@ -1007,7 +1007,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to store subtree data")
 		// With streaming approach, if storage fails, no transactions are collected
@@ -1035,7 +1035,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error reading transaction")
 	})
@@ -1067,7 +1067,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Equal(t, 3, count)         // includes coinbase in the count
@@ -1087,7 +1087,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		// Don't add any nodes - this means 0 transactions expected
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &emptyBuffer, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &emptyBuffer, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Equal(t, 0, count)
@@ -1133,7 +1133,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		subtreeData.Write(tx1.Bytes())
 
 		var allTransactions []*bt.Tx
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.NoError(t, err)
 
 		// Should succeed — the coinbase placeholder at index 0 is allowed when the tx is coinbase
@@ -1164,7 +1164,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		subtreeData.Write(tx2.Bytes())
 
 		var allTransactions []*bt.Tx
-		_, err = server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		_, err = server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "transaction hash mismatch")
 	})
@@ -2008,13 +2008,13 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtree1, &transactions1)
+		err := server.extractAndCollectTransactions(context.Background(), subtree1, &transactions1, nil)
 		assert.NoError(t, err)
 	}()
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtree2, &transactions2)
+		err := server.extractAndCollectTransactions(context.Background(), subtree2, &transactions2, nil)
 		assert.NoError(t, err)
 	}()
 
