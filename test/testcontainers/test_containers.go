@@ -293,6 +293,7 @@ func (tc *TestContainer) Cleanup(t *testing.T) {
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
 	timeoutElapsed := time.After(timeout)
+	localHealthClient := &http.Client{Timeout: time.Second}
 
 	var err error
 
@@ -301,12 +302,23 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 		case <-timeoutElapsed:
 			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
-			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
-			if err != nil {
+			resp, requestErr := localHealthClient.Get(healthReadinessEndpoint)
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if requestErr != nil {
+				err = requestErr
 				time.Sleep(100 * time.Millisecond)
 
 				continue
 			}
+			if resp.StatusCode != http.StatusOK {
+				err = errors.NewError("health check returned status code %d", resp.StatusCode)
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+			err = nil
 
 			return nil
 		}

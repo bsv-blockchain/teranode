@@ -74,9 +74,8 @@ func isBlockedDialIP(ip net.IP) bool {
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
-		"fc00::/7",   // IPv6 unique-local
-		"fe80::/10",  // IPv6 link-local
-		"::1/128",    // IPv6 loopback
+		"fc00::/7",  // IPv6 unique-local
+		"fe80::/10", // IPv6 link-local
 	}
 	for _, cidrStr := range privateRanges {
 		_, cidr, err := net.ParseCIDR(cidrStr)
