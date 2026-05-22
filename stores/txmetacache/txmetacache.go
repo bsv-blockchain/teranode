@@ -19,8 +19,8 @@ package txmetacache
 import (
 	"context"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -48,7 +48,36 @@ type metrics struct {
 	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
 	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
 	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
+	getOrigin  atomic.Uint64 // Tracks origin-store metadata retrievals
 	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
+}
+
+const (
+	txMetaCacheReadBufferInitialCapacity = 1024
+	txMetaCacheReadBufferMaxRetain       = 64 * 1024
+)
+
+var txMetaCacheReadBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+		return &buf
+	},
+}
+
+func getTxMetaCacheReadBuffer() *[]byte {
+	buf := txMetaCacheReadBufferPool.Get().(*[]byte)
+	*buf = (*buf)[:0]
+	return buf
+}
+
+func putTxMetaCacheReadBuffer(buf *[]byte) {
+	if cap(*buf) > txMetaCacheReadBufferMaxRetain {
+		*buf = make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+	} else {
+		*buf = (*buf)[:0]
+	}
+
+	txMetaCacheReadBufferPool.Put(buf)
 }
 
 // TxMetaCache wraps a utxo.Store implementation and adds caching capabilities for transaction metadata.
@@ -119,6 +148,12 @@ const (
 	// less frequently used entries to maintain a smaller memory footprint.
 	// Suitable for long-running services with memory constraints.
 	Trimmed
+
+	// Native uses Go's native map (Swiss Tables in Go 1.24+) for the bucket index
+	// instead of the dolthub Swiss map. Recommended for general-purpose use as it
+	// benefits from Go runtime optimisations and avoids external dependencies.
+	// Offers the best read/write throughput in most workloads.
+	Native
 )
 
 // NewTxMetaCache creates a new transaction metadata cache that wraps an existing UTXO store.
@@ -137,8 +172,8 @@ const (
 // - A utxo.Store interface that can be used in place of the original store
 // - Error if initialization fails
 //
-// The function starts a background goroutine that updates Prometheus metrics every 5 seconds
-// to provide operational visibility into cache performance.
+// The function registers the cache with the package-level Prometheus updater, which publishes
+// aggregate metrics for all active TxMetaCache instances in the process.
 func NewTxMetaCache(
 	ctx context.Context,
 	tSettings *settings.Settings,
@@ -184,31 +219,10 @@ func NewTxMetaCache(
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 	}
 
+	unregisterMetrics := registerTxMetaCacheMetrics(m)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				cacheStats := m.GetCacheStats()
-				if prometheusBlockValidationTxMetaCacheInsertions != nil {
-					// prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
-					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
-					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
-					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
-					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
-					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
-					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
-					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
-					prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(cacheStats.ValidEntriesCount))
-					prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(cacheStats.CurrentGenEntries))
-					prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(cacheStats.PreviousGenEntries))
-					prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(m.metrics.hitOldTx.Load()))
-				}
-			}
-		}
+		<-ctx.Done()
+		unregisterMetrics()
 	}()
 
 	return m, nil
@@ -280,6 +294,56 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+// SetCacheMultiSequential is the partition-aware twin of SetCacheMulti. It
+// appends the current block height to each value (same as SetCacheMulti) and
+// then delegates to ImprovedCache.SetMultiSequential, which performs all
+// bucket writes on the calling goroutine without errgroup fan-out.
+//
+// Use this in receivers that already have parallelism elsewhere (one
+// goroutine per Kafka partition, partitions aligned with disjoint cache
+// bucket ranges). See SetMultiSequential's doc for the throughput rationale.
+func (t *TxMetaCache) SetCacheMultiSequential(keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	valuesWithHeight := make([][]byte, len(values))
+	for i, value := range values {
+		valuesWithHeight[i] = t.appendHeightToValue(value)
+	}
+
+	if err := t.cache.SetMultiSequential(keys, valuesWithHeight); err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
+// SetCacheMultiSequentialWithHashes is SetCacheMultiSequential with caller-
+// supplied xxhash values, allowing the v2 txmeta receiver to skip its own
+// xxhash by reading the hash from the wire format. hashes[i] MUST equal
+// xxhash.Sum64(keys[i]) — see ImprovedCache.SetMultiSequentialWithHashes.
+func (t *TxMetaCache) SetCacheMultiSequentialWithHashes(keys [][]byte, values [][]byte, hashes []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	valuesWithHeight := make([][]byte, len(values))
+	for i, value := range values {
+		valuesWithHeight[i] = t.appendHeightToValue(value)
+	}
+
+	if err := t.cache.SetMultiSequentialWithHashes(keys, valuesWithHeight, hashes); err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
 func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) error {
 
 	err := t.cache.SetMulti(keys, values)
@@ -308,29 +372,44 @@ func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) err
 // 2. Validates that the data is not empty
 // 3. Checks if the data has expired based on block height
 // All these conditions have corresponding metrics incremented for monitoring.
-func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
-	cachedBytes := make([]byte, 0, 64)
+func (t *TxMetaCache) GetMetaCached(ctx context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
+	cachedBytes := getTxMetaCacheReadBuffer()
+	defer putTxMetaCacheReadBuffer(cachedBytes)
+
+	var (
+		found bool
+		err   error
+	)
+
+	*cachedBytes, found, err = t.GetMetaCachedWithBuffer(ctx, hash, txmetaData, *cachedBytes)
+	return found, err
+}
+
+// GetMetaCachedWithBuffer retrieves transaction metadata from the cache using a caller-owned
+// scratch buffer. The returned buffer should be reused by the caller on subsequent calls.
+func (t *TxMetaCache) GetMetaCachedWithBuffer(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data, cachedBytes []byte) ([]byte, bool, error) {
+	cachedBytes = cachedBytes[:0]
 
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
 
-		return false, err
+		return cachedBytes, false, err
 	}
 
 	if len(cachedBytes) == 0 {
 		t.metrics.misses.Add(1)
 		t.logger.Warnf("txMetaCache empty for %s", hash.String())
 
-		return false, nil
+		return cachedBytes, false, nil
 	}
 
 	t.metrics.hits.Add(1)
 
 	if err := meta.NewMetaDataFromBytes(cachedBytes, txmetaData); err != nil {
-		return false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
+		return cachedBytes, false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
 	}
 
-	return true, nil
+	return cachedBytes, true, nil
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
@@ -347,17 +426,18 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash, txme
 // This is one of the primary interface methods that proxies calls to the underlying store
 // with a caching layer in between for improved performance.
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	cachedBytes := make([]byte, 0)
+	cachedBytes := getTxMetaCacheReadBuffer()
+	defer putTxMetaCacheReadBuffer(cachedBytes)
 
-	err := t.cache.Get(&cachedBytes, hash[:])
+	err := t.cache.Get(cachedBytes, hash[:])
 	if err != nil && !errors.Is(err, errors.ErrNotFound) {
 		return err
 	}
 
-	if len(cachedBytes) > 0 {
+	if len(*cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
 
-		if err = meta.NewMetaDataFromBytes(cachedBytes, data); err != nil {
+		if err = meta.NewMetaDataFromBytes(*cachedBytes, data); err != nil {
 			return err
 		}
 
@@ -373,10 +453,10 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *m
 		return err
 	}
 
-	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
+	t.metrics.getOrigin.Add(1)
 
-	// add to cache, but only if the blockIDs have not been set
-	if len(data.BlockIDs) == 0 {
+	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
+	if len(data.BlockIDs) == 0 && !data.Conflicting {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
 	}
@@ -418,7 +498,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		return err
 	}
 
-	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
+	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and call SetCacheMulti.
 	// Note: values are serialized the same way SetCache() does (MetaBytes + height appended inside SetCacheMulti).
@@ -427,6 +507,11 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 
 	for _, data := range hashes {
 		if data == nil || data.Data == nil {
+			continue
+		}
+
+		if len(data.Data.BlockIDs) > 0 || data.Data.Conflicting {
+			// Skip transactions that have already been mined or are marked as conflicting
 			continue
 		}
 
@@ -505,8 +590,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return txMeta, nil
 }
 
-// setMinedInCache updates the cache with information about a transaction that has been mined in a block.
-// This internal helper method is used by both SetMined and SetMinedMulti to maintain cache consistency.
+// SetMined marks a transaction as mined in the underlying store and evicts it
+// from the cache. The cache is populated on read only for txs with no block IDs
+// and not flagged conflicting (see GetMeta), so a newly mined tx must not stay
+// in the cache; subsequent reads will go through to the store.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -514,53 +601,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // - minedBlockInfo: Information about the block where the transaction was mined
 //
 // Returns:
-// - Error if updating the transaction metadata fails
-func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (blockIDs []uint32, err error) {
-	var txMeta *meta.Data
-
-	txMeta, err = t.Get(ctx, hash)
-	if err != nil {
-		txMeta, err = t.utxoStore.Get(ctx, hash)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	if txMeta.BlockIDs == nil {
-		txMeta.BlockIDs = []uint32{
-			minedBlockInfo.BlockID,
-		}
-	} else {
-		txMeta.BlockIDs = append(txMeta.BlockIDs, minedBlockInfo.BlockID)
-	}
-
-	// if the blockID is not set, then we need to set it
-	if len(txMeta.BlockIDs) == 0 {
-		// don't return errors from SetCache, as it is not critical if the cache fails to set
-		_ = t.SetCache(hash, txMeta)
-	}
-
-	return txMeta.BlockIDs, nil
-}
-
-// SetMined marks a transaction as mined in a specific block, updating both the
-// underlying store and the cache to maintain consistency.
-//
-// Parameters:
-// - ctx: Context for the operation
-// - hash: Hash of the transaction to mark as mined
-// - minedBlockInfo: Information about the block where the transaction was mined
-//
-// Returns:
-// - Error if updating either the underlying store or cache fails
+// - The block IDs returned by the underlying store for this tx
+// - Error if the underlying store fails
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) ([]uint32, error) {
-	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = t.setMinedInCache(ctx, hash, minedBlockInfo)
+	blockIDsMap, err := t.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -568,8 +612,10 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 	return blockIDsMap[*hash], nil
 }
 
-// SetMinedMulti marks multiple transactions as mined in a specific block.
-// This batch operation is more efficient than calling SetMined multiple times.
+// SetMinedMulti marks transactions as mined in the underlying store and evicts
+// them from the cache. The cache read path skips entries with block IDs (see
+// GetMeta), so mined txs must not remain in the cache; subsequent reads go to
+// the store. Eviction is best-effort: Delete never errors.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -577,17 +623,41 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 // - minedBlockInfo: Information about the block where the transactions were mined
 //
 // Returns:
-// - Error if updating the cache for any transaction fails
+// - The store's blockIDsMap on success
+// - Error if the underlying store fails
 func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
-	blockIDsMap := make(map[chainhash.Hash][]uint32, len(hashes))
+	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, hashes, minedBlockInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	// Defensive postcondition (see stores/utxo/Interface.go SetMinedMulti
+	// docstring): as an implementation of utxo.Store, re-verify coverage even
+	// when the wrapped store says success. Catches regressions in any backend
+	// before the cache layer hides them.
+	if !minedBlockInfo.UnsetMined {
+		for _, h := range hashes {
+			bIDs, ok := blockIDsMap[*h]
+			if !ok {
+				return nil, errors.NewTxNotFoundError("setMinedMulti coverage gap: tx absent from store result", h.String())
+			}
+
+			found := false
+			for _, bID := range bIDs {
+				if bID == minedBlockInfo.BlockID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return nil, errors.NewProcessingError("setMinedMulti coverage gap: tx present but missing current blockID", h.String())
+			}
+		}
+	}
 
 	for _, hash := range hashes {
-		blockIDs, err := t.setMinedInCache(ctx, hash, minedBlockInfo)
-		if err != nil {
-			return nil, err
-		}
-
-		blockIDsMap[*hash] = blockIDs
+		_ = t.Delete(ctx, hash)
 	}
 
 	return blockIDsMap, nil
@@ -613,12 +683,28 @@ func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chain
 	return nil
 }
 
-func (t *TxMetaCache) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (t *TxMetaCache) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("not implemented")
+}
+
+func (t *TxMetaCache) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	return nil, errors.NewProcessingError("not implemented")
 }
 
 func (t *TxMetaCache) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	return t.utxoStore.GetPrunableUnminedTxIterator(cutoffBlockHeight)
+}
+
+func (t *TxMetaCache) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return t.utxoStore.GetConflictingTxIterator()
+}
+
+func (t *TxMetaCache) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return t.utxoStore.RemoveFromConflictingChildren(ctx, removals)
+}
+
+func (t *TxMetaCache) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return t.utxoStore.RemoveBlockIDs(ctx, removals)
 }
 
 // setMinedInCacheParallel is an internal helper method that updates the mined status
@@ -633,9 +719,7 @@ func (t *TxMetaCache) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (ut
 // - Error if updating the cache for any transaction fails
 //
 // The method uses an errgroup to manage concurrent updates while properly handling errors.
-func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
-	var txMeta *meta.Data
-
+func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	g := new(errgroup.Group)
 	util.SafeSetLimit(g, 100)
 
@@ -643,7 +727,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 		hash := hash
 
 		g.Go(func() error {
-			txMeta, err = t.Get(ctx, hash)
+			txMeta, err := t.Get(ctx, hash)
 			if err != nil {
 				txMeta, err = t.utxoStore.Get(ctx, hash)
 			}
@@ -664,7 +748,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 		})
 	}
 
-	return nil
+	return g.Wait()
 }
 
 // Delete removes a transaction's metadata from the cache.
@@ -803,6 +887,12 @@ func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) er
 	return t.utxoStore.PreviousOutputsDecorate(ctx, tx)
 }
 
+// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+// multiple transactions in bulk, delegating to the underlying store.
+func (t *TxMetaCache) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	return t.utxoStore.BatchPreviousOutputsDecorate(ctx, txs)
+}
+
 // FreezeUTXOs marks UTXOs as frozen and not spendable in the underlying store
 // and removes any related entries from the cache to ensure consistency.
 //
@@ -905,7 +995,16 @@ func (t *TxMetaCache) GetConflictingChildren(ctx context.Context, txHash chainha
 // - Array of transaction hashes that were successfully marked
 // - Error if the operation fails
 func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return t.utxoStore.SetConflicting(ctx, txHashes, setValue)
+	affectedSpends, spendingChildren, err := t.utxoStore.SetConflicting(ctx, txHashes, setValue)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, txHash := range txHashes {
+		_ = t.Delete(ctx, &txHash)
+	}
+
+	return affectedSpends, spendingChildren, nil
 }
 
 // SetLocked marks transactions as locked and not spendable.

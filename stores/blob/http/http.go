@@ -230,6 +230,9 @@ func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.Fil
 func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error {
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
+	// NOTE: Any WithDeleteAt(dah) in opts is serialized as the "dah" query param for
+	// diagnostics only. The receiving node does NOT use the sender's DAH — it applies its
+	// own retention policy via its local BlockHeightRetention setting. See QueryToFileOptions.
 	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 

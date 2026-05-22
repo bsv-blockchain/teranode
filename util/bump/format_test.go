@@ -60,21 +60,25 @@ func TestConvertToBUMP(t *testing.T) {
 
 		// Verify first subtree level (level 0)
 		level0 := bump.Path[0]
-		assert.Equal(t, 1, len(level0))
-		assert.Equal(t, uint32(4), level0[0].Offset) // 5 XOR 1 = 4 (sibling of index 5)
-		assert.Equal(t, sibling1.String(), level0[0].Hash)
+		assert.Equal(t, 2, len(level0))
+		assert.Equal(t, uint32(4), level0[0].Offset)       // 5 XOR 1 = 4 (sibling of index 5)
+		assert.Equal(t, sibling1.String(), level0[0].Hash) // display order (BRC-74)
+		assert.False(t, level0[0].TxID)
+		assert.Equal(t, uint32(5), level0[1].Offset)     // txid at index 5 (odd, appended)
+		assert.Equal(t, txHash.String(), level0[1].Hash) // display order (BRC-74)
+		assert.True(t, level0[1].TxID)
 
 		// Verify second subtree level (level 1)
 		level1 := bump.Path[1]
 		assert.Equal(t, 1, len(level1))
-		assert.Equal(t, uint32(3), level1[0].Offset) // (5>>1) XOR 1 = 2 XOR 1 = 3
-		assert.Equal(t, sibling2.String(), level1[0].Hash)
+		assert.Equal(t, uint32(3), level1[0].Offset)       // (5>>1) XOR 1 = 2 XOR 1 = 3
+		assert.Equal(t, sibling2.String(), level1[0].Hash) // display order (BRC-74)
 
 		// Verify block level
 		blockLevel := bump.Path[2]
 		assert.Equal(t, 1, len(blockLevel))
-		assert.Equal(t, uint32(3), blockLevel[0].Offset) // 2 XOR 1 = 3
-		assert.Equal(t, blockSibling.String(), blockLevel[0].Hash)
+		assert.Equal(t, uint32(3), blockLevel[0].Offset)           // 2 XOR 1 = 3
+		assert.Equal(t, blockSibling.String(), blockLevel[0].Hash) // display order (BRC-74)
 	})
 
 	t.Run("nil proof returns error", func(t *testing.T) {
@@ -203,25 +207,25 @@ func TestBUMPFormat_EncodeBinary(t *testing.T) {
 
 		_, err := bump.EncodeBinary()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid hash hex")
+		assert.Contains(t, err.Error(), "invalid hash at level")
 	})
 
-	t.Run("wrong hash length should return error", func(t *testing.T) {
+	t.Run("short hash is zero-padded by chainhash", func(t *testing.T) {
 		bump := &Format{
 			BlockHeight: 100,
 			Path: []Level{
 				{
 					{
 						Offset: 1,
-						Hash:   "abc123", // Too short
+						Hash:   "abc123", // Short hash — chainhash.NewHashFromStr zero-pads it
 					},
 				},
 			},
 		}
 
-		_, err := bump.EncodeBinary()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "hash must be 32 bytes")
+		binary, err := bump.EncodeBinary()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, binary)
 	})
 }
 

@@ -10,9 +10,11 @@ import (
 	"sync"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/asset/centrifuge_impl"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
@@ -57,7 +59,9 @@ type Server struct {
 	centrifugeServer      *centrifuge_impl.Centrifuge
 	blockchainClient      blockchain.ClientI
 	blockvalidationClient blockvalidation.Interface
+	blockAssemblyClient   blockassembly.ClientI
 	p2pClient             p2p.ClientI
+	banList               banlist.Interface
 }
 
 // NewServer creates a new Server instance with the provided dependencies.
@@ -81,7 +85,8 @@ type Server struct {
 //   - *Server: A fully initialized Server instance ready for use
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
-	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server {
+	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface,
+	blockAssemblyClient ...blockassembly.ClientI) *Server {
 	s := &Server{
 		logger:                logger,
 		settings:              tSettings,
@@ -92,6 +97,11 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
+		banList:               banList,
+	}
+
+	if len(blockAssemblyClient) > 0 {
+		s.blockAssemblyClient = blockAssemblyClient[0]
 	}
 
 	return s
@@ -195,7 +205,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo)
+	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo, v.banList, v.blockAssemblyClient)
 	if err != nil {
 		return errors.NewServiceError("error creating http server", err)
 	}
@@ -265,8 +275,11 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			v.logger.Infof("[Asset Service] Shutting down during FSM wait")
+			return err
+		}
 		v.logger.Errorf("[Asset Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 

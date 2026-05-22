@@ -55,7 +55,9 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	// The query starts from both genesis (id=0) and the best block, walking back
 	// through parent links. The final WHERE clause filters to only blocks within
 	// the requested time period.
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
 			 id
@@ -77,10 +79,26 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			FROM blocks b
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
+			  AND b.block_time >= $1
 		)
 		SELECT block_time, tx_count FROM ChainBlocks
 		WHERE block_time >= $1
 	`
+	} else {
+		// Mirror the original CTE exactly. The CTE's anchor is `id IN (0, best)`
+		// so genesis is explicitly included; the recursive step has
+		// `WHERE b.parent_id != 0` (needed because genesis's parent_id
+		// self-references to 0) which inadvertently drops the height-1 block
+		// (whose parent_id equals genesis's id, 0). So: keep genesis, keep
+		// anything with parent_id != 0, drop the height-1 block.
+		q = `
+		SELECT block_time, tx_count
+		FROM blocks
+		WHERE on_main_chain = true
+		  AND (id = 0 OR parent_id != 0)
+		  AND block_time >= $1
+	`
+	}
 
 	blockDataPoints := &model.BlockDataPoints{}
 

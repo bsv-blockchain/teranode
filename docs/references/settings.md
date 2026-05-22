@@ -4,7 +4,7 @@ All services accept settings through a centralized Settings object that allows l
 
 Please review the following documents for more information on how to deploy the settings:
 
-- [Developer Setup](../tutorials/developers/developerSetup.md)
+- [Developer Setup](../howto/developerSetup.md)
 - [Test Setup](../howto/miners/docker/minersHowToConfigureTheNode.md)
 - [Production Setup](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 
@@ -24,11 +24,13 @@ When developing locally, you should:
 
 The configuration system allows for a layered approach to settings. At its core, it works with a base setting. However, to cater to individualized or context-specific requirements, you can have context-dependent overrides.
 
-Here's how it prioritizes:
+Here's how it prioritizes (highest to lowest):
 
-1. `SETTING_NAME.context_name`: A context-specific override (highest priority)
-2. `SETTING_NAME.base`: A general override
+1. Environment variable (exact setting key name — highest priority)
+2. `SETTING_NAME.context_name`: A context-specific override (longest matching context chain wins)
 3. `SETTING_NAME`: The base setting (lowest priority)
+
+Context resolution strips suffixes from right to left until a match is found. There is no special `.base` suffix — the plain key name is the final fallback.
 
 ### Example
 
@@ -165,6 +167,8 @@ For comprehensive documentation of all available settings, see the following ref
 - [Subtree Validation Settings](settings/services/subtreevalidation_settings.md)
 - [UTXO Persister Settings](settings/services/utxopersister_settings.md)
 - [Validator Settings](settings/services/validator_settings.md)
+- [Coinbase Settings](settings/services/coinbase_settings.md)
+- [Faucet Settings](settings/services/faucet_settings.md)
 
 ### Stores
 

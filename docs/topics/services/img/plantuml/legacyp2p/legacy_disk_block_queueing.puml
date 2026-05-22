@@ -90,8 +90,8 @@ note over tempStore : **Automatic Cleanup**\nBlocks auto-deleted after 10 minute
 
 deactivate syncMgr
 
-left footer "Legacy Service - Disk-Based Block Queueing \n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+left footer "Legacy Service - Disk-Based Block Queueing \n Last Modified On: %date("dd-MMM-yyyy"). © 2025 BSV Association. All rights reserved."
 
-left footer "Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+left footer "Last Modified On: %date("dd-MMM-yyyy"). © 2025 BSV Association. All rights reserved."
 
 @enduml

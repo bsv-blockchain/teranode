@@ -3,11 +3,14 @@ package aerospike
 import (
 	"context"
 	"testing"
+	"time"
 
+	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -256,7 +259,7 @@ func Test_GetUnminedTxIterator(t *testing.T) {
 			client: nil,
 		}
 
-		it, err := store.GetUnminedTxIterator(false)
+		it, err := store.GetUnminedTxIterator()
 		assert.Error(t, err)
 		assert.Nil(t, it)
 		assert.Contains(t, err.Error(), "aerospike client not initialized")
@@ -323,7 +326,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 	t.Run("NilStore", func(t *testing.T) {
 		// This would panic in real usage, but test the behavior
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(nil, false)
+			_, _ = newUnminedTxIterator(nil)
 		})
 	})
 
@@ -336,7 +339,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 
 		// This will panic because client.Query is called on nil
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(store, false)
+			_, _ = newUnminedTxIterator(store)
 		})
 	})
 }
@@ -476,4 +479,72 @@ func Test_processPrunerRecord(t *testing.T) {
 		// inpoint error → returns nil
 		assert.Nil(t, result)
 	})
+}
+
+// Test_processRecordset_IdleTimeout verifies that a stalled results channel triggers the idle
+// timeout and surfaces an error, preventing workers from hanging indefinitely on dead connections.
+func Test_processRecordset_IdleTimeout(t *testing.T) {
+	resultChan := make(chan []*utxo.UnminedTransaction, 4)
+	errorChan := make(chan error, 1)
+
+	it := &unminedTxIterator{
+		store: &Store{
+			logger: ulogger.TestLogger{},
+		},
+		resultChan:       resultChan,
+		errorChan:        errorChan,
+		queryIdleTimeout: 100 * time.Millisecond, // short timeout for test
+	}
+
+	// Create a results channel that never sends anything, simulating a stalled connection
+	stalledResults := make(chan *as.Result)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		it.processRecordset(ctx, stalledResults)
+		close(done)
+	}()
+
+	// Worker should abort within the idle timeout
+	select {
+	case <-done:
+		// Success: worker exited
+	case <-time.After(2 * time.Second):
+		t.Fatal("processRecordset did not exit after idle timeout")
+	}
+
+	// Verify an error was sent to the error channel
+	select {
+	case err := <-errorChan:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Aerospike partition query stalled")
+	default:
+		t.Fatal("expected error on errorChan but got none")
+	}
+}
+
+// Test_Next_SurfacesErrorOnChannelClose verifies that Next() checks errorChan
+// after resultChan closes, so worker errors are not silently swallowed.
+func Test_Next_SurfacesErrorOnChannelClose(t *testing.T) {
+	resultChan := make(chan []*utxo.UnminedTransaction, 1)
+	errorChan := make(chan error, 1)
+
+	// Simulate a worker that sent an error and then all channels closed
+	stalledErr := errors.NewProcessingError("Aerospike partition query stalled: no records received in 60s")
+	errorChan <- stalledErr
+	close(resultChan)
+
+	it := &unminedTxIterator{
+		resultChan: resultChan,
+		errorChan:  errorChan,
+	}
+
+	ctx := context.Background()
+	batch, err := it.Next(ctx)
+	assert.Nil(t, batch)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Aerospike partition query stalled")
 }

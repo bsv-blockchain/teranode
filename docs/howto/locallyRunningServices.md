@@ -28,7 +28,7 @@ Execute all services in a single terminal window with the command below. Replace
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
-> **📝 Note:** Confirm that settings for your context are correctly established as outlined in the [Installation Guide](../tutorials/developers/developerSetup.md).
+> **📝 Note:** Confirm that settings for your context are correctly established as outlined in the [Installation Guide](./developerSetup.md).
 >
 > **⚠️ Warning:** When restarting services, it's recommended to clean the data directory first:
 >
@@ -109,6 +109,8 @@ Teranode supports different transaction metadata cache sizes through build tags:
   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
   ```
 
+  > **Note**: The large cache is the default — it is selected by the *absence* of `smalltxmetacache` or `testtxmetacache`. There is no `largetxmetacache` build tag; passing it has no effect.
+
 - **Small Cache**: Reduces memory usage with a smaller transaction metadata cache
 
   ```shell
@@ -147,10 +149,12 @@ network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
 
 For running various test suites (not typically needed for development):
 
-- `test_all`: Runs all tests
-- `test_smoke_rpc`: Runs smoke tests for RPC functionality
-- `test_services`: Tests specific to services
-- `test_longlong`: For extended duration tests
+- `test_tna` - TNA integration test suite (`test/tna/`)
+- `test_tec` - TEC integration test suite (`test/tec/`)
+- `test_tnd` - TND integration test suite (`test/tnd/`)
+- `test_tnf` - TNF integration test suite (`test/tnf/`)
+- `test_smoke` - Smoke tests (docker-based, see `test/e2e/docker/`)
+- `test_functional` - Functional tests (subset of smoke tests)
 
 ### Component Options
 
@@ -162,31 +166,31 @@ rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . [OPT
 
 Enable or disable components by setting the corresponding option to `1` or `0`. **Note: Options are case-sensitive and must be lowercase.**
 
-| Component          | Option                      | Description                           |
-|--------------------|---------------------------|---------------------------------------|
-| Alert              | `-alert=1`                  | Alert system for network notifications|
-| Asset              | `-asset=1`                  | Asset handling service                |
-| Block Assembly     | `-blockassembly=1`          | Block assembly service                |
-| Block Persister    | `-blockpersister=1`         | Block persistence service             |
-| Block Validation   | `-blockvalidation=1`        | Block validation service              |
-| Blockchain         | `-blockchain=1`             | Blockchain processing service         |
-| Legacy             | `-legacy=1`                 | Legacy API support                    |
-| P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
-| Propagation        | `-propagation=1`            | Data propagation service              |
-| Pruner             | `-pruner=1`                 | UTXO data pruning service             |
-| RPC                | `-rpc=1`                    | RPC interface service                 |
-| Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
-| UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |
-| Validator          | `-validator=1`              | Transaction validation service        |
+| Component | Option | Description |
+| --- | --- | --- |
+| Alert | `-alert=1` | Alert system for network notifications |
+| Asset | `-asset=1` | Asset handling service |
+| Block Assembly | `-blockassembly=1` | Block assembly service |
+| Block Persister | `-blockpersister=1` | Block persistence service |
+| Block Validation | `-blockvalidation=1` | Block validation service |
+| Blockchain | `-blockchain=1` | Blockchain processing service |
+| Legacy | `-legacy=1` | Legacy API support |
+| P2P | `-p2p=1` | Peer-to-peer networking service |
+| Propagation | `-propagation=1` | Data propagation service |
+| Pruner | `-pruner=1` | UTXO data pruning service |
+| RPC | `-rpc=1` | RPC interface service |
+| Subtree Validation | `-subtreevalidation=1` | Subtree validation service |
+| UTXO Persister | `-utxopersister=1` | UTXO persistence service |
+| Validator | `-validator=1` | Transaction validation service |
 
 #### Additional Options
 
-| Option                        | Description                                     |
-|-------------------------------|-------------------------------------------------|
-| `-all=<1\|0>`                 | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
-| `-help=1`                     | Display command-line help information            |
-| `-wait_for_postgres=1`        | Wait for PostgreSQL to be available before starting |
-| `-localTestStartFromState=X`  | Start blockchain FSM from a specific state (for testing) |
+| Option | Description |
+| --- | --- |
+| `-all=<1\|0>` | Enable/disable all services unless explicitly overridden by other flags. By default, when no flags are specified, the system behaves as if `-all=1` was set. |
+| `-help=1` | Display command-line help information |
+| `-wait_for_postgres=1` | Wait for PostgreSQL to be available before starting |
+| `-localTestStartFromState=X` | Start blockchain FSM from a specific state for testing |
 
 #### Examples
 
@@ -257,7 +261,7 @@ You can also run each service on its own:
 
 ## 📜 Running Specific Commands
 
-For executing particular tasks, use commands found under the _cmd/_ directory.
+For executing particular tasks, use commands found under the `cmd/` directory.
 
 ## 🖥 Running UI Dashboard
 
@@ -273,52 +277,28 @@ This guide aims to provide a streamlined process for running services and nodes 
 
 ## 🌐 Running a Local Testnet Network
 
-For a complete testnet deployment with automated setup wizard and network configuration, see the **[Teranode Teratestnet Repository](https://github.com/bsv-blockchain/teranode-teratestnet)**.
+For a complete Docker-based node deployment with an interactive setup wizard,
+use **[teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart)**.
+It supports mainnet, testnet, teratestnet, and regtest.
 
-The teratestnet repository provides:
+Quickstart provides:
 
-- **`start-teratestnet.sh`** - Interactive wizard for automated setup
-- **Configuration helpers** - Automated domain/URL setup (via ngrok or custom domain)
-- **Docker Compose orchestration** - Pre-configured multi-service deployment
-- **Network setup** - Automatic connectivity configuration
-- **Reset and upgrade utilities** - Simplified data management and version updates
+- `./setup.sh` for first-time network and mode selection
+- `./start.sh`, `./stop.sh`, `./status.sh`, and `./logs.sh` for operations
+- `./rpc.sh` and `./cli.sh` wrappers for JSON-RPC and `teranode-cli`
+- `./seed.sh` for compatible UTXO snapshots
+- `./update.sh` for Teranode image version updates
 
-**Key differences from this repository:**
-
-| Feature | Teranode (this repo) | Teranode Teratestnet |
-|---------|----------------------|----------------------|
-| Setup approach | Manual configuration | Wizard-based automation |
-| Target audience | Developers | Miners and operators |
-| Configuration | Requires settings_local.conf | Interactive prompts |
-| Network setup | Manual | Automated (ngrok or custom) |
-| Service management | Individual service control | Docker Compose orchestration |
-
-**When to use each:**
-
-- **Use this repository** for:
-    - Core development and testing
-    - Individual service development
-    - Custom configurations
-    - Contributing to Teranode codebase
-
-- **Use teratestnet repository** for:
-    - Quick testnet deployment
-    - Mining operations
-    - Production-like testnet environment
-    - Users wanting automated setup
-
-**Getting started with teratestnet:**
+Use this repository for core development, individual service work, and
+contributing to Teranode. Use quickstart when you want to run the complete
+Docker Compose stack as an operator or integration test environment.
 
 ```bash
-# Clone the teratestnet repository
-git clone https://github.com/bsv-blockchain/teranode-teratestnet.git
-cd teranode-teratestnet
-
-# Run the setup wizard
-./start-teratestnet.sh
-
-# For help and options
-./start-teratestnet.sh --help
+git clone https://github.com/bsv-blockchain/teranode-quickstart.git
+cd teranode-quickstart
+./setup.sh
+./start.sh
+./status.sh
 ```
 
 ## Additional Resources

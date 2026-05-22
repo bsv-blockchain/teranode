@@ -13,6 +13,7 @@ var (
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
@@ -36,6 +37,7 @@ var (
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
 	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
+	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -50,7 +52,6 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
-	ErrTxConsensus                = New(ERR_TX_CONSENSUS, "fail consensus check")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
@@ -125,6 +126,11 @@ func NewBlockNotFoundError(message string, params ...interface{}) *Error {
 // NewBlockParentNotMinedError creates a new error with the block parent not mined error code.
 func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_PARENT_NOT_MINED, message, params...)
+}
+
+// NewBlockIncompleteError creates a new error for blocks with missing data (e.g. no coinbase from seeded peers).
+func NewBlockIncompleteError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_INCOMPLETE, message, params...)
 }
 
 // NewBlockInvalidError creates a new error with the block invalid error code.
@@ -217,11 +223,6 @@ func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)
 }
 
-// NewTxConsensusError creates a new error with the transaction consensus error code.
-func NewTxConsensusError(message string, params ...interface{}) *Error {
-	return New(ERR_TX_CONSENSUS, message, params...)
-}
-
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
@@ -280,6 +281,14 @@ func NewUtxoHashMismatchError(message string, params ...interface{}) *Error {
 // NewUtxoInvalidSize creates a new error with the utxo invalid size error code.
 func NewUtxoInvalidSize(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_INVALID_SIZE, message, params...)
+}
+
+// NewUtxoUnspentError creates a new error indicating the UTXO is unspent.
+// Returned by Unspend when the caller's expected SpendingData does not match
+// the stored value because the row is already cleared. Treated as idempotent
+// success by retry-safe callers like validator.reverseSpends.
+func NewUtxoUnspentError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_UNSPENT, message, params...)
 }
 
 // NewUtxoError creates a new generic utxo error.

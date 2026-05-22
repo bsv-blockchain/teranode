@@ -1,177 +1,173 @@
-# How to Troubleshoot Teranode (Docker Compose)
+# Troubleshoot Docker Teranode
 
-Last modified: 22-January-2025
+Last modified: 28-April-2026
 
-## Index
+Use the quickstart scripts first. They keep checks consistent with the Docker
+Compose files and `.env` used by the deployment.
 
-- [Introduction](#introduction)
-- [Troubleshooting](#troubleshooting)
-    - [Health Checks and System Monitoring](#health-checks-and-system-monitoring)
-        - [Service Status](#service-status)
-        - [Detailed Container/Pod Health](#detailed-containerpod-health)
-        - [Monitoring System Resources](#monitoring-system-resources)
-    - [Recovery Procedures](#recovery-procedures)
-        - [Third Party Component Failure](#third-party-component-failure)
-        - [Container Name Conflicts When Switching Networks](#container-name-conflicts-when-switching-networks)
+## First Checks
 
-## Introduction
+From the quickstart repository root:
 
-This guide provides troubleshooting steps for common issues encountered while running Teranode with Docker Compose.
+```bash
+./status.sh
+./logs.sh blockchain
+./logs.sh asset
+```
 
-## Troubleshooting
+If the stack is not running:
 
-### Health Checks and System Monitoring
+```bash
+./start.sh
+```
 
-#### Service Status
+If `.env` is missing:
+
+```bash
+./setup.sh
+```
+
+## Container Health
+
+Show all services:
 
 ```bash
 docker compose ps
 ```
 
-This command lists all services defined in your docker-compose.yml file, along with their current status (Up, Exit, etc.) and health state if health checks are configured.
-
-#### Detailed Container/Pod Health
+Inspect a health check:
 
 ```bash
-docker inspect --format='{{json .State.Health}}' container_name
+docker inspect --format='{{json .State.Health}}' blockchain
 ```
 
-Replace `container_name` with the name of your specific Teranode service container. For example:
+Use service logs for failures:
 
 ```bash
-docker inspect --format='{{json .State.Health}}' asset
+./logs.sh <service-name>
 ```
 
-#### Monitoring System Resources
+Common services include `blockchain`, `asset`, `rpc`, `legacy`, `p2p`,
+`postgres`, `aerospike`, `redpanda`, `prometheus`, and `grafana`.
 
-- Use `docker stats` to monitor CPU, memory, and I/O usage of containers:
+## FSM Stuck in INIT
 
-  ```bash
-  docker stats
-  ```
-
-- Consider using Prometheus and Grafana for comprehensive monitoring.
-- Look for services consuming unusually high resources.
-
-##### Viewing Global Logs
+The startup FSM transition can race while services become healthy. Set the
+state manually:
 
 ```bash
-docker compose logs
-docker compose logs -f  # Follow logs in real-time
-docker compose logs --tail=100  # View only the most recent logs
+./cli.sh setfsmstate --fsmstate RUNNING
+./cli.sh getfsmstate
 ```
 
-##### Viewing Logs for Specific Microservices
+Then check status:
 
 ```bash
-docker compose logs [service_name]
+./status.sh
 ```
 
-##### Useful Options for Log Viewing
+## RPC Fails
 
-- Show timestamps:
-
-  ```bash
-  docker compose logs -t
-  ```
-
-- Limit output:
-
-  ```bash
-  docker compose logs --tail=50 [service_name]
-  ```
-
-- Since time:
-
-  ```bash
-  docker compose logs --since 2025-01-01T00:00:00 [service_name]
-  ```
-
-##### Checking Logs for Specific Teranode Microservices
+Use the wrapper first:
 
 ```bash
-docker compose logs [service_name]
+./rpc.sh getblockchaininfo
 ```
 
-For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
+If it fails:
 
-- Propagation Service (service name: `propagation`)
-- Blockchain Service (service name: `blockchain`)
-- Asset Service (service name: `asset`)
-- Block Validation Service (service name: `blockvalidation`)
-- P2P Service (service name: `p2p`)
-- Block Assembly Service (service name: `blockassembly`)
-- Subtree Validation Service (service name: `subtreevalidation`)
-- RPC Server (service name: `rpc`)
-- Postgres Database (service name: `postgres`)          [*Only in Docker*]
-- Aerospike Database (service name: `aerospike`)        [*Only in Docker*]
-- Kafka   (service name: `kafka-shared`)                [*Only in Docker*]
-- Kafka Console (service name: `kafka-console-shared`)  [*Only in Docker*]
-- Prometheus (service name: `prometheus`)               [*Only in Docker*]
-- Grafana  (service name: `grafana`)                    [*Only in Docker*]
+- Confirm `rpc_user` and `rpc_pass` are set in `.env`.
+- Confirm the `rpc` container is running with `docker compose ps`.
+- Check RPC logs with `./logs.sh rpc`.
+- Remember that quickstart binds RPC to `127.0.0.1:9292`.
 
-##### Redirecting Logs to a File
+## Port Already in Use
+
+Check which process owns the port:
 
 ```bash
-docker compose logs > teranode_logs.txt
-docker compose logs [service_name] > [service_name]_logs.txt
+lsof -i :9292
 ```
 
-Remember to replace placeholders like `[service_name]`, and label selectors with the appropriate values for your Teranode setup.
+Quickstart's common host ports are:
 
-#### **Check Services Dashboard**
+| Port | Service |
+| --- | --- |
+| `8090` | Asset viewer |
+| `8000` | Asset cache |
+| `9905` | P2P |
+| `9292` | RPC, loopback only |
+| `3005` | Grafana, loopback only |
+| `9090` | Prometheus, loopback only |
+| `8080` | Kafka Console, loopback only |
 
-Check your Grafana `TERANODE Service Overview` dashboard:
+Change bindings in the Compose files only when you understand the security
+impact.
 
-- Check that there's no blocks in the queue (`Queued Blocks in Block Validation`). We expect little or no queueing, and not creeping up. 3 blocks queued up are already a concern.
+## Full Mode Reachability Fails
 
-- Check that the propagation instances are handling around the same load to make sure the load is equally distributed among all the propagation servers. See the `Propagation Processed Transactions per Instance` diagram.
+Check `.env`:
 
-- Check that the cache is at a sustainable pattern rather than "exponentially" growing (see both the `Tx Meta Cache in Block Validation` and `Tx Meta Cache Size in Block Validation` diagrams).
+```env
+listen_mode=full
+asset_httpPublicAddress=https://node.example.com/api/v1
+p2p_advertise_addresses=/dns4/node.example.com/tcp/9905
+```
 
-- Check that go routines (`Goroutines` graph) are not creeping up or reaching excessive levels.
+Then verify:
 
-### Recovery Procedures
+- DNS points to the expected host.
+- The reverse proxy forwards HTTPS asset API traffic to port `8000`.
+- The firewall allows inbound TCP on port `9905`.
+- `HOST_IP` allows the reverse proxy or firewall path to reach the quickstart
+  host binding.
 
-#### Third Party Component Failure
-
-Teranode is highly dependent on its third party dependencies. Postgres, Kafka and Aerospike are critical for Teranode operations, and the node cannot work without them.
-
-If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly following the instructions in the [How to Start and Stop Teranode in Docker](minersHowToStopStartDockerTeranode.md) guide.
-
-#### Container Name Conflicts When Switching Networks
-
-**Problem:** When attempting to start a different Teranode network (e.g., switching from testnet to mainnet, or testnet to teratestnet) on the same machine, Docker Compose may fail with errors indicating that containers with the same names already exist.
-
-**Root Cause:** All Teranode Docker Compose configurations (testnet, mainnet, teratestnet) use the same hardcoded container names for their services. Docker requires container names to be unique across all running containers on the host machine, regardless of which Docker Compose project they belong to.
-
-**Important Note:** Running multiple Teranode network instances simultaneously on the same machine is **not recommended**. Beyond container name conflicts, you will also encounter port conflicts as all networks attempt to bind to the same host ports. This configuration is not supported for production or testing environments.
-
-##### Solution: Proper Cleanup Before Switching Networks
-
-Before starting a different Teranode network, run these commands from your current network directory:
+Rerun startup or the reachability helper after changes:
 
 ```bash
-# Stop and remove all containers
-docker compose down
-
-# Verify containers are removed
-docker ps -a | grep teranode
+./start.sh
+./lib/reachability.sh
 ```
 
-If any containers remain, remove them with:
+## Aerospike Out of Space
+
+The quickstart Aerospike Community Edition configuration uses a bounded local
+UTXO store. If Aerospike reports device-full or stop-writes errors:
+
+- Check host disk and memory.
+- Confirm pruning settings were not increased unexpectedly.
+- Consider reseeding from a newer snapshot if appropriate.
+- For larger mainnet capacity, plan a custom Aerospike layout outside the basic
+  quickstart defaults.
+
+## Grafana Shows No Data
+
+Prometheus needs time to scrape initial metrics. If dashboards remain empty:
 
 ```bash
-docker container prune
+docker compose ps prometheus
+./logs.sh prometheus
 ```
 
-Then start your new network from its directory:
+Open Prometheus locally at <http://localhost:9090> and check target health.
+
+## Reset Bad Local State
+
+If containers are healthy but local data is inconsistent, reset Docker volumes:
 
 ```bash
-cd deploy/docker/[new-network]  # e.g., testnet, mainnet
-docker compose up -d
+./stop.sh
+./clean.sh --data-only
+./start.sh
 ```
 
-------
+For seeded recovery, run `./seed.sh` before `./start.sh`. See
+[Sync Docker Teranode](./minersHowToSyncTheNode.md).
 
-Should you encounter a bug, please report it following the instructions in the [Bug Reporting](../../bugReporting.md) section.
+## Report Issues
+
+Open quickstart orchestration issues in
+[bsv-blockchain/teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart).
+
+Open Teranode service bugs in
+[bsv-blockchain/teranode](https://github.com/bsv-blockchain/teranode/issues).

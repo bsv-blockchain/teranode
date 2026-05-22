@@ -174,12 +174,17 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 //
 // Returns:
 //   - error: If validation fails
-func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, baseURL string) error {
+func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlock][%s] performing quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -210,7 +215,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
@@ -255,12 +260,17 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlockAsync",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -291,7 +301,7 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
@@ -1066,34 +1076,11 @@ func (u *BlockValidation) processSubtreeBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Phase 3: Extend remaining transactions in parallel using UTXO store
+	// Phase 3: Extend remaining transactions using bulk UTXO store lookup
 	if len(txsNeedingExtension) > 0 {
-		extendG, extendCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(extendG, 256)
-
-		for _, tx := range txsNeedingExtension {
-			tx := tx
-			extendG.Go(func() error {
-				return u.utxoStore.PreviousOutputsDecorate(extendCtx, tx)
-			})
-		}
-
-		if err := extendG.Wait(); err != nil {
+		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			cancelReaders()
 			return nil, errors.NewProcessingError("[processSubtreeBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
-		}
-
-		// Verify all inputs are now extended
-		for _, tx := range txsNeedingExtension {
-			for j, input := range tx.Inputs {
-				if input.PreviousTxSatoshis == 0 && input.PreviousTxScript == nil {
-					parentHash := input.PreviousTxIDChainHash()
-					cancelReaders()
-					return nil, errors.NewProcessingError(
-						"[processSubtreeBatch][%s] parent tx %s not found for input %d of tx %s",
-						block.Hash().String(), parentHash.String(), j, tx.TxIDChainHash().String())
-				}
-			}
 		}
 	}
 
@@ -1427,32 +1414,10 @@ func (u *BlockValidation) extendBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Extend remaining transactions in parallel using UTXO store
+	// Extend remaining transactions using bulk UTXO store lookup
 	if len(txsNeedingExtension) > 0 {
-		extendG, extendCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(extendG, 256)
-
-		for _, tx := range txsNeedingExtension {
-			tx := tx
-			extendG.Go(func() error {
-				return u.utxoStore.PreviousOutputsDecorate(extendCtx, tx)
-			})
-		}
-
-		if err := extendG.Wait(); err != nil {
+		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			return errors.NewProcessingError("[extendBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
-		}
-
-		// Verify all inputs are now extended
-		for _, tx := range txsNeedingExtension {
-			for j, input := range tx.Inputs {
-				if input.PreviousTxSatoshis == 0 && input.PreviousTxScript == nil {
-					parentHash := input.PreviousTxIDChainHash()
-					return errors.NewProcessingError(
-						"[extendBatch][%s] parent tx %s not found for input %d of tx %s",
-						block.Hash().String(), parentHash.String(), j, tx.TxIDChainHash().String())
-				}
-			}
 		}
 	}
 

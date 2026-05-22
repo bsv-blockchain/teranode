@@ -189,10 +189,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
 				catchupCtx.blockUpTo.Hash().String(), err)
 		} else {
+			var clearErrors, notifyErrors int
 			for _, header := range headers {
 				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
-					u.logger.Errorf("[catchup][%s] Failed to clear mined_set for block %s: %v",
-						catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+					clearErrors++
 				} else {
 					// Send BlockMinedUnset notification to trigger immediate transaction status update
 					// This ensures BlockValidation processes the block immediately instead of waiting
@@ -201,10 +201,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 						Type: model.NotificationType_BlockMinedUnset,
 						Hash: header.Hash().CloneBytes(),
 					}); err != nil {
-						u.logger.Errorf("[catchup][%s] Failed to send BlockMinedUnset notification for %s: %v",
-							catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+						notifyErrors++
 					}
 				}
+			}
+			if clearErrors > 0 || notifyErrors > 0 {
+				u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
+					catchupCtx.blockUpTo.Hash().String(), clearErrors, len(headers), notifyErrors)
 			}
 			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 				catchupCtx.blockUpTo.Hash().String(), len(headers))
@@ -226,10 +229,9 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Early exit if no new blocks to process
+	// Early exit if no new blocks to process.
 	if len(catchupCtx.blockHeaders) == 0 {
-		u.logger.Infof("[catchup][%s] no new blocks to fetch - already synced", blockUpTo.Hash().String())
-		return nil
+		return u.handleNoNewHeaders(ctx, blockUpTo)
 	}
 
 	// Step 7: Build header chain cache for validation
@@ -260,6 +262,30 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// Report successful catchup to P2P service
 	u.reportCatchupSuccess(ctx, catchupCtx.peerID, time.Since(catchupCtx.startTime))
 
+	return nil
+}
+
+// handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
+// A peer on a dead or shorter fork can legitimately return zero new headers even when
+// blockUpTo is unknown to us. Returning nil unconditionally would make the outer
+// peer-selection loop treat this as success and stop trying other peers, leaving the
+// node unable to sync past the announced block. Only treat it as "already synced"
+// when blockUpTo is known locally (present in our blocks table); otherwise surface
+// an error so the caller moves on to the next peer.
+//
+// Note: this uses GetBlockExists, which is a local-existence check — it returns true
+// for blocks on the main chain as well as for known off-chain (stale) blocks. That is
+// intentional here: if we already have the announced block in any form, we have at
+// least caught up to (or past) it and there is no value in asking another peer for it.
+func (u *Server) handleNoNewHeaders(ctx context.Context, blockUpTo *model.Block) error {
+	exists, err := u.blockchainClient.GetBlockExists(ctx, blockUpTo.Hash())
+	if err != nil {
+		return errors.NewProcessingError("[catchup][%s] peer returned no new headers and block existence check failed", blockUpTo.Hash().String(), err)
+	}
+	if !exists {
+		return errors.NewProcessingError("[catchup][%s] peer returned no new headers but target block is not known locally - peer may be on a dead fork", blockUpTo.Hash().String())
+	}
+	u.logger.Infof("[catchup][%s] no new blocks to fetch - target block already known locally", blockUpTo.Hash().String())
 	return nil
 }
 
@@ -338,6 +364,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		case errors.Is(*err, errors.ErrServiceUnavailable):
 			// Service unavailable errors are local system issues, not peer errors
 			errorType = "local_service_unavailable"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrBlockIncomplete):
+			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			errorType = "block_incomplete"
 			isPeerError = false
 		}
 
@@ -672,7 +702,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 //   - error: If checkpoint verification fails (hash mismatch)
 func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
 	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
+	highestCheckpointHeight := blockchain.HighestCheckpointHeight(catchupCtx.checkpoints)
 	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
 
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
@@ -769,27 +799,18 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// This creates backpressure so workers don't fetch blocks 2000+ ahead of validation
 	const maxValidationBuffer = 50
 	validationBufferSize := min(int(size.Load()), maxValidationBuffer)
-	validateBlocksChan := make(chan *model.Block, validationBufferSize)
+	validateBlocksChan := make(chan blockForValidation, validationBufferSize)
 
 	// Channel for async subtree file writes (only used by quick validation)
 	var writeJobsChan chan *SubtreeWriteJob
 
-	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return errors.NewProcessingError("failed to get best block header", err)
+	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
+	// If the FSM rejects the transition (e.g. node is LEGACYSYNCING), the error propagates
+	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
+	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
+		return err
 	}
-
-	// Check if we need to change FSM state
-	newBlocksOnOurChain := len(catchupCtx.blockHeaders) > 0 && catchupCtx.blockHeaders[0].HashPrevBlock.IsEqual(bestBlockHeader.Hash())
-
-	// Set FSM state if needed
-	if newBlocksOnOurChain {
-		if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
-			return err
-		}
-
-		defer u.restoreFSMState(ctx, catchupCtx)
-	}
+	defer u.restoreFSMState(ctx, catchupCtx)
 
 	// Create error group for concurrent operations
 	errorGroup, gCtx := errgroup.WithContext(ctx)
@@ -824,7 +845,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	})
 
 	// Wait for both operations to complete
-	err = errorGroup.Wait()
+	err := errorGroup.Wait()
 	if err != nil {
 		catchupCtx.catchupError = err
 	}
@@ -947,7 +968,10 @@ func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupCo
 	u.logger.Infof("[catchup][%s] Setting node to CATCHINGBLOCKS state for %d blocks", catchupCtx.blockUpTo.Hash().String(), size.Load())
 
 	if err := u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to send CATCHUPBLOCKS event: %w", catchupCtx.blockUpTo.Hash().String(), err)
+		if errors.Is(err, errors.ErrStateError) {
+			return errors.NewStateError("[catchup][%s] FSM rejected CATCHUPBLOCKS transition", catchupCtx.blockUpTo.Hash().String(), err)
+		}
+		return errors.NewServiceError("[catchup][%s] failed to transition FSM to CATCHINGBLOCKS", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	return nil
@@ -987,7 +1011,7 @@ func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidation, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64, writeJobsChan chan<- *SubtreeWriteJob) error {
 	i := 0
 	blockUpTo := catchupCtx.blockUpTo
 	baseURL := catchupCtx.baseURL
@@ -995,7 +1019,8 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
-	for block := range validateBlocksChan {
+	for item := range validateBlocksChan {
+		block := item.block
 		// Check context cancellation before processing each block
 		select {
 		case <-gCtx.Done():
@@ -1019,7 +1044,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
 			// Try quick validation if applicable
-			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, baseURL, writeJobsChan)
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan)
 			if err != nil {
 				return err
 			}
@@ -1039,12 +1064,14 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
-					// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
-					// Just log and record metrics
-					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
+					// Block was NOT stored as invalid, so another peer can provide the full version
+					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					if errors.Is(err, errors.ErrBlockIncomplete) {
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
-
-						// Mark peer as malicious for providing invalid block
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 
@@ -1054,10 +1081,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 					}
 
 					return err
-
-					// TODO: Consider increasing peer reputation for successful block validations. For now being cautious and only increasing on successful catchup operations.
 				}
 			}
+
+			// Block validated successfully — credit reputation to all peers that contributed data
+			u.reportValidBlockForPeers(gCtx, peerID, block.Hash().String(), item.contributingPeers)
+
 			// Update the remaining block count
 			remaining := size.Add(-1)
 			if remaining%100 == 0 && remaining > 0 {
@@ -1076,7 +1105,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 // tryQuickValidation attempts quick validation for checkpointed blocks
 // Returns true if normal validation should be tried, false if quick validation succeeded
-func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
 	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
@@ -1103,9 +1132,19 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 	}
 
 	// Quick validation: create UTXOs for the block and validate transactions in parallel
-	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, baseURL, writeJobsChan); err != nil {
+	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
 		if prometheusCatchupErrors != nil {
-			prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+			prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
+		}
+
+		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
+		// Keep subtree files — they contain valid data that the next peer's validation can reuse
+		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		if errors.Is(err, errors.ErrBlockIncomplete) {
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			return false, err
 		}
 
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
@@ -1127,21 +1166,6 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
-}
-
-// getHighestCheckpointHeight returns the height of the highest checkpoint
-func getHighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	if len(checkpoints) == 0 {
-		return 0
-	}
-
-	var highestHeight uint32
-	for _, checkpoint := range checkpoints {
-		if uint32(checkpoint.Height) > highestHeight {
-			highestHeight = uint32(checkpoint.Height)
-		}
-	}
-	return highestHeight
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint

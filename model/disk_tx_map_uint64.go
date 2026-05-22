@@ -384,6 +384,7 @@ func (m *DiskTxMapUint64) PutMulti(_ []chainhash.Hash, _ uint64) error {
 
 // Iter is not used during block validation.
 func (m *DiskTxMapUint64) Iter(_ func(hash chainhash.Hash, value uint64) bool) {
+	// intentionally empty: DiskTxMapUint64 is only used during block validation where iteration is not needed
 }
 
 // DiskMapStats holds lightweight metrics for a disk-backed map.

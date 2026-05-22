@@ -117,6 +117,14 @@ type ClientI interface {
 	//   - error: Any error encountered during reset
 	ResetBlockAssemblyFully(ctx context.Context) error
 
+	// ResetBlockAssemblyValidateInputs performs a full reset with UTXO input validation.
+	// Verifies each unmined tx's inputs are still spent by this tx, marks invalid ones as conflicting.
+	ResetBlockAssemblyValidateInputs(ctx context.Context) error
+
+	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+	// Returns an error if any unmined transactions have inputs spent by different transactions.
+	CheckBlockAssemblyValidateInputs(ctx context.Context) error
+
 	// GetBlockAssemblyState retrieves the current state of block assembly.
 	//
 	// Parameters:
@@ -136,6 +144,19 @@ type ClientI interface {
 	//   - *model.Block: Block candidate
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error)
+
+	// GetCandidateBlock retrieves block metadata for an existing mining candidate.
+	// Returns the 80-byte header, coinbase tx, subtree hashes, and tx count
+	// needed to assemble a standard Bitcoin wire format block.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//   - candidateID: The mining candidate ID (from a prior GetMiningCandidate call)
+	//
+	// Returns:
+	//   - *blockassembly_api.GetCandidateBlockResponse: Block metadata for wire format assembly
+	//   - error: NotFound if candidate has expired or ID is invalid
+	GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error)
 
 	// GetTransactionHashes retrieves all transaction hashes in block assembly.
 	//

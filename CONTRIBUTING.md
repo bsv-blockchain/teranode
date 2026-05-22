@@ -9,7 +9,7 @@ As you get started, you are in the best position to give us feedback on areas of
 our project that we need help with including:
 
 * Problems found during setting up a new developer environment
-* Gaps in our documentationa
+* Gaps in our documentation
 
 If anything doesn't make sense, or doesn't work when you run it, please open a
 bug report and let us know!

@@ -1,15 +1,20 @@
 package aerospike_test
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -19,6 +24,108 @@ import (
 )
 
 // go test -v -tags test_aerospike ./test/...
+
+func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
+	tests := []struct {
+		name              string
+		enableExpressions bool
+	}{
+		{name: "lua", enableExpressions: false},
+		{name: "expressions", enableExpressions: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 1
+			tSettings.UtxoStore.SpendBatcherSize = 2
+			tSettings.UtxoStore.SpendBatcherDurationMillis = 5_000
+			tSettings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+			tSettings.Aerospike.EnableSpendFilterExpressions = tt.enableExpressions
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(func() {
+				deferFn()
+			})
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tx, 101)
+			require.NoError(t, err)
+
+			winnerCandidate := spendTx.Clone()
+			loserCandidate := spendTx2.Clone()
+			loserCandidate.Version = winnerCandidate.Version + 1
+
+			outcomes := spendConcurrently(t, store, winnerCandidate, loserCandidate)
+
+			var (
+				successCount int
+				failureCount int
+				winner       *bt.Tx
+				loserSpend   *utxo.Spend
+			)
+			candidates := []*bt.Tx{winnerCandidate, loserCandidate}
+			for idx, outcome := range outcomes {
+				require.Len(t, outcome.spends, 1)
+				if outcome.err == nil {
+					successCount++
+					winner = candidates[idx]
+					continue
+				}
+
+				failureCount++
+				require.ErrorIs(t, outcome.err, errors.ErrUtxoError)
+				require.ErrorIs(t, outcome.spends[0].Err, errors.ErrSpent)
+				loserSpend = outcome.spends[0]
+			}
+
+			require.Equal(t, 1, successCount)
+			require.Equal(t, 1, failureCount)
+			require.NotNil(t, winner)
+			require.NotNil(t, loserSpend)
+			require.NotNil(t, loserSpend.ConflictingTxID)
+			require.Equal(t, winner.TxIDChainHash().String(), loserSpend.ConflictingTxID.String())
+
+			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), 0, store.GetUtxoBatchSize())
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+			require.NoError(t, err)
+
+			rec, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key, fields.SpentUtxos.String())
+			require.NoError(t, err)
+			require.NotNil(t, rec)
+			require.Equal(t, 1, rec.Bins[fields.SpentUtxos.String()])
+		})
+	}
+}
+
+type spendOutcome struct {
+	spends []*utxo.Spend
+	err    error
+}
+
+func spendConcurrently(t *testing.T, store *teranode_aerospike.Store, txs ...*bt.Tx) []spendOutcome {
+	t.Helper()
+
+	start := make(chan struct{})
+	outcomes := make([]spendOutcome, len(txs))
+
+	var wg sync.WaitGroup
+	wg.Add(len(txs))
+	for idx, spendTx := range txs {
+		idx, spendTx := idx, spendTx
+		go func() {
+			defer wg.Done()
+			<-start
+			outcomes[idx].spends, outcomes[idx].err = store.Spend(context.Background(), spendTx, store.GetBlockHeight()+1)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	return outcomes
+}
 
 func TestStore_SpendMultiRecord(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
@@ -323,6 +430,128 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 	})
 }
 
+func TestStore_IncrementSpentRecords_Timeout(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tx, 101)
+	require.NoError(t, err)
+
+	// Set an extremely short timeout so the batcher can't respond in time
+	tSettings.UtxoStore.SpendWaitTimeout = time.Nanosecond
+
+	_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected service unavailable error, got: %v", err)
+}
+
+// TestDriftedCounterDoesNotSetDAH verifies that when spentExtraRecs drifts
+// (e.g. due to interrupted rollbacks during DEVICE_OVERLOAD), the Go-side
+// sanity check in handleExtraRecords detects that not all children are
+// actually spent and clears the DAH that Lua prematurely set.
+//
+// Flow: create multi-record tx → mine it → inflate spentExtraRecs on master
+// to simulate drift → spend only the master's UTXOs (not children) → the
+// child ALLSPENT signal triggers handleExtraRecords(+1) → Lua sees
+// spentExtraRecs == totalExtraRecs, sets DAH → Go verifies children →
+// finds they're NOT all-spent → clears the master DAH.
+func TestDriftedCounterDoesNotSetDAH(t *testing.T) {
+	batchSize := 2
+	numOutputs := 10
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = batchSize
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// Build a transaction with many outputs spanning multiple child records
+	largeTx := bt.NewTx()
+	err := largeTx.From(
+		"1111111111111111111111111111111111111111111111111111111111111111",
+		0,
+		"76a914000000000000000000000000000000000000000088ac",
+		uint64(numOutputs*1000+1000),
+	)
+	require.NoError(t, err)
+
+	for i := 0; i < numOutputs; i++ {
+		err = largeTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)
+		require.NoError(t, err)
+	}
+
+	txID := largeTx.TxIDChainHash()
+
+	_, err = store.Create(ctx, largeTx, 1)
+	require.NoError(t, err)
+
+	masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
+	require.NoError(t, err)
+
+	// Verify initial state: totalExtraRecs=4, no spentExtraRecs
+	rec, err := client.Get(nil, masterKey)
+	require.NoError(t, err)
+	totalExtraRecs := rec.Bins[fields.TotalExtraRecs.String()].(int)
+	expectedExtraRecs := (numOutputs / batchSize) - 1 // 4
+	require.Equal(t, expectedExtraRecs, totalExtraRecs)
+
+	// Mine the tx so DAH conditions can be met
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{txID}, utxo.MinedBlockInfo{
+		BlockID: 1, BlockHeight: 1, SubtreeIdx: 1, OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	// Simulate counter drift: inflate spentExtraRecs to totalExtraRecs-1
+	// without actually spending any child UTXOs. This is what happens when
+	// spend/unspend rollbacks are interrupted by context cancellation.
+	err = client.Put(nil, masterKey, aerospike.BinMap{
+		fields.SpentExtraRecs.String(): totalExtraRecs - 1,
+	})
+	require.NoError(t, err)
+
+	// Spend only outputs 0-1 (the master record's UTXOs, batchSize=2).
+	// This makes the master's own spentUtxos == recordUtxos.
+	// The child at vout 0-1 signals ALLSPENT → handleExtraRecords(+1) fires.
+	// Lua increments spentExtraRecs from (totalExtraRecs-1) to totalExtraRecs,
+	// allSpent becomes true, Lua sets DAH on master inline.
+	// Go then verifies children → most are NOT actually spent → clears DAH.
+	spendingTx := bt.NewTx()
+	for i := 0; i < batchSize; i++ {
+		err = spendingTx.From(
+			txID.String(),
+			uint32(i),
+			largeTx.Outputs[i].LockingScript.String(),
+			largeTx.Outputs[i].Satoshis,
+		)
+		require.NoError(t, err)
+	}
+	err = spendingTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(batchSize*1000-500))
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, spendingTx, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	// The key assertion: despite Lua setting DAH (because the drifted counter
+	// said allSpent=true), the Go verification should have cleared it after
+	// detecting that children 2-4 still have unspent UTXOs.
+	rec, err = client.Get(nil, masterKey)
+	require.NoError(t, err)
+	assert.Nil(t, rec.Bins[fields.DeleteAtHeight.String()],
+		"DAH should NOT be set — Go sanity check should have cleared it after detecting unspent children (counter drift)")
+}
+
 func TestStore_Unspend(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -374,19 +603,40 @@ func TestStore_Unspend(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		// Try to unspend a tx that hasn't been spent
+		// Unspend a never-spent UTXO is an idempotent no-op: the row's spending_data
+		// is already nil, so the ownership check naturally short-circuits and the
+		// call succeeds without modifying anything.
+		someTxHash := chainhash.HashH([]byte("some-other-tx"))
 		err = store.Unspend(ctx, []*utxo.Spend{
 			{
-				TxID:     tx.TxIDChainHash(),
-				Vout:     0,
-				UTXOHash: utxoHash,
+				TxID:         tx.TxIDChainHash(),
+				Vout:         0,
+				UTXOHash:     utxoHash,
+				SpendingData: spendpkg.NewSpendingData(&someTxHash, 0),
 			},
 		})
 		require.NoError(t, err)
 
-		// Verify we can still spend it
+		// Verify we can still spend the UTXO normally.
 		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
+}
+
+// TestStore_SpendNilTxPanicRecovery exercises the real Spend function with a nil
+// *bt.Tx, which triggers a nil pointer dereference inside utxo.GetSpends. This
+// covers the defer/named-return/&err plumbing in Spend itself rather than just
+// the helper unit-tested in spend_panic_test.go.
+func TestStore_SpendNilTxPanicRecovery(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	spends, err := store.Spend(ctx, nil, store.GetBlockHeight()+1)
+	require.Error(t, err, "Spend must surface panic as error, not return (nil, nil)")
+	require.Nil(t, spends)
+	require.Contains(t, err.Error(), "panic")
 }

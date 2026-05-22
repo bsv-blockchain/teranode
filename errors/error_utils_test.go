@@ -50,6 +50,26 @@ func TestIsRetryableError(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "storage error - retryable",
+			err:      NewStorageError("DEVICE_OVERLOAD"),
+			expected: true,
+		},
+		{
+			name:     "wrapped storage error - retryable",
+			err:      NewProcessingError("spend failed", NewStorageError("DEVICE_OVERLOAD")),
+			expected: true,
+		},
+		{
+			name:     "deeply wrapped storage error - retryable",
+			err:      NewProcessingError("validate failed", NewProcessingError("spend failed", NewStorageError("DEVICE_OVERLOAD"))),
+			expected: true,
+		},
+		{
+			name:     "processing error without storage - not retryable",
+			err:      NewProcessingError("validation failed"),
+			expected: false,
+		},
+		{
 			name:     "context canceled - not retryable",
 			err:      context.Canceled,
 			expected: false,
@@ -217,6 +237,62 @@ func TestIsContextError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := IsContextError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsLocalError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "context canceled",
+			err:      context.Canceled,
+			expected: true,
+		},
+		{
+			name:     "context deadline exceeded",
+			err:      context.DeadlineExceeded,
+			expected: true,
+		},
+		{
+			name:     "wrapped context canceled",
+			err:      NewContextCanceledError("test"),
+			expected: true,
+		},
+		{
+			name:     "storage error",
+			err:      NewStorageError("test"),
+			expected: true,
+		},
+		{
+			name:     "network error - should retry with other peers",
+			err:      NewNetworkTimeoutError("test"),
+			expected: false,
+		},
+		{
+			name:     "service error - should retry with other peers",
+			err:      NewServiceError("test"),
+			expected: false,
+		},
+		{
+			name:     "processing error - should retry with other peers",
+			err:      NewProcessingError("test"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsLocalError(tt.err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

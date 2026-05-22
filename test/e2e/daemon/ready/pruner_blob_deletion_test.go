@@ -319,23 +319,22 @@ func TestBlobDeletionSchedulingViaBlobStore(t *testing.T) {
 
 // TestBlobDeletionSafetyWindow verifies that the BlobDeletionSafetyWindow setting
 // prevents premature deletion of blobs. With a safety window of 2, blob deletions
-// are only processed when persistedHeight - safetyWindow >= deleteAtHeight.
+// are only processed when blockHeight > safetyWindow AND blockHeight - safetyWindow >= deleteAtHeight.
 //
 // The safety window logic in processBlobDeletionsAtHeight:
-//   - If persistedHeight > 0 and safetyWindow > 0:
-//     safeHeight = persistedHeight - safetyWindow
-//   - Only blobs with delete_at_height <= safeHeight are eligible for deletion
-//   - This ensures data is safely persisted before blob removal
-//   - Note: the safeHeight calculation only applies when persistedHeight > safetyWindow
-//     (uint32 underflow guard), so we mine initial blocks to establish a baseline
+//
+//	if blockHeight <= safetyWindow: skip all deletions (window not yet satisfied)
+//	safeHeight = blockHeight - safetyWindow
+//	Only blobs with delete_at_height <= safeHeight are eligible for deletion
+//	This ensures data is safely behind the triggering height before blob removal
 //
 // Test flow:
 // 1. Create TestDaemon with block persister + pruner, safety window = 2
-// 2. Mine initial blocks so persistedHeight > safetyWindow (required for safeHeight calc)
+// 2. Mine initial blocks to establish a baseline height
 // 3. Schedule blob deletions at DAH = H+1 and DAH = H+3
-// 4. Mine 1 block (persisted H+1, safeHeight = H-1): verify NOTHING deleted
-// 5. Mine 2 more blocks (persisted H+3, safeHeight = H+1): verify first blob deleted
-// 6. Mine 2 more blocks (persisted H+5, safeHeight = H+3): verify second blob deleted
+// 4. Mine 1 block (height H+1, safeHeight = H-1): verify NOTHING deleted
+// 5. Mine 2 more blocks (height H+3, safeHeight = H+1): verify first blob deleted
+// 6. Mine 2 more blocks (height H+5, safeHeight = H+3): verify second blob deleted
 func TestBlobDeletionSafetyWindow(t *testing.T) {
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableBlockPersister: true,
@@ -365,9 +364,7 @@ func TestBlobDeletionSafetyWindow(t *testing.T) {
 	ctx := context.Background()
 	db := node.BlockchainStore.GetDB()
 
-	// Mine initial blocks so persistedHeight > safetyWindow (2).
-	// The safeHeight = persistedHeight - safetyWindow calculation only executes
-	// when persistedHeight > safetyWindow (uint32 underflow guard in blob_deletion_worker.go:60).
+	// Mine initial blocks to establish a baseline height above the safety window threshold
 	t.Log("Mining initial blocks to establish baseline above safety window threshold...")
 	var block *model.Block
 	for i := 0; i < 5; i++ {
@@ -419,7 +416,7 @@ func TestBlobDeletionSafetyWindow(t *testing.T) {
 
 	require.Equal(t, initialDBCount+2, getDBDeletionCount(t, db), "Should have 2 new scheduled deletions")
 
-	// Phase 1: Mine 1 block -> height H+1, persisted ~ H+1
+	// Phase 1: Mine 1 block -> height H+1
 	// safeHeight = (H+1) - 2 = H-1
 	// Neither DAH H+1 nor DAH H+3 <= H-1, so NOTHING should be deleted
 	t.Log("Phase 1: Mining 1 block - safety window should prevent all deletions...")
@@ -433,11 +430,11 @@ func TestBlobDeletionSafetyWindow(t *testing.T) {
 
 	count := getDBDeletionCount(t, db)
 	require.Equal(t, initialDBCount+2, count,
-		"Safety window should prevent all deletions (persisted=%d, safeHeight=%d, DAH values: %d, %d)",
+		"Safety window should prevent all deletions (height=%d, safeHeight=%d, DAH values: %d, %d)",
 		currentHeight+1, currentHeight+1-2, currentHeight+1, currentHeight+3)
 	t.Log("Verified: both deletions still in queue (safety window active)")
 
-	// Phase 2: Mine 2 more blocks -> height H+3, persisted ~ H+3
+	// Phase 2: Mine 2 more blocks -> height H+3
 	// safeHeight = (H+3) - 2 = H+1
 	// Blob 0 (DAH H+1) <= H+1 -> DELETED
 	// Blob 1 (DAH H+3) > H+1 -> stays
@@ -457,7 +454,7 @@ func TestBlobDeletionSafetyWindow(t *testing.T) {
 		"First blob (DAH=%d) should be deleted once safeHeight >= %d", currentHeight+1, currentHeight+1)
 	t.Logf("Verified: first blob deleted (DAH=%d), one still pending (DAH=%d)", currentHeight+1, currentHeight+3)
 
-	// Phase 3: Mine 2 more blocks -> height H+5, persisted ~ H+5
+	// Phase 3: Mine 2 more blocks -> height H+5
 	// safeHeight = (H+5) - 2 = H+3
 	// Blob 1 (DAH H+3) <= H+3 -> DELETED
 	t.Log("Phase 3: Mining 2 more blocks - second deletion should be processed...")
@@ -485,7 +482,7 @@ func TestBlobDeletionSafetyWindow(t *testing.T) {
 // The existing tests (TestBlobDeletionScheduling, TestBlobDeletionSchedulingViaBlobStore)
 // both use OnBlockMined trigger mode. This test exercises the OnBlockPersisted path where:
 //   - Block notifications are ignored (server.go line 194: continue)
-//   - BlockPersisted notifications update lastPersistedHeight and trigger blob deletion
+//   - BlockPersisted notifications trigger blob deletion
 //   - The block persister must be running for notifications to arrive
 //
 // Test flow:
@@ -507,7 +504,7 @@ func TestBlobDeletionOnBlockPersistedTrigger(t *testing.T) {
 			test.MultiNodeSettings(1),
 			func(s *settings.Settings) {
 				s.Pruner.SkipBlobDeletion = false
-				s.Pruner.BlobDeletionSafetyWindow = 0 // No safety window - isolate trigger mechanism
+				s.Pruner.BlobDeletionSafetyWindow = 0
 				s.Pruner.BlobDeletionBatchSize = 100
 				s.Pruner.BlobDeletionMaxRetries = 3
 				s.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted

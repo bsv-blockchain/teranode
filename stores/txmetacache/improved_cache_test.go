@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,17 +85,18 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 }
 
 // TestInitTimes measures New startup across X runs and logs the average per bucket type.
-func TestInitTimes(t *testing.T) {
+func Test_InitTimes(t *testing.T) {
 	// testing with 256 MB cache
 	const (
 		maxBytes = 256 * 1024 * 1024
-		runs     = 3
+		runs     = 5
 	)
 
 	buckets := []struct {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
@@ -115,6 +118,28 @@ func TestInitTimes(t *testing.T) {
 
 		avg := total / runs
 		t.Logf("%s average init over %d runs: %v", bc.name, runs, avg)
+	}
+}
+
+func BenchmarkImprovedCache_SetMulti_Small(b *testing.B) {
+	cache, err := New(64*1024, Unallocated)
+	require.NoError(b, err)
+	defer cache.Reset()
+
+	keys := make([][]byte, 8)
+	values := make([][]byte, 8)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("small-key-%d", i))
+		values[i] = []byte("small-value")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err := cache.SetMulti(keys, values); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -142,6 +167,12 @@ func TestImprovedCache_New(t *testing.T) {
 			name:       "valid trimmed cache",
 			maxBytes:   64 * 1024, // 64KB
 			bucketType: Trimmed,
+			wantError:  false,
+		},
+		{
+			name:       "valid native cache",
+			maxBytes:   64 * 1024, // 64KB
+			bucketType: Native,
 			wantError:  false,
 		},
 		{
@@ -229,6 +260,31 @@ func TestImprovedCache_SetAndGet(t *testing.T) {
 			require.Equal(t, tc.value, dst)
 		})
 	}
+}
+
+// TestImprovedCache_GetMissReturnsSentinel pins the cache-miss contract: the
+// returned error must satisfy errors.Is(err, errors.ErrNotFound) and must not
+// allocate per call. The previous formatted error accounted for ~10% of CPU
+// under load via fmt.Errorf + runtime.Caller.
+func TestImprovedCache_GetMissReturnsSentinel(t *testing.T) {
+	cache, err := New(64*1024, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	var buf []byte
+	err1 := cache.Get(&buf, []byte("absent-key-1"))
+	err2 := cache.Get(&buf, []byte("absent-key-2"))
+
+	require.Error(t, err1)
+	require.Error(t, err2)
+	require.True(t, errors.Is(err1, errors.ErrNotFound), "miss must satisfy errors.Is(err, ErrNotFound)")
+	require.True(t, errors.Is(err2, errors.ErrNotFound))
+
+	key := []byte("absent-key-1")
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = cache.Get(&buf, key)
+	})
+	require.Zero(t, allocs, "cache miss must not allocate; got %.2f allocs/op", allocs)
 }
 
 // TestImprovedCache_Has tests the Has function
@@ -555,6 +611,7 @@ func TestImprovedCache_DifferentBucketTypes(t *testing.T) {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Preallocated", Preallocated},
 		{"Trimmed", Trimmed},
@@ -584,28 +641,25 @@ func TestImprovedCache_DifferentBucketTypes(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, value, dst)
 
-			// Del - some implementations might not immediately remove items from their maps
-			// but they should at least not crash
+			// Capture map size before deleting the key.
+			var statsBeforeDel Stats
+			cache.UpdateStats(&statsBeforeDel)
+
 			cache.Del(key)
-			// For trimmed cache, the item might still appear to exist due to implementation details
-			// but Get should fail
+
+			// Del must remove the key from all bucket implementations.
+			require.False(t, cache.Has(key), "deleted key should not exist in %s", bt.name)
+
 			var delDst []byte
-			getErr := cache.Get(&delDst, key)
-			// Either the key shouldn't exist or we should get an error
-			if cache.Has(key) {
-				// If Has returns true, Get should still work or return specific behavior
-				// This is implementation-dependent for trimmed caches
-				t.Logf("%s bucket type may keep deleted keys in map temporarily", bt.name)
-			} else if getErr != nil {
-				// This is expected behavior after deletion
-				t.Logf("%s bucket type correctly removed deleted key", bt.name)
-			}
+			require.Error(t, cache.Get(&delDst, key), "Get on deleted key should fail in %s", bt.name)
 
 			// UpdateStats
 			var stats Stats
 			cache.UpdateStats(&stats)
 			// Stats should work for all bucket types
 			require.GreaterOrEqual(t, stats.TotalMapSize, uint64(0))
+			require.Less(t, stats.TotalMapSize, statsBeforeDel.TotalMapSize,
+				"map size should shrink after deletion in %s", bt.name)
 		})
 	}
 }
@@ -899,6 +953,7 @@ func TestImprovedCache_OverfillGenerationStats(t *testing.T) {
 		name string
 		typ  BucketType
 	}{
+		{"Native", Native},
 		{"Unallocated", Unallocated},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
@@ -1141,61 +1196,12 @@ func TestImprovedCache_ForceCleanLockedMap(t *testing.T) {
 	}
 }
 
-func TestImprovedCache_ListChunks(t *testing.T) {
-	tests := []struct {
-		name       string
-		bucketType BucketType
-	}{
-		{"Trimmed", Trimmed},
-		{"Preallocated", Preallocated},
-		{"Unallocated", Unallocated},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cache, err := New(1024, tt.bucketType)
-			require.NoError(t, err)
-			defer cache.Reset()
-
-			// Add some entries to create chunks
-			for i := 0; i < 5; i++ {
-				key := fmt.Sprintf("key_%d", i)
-				value := fmt.Sprintf("value_%d", i)
-				err := cache.Set([]byte(key), []byte(value))
-				if err != nil {
-					t.Logf("Set failed for key %d: %v", i, err)
-				}
-			}
-
-			// Call listChunks directly on the bucket
-			// Note: This is a debug function that prints to stdout
-			bucket := cache.buckets[0] // Get first bucket
-			switch tt.bucketType {
-			case Trimmed:
-				if tb, ok := bucket.(*bucketTrimmed); ok {
-					tb.listChunks()
-				}
-			case Preallocated:
-				if pb, ok := bucket.(*bucketPreallocated); ok {
-					pb.listChunks()
-				}
-			case Unallocated:
-				if ub, ok := bucket.(*bucketUnallocated); ok {
-					ub.listChunks()
-				}
-			}
-
-			// Just verify the function was called (we can't easily capture stdout)
-			require.True(t, true, "listChunks function was called")
-		})
-	}
-}
-
 func TestImprovedCache_SetMulti(t *testing.T) {
 	tests := []struct {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1203,7 +1209,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cache, err := New(8192, tt.bucketType)
+			cache, err := New(8192000000, tt.bucketType)
 			require.NoError(t, err)
 			defer cache.Reset()
 
@@ -1263,12 +1269,16 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 				}
 
 				expectedValue := newValues[i]
-				if tt.bucketType == Trimmed {
+				switch tt.bucketType {
+				case Trimmed:
 					// Trimmed bucket may have different behavior for overwrites
 					// Just verify that we got some value back
 					require.NotEmpty(t, val, "Should have some value for key %s", string(key))
-					t.Logf("Trimmed bucket returned value: %s for key %s", string(val), string(key))
-				} else {
+					// t.Logf("Trimmed bucket returned value: %s for key %s", string(val), string(key))
+				case Native:
+					// Native bucket does not overwrite; expect original value
+					require.Equal(t, values[i], val, "Native does not overwrite; expect original value for key %s", string(key))
+				default:
 					require.Equal(t, expectedValue, val, "Overwritten value mismatch for key %s", string(key))
 				}
 			}
@@ -1344,6 +1354,7 @@ func TestImprovedCache_BucketDelFunctions(t *testing.T) {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1374,16 +1385,87 @@ func TestImprovedCache_BucketDelFunctions(t *testing.T) {
 				require.True(t, exists, "Key should exist before deletion in %s", tt.name)
 			}
 
+			var statsBeforeDel Stats
+			cache.UpdateStats(&statsBeforeDel)
+			require.GreaterOrEqual(t, statsBeforeDel.TotalMapSize, uint64(len(testKeys)),
+				"expected map size to include inserted keys in %s", tt.name)
+
 			// Delete keys using cache.Del which calls bucket Del functions
 			for _, key := range testKeys {
 				cache.Del(key)
-				// Don't verify deletion success as some bucket types may not fully support deletion
-				// The goal is to exercise the Del function code paths for coverage
+				require.False(t, cache.Has(key), "deleted key should not exist in %s", tt.name)
+
+				var dst []byte
+				require.Error(t, cache.Get(&dst, key), "Get on deleted key should fail in %s", tt.name)
 			}
 
-			var stats Stats
-			cache.UpdateStats(&stats)
-			t.Logf("%s Del test - ValidEntriesCount: %d", tt.name, stats.ValidEntriesCount)
+			var statsAfterDel Stats
+			cache.UpdateStats(&statsAfterDel)
+			require.Equal(t, uint64(0), statsAfterDel.TotalMapSize,
+				"all inserted keys were deleted in %s", tt.name)
+		})
+	}
+}
+
+func TestImprovedCache_ConcurrentSetGetDelResetAllBucketTypes(t *testing.T) {
+	bucketTypes := []struct {
+		name string
+		typ  BucketType
+	}{
+		{"Native", Native},
+		{"Unallocated", Unallocated},
+		{"Preallocated", Preallocated},
+		{"Trimmed", Trimmed},
+	}
+
+	for _, bt := range bucketTypes {
+		t.Run(bt.name, func(t *testing.T) {
+			cache, err := New(64*1024, bt.typ)
+			require.NoError(t, err)
+			defer cache.Reset()
+
+			const goroutines = 8
+			const operationsPerGoroutine = 200
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+
+			for worker := 0; worker < goroutines; worker++ {
+				wg.Add(1)
+				go func(workerID int) {
+					defer wg.Done()
+					<-start
+
+					for i := 0; i < operationsPerGoroutine; i++ {
+						key := []byte(fmt.Sprintf("race_key_%d_%d", workerID, i%32))
+						value := []byte(fmt.Sprintf("race_value_%d_%d", workerID, i))
+
+						_ = cache.Set(key, value)
+						_ = cache.Has(key)
+
+						var dst []byte
+						_ = cache.Get(&dst, key)
+
+						cache.Del(key)
+
+						if i%40 == 0 {
+							cache.Reset()
+						}
+					}
+				}(worker)
+			}
+
+			close(start)
+			wg.Wait()
+
+			// Ensure cache remains usable after the concurrent mixed workload.
+			finalKey := []byte("post_race_key")
+			finalValue := []byte("post_race_value")
+			require.NoError(t, cache.Set(finalKey, finalValue))
+
+			var dst []byte
+			require.NoError(t, cache.Get(&dst, finalKey))
+			require.Equal(t, finalValue, dst)
 		})
 	}
 }
@@ -1393,6 +1475,7 @@ func TestImprovedCache_SetMultiKeysSingleValueAllBuckets(t *testing.T) {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Trimmed", Trimmed},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
@@ -1440,11 +1523,12 @@ func TestImprovedCache_SetMultiKeysSingleValueAllBuckets(t *testing.T) {
 }
 
 func TestImprovedCache_CleanLockedMapCoverage(t *testing.T) {
-	// This test focuses on triggering cleanLockedMap for preallocated and unallocated buckets
+	// This test focuses on triggering cleanLockedMap for native, preallocated and unallocated buckets
 	tests := []struct {
 		name       string
 		bucketType BucketType
 	}{
+		{"Native", Native},
 		{"Preallocated", Preallocated},
 		{"Unallocated", Unallocated},
 	}
@@ -1455,7 +1539,7 @@ func TestImprovedCache_CleanLockedMapCoverage(t *testing.T) {
 			var numEntries int
 
 			// Different strategies for different bucket types
-			if tt.bucketType == Unallocated {
+			if tt.bucketType == Native || tt.bucketType == Unallocated {
 				cacheSize = 512  // Very small cache to force chunk overflow quickly
 				numEntries = 500 // Many entries to force generation wraparound
 			} else {

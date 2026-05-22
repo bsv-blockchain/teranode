@@ -234,15 +234,15 @@
   
   .first-node-panel {
     background: rgba(74, 158, 255, 0.1);
-    border: 1px solid #4a9eff;
+    border: 1px solid var(--link-default-enabled-color);
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 20px;
   }
-  
+
   .first-node-panel h3 {
     margin: 0 0 12px 0;
-    color: #4a9eff;
+    color: var(--link-default-enabled-color);
   }
   
   .first-node-info {
@@ -259,31 +259,31 @@
   .info-row .label {
     font-weight: bold;
     min-width: 120px;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--comp-label-color);
   }
-  
+
   .info-row .value {
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
     font-family: 'JetBrains Mono', monospace;
   }
-  
+
   .info-row .value.missing {
     color: #ff9999;
     font-style: italic;
   }
-  
+
   .log-section, .messages-section {
     margin-top: 20px;
   }
-  
+
   .log-section h3, .messages-section h3 {
     margin-bottom: 10px;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
   }
-  
+
   .log {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--app-subtle-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 4px;
     padding: 10px;
     max-height: 200px;
@@ -291,47 +291,47 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
   }
-  
+
   .log-entry {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
     margin-bottom: 4px;
   }
-  
+
   .messages {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--app-subtle-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 4px;
     padding: 10px;
     max-height: 400px;
     overflow-y: auto;
   }
-  
+
   .message {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--app-overlay-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 4px;
     padding: 10px;
     margin-bottom: 10px;
   }
-  
+
   .message-header {
     display: flex;
     gap: 12px;
     align-items: center;
     margin-bottom: 8px;
   }
-  
+
   .time {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-family: 'JetBrains Mono', monospace;
   }
-  
+
   .type {
     font-weight: bold;
-    color: #4a9eff;
+    color: var(--link-default-enabled-color);
   }
-  
+
   .wrapped {
     background: rgba(255, 193, 7, 0.2);
     color: #ffc107;
@@ -339,32 +339,32 @@
     border-radius: 3px;
     font-size: 11px;
   }
-  
+
   .message-info {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--comp-label-color);
     margin-bottom: 8px;
     font-family: 'JetBrains Mono', monospace;
   }
-  
+
   details {
     margin-top: 8px;
   }
-  
+
   summary {
     cursor: pointer;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--comp-label-color);
     font-size: 12px;
   }
-  
+
   pre {
-    background: rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--app-subtle-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 4px;
     padding: 8px;
     margin-top: 8px;
     font-size: 11px;
     overflow-x: auto;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
   }
 </style>

@@ -1,0 +1,33 @@
+{
+  "skill_name": "release",
+  "evals": [
+    {
+      "id": 0,
+      "name": "triage-pick-vs-hold",
+      "prompt": "/release triage release/v0.15. The first beta was cut last week. What's worth backporting from main? Lean Pick when prod evidence or test coverage exists — Hold is a starting point, not a rule.",
+      "expected_output": "Walks main commits since release/v0.15 base, classifies each PR with explicit reasoning (Pick/Hold/Caution), surfaces prereq concerns, recommends a final pick set without taking action.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "stable-gate-refusal",
+      "prompt": "Let's tag v0.15.1 from beta-1. It's been on testnet for about 6 hours and looks healthy. We have one mainnet peer still on v0.15.0 — nothing has crashed.",
+      "expected_output": "Refuses to tag. Names which gates fail by number/concept: soak duration <24h on testnet, no mainnet peer on the beta itself, TeraTestNet not mentioned, sync-from-zero and upgrade-mid-IBD not verified. Suggests waiting or specific evidence needed.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "hotfix-probe-dirty-wt",
+      "prompt": "PR #872 is the block-assembly stall fix, already merged. I want to probe whether it cherry-picks clean onto release/v0.15 without committing. My working tree currently has the untracked deploy/docker/base/grafana_dashboards/teranode/ directory in it. Don't lose those files.",
+      "expected_output": "Recognizes precondition: clean working tree required before -n probe. Stashes user state first (`git stash push --include-untracked -m user-state-before-probe`), runs `git cherry-pick -n <sha>`, reports applies-clean/conflict result, cleans up the probe staging area without `git reset --hard`/`checkout .`/`clean -f`, then pops the user stash back.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "anchor-drift-conflict",
+      "prompt": "I'm cherry-picking PR #850 (a single-line nil-guard in services/validator/txvalidator.go) onto release/v0.14. Git aborted with conflict markers where the <<<<<<< HEAD section is empty and my new code sits inside the markers. What now?",
+      "expected_output": "Recognizes anchor-drift signature (HEAD-empty hunks = missing prerequisite refactor on the release branch). Lists candidate prereq commits via `git log release/v0.14..origin/main -- services/validator/txvalidator.go`. Recommends evaluating each candidate as a standalone backport. Does NOT propose auto-resolving. Suggests `git cherry-pick --abort` if abandoning.",
+      "files": []
+    }
+  ]
+}

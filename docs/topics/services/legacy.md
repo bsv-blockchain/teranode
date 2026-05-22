@@ -278,8 +278,8 @@ The Legacy Service converts standard BSV blocks (which don't have subtrees) into
     - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
 
 4. **Validation:**
-    - In legacy sync mode, a quick validation is performed assuming blocks are valid
-    - In normal mode, more thorough validation is performed via the Teranode validation services
+    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (LEGACYSYNCING or CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
+    - For blocks above the highest checkpoint, more thorough validation is performed via the Teranode validation services.
 
 5. **Storage:**
     - The subtree, its data, and metadata are stored in the Subtree Store
@@ -353,7 +353,7 @@ The entire codebase is written in Go (Golang), a statically typed, compiled prog
 
 Technology highlights:
 
-- **Bitcoin SV (BSV):** An implementation of the Bitcoin protocol that follows the vision set out by Satoshi Nakamoto's original Bitcoin whitepaper. BSV focuses on scalability, aiming to provide high transaction throughput and enterprise-level capabilities.
+- **BSV Blockchain:** An implementation of the Bitcoin protocol that follows the vision set out by Satoshi Nakamoto's original Bitcoin whitepaper. BSV Blockchain focuses on scalability, aiming to provide high transaction throughput and enterprise-level capabilities.
 - **Teranode:** A high-performance implementation of the Bitcoin protocol designed to handle a massive scale of transactions.
 
 - **Echo Framework:** The code uses Echo, a high-performance, extensible web framework for Go, to create an HTTP server. This server exposes endpoints for block, transaction, and subtree data retrieval.

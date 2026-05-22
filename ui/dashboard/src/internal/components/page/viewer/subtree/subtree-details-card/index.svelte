@@ -257,7 +257,7 @@
     width: 100%;
 
     padding-bottom: 32px;
-    border-bottom: 1px solid #0a1018;
+    border-bottom: 1px solid var(--app-bg-color);
   }
 
   .json-header {
@@ -289,7 +289,7 @@
   }
 
   .loading {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     text-align: center;
     padding: 40px;
   }
@@ -330,7 +330,7 @@
   }
 
   .label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -342,7 +342,7 @@
   .value {
     word-break: break-all;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;

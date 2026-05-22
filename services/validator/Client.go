@@ -1,15 +1,13 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -31,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
@@ -39,6 +37,8 @@ import (
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/tracing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -100,6 +100,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	conn, err := util.GetGRPCClient(ctx, validatorGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
+		CallerName: "validator",
 	}, tSettings)
 
 	if err != nil {
@@ -129,7 +130,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			client.sendBatchToValidator(ctx, batch)
 		}
 		duration := time.Duration(sendBatchTimeout) * time.Millisecond
-		client.batcher = *batcher.New(sendBatchSize, duration, sendBatch, true)
+		client.batcher = *batcher.NewWithPool(sendBatchSize, duration, sendBatch, true,
+			batcher.WithName("validator_client"),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
+		)
 	}
 
 	return client, nil
@@ -194,6 +200,13 @@ func (c *Client) TriggerBatcher() {
 	}
 }
 
+// EnsureMTPLoaded is a no-op on the gRPC client. The remote validator service manages
+// its own in-memory MTP store; EnsureMTPLoaded is called server-side before concurrent
+// per-transaction goroutines start.
+func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
+}
+
 // Validate performs transaction validation by applying the given options and delegating
 // to ValidateWithOptions. See ValidateWithOptions for details on the validation flow.
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {
@@ -224,6 +237,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
 			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
 			CreateConflicting:    &validationOptions.CreateConflicting,
+			SkipTxmetaPublishing: &validationOptions.SkipTxMetaPublishing,
 		})
 		if err != nil {
 			c.logger.Errorf("[ValidateWithOptions] failed to validate non-batched transaction: %v", err)
@@ -242,7 +256,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// Batch mode
 	doneCh := make(chan validateBatchResponse)
-	c.batcher.Put(&batchItem{
+	c.batcher.PutCtx(ctx, &batchItem{
 		req: &validator_api.ValidateTransactionRequest{
 			TransactionData:      tx.SerializeBytes(),
 			BlockHeight:          blockHeight,
@@ -250,6 +264,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
 			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
 			CreateConflicting:    &validationOptions.CreateConflicting,
+			SkipTxmetaPublishing: &validationOptions.SkipTxMetaPublishing,
 		},
 		done: doneCh,
 	})

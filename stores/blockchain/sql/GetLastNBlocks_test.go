@@ -68,13 +68,66 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block3, "")
 		require.NoError(t, err)
 
-		// Get blocks from height 1
+		// Get blocks from height 2 (simulates page 2+ pagination)
 		blocks, err := s.GetLastNBlocks(context.Background(), 10, false, 2)
 		require.NoError(t, err)
 		assert.Len(t, blocks, 3)
 		assert.Equal(t, uint32(2), blocks[0].Height)
 		assert.Equal(t, uint32(1), blocks[1].Height)
 		assert.Equal(t, uint32(0), blocks[2].Height)
+	})
+
+	t.Run("pagination page 2 returns full page", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		// Store blocks 1, 2, and 3 (chain: genesis -> 1 -> 2 -> 3)
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		// Page 1: get 2 blocks from tip (heights 3, 2)
+		page1, err := s.GetLastNBlocks(context.Background(), 2, false, 0)
+		require.NoError(t, err)
+		assert.Len(t, page1, 2)
+		assert.Equal(t, uint32(3), page1[0].Height)
+		assert.Equal(t, uint32(2), page1[1].Height)
+
+		// Page 2: get 2 blocks from height 1 (heights 1, 0)
+		page2, err := s.GetLastNBlocks(context.Background(), 2, false, 1)
+		require.NoError(t, err)
+		assert.Len(t, page2, 2, "page 2 should return a full page of blocks")
+		assert.Equal(t, uint32(1), page2[0].Height)
+		assert.Equal(t, uint32(0), page2[1].Height)
+	})
+
+	t.Run("fromHeight greater than tip returns blocks from tip", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		// Store blocks 1, 2, and 3 (chain tip at height 3)
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		// Request fromHeight=1000 which is far above tip (height 3)
+		// Should behave gracefully, returning blocks from the tip down
+		blocks, err := s.GetLastNBlocks(context.Background(), 10, false, 1000)
+		require.NoError(t, err)
+		assert.Len(t, blocks, 4, "fromHeight > tip should return all blocks from tip down")
+		assert.Equal(t, uint32(3), blocks[0].Height)
 	})
 
 	t.Run("get last blocks with includeOrphans=true", func(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -63,6 +63,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "blockvalidation",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init block validation service connection for '%s'", source, err)
@@ -149,7 +150,7 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 //   - blockHeight: Expected chain height for the block
 //
 // Returns an error if block processing fails
-func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return err
@@ -160,6 +161,7 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 		Height:  blockHeight,
 		PeerId:  peerID,
 		BaseUrl: baseURL,
+		BlockId: blockID,
 	}
 
 	_, err = s.apiClient.ProcessBlock(ctx, req)

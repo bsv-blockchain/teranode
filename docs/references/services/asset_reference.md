@@ -667,7 +667,7 @@ Error responses include a JSON object with an error message:
     - URL Parameters: `hash` - Starting block hash (hex string)
     - Query Parameters:
 
-        - `n` (integer, optional, default: 100, max: 1000) - Number of headers to retrieve
+        - `n` (integer, optional, default: 100, max: 10000) - Number of headers to retrieve
     - Returns: Block headers (binary, 80 bytes per header)
     - Also available: `/api/v1/headers/:hash/hex` (hex), `/api/v1/headers/:hash/json` (JSON)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var benchDriverOnce sync.Once
 
 func TestDB_SetGetRetryConfig(t *testing.T) {
 	// Open an in-memory SQLite database for testing
@@ -687,9 +690,11 @@ func TestDB_ConcurrentOperations(t *testing.T) {
 
 // BenchmarkQuery benchmarks the Query method
 func BenchmarkQuery(b *testing.B) {
-	// Register mock driver
 	driverName := "mock-driver-bench"
-	sql.Register(driverName, &MockDriver{})
+	benchDriverOnce.Do(func() {
+		sql.Register("mock-driver-bench", &MockDriver{})
+		sql.Register("mock-driver-bench-exec", &MockDriver{})
+	})
 
 	db, err := Open(driverName, "test-dsn")
 	if err != nil {
@@ -709,9 +714,11 @@ func BenchmarkQuery(b *testing.B) {
 
 // BenchmarkExec benchmarks the Exec method
 func BenchmarkExec(b *testing.B) {
-	// Register mock driver
 	driverName := "mock-driver-bench-exec"
-	sql.Register(driverName, &MockDriver{})
+	benchDriverOnce.Do(func() {
+		sql.Register("mock-driver-bench", &MockDriver{})
+		sql.Register(driverName, &MockDriver{})
+	})
 
 	db, err := Open(driverName, "test-dsn")
 	if err != nil {

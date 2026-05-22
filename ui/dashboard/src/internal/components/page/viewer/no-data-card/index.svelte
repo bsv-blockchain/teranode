@@ -26,7 +26,7 @@
       variant="title"
       size="h5"
       value={t(`${fieldKey}.title`)}
-      color="rgba(255, 255, 255, 0.88)"
+      color="var(--app-color)"
     />
   </div>
   <div class="body">
@@ -34,7 +34,7 @@
       variant="text"
       size="md"
       value={t(`${fieldKey}.body`)}
-      color="rgba(255, 255, 255, 0.66)"
+      color="var(--comp-label-color)"
     />
   </div>
   <div class="btn">

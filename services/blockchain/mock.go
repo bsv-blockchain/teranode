@@ -1379,3 +1379,12 @@ func (m *Mock) GetMedianTimePastForHeights(ctx context.Context, heights []uint32
 	}
 	return args.Get(0).([]uint32), args.Error(1)
 }
+
+// GetMedianTimePastRange mocks the GetMedianTimePastRange method
+func (m *Mock) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	args := m.Called(ctx, fromHeight, toHeight)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]uint32), args.Error(1)
+}

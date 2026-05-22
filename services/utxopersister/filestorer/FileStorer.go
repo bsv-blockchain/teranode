@@ -119,6 +119,12 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		// reader's interaction with the pipe can create deadlocks in error scenarios.
 		err := store.SetFromReader(ctx, key, fileType, reader, fileOptions...)
 		if err != nil {
+			// Close the pipe reader with the error BEFORE acquiring the mutex.
+			// This unblocks any Write() call stuck on pipe.write(), which holds
+			// fs.mu. Without this, we deadlock: Write holds mu waiting for the
+			// pipe to drain, and we wait for mu to set readerError.
+			_ = reader.CloseWithError(err)
+
 			fs.mu.Lock()
 			fs.readerError = err
 			fs.mu.Unlock()

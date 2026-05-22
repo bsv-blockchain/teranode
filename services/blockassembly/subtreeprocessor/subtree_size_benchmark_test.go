@@ -526,10 +526,12 @@ func BenchmarkChannelSendReceive(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		errCh := make(chan error)
 		ch <- NewSubtreeRequest{
-			Subtree:          subtree,
-			ParentTxMap:      txMap,
-			SkipNotification: true,
-			ErrChan:          errCh,
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			SkipNotification:  true,
+			ErrChan:           errCh,
+			OnStorageComplete: nil,
 		}
 		<-errCh
 	}

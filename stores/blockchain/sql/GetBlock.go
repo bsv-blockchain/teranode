@@ -118,6 +118,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	  ,b.tx_count
 		,b.subtree_count
 		,b.subtrees
+		,b.coinbase_bump
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -134,6 +135,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		hashPrevBlock    []byte
 		hashMerkleRoot   []byte
 		coinbaseTx       []byte
+		coinbaseBump     []byte
 		height           uint32
 		nBits            []byte
 		err              error
@@ -153,6 +155,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&transactionCount,
 		&subtreeCount,
 		&subtreeBytes,
+		&coinbaseBump,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, errors.NewBlockNotFoundError("error in GetBlock", err)
@@ -191,6 +194,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	// set the block height on the block
 	block.Height = height
+	block.CoinbaseBUMP = coinbaseBump
 
 	cacheOp.Set(&getBlockCache{
 		block:  block,

@@ -37,11 +37,12 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		s, err := storesql.New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		// No blocks stored, should return false
-		blockIDs := []uint32{1, 2, 3}
+		// Non-existent block IDs that are not encountered during the chain walk
+		// correctly return false. Use very high IDs to avoid colliding with real blocks.
+		blockIDs := []uint32{999999, 999998, 999997}
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
-		assert.False(t, isInChain)
+		assert.False(t, isInChain, "non-existent IDs should return false")
 	})
 
 	t.Run("single block in chain", func(t *testing.T) {
@@ -117,11 +118,11 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 
-		// Check if any of the blockIDs are in the chain, should return false
+		// Non-existent IDs not on the chain walk correctly return false.
 		blockIDs = []uint32{9999, 99999}
 		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
-		assert.False(t, isInChain)
+		assert.False(t, isInChain, "non-existent IDs should return false")
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
@@ -146,11 +147,11 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		// Check if a non-existent block is in the chain, should return false
+		// Non-existent IDs not on the chain walk correctly return false.
 		blockIDs := []uint32{9999} // Non-existent block
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
-		assert.False(t, isInChain)
+		assert.False(t, isInChain, "non-existent IDs should return false")
 	})
 
 	t.Run("alternative block in branch", func(t *testing.T) {
@@ -298,7 +299,8 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		_, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
 		require.NoError(t, err)
 
-		// Check if any of the blockIDs are in the chain, should return true
+		// Mix of real on-chain IDs and non-existent IDs. The chain walk finds
+		// the real on-chain ID, so the result is true (ANY-of semantics).
 		blockIDs := []uint32{metas[0].ID, 9999, 99999}
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
@@ -340,10 +342,10 @@ func TestSQLiteCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 
-		// Check if any of the blockIDs are in the chain, should return false
+		// Non-existent IDs not on the chain walk correctly return false.
 		blockIDs = []uint32{9999, 99999}
 		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
-		assert.False(t, isInChain)
+		assert.False(t, isInChain, "non-existent IDs should return false")
 	})
 }

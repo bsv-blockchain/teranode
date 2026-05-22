@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +39,7 @@ func TestDoHTTPRequestPOST(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -190,7 +192,7 @@ func TestDoHTTPRequestInvalidURL(t *testing.T) {
 	_, err := DoHTTPRequest(ctx, "invalid-url")
 
 	require.Error(t, err)
-	// Invalid URL error happens during Do, not NewRequest
+	// Non-http URL passes SSRF validation but fails at HTTP client level
 	assert.Contains(t, err.Error(), "failed to do http request")
 }
 
@@ -231,7 +233,7 @@ func TestDoHTTPRequestBodyReaderPOST(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -261,7 +263,7 @@ func TestDoHTTPRequestBodyReaderError(t *testing.T) {
 
 	assert.Nil(t, reader)
 	require.Error(t, err)
-	// Invalid URL error happens during Do, not NewRequest
+	// Non-http URL passes SSRF validation but fails at HTTP client level
 	assert.Contains(t, err.Error(), "failed to do http request")
 }
 
@@ -389,7 +391,7 @@ func TestDoHTTPRequestEmptyRequestBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Empty slice still triggers POST because len(requestBody) > 0
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.Equal(t, []byte{}, body)
@@ -426,7 +428,7 @@ func TestDoHTTPRequestNilRequestBody(t *testing.T) {
 func TestDoHTTPRequestMultipleRequestBodies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -505,6 +507,139 @@ func TestDoHTTPRequestJSONResponse(t *testing.T) {
 	assert.Equal(t, float64(123), parsed["id"]) // JSON numbers become float64
 	assert.Equal(t, "test", parsed["name"])
 	assert.Equal(t, true, parsed["active"])
+}
+
+func TestDoHTTPRequestBounded_HappyPath(t *testing.T) {
+	responseData := []byte(`{"message": "success"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+}
+
+func TestDoHTTPRequestBounded_POST(t *testing.T) {
+	requestBody := []byte(`{"data": "test"}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Equal(t, requestBody, body)
+
+		w.WriteHeader(http.StatusOK)
+		_, err = w.Write([]byte(`{"processed": true}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, 1024, requestBody)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"processed": true}`, string(response))
+}
+
+func TestDoHTTPRequestBounded_BodyEqualToLimit(t *testing.T) {
+	// Boundary case: server returns exactly maxBytes — must succeed.
+	const limit = 32
+	responseData := []byte(strings.Repeat("a", limit))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.NoError(t, err)
+	assert.Equal(t, responseData, response)
+	assert.Len(t, response, limit)
+}
+
+func TestDoHTTPRequestBounded_BodyExceedsLimit(t *testing.T) {
+	// Server returns more than maxBytes — must return a typed error and not allocate the whole body.
+	const limit = 16
+	responseData := []byte(strings.Repeat("x", limit*4))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+	assert.Contains(t, err.Error(), "exceeds")
+}
+
+func TestDoHTTPRequestBounded_BodyOneByteOverLimit(t *testing.T) {
+	// Off-by-one boundary: maxBytes+1 bytes must fail.
+	const limit = 32
+	responseData := []byte(strings.Repeat("b", limit+1))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	response, err := DoHTTPRequestBounded(ctx, server.URL, int64(limit))
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal))
+}
+
+func TestDoHTTPRequestBounded_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, err := w.Write([]byte("not found"))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}
+
+func TestDoHTTPRequestBounded_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("slow response"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := DoHTTPRequestBounded(ctx, server.URL, 1024)
+	require.Error(t, err)
 }
 
 // Benchmark tests
@@ -640,10 +775,284 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
-	// Test with malformed URL that will fail NewRequestWithContext
+	// Test with malformed URL that will fail validation/request creation
 	ctx := context.Background()
 	_, err := DoHTTPRequest(ctx, "ht\ttp://invalid-url-with-control-char")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create http request")
+	assert.Contains(t, err.Error(), "invalid URL")
+}
+
+func TestValidateURL(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid https URL",
+			url:     "https://example.com/path",
+			wantErr: false,
+		},
+		{
+			name:    "valid http URL",
+			url:     "http://example.com/path",
+			wantErr: false,
+		},
+		{
+			name:    "skip ftp scheme",
+			url:     "ftp://example.com/file",
+			wantErr: false,
+		},
+		{
+			name:    "skip file scheme",
+			url:     "file:///etc/passwd",
+			wantErr: false,
+		},
+		{
+			name:    "allow loopback IPv4",
+			url:     "http://127.0.0.1:8080/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow localhost",
+			url:     "http://localhost:8080/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 10.x",
+			url:     "http://10.0.0.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 192.168.x",
+			url:     "http://192.168.1.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "allow private 172.16.x",
+			url:     "http://172.16.0.1/path",
+			wantErr: false,
+		},
+		{
+			name:    "reject link-local 169.254.x",
+			url:     "http://169.254.169.254/latest/meta-data",
+			wantErr: true,
+			errMsg:  "blocked IP",
+		},
+		{
+			name:    "skip non-http scheme",
+			url:     "no-scheme-url",
+			wantErr: false,
+		},
+		{
+			name:    "reject empty hostname",
+			url:     "http:///path",
+			wantErr: true,
+			errMsg:  "no hostname",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateURL(tt.url)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateURL_Disabled(t *testing.T) {
+	// Verify that disabling SSRF protection allows all URLs
+	ssrfProtectionEnabled = false
+	defer func() { ssrfProtectionEnabled = true }()
+
+	err := ValidateURL("http://127.0.0.1:8080/path")
+	require.NoError(t, err)
+}
+
+// testRetryConfig is a fast retry config for tests: short delays, low attempt count.
+var testRetryConfig = retryConfig{
+	maxAttempts:  4,
+	initialDelay: 10 * time.Millisecond,
+	maxDelay:     50 * time.Millisecond,
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_SuccessOnFirstTry(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, "body", string(got))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts), "should not retry on success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_RetriesOn503ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			// First two attempts: 503
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("busy"))
+			return
+		}
+		// Third attempt: success
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-retry"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, "ok-after-retry", string(got), "should return body from successful retry, not earlier 503 body")
+	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ExhaustsAttemptsOnPersistent503(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	assert.Nil(t, body)
+	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"final error must be ErrServiceUnavailable so callers can branch on it; got %T: %v", err, err)
+	assert.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts),
+		"should have exactly maxAttempts attempts")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_HonorsRetryAfter(t *testing.T) {
+	var attempts int32
+	const retryAfterSeconds = 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1") // 1 second per RFC 7231 delta-seconds
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	// Tight initialDelay (10ms) so the only thing that can produce a >=1s wait is honoring Retry-After.
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	start := time.Now()
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	defer body.Close()
+	assert.GreaterOrEqual(t, elapsed, time.Duration(retryAfterSeconds)*time.Second-100*time.Millisecond,
+		"server's Retry-After=1 must be honored over the much smaller initialDelay")
+	assert.Less(t, elapsed, 3*time.Second, "should not wait significantly longer than Retry-After")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_NoRetryOnNon503(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+	}{
+		{"500_internal_server_error", http.StatusInternalServerError},
+		{"502_bad_gateway", http.StatusBadGateway},
+		{"504_gateway_timeout", http.StatusGatewayTimeout},
+		{"404_not_found", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&attempts, 1)
+				w.WriteHeader(tc.code)
+			}))
+			defer server.Close()
+
+			_, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+			require.Error(t, err)
+			assert.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+				"non-503 status %d must fail immediately, not retry", tc.code)
+		})
+	}
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ContextCancelAbortsRetries(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	// Generous per-attempt delay so the cancel must be the thing that ends the loop.
+	cfg := retryConfig{maxAttempts: 6, initialDelay: 200 * time.Millisecond, maxDelay: time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 500*time.Millisecond,
+		"ctx cancel should short-circuit the retry loop well before exhausting attempts")
+	// At least one attempt happened; we don't assert exactly because timing is racy.
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&attempts), int32(1))
+	assert.LessOrEqual(t, atomic.LoadInt32(&attempts), int32(2),
+		"should not fire all 6 attempts if cancelled at 50ms with 200ms+ backoffs")
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"", 0},
+		{"0", 0},
+		{"-1", 0},
+		{"1", time.Second},
+		{"30", 30 * time.Second},
+		{"not-a-number", 0},
+		// HTTP-date format must be treated as "no retry hint", not silently
+		// reinterpreted. Same for any non-integer the server might emit.
+		{"Wed, 21 Oct 2015 07:28:00 GMT", 0},
+		{"1.5", 0}, // time.ParseDuration would have accepted "1.5s"
+		{"1m", 0},  // and "1ms", "1h" etc — none are valid delta-seconds
+		{" 5", 0},  // surrounding whitespace
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			assert.Equal(t, c.want, parseRetryAfter(c.in))
+		})
+	}
 }

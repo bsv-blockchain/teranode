@@ -71,11 +71,12 @@ var (
 		Height:           100,
 		ID:               666,
 	}
-	testBlockBytes, _ = testBlock.Bytes()
-	testSubtree, _    = subtree.NewTreeByLeafCount(4)
-	testTxMeta        = &meta.Data{
+	testBlockBytes, _     = testBlock.Bytes()
+	testSubtree, _        = subtree.NewTreeByLeafCount(4)
+	testTxMetaInpoints, _ = subtree.NewTxInpointsFromInputs(testTx1.Inputs)
+	testTxMeta            = &meta.Data{
 		Tx:          testTx1,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*testTx1.Inputs[0].PreviousTxIDChainHash()}, Idxs: [][]uint32{{testTx1.Inputs[0].PreviousTxOutIndex}}},
+		TxInpoints:  testTxMetaInpoints,
 		BlockIDs:    []uint32{100},
 		Fee:         123,
 		SizeInBytes: 321,
@@ -97,7 +98,7 @@ func init() {
 	}
 }
 
-func GetMockHTTP(t *testing.T, body io.Reader) (*HTTP, *repository.Mock, echo.Context, *httptest.ResponseRecorder) {
+func GetMockHTTP(t testing.TB, body io.Reader) (*HTTP, *repository.Mock, echo.Context, *httptest.ResponseRecorder) {
 	// Mock repository
 	mockRepo := &repository.Mock{}
 

@@ -57,9 +57,9 @@
     cd /teranode/test/tna
     go test -v -tags test_tna
 
-    # Run TNB tests
+    # Run TNB tests (no build tag required — see note at bottom of Available Test Tags section)
     cd /teranode/test/tnb
-    go test -v -tags test_tnb
+    go test -v
 
     # Run TEC tests
     cd /teranode/test/tec
@@ -390,18 +390,19 @@
 
 Teranode uses build tags to control which tests run:
 
-- `test_tna` - TNA test suite
-- `test_tnb` - TNB test suite
-- `test_tec` - TEC test suite
-- `test_tnd` - TND test suite
-- `test_tnf` - TNF test suite
-- `test_tnj` - TNJ test suite
-- `test_smoke` - Smoke tests
-- `test_functional` - Functional tests
-- `testtxmetacache` - Use small transaction metadata cache
-- `largetxmetacache` - Use production-sized cache
+- `test_tna` - TNA test suite (`test/tna/`)
+- `test_tec` - TEC test suite (`test/tec/`)
+- `test_tnd` - TND test suite (`test/tnd/`)
+- `test_tnf` - TNF test suite (`test/tnf/`)
+- `test_smoke` - Smoke tests (docker-based e2e)
+- `test_functional` - Functional tests (subset of smoke)
+- `test_utxo` - UTXO tests (subset of smoke)
+- `test_peer` - Peer tests (subset of smoke)
+- `testtxmetacache` - Use small transaction metadata cache (for testing)
 - `aerospike` - Tests requiring Aerospike
 - `debug` - Enable debug mode for tests
+
+> **Note:** The `test/tnb/` and `test/tnj/` test directories do not use build tags; run them directly with `go test ./test/tnb/` and `go test ./test/tnj/`.
 
 # Other Resources
 

@@ -81,6 +81,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 			FROM blocks bb
 			JOIN ChainBlocks cb ON bb.id = cb.parent_id
 			WHERE bb.id != cb.id
+			  AND bb.height >= $1
 		)
 		SELECT
 		 b.ID
@@ -97,11 +98,9 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		,b.subtrees
 		,b.invalid
 		FROM blocks b
-		WHERE b.id IN (
-			SELECT id FROM ChainBlocks
-			WHERE height = $1
-			LIMIT 1
-		)
+		JOIN ChainBlocks cb ON b.id = cb.id
+		WHERE cb.height = $1
+		LIMIT 1
 	`
 
 	block = &model.Block{

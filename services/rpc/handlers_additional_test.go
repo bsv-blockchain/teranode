@@ -1498,6 +1498,33 @@ func TestHandleGetBlockHashComprehensive(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block not found")
 	})
+
+	t.Run("missing height returns RPC block not found", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockByHeight", mock.Anything, uint32(101)).Return(
+			(*model.Block)(nil), errors.NewBlockNotFoundError("block not found at height"),
+		)
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetBlockHashCmd{
+			Index: 101,
+		}
+
+		_, err := handleGetBlockHash(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block not found")
+	})
 }
 
 // TestHandleGetBlockHeaderComprehensive tests the handleGetBlockHeader handler
@@ -4731,7 +4758,7 @@ func (m *mockBlockValidationClient) BlockFound(ctx context.Context, blockHash *c
 	return nil
 }
 
-func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
 	if m.processBlockFunc != nil {
 		return m.processBlockFunc(ctx, block, blockHeight)
 	}
@@ -5807,6 +5834,14 @@ func (m *mockBlockAssemblyClient) ResetBlockAssemblyFully(ctx context.Context) e
 	return nil
 }
 
+func (m *mockBlockAssemblyClient) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockBlockAssemblyClient) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	return nil
+}
+
 func (m *mockBlockAssemblyClient) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return nil, nil
 }
@@ -5817,6 +5852,9 @@ func (m *mockBlockAssemblyClient) GetTransactionHashes(ctx context.Context) ([]s
 	if m.getTransactionHashesFunc != nil {
 		return m.getTransactionHashesFunc(ctx)
 	}
+	return nil, nil
+}
+func (m *mockBlockAssemblyClient) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
 	return nil, nil
 }
 

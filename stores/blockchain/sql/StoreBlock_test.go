@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -330,7 +331,7 @@ func TestParseSQLError_PostgreSQLConstraint(t *testing.T) {
 
 	// Create a PostgreSQL constraint violation error
 	pqErr := &pq.Error{
-		Code: "23505", // Unique constraint violation
+		Code: usql.PgErrUniqueViolation,
 	}
 
 	result := s.parseSQLError(pqErr, block1)
@@ -645,6 +646,41 @@ func TestStoreBlock_ValidCoinbaseTransaction(t *testing.T) {
 	// This should work with minimal miner extraction
 	_, _, err = s.StoreBlock(context.Background(), blockMinimalCoinbase, "test-peer")
 	assert.NoError(t, err)
+}
+
+func TestStoreBlock_NilCoinbaseTransaction(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// First store a normal block to create a valid parent
+	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
+	require.NoError(t, err)
+
+	// Create block with nil CoinbaseTx, simulating V1 utxo-headers from a pruned SV Node
+	blockNilCoinbase := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  block1.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           *bits,
+			Nonce:          0,
+		},
+		Height:           2,
+		TransactionCount: 1,
+		SizeInBytes:      100,
+		CoinbaseTx:       nil,
+	}
+
+	blockID, height, err := s.StoreBlock(context.Background(), blockNilCoinbase, "test-peer")
+	require.NoError(t, err, "StoreBlock must accept nil CoinbaseTx (V1 seeder headers)")
+	assert.Greater(t, blockID, uint64(0))
+	assert.Equal(t, uint32(2), height)
 }
 
 func TestStoreBlock_InheritInvalidFromParent(t *testing.T) {

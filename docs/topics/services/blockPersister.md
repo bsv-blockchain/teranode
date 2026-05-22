@@ -219,7 +219,7 @@ If you need all transaction information in a subtree, you should access the `.su
 
 1. **Go (Golang):** The primary programming language used for developing the service.
 
-2. **Bitcoin SV (BSV) Libraries:**
+2. **BSV Blockchain Libraries:**
     - **Data Models and Utilities:** For handling BSV blockchain data structures and operations, including transaction and block processing.
 
 3. **Storage Libraries:**

@@ -63,20 +63,20 @@ func Test_queueWithTime(t *testing.T) {
 
 	enqueueBatches(t, q, 1, 10)
 
-	validFromMillis := time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis := time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found := q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	batches := 0
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 
 	for {
 		batch, found := q.dequeueBatch(validFromMillis)
@@ -93,20 +93,20 @@ func Test_queueWithTime(t *testing.T) {
 
 	enqueueBatches(t, q, 1, 10)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	batches = 0
-	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
 
 	for {
 		batch, found := q.dequeueBatch(validFromMillis)
@@ -120,6 +120,248 @@ func Test_queueWithTime(t *testing.T) {
 
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10, batches)
+}
+
+type fixedClock struct{ t time.Time }
+
+func (f fixedClock) Now() time.Time { return f.t }
+
+// Test_queueClockOverride verifies the clock seam: when a fake clock is
+// installed, batch.time matches the fake's value rather than wall time.
+// This is the hook tests will use to drive deterministic batch timestamps.
+func Test_queueClockOverride(t *testing.T) {
+	q := NewLockFreeQueue()
+
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	q.clock = fixedClock{t: fixed}
+
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	batch, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, fixed.UnixMilli(), batch.time)
+}
+
+// Test_zeroWindowFormulasAgree asserts parity between the two
+// validFromMillis formulas inside SubtreeProcessor at DoubleSpendWindow=0
+// (the documented default - see settings/blockassembly_settings.go:29).
+// Both call sites now zero-guard the calculation, so neither activates
+// the queue filter at queue.go:96 and both admit same-millisecond
+// batches.
+//
+//	Start loop (SubtreeProcessor.go:807-813):
+//	  validFromMillis = 0                              if DoubleSpendWindow == 0
+//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//
+//	dequeueDuringBlockMovement (SubtreeProcessor.go:3789-3796):
+//	  validFromMillis = 0                              if DoubleSpendWindow == 0
+//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//
+// Before the fix, the drain formula was unconditional, which held back
+// same-millisecond batches under the default config. This test pins the
+// post-fix parity. If a future change removes either zero-guard, the
+// corresponding subtest will fail.
+func Test_zeroWindowFormulasAgree(t *testing.T) {
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	window := time.Duration(0)
+
+	enqueueAtFixed := func() *LockFreeQueue {
+		q := NewLockFreeQueue()
+		q.clock = fixedClock{t: fixed}
+		q.enqueueBatch(
+			[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+			[]*subtree.TxInpoints{{}},
+		)
+		return q
+	}
+
+	t.Run("start_loop_formula_admits_same_millisecond_batch", func(t *testing.T) {
+		// Mirror of the formula at SubtreeProcessor.go:810-813.
+		startValidFromMillis := int64(0)
+		if window > 0 {
+			startValidFromMillis = fixed.Add(-window).UnixMilli()
+		}
+
+		q := enqueueAtFixed()
+		batch, found := q.dequeueBatch(startValidFromMillis)
+		require.True(t, found, "Start loop must admit same-ms batch at window=0")
+		require.Equal(t, fixed.UnixMilli(), batch.time)
+	})
+
+	t.Run("drain_formula_admits_same_millisecond_batch", func(t *testing.T) {
+		// Mirror of the formula at SubtreeProcessor.go:3789-3796.
+		drainValidFromMillis := int64(0)
+		if window > 0 {
+			drainValidFromMillis = fixed.Add(-window).UnixMilli()
+		}
+
+		q := enqueueAtFixed()
+		batch, found := q.dequeueBatch(drainValidFromMillis)
+		require.True(t, found, "drain must admit same-ms batch at window=0 "+
+			"(zero-guard parity with the Start loop)")
+		require.Equal(t, fixed.UnixMilli(), batch.time)
+	})
+}
+
+// Test_validFromMillisBoundaries pins the inclusive-reject semantics and
+// the negative/zero-bypass behaviour of the queue's validFromMillis
+// filter at queue.go:96:
+//
+//	if validFromMillis > 0 && next.time >= validFromMillis {
+//	    return nil, false
+//	}
+//
+// Two pieces worth documenting beyond the asymmetry test above:
+//
+//   - Boundary: batch.time == validFromMillis is rejected (>= is
+//     inclusive). batch.time == validFromMillis - 1 admits. A future
+//     change to "strictly greater than" would silently widen the
+//     admission window by one millisecond.
+//
+//   - Defensive bypass: validFromMillis <= 0 short-circuits filtering
+//     entirely. Any caller producing a non-positive cutoff (e.g. via
+//     clock.Now() before the unix epoch, or a window larger than the
+//     current millisecond timestamp) silently disables double-spend
+//     protection for that dequeue. Both call sites in SubtreeProcessor
+//     compute Now().Add(-window).UnixMilli(); in production
+//     Now().UnixMilli() is in the trillions so this guard is dormant,
+//     but a future caller or a test built on time.Time{} would trip it.
+func Test_validFromMillisBoundaries(t *testing.T) {
+	t.Run("inclusive_reject_at_boundary", func(t *testing.T) {
+		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		q := NewLockFreeQueue()
+		q.clock = fixedClock{t: fixed}
+		q.enqueueBatch(
+			[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+			[]*subtree.TxInpoints{{}},
+		)
+		_, found := q.dequeueBatch(fixed.UnixMilli())
+		require.False(t, found, "batch.time == validFromMillis must be rejected")
+	})
+
+	t.Run("admit_one_below_boundary", func(t *testing.T) {
+		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		q := NewLockFreeQueue()
+		q.clock = fixedClock{t: fixed}
+		q.enqueueBatch(
+			[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+			[]*subtree.TxInpoints{{}},
+		)
+		_, found := q.dequeueBatch(fixed.UnixMilli() + 1)
+		require.True(t, found, "batch.time == validFromMillis - 1 must admit")
+	})
+
+	t.Run("negative_validFromMillis_bypasses_filter", func(t *testing.T) {
+		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		q := NewLockFreeQueue()
+		q.clock = fixedClock{t: fixed}
+		q.enqueueBatch(
+			[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+			[]*subtree.TxInpoints{{}},
+		)
+		// validFromMillis = -1 → guard ("> 0") short-circuits, filter off.
+		batch, found := q.dequeueBatch(-1)
+		require.True(t, found, "negative validFromMillis must short-circuit the filter")
+		require.Equal(t, fixed.UnixMilli(), batch.time)
+	})
+}
+
+// Test_clockBackwardJumpHoldsBatchesLonger characterizes how the queue
+// behaves when the drain clock jumps backwards relative to the enqueue
+// clock - the kind of jump an NTP correction can introduce mid-flight.
+//
+//	enqueue at T=10_000_000, batch.time = 10_000_000
+//	drain at  T= 5_000_000, window = 200ms → validFromMillis = 4_999_800
+//	batch.time (10_000_000) >= validFromMillis (4_999_800) → rejected
+//
+// The batch stays queued until the drain clock catches back up past
+// (batch.time + window). In production this means an NTP step
+// backwards during block movement can stall the drain until wall time
+// re-advances, even though the batch itself is fully aged. Documented
+// here so the behaviour does not surprise anyone tracking down a
+// post-NTP-correction stall.
+func Test_clockBackwardJumpHoldsBatchesLonger(t *testing.T) {
+	enqueueAt := time.UnixMilli(10_000_000).UTC()
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: enqueueAt}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	const window = 200 * time.Millisecond
+
+	drainAtBack := time.UnixMilli(5_000_000).UTC() // clock stepped backwards
+	_, found := q.dequeueBatch(drainAtBack.Add(-window).UnixMilli())
+	require.False(t, found, "batch held back while drain clock is behind enqueue clock")
+
+	// Once wall time recovers past (batch.time + window) the batch drains.
+	drainAtRecovered := enqueueAt.Add(window + time.Millisecond)
+	batch, found := q.dequeueBatch(drainAtRecovered.Add(-window).UnixMilli())
+	require.True(t, found, "batch drains once drain clock recovers")
+	require.Equal(t, enqueueAt.UnixMilli(), batch.time)
+}
+
+// Test_dequeueBatchUntilPreservesPostBoundaryBatch pins the
+// inclusive-until admit semantics of dequeueBatchUntil. The boundary
+// batch (batch.time == maxTimeMillis) is admitted; any batch with
+// batch.time > maxTimeMillis is rejected without being removed from
+// the queue.
+//
+// Regression guard for the Reset drain loop bug: the previous
+// implementation called dequeueBatch(0) then checked batch.time
+// post-hoc, which removed the boundary batch from the queue before
+// discovering it was too new. dequeueBatchUntil peeks first.
+func Test_dequeueBatchUntilPreservesPostBoundaryBatch(t *testing.T) {
+	preSnapshot := time.UnixMilli(1_700_000_000_000).UTC()
+	postSnapshot := preSnapshot.Add(10 * time.Millisecond)
+
+	q := NewLockFreeQueue()
+
+	q.clock = fixedClock{t: preSnapshot}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("pre")), Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	q.clock = fixedClock{t: postSnapshot}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("post")), Fee: 2, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	require.Equal(t, int64(2), q.length(), "precondition: both batches enqueued")
+
+	// Drain everything up to and including preSnapshot.
+	var consumedFees []uint64
+	for {
+		batch, found := q.dequeueBatchUntil(preSnapshot.UnixMilli())
+		if !found {
+			break
+		}
+		consumedFees = append(consumedFees, batch.nodes[0].Fee)
+	}
+
+	require.Equal(t, []uint64{1}, consumedFees,
+		"pre-snapshot batch must drain inside the loop body")
+	require.Equal(t, int64(1), q.length(),
+		"post-snapshot batch must survive: dequeueBatchUntil peeks before consuming")
+
+	// Boundary check: a batch enqueued at exactly maxTimeMillis admits.
+	q2 := NewLockFreeQueue()
+	q2.clock = fixedClock{t: preSnapshot}
+	q2.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.HashH([]byte("boundary")), Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	_, found := q2.dequeueBatchUntil(preSnapshot.UnixMilli())
+	require.True(t, found, "batch.time == maxTimeMillis must admit (inclusive-until)")
+
+	// Empty queue returns false without touching state.
+	_, found = q2.dequeueBatchUntil(preSnapshot.UnixMilli())
+	require.False(t, found, "empty queue returns false")
 }
 
 func Test_queue2Threads(t *testing.T) {

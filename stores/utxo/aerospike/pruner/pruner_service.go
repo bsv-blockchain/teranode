@@ -66,6 +66,7 @@ var (
 	prometheusUtxoExternalFilesDeletedSkipped prometheus.Counter
 	prometheusUtxoRetryAttempts               prometheus.Counter
 	prometheusUtxoTimeoutEvents               prometheus.Counter
+	prometheusUtxoParentsSkippedPruned        prometheus.Counter
 )
 
 // Options contains configuration options for the cleanup service
@@ -94,6 +95,9 @@ type Options struct {
 	// GetPersistedHeight returns the last block height processed by block persister
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	GetPersistedHeight func() uint32
+
+	// LuaPackage is the name of the registered Lua UDF module
+	LuaPackage string
 
 	// Observers is a list of observers to notify when pruning completes
 	Observers []pruner.Observer
@@ -127,16 +131,19 @@ type Service struct {
 	partitionQueries               int     // Number of parallel partition queries (0 = auto-detect)
 	connectionPoolWarningThreshold float64 // Threshold for connection pool auto-adjustment (0.0-1.0)
 	utxoSetTTL                     bool    // Use TTL expiration instead of hard delete
+	partitionWorkerFn              func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int, prunedSet *PrunedTxSet) (int64, int64, error)
+
+	// Lua UDF module name
+	luaPackage string
 
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
 
 	// Internally reused variables
-	queryPolicy      *aerospike.QueryPolicy
-	writePolicy      *aerospike.WritePolicy
-	batchWritePolicy *aerospike.BatchWritePolicy
-	batchPolicy      *aerospike.BatchPolicy
+	queryPolicy *aerospike.QueryPolicy
+	writePolicy *aerospike.WritePolicy
+	batchPolicy *aerospike.BatchPolicy
 }
 
 // parentUpdateInfo holds accumulated parent update information for batching
@@ -224,6 +231,10 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 			Name: "utxo_pruner_timeout_events_total",
 			Help: "Total number of timeout events requiring retry during pruning operations",
 		})
+		prometheusUtxoParentsSkippedPruned = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_parents_skipped_pruned_total",
+			Help: "Number of parent updates skipped because parent was already pruned in this session",
+		})
 	})
 
 	// Use the configured query policy from settings (configured via aerospike_queryPolicy URL)
@@ -232,10 +243,6 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 
 	// Use the configured write policy from settings
 	writePolicy := util.GetAerospikeWritePolicy(settings, 0)
-
-	// Use the configured batch policies from settings
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(settings)
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
 	batchPolicy := util.GetAerospikeBatchPolicy(settings)
@@ -255,9 +262,9 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		ctx:                            opts.Ctx,
 		indexWaiter:                    opts.IndexWaiter,
 		notifier:                       notifier,
+		luaPackage:                     opts.LuaPackage,
 		queryPolicy:                    queryPolicy,
 		writePolicy:                    writePolicy,
-		batchWritePolicy:               batchWritePolicy,
 		batchPolicy:                    batchPolicy,
 		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
@@ -279,6 +286,8 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldUnminedSince:              fields.UnminedSince.String(),
 		fieldBlockHeights:              fields.BlockHeights.String(),
 	}
+
+	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
 }
@@ -440,6 +449,7 @@ func (s *Service) partitionWorker(
 	blockHeight uint32,
 	partitionStart int,
 	partitionCount int,
+	prunedSet *PrunedTxSet,
 ) (processed int64, skipped int64, err error) {
 
 	// Each worker creates its own policy for complete independence (no shared state)
@@ -474,36 +484,95 @@ func (s *Service) partitionWorker(
 	}
 	defer recordset.Close()
 
-	// Process recordset with parallel chunk processing
-	result := recordset.Results()
+	// Two-stage pipeline: reader registers TXIDs in shared set before processor handles them
+	// This eliminates cross-worker race conditions for parent-update skipping
+	// Derive read-ahead buffer size from chunkSize with a conservative cap so memory scales predictably.
+	readAheadBase := s.chunkSize
+	if readAheadBase <= 0 {
+		readAheadBase = 1000 // fall back to default chunk size if unset
+	}
+	// Allow modest read-ahead, but cap to avoid excessive buffered records.
+	readAheadBuffer := min(readAheadBase*2, 10000)
+	if readAheadBuffer < 1 {
+		readAheadBuffer = 1
+	}
+	pipeline := make(chan *aerospike.Result, readAheadBuffer)
+
+	// Stage 1: Reader — streams from Aerospike, registers TXIDs, forwards to pipeline
+	var readerErr error
+	var readerDone sync.WaitGroup
+	readerDone.Add(1)
+	go func() {
+		defer readerDone.Done()
+		defer close(pipeline)
+		for {
+			// Read from Aerospike with cancellation support to avoid blocking on stalled recordsets
+			var rec *aerospike.Result
+			select {
+			case <-ctx.Done():
+				return
+			case r, ok := <-recordset.Results():
+				if !ok || r == nil {
+					return
+				}
+				rec = r
+			}
+
+			// Register TXID in shared set before forwarding (if record is valid)
+			if rec.Err == nil && rec.Record != nil && rec.Record.Bins != nil {
+				if txIDBytes, ok := rec.Record.Bins[s.fieldTxID].([]byte); ok && len(txIDBytes) == 32 {
+					var h chainhash.Hash
+					copy(h[:], txIDBytes)
+					if prunedSet != nil {
+						prunedSet.Add(h)
+					}
+				}
+			}
+
+			// Check for timeout/network errors
+			if rec.Err != nil {
+				var asErr aerospike.Error
+				if errors.As(rec.Err, &asErr) {
+					if asErr.Matches(types.TIMEOUT, types.NETWORK_ERROR, types.NO_RESPONSE, types.SERVER_NOT_AVAILABLE) {
+						s.logger.Infof("Partition range [%d-%d] hit timeout/network error, stopping reader: %v",
+							partitionStart, partitionStart+partitionCount-1, rec.Err)
+						readerErr = &TimeoutError{cause: rec.Err}
+						return
+					}
+				}
+			}
+
+			// Send to pipeline with cancellation support to avoid deadlock on shutdown
+			select {
+			case pipeline <- rec:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Stage 2: Processor — reads from pipeline, chunks, and processes
 	chunk := make([]*aerospike.Result, 0, s.chunkSize)
-
-	// Local counters per worker (no atomic operations during processing)
 	var totalProcessed, totalSkipped int64
-	var mu sync.Mutex // Protect local counters from chunk goroutines
+	var mu sync.Mutex
 
-	// Each worker has its own errgroup for parallel chunk processing
 	chunkGroup := &errgroup.Group{}
-	util.SafeSetLimit(chunkGroup, s.chunkGroupLimit) // 10 concurrent chunks per worker
+	util.SafeSetLimit(chunkGroup, s.chunkGroupLimit)
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
-		// No copy needed - chunks are read-only (optimization: saves 160K allocations per pruning operation)
 		chunkGroup.Go(func() error {
-			processed, skipped, err := s.processRecordChunk(ctx, blockHeight, chunkToProcess)
+			processed, skipped, err := s.processRecordChunk(ctx, blockHeight, chunkToProcess, prunedSet)
 			if err != nil {
 				return err
 			}
-			// Batch update: accumulate locally per worker (mutex protected)
 			mu.Lock()
 			totalProcessed += int64(processed)
 			totalSkipped += int64(skipped)
 			mu.Unlock()
 
-			// Update Prometheus counter incrementally for real-time rate calculation
 			if processed > 0 {
 				prometheusUtxoRecordsDeleted.Add(float64(processed))
 			}
-
 			if skipped > 0 {
 				prometheusUtxoRecordsDeletedSkipped.Add(float64(skipped))
 			}
@@ -511,175 +580,202 @@ func (s *Service) partitionWorker(
 		})
 	}
 
-	// Accumulate and process chunks
-	for {
-		// Check for cancellation
+	for rec := range pipeline {
 		select {
 		case <-ctx.Done():
+			// Close recordset to unblock the reader from recordset.Results()
+			recordset.Close()
+			readerDone.Wait()
 			return 0, 0, ctx.Err()
 		default:
 		}
 
-		rec, ok := <-result
-		if !ok || rec == nil {
-			if len(chunk) > 0 {
-				submitChunk(chunk)
-			}
-			break
-		}
-
-		// Check for timeout/network errors in the record
-		if rec.Err != nil {
-			var asErr aerospike.Error
-			if errors.As(rec.Err, &asErr) {
-				isTimeoutError := asErr.Matches(
-					types.TIMEOUT,
-					types.NETWORK_ERROR,
-					types.NO_RESPONSE,
-					types.SERVER_NOT_AVAILABLE,
-				)
-
-				if isTimeoutError {
-					s.logger.Infof("Partition range [%d-%d] hit timeout/network error after processing records, stopping gracefully: %v",
-						partitionStart, partitionStart+partitionCount-1, rec.Err)
-
-					// Process any accumulated records in current chunk before returning
-					if len(chunk) > 0 {
-						submitChunk(chunk)
-					}
-
-					// Wait for any in-flight chunk processing to complete
-					if err := chunkGroup.Wait(); err != nil {
-						return 0, 0, err
-					}
-
-					// Return TimeoutError to signal retry is needed (partial progress is already recorded)
-					return totalProcessed, totalSkipped, &TimeoutError{cause: rec.Err}
-				}
-			}
-
-			// Non-timeout errors: add record to chunk for normal error handling in processRecordChunk
-			// These errors are tracked via prometheusUtxoRecordErrors in processRecordChunk
-		}
-
-		// Add record to chunk (even if it has non-timeout errors - processRecordChunk will handle them)
 		chunk = append(chunk, rec)
 		if len(chunk) >= s.chunkSize {
 			submitChunk(chunk)
-			chunk = chunk[:0]
+			chunk = make([]*aerospike.Result, 0, s.chunkSize)
 		}
 	}
 
+	if len(chunk) > 0 {
+		submitChunk(chunk)
+	}
+
 	if err := chunkGroup.Wait(); err != nil {
+		readerDone.Wait()
 		return 0, 0, err
+	}
+
+	// Check if reader hit a timeout
+	readerDone.Wait()
+	if readerErr != nil {
+		return totalProcessed, totalSkipped, readerErr
 	}
 
 	return totalProcessed, totalSkipped, nil
 }
 
-// workerResult holds the result from a partition worker
-type workerResult struct {
-	processed int64
-	skipped   int64
-	err       error
+// partitionRange represents a contiguous range of Aerospike partitions assigned to a worker
+type partitionRange struct {
+	start int
+	count int
 }
 
-// PruneWithPartitions implements parallel partition-based pruning with retry logic for timeout handling
+// workerResult holds the result from a partition worker
+type workerResult struct {
+	processed      int64
+	skipped        int64
+	err            error
+	partitionStart int
+	partitionCount int
+}
+
+// PruneWithPartitions implements parallel partition-based pruning with retry logic for timeout handling.
 // This method splits the Aerospike keyspace (4096 partitions) across multiple workers
 // for maximum throughput, achieving 100x performance improvement over sequential queries.
 //
-// Timeout Handling: If any worker encounters a timeout or network error, the entire query is restarted
-// from the beginning. This is safe due to idempotent operations (already-processed records are handled
-// gracefully). Multiple retry attempts allow the system to adaptively process large catchup workloads
-// that accumulate when the pruner is stopped for extended periods.
+// Timeout Handling: When a worker encounters a timeout or network error, only the failed partition
+// ranges are retried — successfully completed ranges are skipped. This prevents a feedback loop
+// where re-processing already-deleted records generates KEY_NOT_FOUND errors and additional load.
+// All operations are idempotent, so partial retries are safe.
 func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, blockHashStr string, numPartitionQueries int) (int64, error) {
 	startTime := time.Now()
 	maxRetries := 10 // Reasonable limit to prevent infinite loop
 	var lastErr error
 
-	// Calculate partition distribution (remains constant across retries)
-	// Get total partitions from Aerospike client library (always 4096 in Aerospike architecture)
+	// Build initial partition ranges from the distribution logic
 	totalPartitions := aerospike.NewPartitionFilterAll().Count
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
-	// Retry loop: restart entire query on timeout, leveraging idempotency
+	pendingRanges := make([]partitionRange, 0, numPartitionQueries)
+	partitionStart := 0
+	for i := 0; i < numPartitionQueries; i++ {
+		partitionCount := partitionsPerQuery
+		if i < remainingPartitions {
+			partitionCount++ // Distribute remainder
+		}
+		pendingRanges = append(pendingRanges, partitionRange{start: partitionStart, count: partitionCount})
+		partitionStart += partitionCount
+	}
+
+	// Shared set tracking TXIDs scanned for pruning — used to skip wasteful parent updates.
+	// Disabled when defensive mode is on: records may be skipped (child not stable) after the
+	// reader registers them, which would incorrectly suppress parent updates for records still
+	// in Aerospike.
+	//
+	// Reused across retry attempts intentionally. The set's contract is "this TXID was scanned
+	// as a deletion candidate in this session" — so reuse is correct because:
+	//   1. Add is idempotent (duplicate keys are no-ops), so re-scanning a partition after
+	//      a timeout simply re-registers entries that were already there.
+	//   2. CheckAndRemove is destructive (one consumer per parent), which is fine: if a parent
+	//      was already consumed by a child in a prior attempt, the parent has either been
+	//      deleted (so the next child's skip is correct) or its deletion is still pending in
+	//      a retry partition (so the next child issues a real update and incurs a wasted
+	//      Aerospike op — a perf nit, not a correctness bug).
+	//   3. The skip only suppresses the deletedChildren bin update on the parent. That bin is
+	//      only consulted by the defensive-mode safety check, which is OFF whenever prunedSet
+	//      is non-nil, so a missed update has no behavioural consequence.
+	// Allocating a fresh set per attempt would break the cross-partition dedup that drove this
+	// optimisation: most parent/child pairs span partitions.
+	//
+	// Memory is bounded by prunedTxSetMaxEntries. In tight-chain workloads CheckAndRemove
+	// reclaims entries quickly so peak Len() stays small, but production sessions can scan
+	// hundreds of millions of records (~500M observed on dev-scale-1). Without a cap, a
+	// workload where most parents live in prior blocks would keep every TXID added,
+	// growing memory linearly with session size. The cap silently degrades the optimisation
+	// back to baseline once hit — no correctness impact, just no further skips.
+	var prunedSet *PrunedTxSet
+	if !s.defensiveEnabled {
+		prunedSet = NewPrunedTxSet(256, prunedTxSetMaxEntries)
+	}
+
+	// Cumulative counters persist across retry attempts
+	var cumulativeProcessed, cumulativeSkipped int64
+
+	// Retry loop: on timeout, only retry the partition ranges that failed
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Track retry attempts (attempt 1 is initial, attempts 2+ are retries)
 		if attempt > 1 {
 			prometheusUtxoRetryAttempts.Inc()
 		}
 
 		s.logger.Infof("[pruner][%s:%d] phase 2: pruning attempt %d with %d partition workers (total partitions: %d)",
-			blockHashStr, blockHeight, attempt, numPartitionQueries, totalPartitions)
+			blockHashStr, blockHeight, attempt, len(pendingRanges), totalPartitions)
 
-		// Launch partition workers
-		results := make(chan workerResult, numPartitionQueries)
+		// Launch partition workers for pending ranges only
+		results := make(chan workerResult, len(pendingRanges))
 		var wg sync.WaitGroup
 
-		partitionStart := 0
-		for i := 0; i < numPartitionQueries; i++ {
-			partitionCount := partitionsPerQuery
-			if i < remainingPartitions {
-				partitionCount++ // Distribute remainder
-			}
-
+		for _, pr := range pendingRanges {
 			wg.Add(1)
-			go func(start, count int) {
-				defer wg.Done() // Call Done() AFTER sending to channel
-				processed, skipped, err := s.partitionWorker(ctx, blockHeight, start, count)
-				results <- workerResult{processed, skipped, err}
-			}(partitionStart, partitionCount)
-
-			partitionStart += partitionCount
+			go func(r partitionRange) {
+				defer wg.Done()
+				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count, prunedSet)
+				results <- workerResult{
+					processed:      processed,
+					skipped:        skipped,
+					err:            err,
+					partitionStart: r.start,
+					partitionCount: r.count,
+				}
+			}(pr)
 		}
 
-		// Close results channel when all workers done
 		go func() {
 			wg.Wait()
 			close(results)
 		}()
 
-		// Aggregate results from all workers
-		var totalProcessed, totalSkipped int64
-		var workerErr error
+		// Classify each worker result as success or timeout
+		var attemptProcessed, attemptSkipped int64
+		var failedRanges []partitionRange
+		var hasTimeout bool
+		var nonTimeoutErr error
 
 		for result := range results {
+			attemptProcessed += result.processed
+			attemptSkipped += result.skipped
+
 			if result.err != nil {
-				workerErr = result.err
-				// Don't break early - drain the channel to allow workers to finish
+				var timeoutErr *TimeoutError
+				if errors.As(result.err, &timeoutErr) {
+					hasTimeout = true
+					failedRanges = append(failedRanges, partitionRange{
+						start: result.partitionStart,
+						count: result.partitionCount,
+					})
+				} else {
+					nonTimeoutErr = result.err
+				}
 			}
-			totalProcessed += result.processed
-			totalSkipped += result.skipped
 		}
 
-		// Check if error is timeout (retriable)
-		if workerErr != nil {
-			var timeoutErr *TimeoutError
-			if errors.As(workerErr, &timeoutErr) {
-				// Timeout error - record partial progress and retry
-				prometheusUtxoTimeoutEvents.Inc()
+		// Accumulate partial progress from this attempt (including from timed-out workers)
+		cumulativeProcessed += attemptProcessed
+		cumulativeSkipped += attemptSkipped
 
-				p := message.NewPrinter(language.English)
-				formattedProcessed := p.Sprintf("%d", totalProcessed)
-
-				s.logger.Infof("[pruner][%s:%d] phase 2: timeout detected on attempt %d, processed %s records. Restarting query immediately...",
-					blockHashStr, blockHeight, attempt, formattedProcessed)
-
-				lastErr = workerErr
-				continue // Retry from beginning
-			}
-
-			// Other errors: return immediately (don't retry)
-			s.logger.Errorf("[pruner][%s:%d] phase 2: partition worker error (non-timeout): %v", blockHashStr, blockHeight, workerErr)
-			return 0, workerErr
+		// Non-timeout errors fail immediately (even if some workers also timed out)
+		if nonTimeoutErr != nil {
+			s.logger.Errorf("[pruner][%s:%d] phase 2: partition worker error (non-timeout): %v", blockHashStr, blockHeight, nonTimeoutErr)
+			return 0, nonTimeoutErr
 		}
 
-		// Success - all partitions processed without timeout
+		if hasTimeout {
+			prometheusUtxoTimeoutEvents.Inc()
+
+			p := message.NewPrinter(language.English)
+			s.logger.Infof("[pruner][%s:%d] phase 2: timeout on attempt %d, %d/%d workers timed out, processed %s records so far. Retrying failed partition ranges...",
+				blockHashStr, blockHeight, attempt, len(failedRanges), len(pendingRanges), p.Sprintf("%d", cumulativeProcessed))
+
+			lastErr = errors.NewProcessingError("timeout in %d partition ranges", len(failedRanges))
+			pendingRanges = failedRanges // Only retry the failed ranges
+			continue
+		}
+
+		// Success — all pending partitions processed without timeout
 		elapsed := time.Since(startTime)
-		tps := float64(totalProcessed) / elapsed.Seconds()
+		tps := float64(cumulativeProcessed) / elapsed.Seconds()
 
-		// Format TPS for readability (e.g., "24.3M records/sec" for large numbers)
 		var tpsStr string
 		if tps >= 1_000_000 {
 			tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
@@ -690,8 +786,8 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		}
 
 		p := message.NewPrinter(language.English)
-		formattedTotal := p.Sprintf("%d", totalProcessed)
-		formattedSkipped := p.Sprintf("%d", totalSkipped)
+		formattedTotal := p.Sprintf("%d", cumulativeProcessed)
+		formattedSkipped := p.Sprintf("%d", cumulativeSkipped)
 
 		var modeStr string
 		if s.defensiveEnabled {
@@ -711,14 +807,14 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 
 		prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
 
-		s.notifier.NotifyPruneComplete(blockHeight, totalProcessed)
+		s.notifier.NotifyPruneComplete(blockHeight, cumulativeProcessed)
 
-		return totalProcessed, nil
+		return cumulativeProcessed, nil
 	}
 
 	// Max retries exceeded
-	s.logger.Warnf("[pruner][%s:%d] phase 2: max retries (%d) exceeded for pruning, last error: %v",
-		blockHashStr, blockHeight, maxRetries, lastErr)
+	s.logger.Warnf("[pruner][%s:%d] phase 2: max retries (%d) exceeded for pruning, processed %d records before giving up, last error: %v",
+		blockHashStr, blockHeight, maxRetries, cumulativeProcessed, lastErr)
 	return 0, errors.NewProcessingError("max retries (%d) exceeded: %v", maxRetries, lastErr)
 }
 
@@ -752,7 +848,7 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 
 // processRecordChunk processes a chunk of parent records with batched child verification
 // Returns: (processedCount, skippedCount, error)
-func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
+func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result, prunedSet *PrunedTxSet) (int, int, error) {
 	if len(chunk) == 0 {
 		return 0, 0, nil
 	}
@@ -774,9 +870,9 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		// Step 1: Extract ALL unique spending children from chunk
 		// For each parent record, we extract all spending child TX hashes from spent UTXOs
 		// We must verify EVERY child is stable before deleting the parent
-		uniqueSpendingChildren := make(map[string][]byte, 100000) // hex hash -> bytes (typical: ~50-100 children per chunk)
-		parentToChildren = make(map[string][]string, len(chunk))  // parent record key -> child hashes
-		deletedChildren := make(map[string]bool, 20)              // child hash -> already deleted (typical: 0-20)
+		uniqueSpendingChildren := make(map[string][]byte, 1000)  // hex hash -> bytes (typical: ~50-100 children per chunk)
+		parentToChildren = make(map[string][]string, len(chunk)) // parent record key -> child hashes
+		deletedChildren := make(map[string]bool, 20)             // child hash -> already deleted (typical: 0-20)
 
 		for _, rec := range chunk {
 			if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
@@ -854,9 +950,9 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	}
 
 	// Step 3: Accumulate operations for entire chunk, then flush once (efficient batching)
-	allParentUpdates := make(map[string]*parentUpdateInfo, 1000) // Accumulate all parent updates for chunk
-	allDeletions := make([]*aerospike.Key, 0, 1000)              // Accumulate all deletions for chunk
-	allExternalFiles := make([]*externalFileInfo, 0, 10)         // Accumulate external files (<1%)
+	allParentUpdates := make(map[string]*parentUpdateInfo, 1000)
+	allDeletions := make([]*aerospike.Key, 0, 1000)      // Accumulate all deletions for chunk
+	allExternalFiles := make([]*externalFileInfo, 0, 10) // Accumulate external files (<1%)
 	processedCount := 0
 	skippedCount := 0
 
@@ -913,9 +1009,16 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 			return 0, 0, err
 		}
 
-		// Accumulate parent updates
+		// Accumulate parent updates, skipping parents already pruned in this session
 		for _, input := range inputs {
-			keySource := uaerospike.CalculateKeySource(input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, s.utxoBatchSize)
+			// Check if parent TX was already pruned — if so, skip the update
+			parentTxID := input.PreviousTxIDChainHash()
+			if prunedSet != nil && prunedSet.CheckAndRemove(*parentTxID) {
+				prometheusUtxoParentsSkippedPruned.Inc()
+				continue
+			}
+
+			keySource := uaerospike.CalculateKeySource(parentTxID, input.PreviousTxOutIndex, s.utxoBatchSize)
 			parentKeyStr := string(keySource)
 
 			if existing, ok := allParentUpdates[parentKeyStr]; ok {
@@ -1321,28 +1424,27 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 }
 
 // flushCleanupBatches flushes accumulated parent updates, external file deletions, and Aerospike deletions
-func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error { // Execute parent updates first
-	if !s.settings.Pruner.SkipParentUpdates {
-		if len(parentUpdates) > 0 {
-			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Delete external files before Aerospike records (fail-safe: if file deletion fails, we keep the record)
-	if len(externalFiles) > 0 {
-		if err := s.executeBatchExternalFileDeletions(ctx, externalFiles); err != nil {
+func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error {
+	// Execute parent updates first
+	if len(parentUpdates) > 0 {
+		if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
 			return err
 		}
 	}
 
+	// Delete Aerospike records before external files (fail-safe: if file deletion fails,
+	// orphaned files are harmless; if record deletion fails, both remain consistent)
 	if !s.settings.Pruner.SkipDeletions {
-		// Delete Aerospike records last
 		if len(deletions) > 0 {
 			if err := s.executeBatchDeletions(ctx, deletions); err != nil {
 				return err
 			}
+		}
+	}
+
+	if len(externalFiles) > 0 {
+		if err := s.executeBatchExternalFileDeletions(ctx, externalFiles); err != nil {
+			return err
 		}
 	}
 
@@ -1372,8 +1474,12 @@ func (s *Service) extractInputs(ctx context.Context, blockHeight uint32, bins ae
 // executeBatchParentUpdates performs Phase 2a: updates parent records to mark that their
 // child transactions have been deleted (adds to deletedChildren map).
 //
+// Uses a Lua UDF (addDeletedChildren) instead of BatchWrite+MapPutItemsOp so that
+// missing parent records are handled server-side without generating KEY_NOT_FOUND errors
+// in Aerospike client metrics.
+//
 // IDEMPOTENCY: This operation is safely re-runnable:
-// - Missing parents (KEY_NOT_FOUND) are skipped - they were already deleted
+// - Missing parents are silently skipped by the Lua UDF (TX_NOT_FOUND)
 // - Duplicate updates are no-ops - deletedChildren map updates are idempotent
 // - Partial batch failures can be retried without side effects
 //
@@ -1383,23 +1489,34 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return nil
 	}
 
-	// Convert map to batch operations
-	// Track deleted children by adding child tx hashes to the DeletedChildren map
-	mapPolicy := aerospike.DefaultMapPolicy()
+	if s.luaPackage != "" {
+		return s.executeBatchParentUpdatesUDF(ctx, updates)
+	}
+
+	return s.executeBatchParentUpdatesBatchWrite(ctx, updates)
+}
+
+// executeBatchParentUpdatesUDF uses a Lua UDF (addDeletedChildren) so that missing parent
+// records are handled server-side without generating KEY_NOT_FOUND errors in Aerospike client metrics.
+func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[string]*parentUpdateInfo) error {
+	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		// For each child transaction being deleted, add it to the DeletedChildren map
-		ops := make([]*aerospike.Operation, len(info.childHashes))
-		for i, childHash := range info.childHashes {
-			ops[i] = aerospike.MapPutOp(mapPolicy, s.fieldDeletedChildren,
-				aerospike.NewStringValue(childHash.String()), aerospike.BoolValue(true))
+		childHashList := make([]interface{}, 0, len(info.childHashes))
+		for _, childHash := range info.childHashes {
+			childHashList = append(childHashList, childHash.String())
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(s.batchWritePolicy, info.key, ops...))
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(
+			batchUDFPolicy,
+			info.key,
+			s.luaPackage,
+			"addDeletedChildren",
+			aerospike.NewValue(childHashList),
+		))
 	}
 
-	// Check context before expensive operation
 	select {
 	case <-ctx.Done():
 		s.logger.Infof("Context cancelled, skipping parent update batch")
@@ -1407,13 +1524,94 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 	default:
 	}
 
-	// Execute batch
 	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
 		s.logger.Errorf("Batch parent update failed: %v", err)
 		return errors.NewStorageError("batch parent update failed", err)
 	}
 
-	// Check for errors
+	successCount := 0
+	notFoundCount := 0
+	errorCount := 0
+
+	for _, rec := range batchRecords {
+		batchRec := rec.BatchRec()
+		if batchRec.Err != nil {
+			s.logger.Errorf("Parent update error for key %v: %v", batchRec.Key, batchRec.Err)
+			errorCount++
+			continue
+		}
+
+		if batchRec.Record != nil && batchRec.Record.Bins != nil {
+			if resp, ok := batchRec.Record.Bins["SUCCESS"]; ok {
+				if respMap, ok := resp.(map[interface{}]interface{}); ok {
+					if status, ok := respMap["status"].(string); ok {
+						switch status {
+						case "OK":
+							successCount++
+						case "ERROR":
+							if errCode, ok := respMap["errorCode"].(string); ok && errCode == "TX_NOT_FOUND" {
+								notFoundCount++
+							} else {
+								s.logger.Errorf("Parent update Lua error for key %v: %v", batchRec.Key, respMap)
+								errorCount++
+							}
+						}
+						continue
+					}
+				}
+			}
+		}
+
+		successCount++
+	}
+
+	if errorCount > 0 {
+		return errors.NewStorageError("%d parent update operations failed", errorCount)
+	}
+
+	if successCount > 0 {
+		prometheusUtxoParentsUpdated.Add(float64(successCount))
+	}
+
+	if notFoundCount > 0 {
+		prometheusUtxoParentsUpdatedSkipped.Add(float64(notFoundCount))
+	}
+
+	return nil
+}
+
+// executeBatchParentUpdatesBatchWrite is the fallback when Lua UDF is not configured.
+// Uses BatchWrite+MapPutItemsOp with UPDATE_ONLY policy. Missing records generate
+// KEY_NOT_FOUND in Aerospike client metrics but are handled gracefully.
+func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updates map[string]*parentUpdateInfo) error {
+	batchWritePolicy := aerospike.NewBatchWritePolicy()
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	mapPolicy := aerospike.DefaultMapPolicy()
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
+
+	for _, info := range updates {
+		items := make(map[interface{}]interface{}, len(info.childHashes))
+		for _, childHash := range info.childHashes {
+			items[childHash.String()] = true
+		}
+
+		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, info.key, op))
+	}
+
+	select {
+	case <-ctx.Done():
+		s.logger.Infof("Context cancelled, skipping parent update batch")
+		return ctx.Err()
+	default:
+	}
+
+	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+		s.logger.Errorf("Batch parent update failed: %v", err)
+		return errors.NewStorageError("batch parent update failed", err)
+	}
+
 	successCount := 0
 	notFoundCount := 0
 	errorCount := 0
@@ -1421,12 +1619,9 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 	for _, rec := range batchRecords {
 		if rec.BatchRec().Err != nil {
 			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-				// Idempotent: Parent may have been deleted by concurrent pruning or LocalDAH cleanup
-				// This is a success condition - parent is already gone so we don't need to update it
 				notFoundCount++
 				continue
 			}
-			// Log other errors
 			s.logger.Errorf("Parent update error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
 			errorCount++
 		} else {
@@ -1434,12 +1629,10 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		}
 	}
 
-	// Return error if any individual record operations failed
 	if errorCount > 0 {
 		return errors.NewStorageError("%d parent update operations failed", errorCount)
 	}
 
-	// Update metric with successful parent updates
 	if successCount > 0 {
 		prometheusUtxoParentsUpdated.Add(float64(successCount))
 	}

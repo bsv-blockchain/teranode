@@ -289,6 +289,49 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		releaseFunc()
 	})
 
+	// Scenario 8: Lock file exists and is kept fresh -> internal timeout returns (false, false, noopFunc, nil)
+	t.Run("LockFileKeptFreshInternalTimeout", func(t *testing.T) {
+		tempDir := t.TempDir()
+		exister := newMockExister(false)
+		shortQuorumOpTimeout := 50 * time.Millisecond
+		q, err := NewQuorum(logger, exister, tempDir, WithTimeout(shortQuorumOpTimeout))
+		require.NoError(t, err)
+
+		localTestHash := GenerateTestHash("FE5A10C101")
+		lockFilePath := filepath.Join(tempDir, localTestHash.String()+".lock")
+
+		// Create the lock file
+		require.NoError(t, os.WriteFile(lockFilePath, []byte("locked"), 0600))
+		defer os.Remove(lockFilePath)
+
+		// Keep the lock file fresh so it never becomes stale
+		stopRefresh := make(chan struct{})
+		defer close(stopRefresh)
+		go func() {
+			ticker := time.NewTicker(shortQuorumOpTimeout / 4)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopRefresh:
+					return
+				case <-ticker.C:
+					now := time.Now()
+					_ = os.Chtimes(lockFilePath, now, now)
+				}
+			}
+		}()
+
+		ctx := context.Background()
+
+		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, localTestHash, fileformat.FileTypeSubtree)
+
+		// Internal timeout should return (false, false, noopFunc, nil) — not an error
+		require.NoError(t, err, "Internal timeout should not return error")
+		assert.False(t, locked, "Lock should not have been acquired")
+		assert.False(t, exists, "Exists should be false")
+		assert.NotNil(t, release, "Release function should not be nil")
+	})
+
 	t.Run("RetryWarningWhenLockExpiresAfterMultipleAttempts", func(t *testing.T) {
 		clogger := newCapturingLogger()
 		tempDir := t.TempDir()

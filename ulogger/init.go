@@ -5,7 +5,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/rs/zerolog"
-	"golang.org/x/term"
 )
 
 func InitLogger(progname string, tSettings *settings.Settings) Logger {
@@ -14,11 +13,9 @@ func InitLogger(progname string, tSettings *settings.Settings) Logger {
 		WithLevel(logLevel),
 	}
 
-	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-
 	output := zerolog.ConsoleWriter{
 		Out:     os.Stdout,
-		NoColor: !isTerminal, // Disable color if output is not a terminal
+		NoColor: !isStdoutTerminal(), // Disable color if output is not a terminal
 	}
 
 	logOptions = append(logOptions, WithWriter(output))

@@ -74,7 +74,7 @@ ContainerDb(ban_database, "Ban Database", "SQL Database", "Persistent ban storag
 
 }
 
-System_Ext(p2p_network, "P2P Network", "Other Bitcoin SV nodes")
+System_Ext(p2p_network, "P2P Network", "Other BSV Blockchain nodes")
 
 System_Ext(rpc_service, "RPC Service", "JSON-RPC API for peer management")
 

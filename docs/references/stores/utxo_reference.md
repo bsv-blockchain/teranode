@@ -275,10 +275,14 @@ type Store interface {
     // ensuring consistency during validation operations.
     GetBlockState() BlockState
 
-    // GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
-    // This is used by the Block Assembly service to recover transactions on startup.
-    // The fullScan parameter determines whether to perform a full scan of all transactions.
-    GetUnminedTxIterator(fullScan bool) (UnminedTxIterator, error)
+    // GetUnminedTxIterator returns an iterator for unmined transactions in the store.
+    // Uses the unmined_since index to efficiently query only unmined transactions.
+    GetUnminedTxIterator() (UnminedTxIterator, error)
+
+    // ScanInconsistentUnminedTxs returns a lightweight iterator that scans all records
+    // to detect unmined_since inconsistencies (mined txs with unmined_since still set).
+    // Only fetches txid, block_ids, and unmined_since — no heavy data like TxInpoints.
+    ScanInconsistentUnminedTxs() (ConsistencyScanIterator, error)
 
     // GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner's needs.
     // Unlike GetUnminedTxIterator, this iterator:

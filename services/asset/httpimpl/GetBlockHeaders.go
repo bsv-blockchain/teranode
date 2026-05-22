@@ -30,7 +30,7 @@ import (
 //   - hash: Starting block hash (hex string)
 //
 // Query Parameters:
-//   - n: Number of headers to retrieve (default: 100, max: 1000)
+//   - n: Number of headers to retrieve (default: 100, max: 10000)
 //     Example: ?n=50
 //
 // HTTP Response Formats:
@@ -108,7 +108,7 @@ import (
 //   - Binary response size can be calculated as n * 80 bytes
 //   - Hex response size can be calculated as n * 160 characters
 //   - Default limit of 100 headers can be adjusted via 'n' parameter
-//   - Maximum limit of 1000 headers per request
+//   - Maximum limit of 10,000 headers per request
 func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
@@ -141,8 +141,8 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 				numberOfHeaders = 100
 			}
 
-			if numberOfHeaders > 1000 {
-				numberOfHeaders = 1000
+			if numberOfHeaders > 10_000 {
+				numberOfHeaders = 10_000
 			}
 		}
 

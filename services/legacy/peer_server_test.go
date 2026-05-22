@@ -1,16 +1,22 @@
 package legacy
 
 import (
+	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // TestAddKnownAddresses tests that the addKnownAddresses function properly adds
@@ -438,6 +444,134 @@ func TestBroadcastMsgStructure(t *testing.T) {
 	assert.Equal(t, pingMsg, msg.message)
 	assert.Equal(t, excludePeers, msg.excludePeers)
 	assert.Len(t, msg.excludePeers, 2)
+}
+
+// newTestServerForRelay builds a minimal server suitable for exercising the
+// transaction-relay gating logic. The relayInv channel is buffered so the
+// goroutine spawned by RelayInventory can complete without a consumer.
+func newTestServerForRelay(t *testing.T, fsmState blockchain.FSMStateType, fsmErr error) (*server, *blockchain.Mock) {
+	t.Helper()
+
+	mockBC := &blockchain.Mock{}
+	mockBC.On("IsFSMCurrentState", mock.Anything, blockchain.FSMStateRUNNING).
+		Return(fsmState == blockchain.FSMStateRUNNING, fsmErr)
+
+	s := &server{
+		ctx:              context.Background(),
+		settings:         &settings.Settings{},
+		blockchainClient: mockBC,
+		relayInv:         make(chan relayMsg, 16),
+	}
+	return s, mockBC
+}
+
+// drain reports how many relayMsg entries arrived on relayInv within the
+// timeout. RelayInventory dispatches via a goroutine, so a short timeout is
+// enough to observe (or rule out) a send.
+func drain(ch chan relayMsg, timeout time.Duration) []relayMsg {
+	var got []relayMsg
+	deadline := time.After(timeout)
+	for {
+		select {
+		case m := <-ch:
+			got = append(got, m)
+		case <-deadline:
+			return got
+		}
+	}
+}
+
+// TestCanRelayTx_FSMStates verifies the FSM-state gate that determines
+// whether the legacy server may emit transaction inventory. The node must
+// only relay tx when the blockchain FSM is RUNNING; LEGACYSYNCING and
+// CATCHINGBLOCKS both suppress relay. Any error reading the FSM also
+// suppresses relay (fail closed).
+func TestCanRelayTx_FSMStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    blockchain.FSMStateType
+		stateErr error
+		want     bool
+	}{
+		{name: "RUNNING permits relay", state: blockchain.FSMStateRUNNING, want: true},
+		{name: "LEGACYSYNCING suppresses relay", state: blockchain.FSMStateLEGACYSYNCING, want: false},
+		{name: "CATCHINGBLOCKS suppresses relay", state: blockchain.FSMStateCATCHINGBLOCKS, want: false},
+		{name: "IDLE suppresses relay", state: blockchain.FSMStateIDLE, want: false},
+		{name: "FSM error fails closed", state: blockchain.FSMStateRUNNING, stateErr: errors.NewError("boom"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, mockBC := newTestServerForRelay(t, tt.state, tt.stateErr)
+			require.Equal(t, tt.want, s.canRelayTx())
+			mockBC.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCanRelayTx_NilBlockchainClient verifies that a server constructed
+// without a blockchain client (defensive path; should not occur in
+// production) permits relay rather than panicking.
+func TestCanRelayTx_NilBlockchainClient(t *testing.T) {
+	s := &server{ctx: context.Background(), settings: &settings.Settings{}}
+	require.True(t, s.canRelayTx())
+}
+
+// TestRelayInventory_SuppressesTxWhenNotRunning is the regression test for
+// the SV-node ban incident: while the node is in CATCHINGBLOCKS (or any
+// non-RUNNING state) the legacy server must not emit transaction inventory
+// to its peers. The local chain tip can sit below the Genesis activation
+// height during IBD, in which case the validator accepts pre-Genesis-only
+// outputs (e.g. P2SH); re-broadcasting them earns an instant ban on the
+// post-Genesis BSV network for `bad-txns-vout-p2sh`.
+func TestRelayInventory_SuppressesTxWhenNotRunning(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateCATCHINGBLOCKS, nil)
+	hash := chainhash.Hash{0xde, 0xad}
+	s.RelayInventory(wire.NewInvVect(wire.InvTypeTx, &hash), &netsync.TxHashAndFee{TxHash: hash, Fee: 1, Size: 100})
+	require.Empty(t, drain(s.relayInv, 50*time.Millisecond), "tx inv must not be relayed while FSM != RUNNING")
+}
+
+// TestRelayInventory_RelaysTxWhenRunning verifies the positive case: tx
+// inventory is emitted when the FSM has reached RUNNING.
+func TestRelayInventory_RelaysTxWhenRunning(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+	hash := chainhash.Hash{0xbe, 0xef}
+	iv := wire.NewInvVect(wire.InvTypeTx, &hash)
+	s.RelayInventory(iv, &netsync.TxHashAndFee{TxHash: hash, Fee: 1, Size: 100})
+	got := drain(s.relayInv, 200*time.Millisecond)
+	require.Len(t, got, 1)
+	require.Equal(t, iv, got[0].invVect)
+}
+
+// TestRelayInventory_AlwaysRelaysBlockInvs guards against an over-broad
+// fix: block inventory must continue to flow during legacy sync /
+// catch-up, otherwise outbound block announcements break. The FSM gate
+// applies to tx invs only.
+func TestRelayInventory_AlwaysRelaysBlockInvs(t *testing.T) {
+	for _, state := range []blockchain.FSMStateType{
+		blockchain.FSMStateRUNNING,
+		blockchain.FSMStateCATCHINGBLOCKS,
+		blockchain.FSMStateLEGACYSYNCING,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, state, nil)
+			hash := chainhash.Hash{0xab}
+			iv := wire.NewInvVect(wire.InvTypeBlock, &hash)
+			s.RelayInventory(iv, nil)
+			require.Len(t, drain(s.relayInv, 200*time.Millisecond), 1, "block inv must always relay")
+		})
+	}
+}
+
+// TestAnnounceNewTransactions_SuppressedWhenNotRunning verifies that the
+// public mempool-relay entry point (called from netsync.handle_block.go
+// for orphan-pool drain and from netsync.manager.go after direct tx
+// accept) also honours the FSM gate.
+func TestAnnounceNewTransactions_SuppressedWhenNotRunning(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateCATCHINGBLOCKS, nil)
+	hash := chainhash.Hash{0xca, 0xfe}
+	s.AnnounceNewTransactions([]*netsync.TxHashAndFee{{TxHash: hash, Fee: 1, Size: 100}})
+	require.Empty(t, drain(s.relayInv, 50*time.Millisecond), "AnnounceNewTransactions must not relay tx while FSM != RUNNING")
 }
 
 // TestRelayMsgStructure tests the relayMsg structure

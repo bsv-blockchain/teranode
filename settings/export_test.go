@@ -150,6 +150,48 @@ func TestExportMetadata_Caching(t *testing.T) {
 	require.Equal(t, "def456", registry2.Commit)
 }
 
+func TestExportMetadata_SecretRedaction(t *testing.T) {
+	settings := &Settings{
+		Version:        "1.0.0",
+		Commit:         "abc123",
+		ChainCfgParams: &chaincfg.MainNetParams,
+		RPC: RPCSettings{
+			RPCPass:      "super-secret-password",
+			RPCLimitPass: "limited-secret-password",
+		},
+		P2P: P2PSettings{
+			PrivateKey: "deadbeef1234567890",
+		},
+	}
+
+	registry := settings.ExportMetadata()
+	require.NotNil(t, registry)
+
+	settingsMap := make(map[string]SettingMetadata)
+	for _, s := range registry.Settings {
+		settingsMap[s.Key] = s
+	}
+
+	// Verify sensitive keys are redacted
+	for key := range sensitiveKeys {
+		if setting, ok := settingsMap[key]; ok {
+			if setting.CurrentValue != "" {
+				require.Equal(t, redactedValue, setting.CurrentValue,
+					"sensitive key %q should be redacted", key)
+			}
+		}
+	}
+
+	// Verify specific keys we set are redacted
+	require.Equal(t, redactedValue, settingsMap["rpc_pass"].CurrentValue)
+	require.Equal(t, redactedValue, settingsMap["rpc_limit_pass"].CurrentValue)
+	require.Equal(t, redactedValue, settingsMap["p2p_private_key"].CurrentValue)
+
+	// Verify non-sensitive keys are NOT redacted
+	logLevel := settingsMap["logLevel"]
+	require.NotEqual(t, redactedValue, logLevel.CurrentValue)
+}
+
 func mustParseURL(rawURL string) *url.URL {
 	u, err := url.Parse(rawURL)
 	if err != nil {

@@ -55,11 +55,30 @@ import (
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 
-	// Default values for peer map cleanup
-	defaultPeerMapMaxSize         = 100000           // Maximum entries in peer maps
-	defaultPeerMapTTL             = 30 * time.Minute // Time-to-live for peer map entries
-	defaultPeerMapCleanupInterval = 5 * time.Minute  // Cleanup interval
+	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
+	defaultPeerMapMaxSize         = 10000            // Maximum entries in peer maps (reduced from 100k)
+	defaultPeerMapTTL             = 10 * time.Minute // Time-to-live for peer map entries (reduced from 30min)
+	defaultPeerMapCleanupInterval = 1 * time.Minute  // Cleanup interval (reduced from 5min)
 	protocolIDVersion             = "1.0.0"          // Protocol version identifier
+
+	// maxP2PMessageSize is the absolute upper bound on a pubsub message payload.
+	// Anything larger is dropped before parsing. Per-topic limits below should
+	// always be tighter than this; this is the safety net.
+	maxP2PMessageSize = 10 * 1024 * 1024 // 10MB
+
+	// Per-topic size limits. Each topic's payload is well-bounded, so these are
+	// kept tight to drop obvious abuse (e.g. multi-MB blobs) before JSON parsing
+	// and to give us a clear ceiling per message type.
+	//
+	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
+	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	maxBlockMessageSize   = 32 * 1024 // 32KB
+	maxSubtreeMessageSize = 32 * 1024 // 32KB
+	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
+	// peers list. Allow generous headroom for very large meshes.
+	maxNodeStatusMessageSize = 64 * 1024 // 64KB
+	// rejected_tx messages carry: tx hash, short reason string, peer ID.
+	maxRejectedTxMessageSize = 16 * 1024 // 16KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -117,10 +136,11 @@ type Server struct {
 	syncConnectionTimes               sync.Map         // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
-	peerMapCleanupTicker    *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize          int           // Maximum number of entries in peer maps
-	peerMapTTL              time.Duration // Time-to-live for peer map entries
-	registryCacheSaveTicker *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerMapCleanupTicker     *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize           int           // Maximum number of entries in peer maps
+	peerMapTTL               time.Duration // Time-to-live for peer map entries
+	registryCacheSaveTicker  *time.Ticker  // Ticker for periodic saving of peer registry cache
+	peerRegistryCleanupTimer *time.Ticker  // Ticker for periodic eviction of stale peer registry entries
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -205,8 +225,8 @@ func NewServer(
 	}
 
 	listenMode := tSettings.P2P.ListenMode
-	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly {
-		return nil, errors.NewConfigurationError("listen_mode must be either '%s' or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, listenMode)
+	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly && listenMode != settings.ListenModeSilent {
+		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
 	}
 
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
@@ -279,8 +299,13 @@ func NewServer(
 	// - If AdvertiseAddresses is explicitly set, those addresses are used
 	// - If SharePrivateAddresses is true, we pass listen addresses to ensure local connectivity
 	// - Otherwise, go-p2p will automatically filter private IPs and detect public addresses
+	// In silent mode, address advertisement is always suppressed regardless of other settings.
 	var advertiseAddresses []string
-	if len(tSettings.P2P.AdvertiseAddresses) > 0 {
+	if listenMode == settings.ListenModeSilent {
+		// Silent mode: never advertise any addresses so the node remains undiscoverable
+		advertiseAddresses = []string{}
+		logger.Infof("[silent mode] Address advertisement suppressed - node will not be discoverable")
+	} else if len(tSettings.P2P.AdvertiseAddresses) > 0 {
 		// Use explicitly configured advertise addresses
 		advertiseAddresses = tSettings.P2P.AdvertiseAddresses
 		logger.Infof("Using configured advertise addresses: %v", advertiseAddresses)
@@ -308,14 +333,22 @@ func NewServer(
 	if err != nil {
 		return nil, errors.NewServiceError("failed to unmarshal key", err)
 	}
+	// In silent mode, DHT is disabled entirely so the node is not discoverable via DHT.
+	dhtMode := tSettings.P2P.DHTMode
+	if listenMode == settings.ListenModeSilent {
+		dhtMode = "off"
+		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
+	}
+
 	conf := p2pMessageBus.Config{
 		PrivateKey:         privKey,
 		Name:               tSettings.ClientName,
 		Logger:             logger,
 		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
 		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
+		StaticPeers:        tSettings.P2P.StaticPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            tSettings.P2P.DHTMode,
+		DHTMode:            dhtMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
 		EnableNAT:          tSettings.P2P.EnableNAT,
 		EnableMDNS:         tSettings.P2P.EnableMDNS,
@@ -520,8 +553,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			s.logger.Infof("[P2P Service] Shutting down during FSM wait")
+			return err
+		}
 		s.logger.Errorf("[P2P Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -619,6 +655,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start periodic save of peer registry cache
 	s.startPeerRegistryCacheSave(ctx)
+
+	// Start periodic eviction of stale peer registry entries
+	s.startPeerRegistryCleanup(ctx)
 
 	// Start sync coordinator (it handles all sync logic internally)
 	if s.syncCoordinator != nil {
@@ -745,7 +784,7 @@ func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaM
 
 func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
-		if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+		if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 			return nil
 		}
 
@@ -893,6 +932,12 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 }
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxNodeStatusMessageSize {
+		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxNodeStatusMessageSize, peerID)
+		return
+	}
+
 	var nodeStatusMessage NodeStatusMessage
 
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
@@ -903,12 +948,24 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
-	// If sender ID doesn't match node status ID log an error and return
-	// In future, consider banning this peer as they are maliciously spoofing
+	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
-		s.logger.Errorf("[handleNodeStatusTopic] node_status peerID %s does not match message ID %s",
-			peerID, nodeStatusMessage.PeerID)
+		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
+		if s.banManager != nil {
+			s.banManager.AddScore(peerID, ReasonProtocolViolation)
+		}
 		return
+	}
+
+	// Validate BaseURL to prevent SSRF attacks
+	if nodeStatusMessage.BaseURL != "" {
+		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
+			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
+			if s.banManager != nil {
+				s.banManager.AddScore(peerID, ReasonProtocolViolation)
+			}
+			return
+		}
 	}
 
 	// Skip further processing for our own messages (peer height updates, etc.)
@@ -998,7 +1055,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 }
 
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
@@ -1199,15 +1256,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		startTime = s.startTime.Unix()
 	}
 
-	// Set empty baseURL if in listen only mode
+	// Suppress DataHub and propagation URLs in non-publishing modes so this node
+	// cannot be selected as a sync source by remote peers.
+	suppressURLs := s.settings.P2P.ListenMode == settings.ListenModeListenOnly ||
+		s.settings.P2P.ListenMode == settings.ListenModeSilent
+
 	baseURL := s.AssetHTTPAddressURL
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if suppressURLs {
 		baseURL = ""
 	}
 
-	// Set propagation URL - empty if in listen only mode
 	propagationURL := s.PropagationURL
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if suppressURLs {
 		propagationURL = ""
 	}
 
@@ -1333,6 +1393,18 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Storage:             msg.Storage,
 	}
 
+	// In silent mode, skip publishing to the P2P network so the node remains undiscoverable,
+	// but still forward to local WebSocket clients for monitoring purposes.
+	if s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		s.logger.Debugf("[handleNodeStatusNotification] Silent mode - skipping P2P publish, forwarding to WebSocket only")
+		select {
+		case s.notificationCh <- msg:
+		default:
+			s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
+		}
+		return nil
+	}
+
 	msgBytes, err := json.Marshal(nodeStatusMessage)
 	if err != nil {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
@@ -1358,7 +1430,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 }
 
 func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
@@ -1582,6 +1654,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.peerMapCleanupTicker != nil {
 		s.peerMapCleanupTicker.Stop()
 		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
+	// Stop the peer registry cleanup ticker
+	if s.peerRegistryCleanupTimer != nil {
+		s.peerRegistryCleanupTimer.Stop()
+		s.logger.Infof("[Stop] stopped peer registry cleanup ticker")
 	}
 
 	// Clear the peer maps to free memory

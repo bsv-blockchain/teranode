@@ -184,7 +184,7 @@ func TestClientHealth(t *testing.T) {
 		code, msg, err := c.Health(context.Background(), false)
 		require.Error(t, err)
 		assert.Equal(t, http.StatusFailedDependency, code)
-		assert.Contains(t, msg, "not ready")
+		assert.Contains(t, msg, "grpc error")
 	})
 
 	t.Run("readiness check returns OK", func(t *testing.T) {
@@ -195,6 +195,40 @@ func TestClientHealth(t *testing.T) {
 			},
 			logger:   logger,
 			settings: tSettings,
+		}
+
+		code, msg, err := c.Health(context.Background(), false)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, code)
+		assert.Equal(t, "all good", msg)
+	})
+
+	t.Run("readiness returns 503 when subscription not ready", func(t *testing.T) {
+		c := &Client{
+			client: &mockHealthClient{
+				resp: &blockchain_api.HealthResponse{Ok: true, Details: "all good"},
+			},
+			logger:            logger,
+			settings:          tSettings,
+			subscriptionReady: make(chan struct{}), // not closed — subscription pending
+		}
+
+		code, msg, err := c.Health(context.Background(), false)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+		assert.Contains(t, msg, "subscription not yet established")
+	})
+
+	t.Run("readiness passes after subscription becomes ready", func(t *testing.T) {
+		ready := make(chan struct{})
+		close(ready)
+		c := &Client{
+			client: &mockHealthClient{
+				resp: &blockchain_api.HealthResponse{Ok: true, Details: "all good"},
+			},
+			logger:            logger,
+			settings:          tSettings,
+			subscriptionReady: ready,
 		}
 
 		code, msg, err := c.Health(context.Background(), false)

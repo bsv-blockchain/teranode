@@ -365,8 +365,12 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 				}
 
 				if aErr.ResultCode == types.FILTERED_OUT {
-					// BlockID already exists in the list - this transaction was already
-					// marked as mined in this block, nothing to do
+					// Filter condition: count(blockID in blockIDs) == 0 -> operation runs.
+					// FILTERED_OUT therefore proves the current blockID is already present
+					// in the durable list. Synthesize the map entry so the postcondition
+					// check at the end of this function sees this hash as covered.
+					blockIDs[*hash] = []uint32{minedBlockInfo.BlockID}
+					okUpdates++
 					continue
 				}
 			}
@@ -432,6 +436,37 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 		}
 
 		okUpdates++
+	}
+
+	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
+	// !UnsetMined every submitted hash MUST appear in blockIDs and the returned
+	// slice MUST contain minedBlockInfo.BlockID. Paths that left a hash unmapped
+	// (nil record/bins, empty BlockIDs bin) are promoted to errors here so all
+	// backends fail closed identically — mirrors the SQL store's tx-not-found
+	// enforcement in stores/utxo/sql/sql.go.
+	if !minedBlockInfo.UnsetMined {
+		for _, h := range hashes {
+			bIDs, ok := blockIDs[*h]
+			if !ok {
+				errs = errors.Join(errs, errors.NewTxNotFoundError("setMinedMulti coverage gap: tx absent from store result", h.String()))
+				nrErrors++
+
+				continue
+			}
+
+			found := false
+			for _, bID := range bIDs {
+				if bID == minedBlockInfo.BlockID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				errs = errors.Join(errs, errors.NewProcessingError("setMinedMulti coverage gap: tx present but missing current blockID", h.String()))
+				nrErrors++
+			}
+		}
 	}
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))

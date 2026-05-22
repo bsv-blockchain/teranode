@@ -12,6 +12,11 @@ env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test
   GO_VERSION: "1.26.0"
+  # Disable testcontainers' Ryuk reaper sidecar — Docker Hub rate-limits and
+  # gateway timeouts pulling testcontainers/ryuk:* are the dominant flake
+  # source on CI. Ephemeral runners are torn down regardless, so the reaper
+  # provides no value here. Tests already call container.Terminate() explicitly.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
   golangci-lint:

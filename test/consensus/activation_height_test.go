@@ -7,7 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
 )
 
-// Bitcoin SV activation heights
+// BSV Blockchain activation heights
 const (
 	// UAHF (Bitcoin Cash fork) - SIGHASH_FORKID becomes mandatory
 	UAHFHeight = 478559

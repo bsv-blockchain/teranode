@@ -1,5 +1,5 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 This file implements option patterns for both general validation options and
 transaction validator-specific options, providing flexible configuration for
@@ -46,6 +46,11 @@ type Options struct {
 	// This enables validation to proceed without UTXO store lookups for in-block parents
 	// Key: parent transaction hash, Value: metadata (block height)
 	ParentMetadata map[chainhash.Hash]*ParentTxMetadata
+
+	// SkipTxMetaPublishing determines whether txmeta should be published to Kafka
+	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
+	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
+	SkipTxMetaPublishing bool
 }
 
 // Option defines a function type for setting options
@@ -152,6 +157,18 @@ func WithIgnoreConflicting(ignore bool) Option {
 func WithIgnoreLocked(ignoreLocked bool) Option {
 	return func(o *Options) {
 		o.IgnoreLocked = ignoreLocked
+	}
+}
+
+// WithSkipTxMetaPublishing creates an option to control txmeta Kafka publishing
+// Parameters:
+//   - skip: When true, txmeta will not be published to Kafka
+//
+// Returns:
+//   - Option: Function that sets the skipTxMetaPublishing option
+func WithSkipTxMetaPublishing(skip bool) Option {
+	return func(o *Options) {
+		o.SkipTxMetaPublishing = skip
 	}
 }
 

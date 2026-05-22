@@ -12,13 +12,17 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -257,4 +261,28 @@ func TestTtlCache(t *testing.T) {
 	assert.Equal(t, 4, cache.Len())
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
+}
+
+// TestStart_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func TestStart_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	server := &Server{
+		logger:           ulogger.TestLogger{},
+		settings:         settings.NewSettings(),
+		blockchainClient: mockBlockchainClient,
+	}
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+	mockBlockchainClient.AssertExpectations(t)
 }

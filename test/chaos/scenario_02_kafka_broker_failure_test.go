@@ -23,7 +23,7 @@ import (
 //
 // Expected Behavior:
 // - Producers should handle errors gracefully and retry
-// - Consumers should detect stuck states and trigger watchdog recovery
+// - Consumers should recover via franz-go's built-in reconnection
 // - No message loss for critical topics (manual commit)
 // - System recovers when broker is restored
 // - Consumer offsets maintained correctly

@@ -12,7 +12,6 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/term"
 )
 
 type ZLoggerWrapper struct {
@@ -70,7 +69,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 }
 
 func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *ZLoggerWrapper {
-	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+	isTerminal := isStdoutTerminal()
 
 	// Cache working directory once at logger initialization to avoid expensive syscall on every log message
 	cachedCwd, _ := os.Getwd()

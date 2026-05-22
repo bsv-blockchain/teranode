@@ -11,7 +11,9 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
+	"github.com/bsv-blockchain/teranode/cmd/checkblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
+	"github.com/bsv-blockchain/teranode/cmd/diagnose"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
 	"github.com/bsv-blockchain/teranode/cmd/logs"
@@ -47,6 +49,7 @@ var commandHelp = map[string]string{
 	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
 	"reconsiderblock":         "Reconsider a block that was previously marked as invalid",
 	"resetblockassembly":      "Reset block assembly state",
+	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
@@ -55,6 +58,7 @@ var commandHelp = map[string]string{
 	"remainderbench":          "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
+	"diagnose":                "Diagnose node health and validate configuration",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -265,6 +269,19 @@ func Start(args []string, version, commit string) {
 		cmd.Execute = func(args []string) error {
 			return logs.Run(*logFile, *bufferSize)
 		}
+	case "diagnose":
+		checkMode := cmd.FlagSet.Bool("check", false, "Run service health checks (default if no mode specified)")
+		configMode := cmd.FlagSet.Bool("config", false, "Validate configuration without running services")
+		jsonOutput := cmd.FlagSet.Bool("json", false, "Output results as JSON")
+
+		cmd.Execute = func(args []string) error {
+			exitCode := diagnose.Run(logger, tSettings, *checkMode, *configMode, *jsonOutput)
+			if exitCode != 0 {
+				os.Exit(exitCode)
+			}
+
+			return nil
+		}
 	case "setfsmstate":
 		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")
 
@@ -364,13 +381,22 @@ func Start(args []string, version, commit string) {
 		}
 	case "resetblockassembly":
 		fullReset := cmd.FlagSet.Bool("full-reset", false, "Perform a full reset, including clearing mempool and unmined transactions")
+		validateInputs := cmd.FlagSet.Bool("validate-inputs", false, "Validate that each unmined tx's inputs are still spent by this tx (marks invalid ones as conflicting)")
 
 		cmd.Execute = func(args []string) error {
-			err := resetblockassembly.ResetBlockAssembly(logger, tSettings, *fullReset)
+			err := resetblockassembly.ResetBlockAssembly(logger, tSettings, *fullReset, *validateInputs)
 			if err != nil {
 				return errors.NewProcessingError("Failed to reset block assembly", err)
 			}
 
+			return nil
+		}
+	case "checkblockassembly":
+		cmd.Execute = func(args []string) error {
+			if err := checkblockassembly.CheckBlockAssembly(logger, tSettings); err != nil {
+				return errors.NewProcessingError("Failed to check block assembly", err)
+			}
+			fmt.Println("Block assembly validation passed: all unmined transactions have valid inputs")
 			return nil
 		}
 	case "fix-chainwork":
@@ -447,13 +473,12 @@ func Start(args []string, version, commit string) {
 		}
 	case "loadunminedbench":
 		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
-		fullScan := cmd.FlagSet.Bool("full-scan", false, "Use full scan mode")
 		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
 		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
 		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
 
 		cmd.Execute = func(args []string) error {
-			return runLoadUnminedBenchmark(*txCount, *fullScan, *cpuProfile, *memProfile, *aerospikeURL)
+			return runLoadUnminedBenchmark(*txCount, *cpuProfile, *memProfile, *aerospikeURL)
 		}
 	case "txmapbench":
 		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")

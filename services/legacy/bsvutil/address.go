@@ -2,7 +2,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Package bsvutil provides Bitcoin SV utility functions and data types for the legacy protocol implementation.
+// Package bsvutil provides BSV Blockchain utility functions and data types for the legacy protocol implementation.
 package bsvutil
 
 import (

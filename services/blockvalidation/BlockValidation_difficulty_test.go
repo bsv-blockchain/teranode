@@ -124,7 +124,7 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 		Return(expectedNBits, nil).Once()
 
 	// Mock AddBlock to store invalid block when difficulty check fails
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -258,7 +258,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 		Return(expectedNBits, nil).Once()
 
 	// Mock AddBlock to store invalid block when difficulty target is not met
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -426,7 +426,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Mock AddBlock for successful validation
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)

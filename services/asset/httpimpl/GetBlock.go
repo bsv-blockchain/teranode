@@ -32,6 +32,8 @@ import (
 // Fields:
 // - Block: Embedded Block model containing all standard block data including header, transactions, etc.
 // - NextBlock: Hash of the next block in the chain, or nil if this is the tip of the chain
+//
+// swagger:model BlockExtended
 type BlockExtended struct {
 	*model.Block                 // Embedded Block model containing basic block data
 	NextBlock    *chainhash.Hash `json:"nextblock"` // Hash of the next block in the chain, if available
@@ -89,6 +91,7 @@ type BlockExtended struct {
 //     "subtrees": ["<hash>", ...],
 //     "height": <uint32>,
 //     "id": <uint32>,
+//     "coinbase_bump": "<hex>",
 //     "nextblock": "<hash or null>"
 //     }
 //
@@ -102,6 +105,7 @@ type BlockExtended struct {
 //     - Subtree list
 //     - Coinbase transaction
 //     - Height (varint)
+//     - Coinbase BUMP length (varint) + Coinbase BUMP bytes
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK
@@ -239,6 +243,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //     "subtrees": ["<hash>", ...],
 //     "height": <uint32>,
 //     "id": <uint32>,
+//     "coinbase_bump": "<hex>",
 //     "nextblock": "<hash or null>"
 //     }
 //
@@ -252,6 +257,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //     - Subtree list
 //     - Coinbase transaction
 //     - Height (varint)
+//     - Coinbase BUMP length (varint) + Coinbase BUMP bytes
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK

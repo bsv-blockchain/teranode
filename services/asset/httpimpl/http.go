@@ -1,4 +1,6 @@
 // Package httpimpl provides HTTP REST API endpoints for blockchain data access.
+//
+//go:generate swagger generate spec -m -o swagger.json -w .
 package httpimpl
 
 import (
@@ -6,10 +8,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ui/dashboard"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -29,12 +35,13 @@ var AssetStat = gocore.NewStat("Asset")
 //
 // Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
-	logger     ulogger.Logger
-	settings   *settings.Settings
-	repository repository.Interface
-	e          *echo.Echo
-	startTime  time.Time
-	privKey    crypto.PrivKey
+	logger              ulogger.Logger
+	settings            *settings.Settings
+	repository          repository.Interface
+	blockAssemblyClient blockassembly.ClientI
+	e                   *echo.Echo
+	startTime           time.Time
+	privKey             crypto.PrivKey
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -101,7 +108,7 @@ type HTTP struct {
 //   - Custom request logging in debug mode
 //   - Prometheus metrics
 //   - Statistical tracking with reset capability
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository) (*HTTP, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface, blockAssemblyClient ...blockassembly.ClientI) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -121,6 +128,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	e.Use(middleware.Recover())
 
+	// Ban list middleware - reject requests from banned IPs early
+	if banList != nil {
+		e.Use(banlist.CreateEchoMiddleware(banList))
+	}
+
 	// Default CORS config for non-dashboard endpoints
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
@@ -135,7 +147,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		MaxAge:           86400,
 	}))
 
-	e.Use(middleware.Gzip())
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
+	}))
+
+	e.Use(securityHeadersMiddleware())
 
 	if e.Debug {
 		e.Use(customLoggerMiddleware(logger))
@@ -147,6 +163,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		repository: repo,
 		e:          e,
 		startTime:  time.Now(),
+	}
+
+	if len(blockAssemblyClient) > 0 && blockAssemblyClient[0] != nil {
+		h.blockAssemblyClient = blockAssemblyClient[0]
 	}
 
 	// add the private key for signing responses
@@ -192,9 +212,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/tx/:hash/hex", h.GetTransaction(HEX))
 	apiGroup.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
-	// backwards compatibility for legacy endpoints - remove in future
-	apiGroup.POST("/txs", h.GetTransactions())       // BINARY_STREAM only
-	apiGroup.POST("/:hash/txs", h.GetTransactions()) // BINARY_STREAM only
+	if tSettings.Asset.PropagationProxyEnabled && tSettings.Asset.PropagationProxyAddress != "" {
+		proxyTarget, err := url.Parse(tSettings.Asset.PropagationProxyAddress)
+		if err != nil {
+			logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", tSettings.Asset.PropagationProxyAddress, err)
+		} else {
+			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget, "/tx"))
+			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget, "/txs"))
+		}
+	}
 
 	apiGroup.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
@@ -234,12 +260,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
 	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock()) // BINARY_STREAM (also supports ?type=miningcandidate)
 
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
 	apiGroup.GET("/block/:hash/forks", h.GetBlockForks)
+	apiGroup.GET("/block/:hash/nearestforks", h.GetNearestForkHeights)
 
 	apiGroup.GET("/block/:hash/subtrees/json", h.GetBlockSubtrees(JSON))
 
@@ -273,12 +300,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.GET(h.settings.StatsPrefix+"*", AdaptStdHandler(gocore.HandleOther))
 	}
 
+	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
+	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
+
 	if h.settings.Dashboard.Enabled {
 		// Initialize dashboard with settings
 		dashboard.InitDashboard(h.settings)
 
 		// Apply authentication middleware for all POST endpoints
-		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
 		// Register dashboard-compatible API routes that need auth protection
@@ -327,11 +356,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		pathFsmStates = "/fsm/states"
 	)
 
-	// Register FSM API endpoints
+	// Register FSM read-only endpoints (no auth required)
 	apiGroup.GET(pathFsmState, fsmHandler.GetFSMState)
-	apiGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 	apiGroup.GET(pathFsmEvents, fsmHandler.GetFSMEvents)
 	apiGroup.GET(pathFsmStates, fsmHandler.GetFSMStates)
+
+	// Register FSM write endpoint with auth (requires authentication regardless of dashboard state)
+	apiAdminGroup := e.Group(apiPrefix)
+	apiAdminGroup.Use(authHandler.RequireAuthMiddleware)
+	apiAdminGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 
 	// Add OPTIONS handlers for CORS preflight requests
 	apiGroup.OPTIONS(pathFsmState, func(c echo.Context) error {
@@ -347,9 +380,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Create and register block handler for block operations
 	blockHandler := NewBlockHandler(repo.BlockchainClient, repo.BlockvalidationClient, logger)
 
-	// Register block invalidation/revalidation endpoints
-	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
-	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
+	// Register block invalidation/revalidation endpoints under authenticated group
+	// These are admin operations that could disrupt the blockchain state
+	apiBlockAdminGroup := e.Group(apiPrefix + "/block")
+	apiBlockAdminGroup.Use(authHandler.RequireAuthMiddleware)
+	apiBlockAdminGroup.POST("/invalidate", blockHandler.InvalidateBlock)
+	apiBlockAdminGroup.POST("/revalidate", blockHandler.RevalidateBlock)
+
+	// Read-only endpoint for invalid blocks doesn't require auth
 	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
 
 	// Register catchup status endpoint
@@ -363,17 +401,16 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	// Register settings handler for settings portal (always requires authentication)
 	settingsHandler := NewSettingsHandler(tSettings, logger)
-	authHandler := dashboard.NewAuthHandler(logger, tSettings)
 	apiSettingsGroup := e.Group(apiPrefix + "/settings")
 	apiSettingsGroup.Use(authHandler.RequireAuthMiddleware)
 	apiSettingsGroup.GET("", settingsHandler.GetSettings)
 	apiSettingsGroup.GET("/categories", settingsHandler.GetSettingsCategories)
 
-	// Add OPTIONS handlers for block operations
-	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
+	// Add OPTIONS handlers for block operations (CORS preflight doesn't require auth)
+	apiBlockAdminGroup.OPTIONS("/invalidate", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
-	apiGroup.OPTIONS("/block/revalidate", func(c echo.Context) error {
+	apiBlockAdminGroup.OPTIONS("/revalidate", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	apiGroup.OPTIONS("/blocks/invalid", func(c echo.Context) error {
@@ -381,6 +418,31 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	return h, nil
+}
+
+func shouldSkipGzipForLargeBinaryAssetResponse(c echo.Context) bool {
+	path := c.Path()
+	if path == "" && c.Request() != nil && c.Request().URL != nil {
+		path = c.Request().URL.Path
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		switch part {
+		case "subtree_data":
+			return true
+		case "subtree":
+			tail := parts[i+1:]
+			if len(tail) == 1 {
+				return true
+			}
+			if len(tail) == 2 && tail[1] == "txs" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func AdaptStdHandler(handler func(w http.ResponseWriter, r *http.Request)) echo.HandlerFunc {
@@ -421,6 +483,12 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 
 	// Set the listener on the Echo server
 	h.e.Listener = listener
+
+	// Defense-in-depth timeouts (reverse proxy also enforces limits)
+	h.e.Server.ReadTimeout = 30 * time.Second
+	h.e.Server.WriteTimeout = 120 * time.Second // generous for large block responses
+	h.e.Server.IdleTimeout = 120 * time.Second
+	h.e.Server.ReadHeaderTimeout = 10 * time.Second
 
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTP listening on %s", address))
@@ -530,6 +598,18 @@ func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			logger.Infof("http request: Method=%s, URI=%s, RemoteAddr=%s Status=%d, Duration=%v, err=%v", c.Request().Method, c.Request().RequestURI, c.Request().RemoteAddr, status, duration, err)
 
 			return err
+		}
+	}
+}
+
+// securityHeadersMiddleware adds security headers to all HTTP responses.
+func securityHeadersMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
+			c.Response().Header().Set("X-Frame-Options", "DENY")
+			c.Response().Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			return next(c)
 		}
 	}
 }

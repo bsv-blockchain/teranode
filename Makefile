@@ -125,6 +125,10 @@ build-tx-blaster: set_debug_flags
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
 
+.PHONY: build-teranode-dev
+build-teranode-dev:
+	CGO_ENABLED=0 go build -o teranode-dev ./cmd/teranodedev
+
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
@@ -152,6 +156,26 @@ build-blockchainstatus:
 .PHONY: build-dashboard
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
+
+# Generate a docker-compose stack for a multinode teranode network (3 <= N <= 10).
+# Output is written to compose/generated/. Bring it up with:
+#   docker compose -f compose/generated/docker-compose-multinode.yml up -d
+# Example: make gen-multinode N=5
+.PHONY: gen-multinode
+gen-multinode:
+	@test -n "$(N)" || { echo "usage: make gen-multinode N=<3..10>"; exit 2; }
+	go run ./compose/cmd/gennodes -n $(N) -o compose/generated
+
+.PHONY: open-dashboards
+open-dashboards:
+	@test -f compose/generated/open-dashboards.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/open-dashboards.sh
+
+# Generate blocks on specific nodes. Usage: make generate-blocks ARGS="1,10 3,5"
+.PHONY: generate-blocks
+generate-blocks:
+	@test -f compose/generated/generate-blocks.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/generate-blocks.sh $(ARGS)
 
 .PHONY: install-tools
 install-tools:
@@ -240,6 +264,13 @@ chainintegrity:
 	@mkdir -p /tmp/teranode-test-results
 	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
 
+.PHONY: network-chaos-test
+network-chaos-test:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
 .PHONY: nightly-tests
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
@@ -247,6 +278,52 @@ nightly-tests:
 
 	cd $(test_dir) && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -tags $(test_tags) -json | go-ctrf-json-reporter -output ../../$(report_name) --verbose
 	# cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME) --verbose
+
+BENCH_PACKAGES = \
+	./errors \
+	./model \
+	./services/blockassembly \
+	./services/blockassembly/mining \
+	./services/blockassembly/subtreeprocessor \
+	./services/blockchain/work \
+	./services/blockpersister \
+	./services/blockvalidation \
+	./services/legacy/bsvec \
+	./services/legacy/bsvutil/hdkeychain \
+	./services/legacy/netsync \
+	./services/legacy/peer \
+	./services/subtreevalidation \
+	./services/validator \
+	./stores/blob/null \
+	./stores/blockchain/options \
+	./stores/blockchain/sql \
+	./stores/txmetacache \
+	./stores/utxo \
+	./stores/utxo/meta \
+	./test/consensus \
+	./ulogger \
+	./util \
+	./util/health \
+	./util/servicemanager \
+	./util/usql
+
+BENCH_FLAGS = -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=2 -run='^$$' -tags "testtxmetacache"
+
+.PHONY: bench-test
+bench-test:
+	go test $(BENCH_FLAGS) $(BENCH_PACKAGES)
+
+.PHONY: bench-local-compare
+bench-local-compare:
+	@command -v benchstat >/dev/null 2>&1 || { echo "Installing benchstat..."; go install golang.org/x/perf/cmd/benchstat@latest; }
+	go build -o /tmp/bench-compare ./cmd/compare-benchmarks
+	@echo "=== Run 1 (baseline) ==="
+	go test $(BENCH_FLAGS) $(BENCH_PACKAGES) | tee /tmp/bench-run1.txt
+	@echo "=== Run 2 (current) ==="
+	go test $(BENCH_FLAGS) $(BENCH_PACKAGES) | tee /tmp/bench-run2.txt
+	@echo "=== Comparing (benchstat with p-value) ==="
+	/tmp/bench-compare -baseline /tmp/bench-run1.txt -current /tmp/bench-run2.txt -output /tmp/bench-local-report.md -threshold 10.0 -alpha 0.05
+	@cat /tmp/bench-local-report.md
 
 reset-data:
 	unzip data.zip
@@ -796,6 +873,18 @@ show-hashes:
 		echo "  - Run 'make chain-integrity-test' first to generate the log file"; \
 	fi
 	@echo ""
+
+# Generate Swagger spec for Asset service from go-swagger annotations
+.PHONY: swagger-asset
+swagger-asset:
+	@echo "Generating Swagger spec for Asset service..."
+	swagger generate spec -m -o services/asset/httpimpl/swagger.json -w services/asset/httpimpl/
+	@echo "Swagger spec generated at services/asset/httpimpl/swagger.json"
+
+# Validate generated Swagger spec
+.PHONY: swagger-validate
+swagger-validate: swagger-asset
+	swagger validate services/asset/httpimpl/swagger.json
 
 # Quick chain integrity test (shorter wait times for faster testing)
 .PHONY: chain-integrity-test-quick

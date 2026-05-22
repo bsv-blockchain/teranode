@@ -68,6 +68,7 @@ type TraceOptions struct {
 	Logger           ulogger.Logger          // logger to be used when starting the span and when the span is finished
 	LogMessages      []logMessage            // log messages to be added to the span
 	Timeout          time.Duration           // timeout for the span, if set
+	SampleRate       *float64                // per-span sample rate override (nil = use default)
 }
 
 // addLogMessage adds a log message to the trace options
@@ -143,7 +144,9 @@ func InitTracer(appSettings *settings.Settings) error {
 		// Create trace provider with the exporter
 		tp = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(time.Second)), // Send batches every second
-			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(appSettings.TracingSampleRate))),
+			sdktrace.WithSampler(newOverrideSampler(
+				sdktrace.ParentBased(sdktrace.TraceIDRatioBased(appSettings.TracingSampleRate)),
+			)),
 			sdktrace.WithResource(res),
 		)
 
@@ -256,6 +259,30 @@ func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interfac
 	}
 }
 
+// WithSampleRate overrides the global sample rate for this specific span.
+// rate is clamped to [0.0, 1.0]. When rate >= 1.0, the span is always sampled
+// regardless of the global rate or parent sampling decision.
+func WithSampleRate(rate float64) Options {
+	return func(s *TraceOptions) {
+		if rate < 0 {
+			rate = 0
+		}
+		if rate > 1 {
+			rate = 1
+		}
+		s.SampleRate = &rate
+	}
+}
+
+// WithAlwaysSample forces this span to always be sampled, regardless of
+// the global sample rate or parent sampling decision.
+func WithAlwaysSample() Options {
+	return func(s *TraceOptions) {
+		rate := 1.0
+		s.SampleRate = &rate
+	}
+}
+
 // WithNewRoot creates a new root span for the trace.
 func WithNewRoot() Options {
 	return func(s *TraceOptions) {
@@ -268,6 +295,13 @@ func WithNewRoot() Options {
 type UTracer struct {
 	name   string
 	tracer trace.Tracer
+}
+
+// OTelTracer returns the underlying OpenTelemetry tracer. Useful when
+// integrating with libraries that accept a trace.Tracer directly (e.g.
+// go-batcher v2's WithTracer option).
+func (u *UTracer) OTelTracer() trace.Tracer {
+	return u.tracer
 }
 
 // USpan represents an active tracing span with associated statistics
@@ -367,25 +401,50 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	// add the start time to the context
 	ctx = context.WithValue(ctx, StartTime, start)
 
-	var span trace.Span
+	// inject sample rate override into context for the custom sampler
+	if options.SampleRate != nil {
+		ctx = context.WithValue(ctx, sampleRateOverrideKey{}, options.SampleRate)
+	}
+
+	var (
+		span           trace.Span
+		shortCircuited bool
+	)
 
 	if tracingEnabled {
-		// Add any options.Tags to the span options...
-		for _, tag := range options.Tags {
-			options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
+		// Fast path: skip the entire OTel SDK when the parent span is unsampled
+		// and there's no per-span override that could force sampling.
+		// This avoids context traversal, sampler evaluation, and span allocation
+		// for the 99%+ of child spans whose parent was already dropped.
+		// At ~2M tx/s with multiple spans per tx, this eliminates millions of
+		// unnecessary sampler evaluations, context lookups, and span allocations
+		// per second on the unsampled path.
+		if options.SampleRate == nil && canShortCircuit(options.SpanStartOptions) {
+			parentSpan := trace.SpanFromContext(ctx)
+			if parentSpan.SpanContext().IsValid() && !parentSpan.SpanContext().IsSampled() {
+				span = parentSpan
+				shortCircuited = true
+			}
 		}
 
-		// Start OpenTelemetry span
-		ctx, span = u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
-
-		// Set span attributes from tags
-		if len(options.Tags) > 0 {
-			attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+		if !shortCircuited {
+			// Add any options.Tags to the span options...
 			for _, tag := range options.Tags {
-				attrs = append(attrs, attribute.String(tag.key, tag.value))
+				options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
 			}
 
-			span.SetAttributes(attrs...)
+			// Start OpenTelemetry span
+			ctx, span = u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
+
+			// Set span attributes from tags
+			if len(options.Tags) > 0 {
+				attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+				for _, tag := range options.Tags {
+					attrs = append(attrs, attribute.String(tag.key, tag.value))
+				}
+
+				span.SetAttributes(attrs...)
+			}
 		}
 	} else {
 		span = trace.SpanFromContext(ctx)
@@ -410,10 +469,14 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 	endFn := func(optionalError ...error) {
 		var err error
+		if len(optionalError) > 0 {
+			err = optionalError[0]
+		}
 
-		if tracingEnabled {
-			if len(optionalError) > 0 && optionalError[0] != nil {
-				err = optionalError[0]
+		// Only interact with the OTel span if we own it (not short-circuited).
+		// When short-circuited, span points to the parent — we must not End() it.
+		if tracingEnabled && !shortCircuited {
+			if err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
 			}
@@ -462,7 +525,9 @@ func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (con
 	// Fast path: if tracing is disabled, return immediately
 	if !IsTracingEnabled() {
 		noopSpan := trace.SpanFromContext(ctx)
-		return ctx, noopSpan, func(...error) {}
+		return ctx, noopSpan, func(...error) {
+			// no-op cleanup: tracing is disabled
+		}
 	}
 
 	// Extract the current span from context
@@ -487,7 +552,7 @@ func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, star
 	// Duplicate the logger to ensure the skip frame is correct, since we are calling this from
 	// a closure and we want to skip the frame of this function.
 	// Then enrich with trace context for log-trace correlation.
-	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1)).WithTraceContext(ctx)
+	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(2)).WithTraceContext(ctx)
 
 	var done string
 	if err != nil {
@@ -497,25 +562,31 @@ func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, star
 	}
 
 	for _, l := range options.LogMessages {
-		switch l.level {
-		case "WARN":
-			if err != nil && logger.LogLevel() == ulogger.LogLevelWarning {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Warnf(l.message+done, l.args...)
-			}
-		case "DEBUG":
-			if err != nil && logger.LogLevel() == ulogger.LogLevelDebug {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Debugf(l.message+done, l.args...)
-			}
-		default:
-			if err != nil {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Infof(l.message+done, l.args...)
-			}
+		logTraceMessage(logger, l, done, err)
+	}
+}
+
+// logTraceMessage logs a single trace message at the appropriate level.
+func logTraceMessage(logger ulogger.Logger, l logMessage, done string, err error) {
+	msg := l.message + done
+	switch l.level {
+	case "WARN":
+		if err != nil && logger.LogLevel() == ulogger.LogLevelWarning {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Warnf(msg, l.args...)
+		}
+	case "DEBUG":
+		if err != nil && logger.LogLevel() == ulogger.LogLevelDebug {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Debugf(msg, l.args...)
+		}
+	default:
+		if err != nil {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Infof(msg, l.args...)
 		}
 	}
 }
@@ -530,6 +601,19 @@ func (u *UTracer) recordMetrics(options *TraceOptions, start time.Time) {
 	if options.Counter != nil {
 		options.Counter.Inc()
 	}
+}
+
+// canShortCircuit reports whether the span creation can skip the OTel SDK
+// based on the parent's sampling decision. It returns false when any
+// SpanStartOption is present that could change the effective parent
+// (e.g. WithNewRoot), because in that case we cannot infer the sampling
+// outcome from the current context's parent span.
+func canShortCircuit(spanOpts []trace.SpanStartOption) bool {
+	// If there are span start options, one of them might be WithNewRoot or
+	// WithLinks that could alter the sampling decision. To keep this check
+	// allocation-free and simple, we conservatively fall through to the
+	// OTel SDK whenever any SpanStartOption is provided.
+	return len(spanOpts) == 0
 }
 
 // SetupMockTracer sets up a mock tracer for testing

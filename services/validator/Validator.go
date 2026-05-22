@@ -1,9 +1,8 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters and implements the full Bitcoin transaction validation ruleset.
+This package provides comprehensive transaction validation for BSV Blockchain nodes,
+including BDK transaction validation, UTXO management, and policy enforcement.
 */
 package validator
 
@@ -16,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -25,30 +24,27 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
 )
 
-// Constants defining key validation parameters and limits for Bitcoin SV consensus rules.
+// Constants defining key validation parameters and limits for Bitcoin consensus rules.
 // These constants establish the fundamental constraints that govern transaction and block validation,
-// ensuring compliance with Bitcoin SV protocol specifications and network consensus requirements.
+// ensuring compliance with Bitcoin protocol specifications and network consensus requirements.
 const (
-	// MaxBlockSize defines the maximum allowed size of a block in bytes (4GB).
-	// This limit governs the maximum amount of transaction data that can be included in a single block,
-	// directly impacting network throughput and scalability. Blocks exceeding this size are rejected
-	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
-	MaxBlockSize = 4 * 1024 * 1024 * 1024
-
 	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
@@ -61,10 +57,6 @@ const (
 	// during validation, as they have special rules and don't spend existing UTXOs.
 	coinbaseTxID = "0000000000000000000000000000000000000000000000000000000000000000"
 
-	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
-	// operations allowed in a transaction after the Genesis upgrade (UINT32_MAX).
-	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0)
-
 	// DustLimit defines the minimum output value in satoshis (1 satoshi)
 	// Outputs with less than this value are considered dust unless they are
 	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
@@ -75,6 +67,15 @@ const (
 	txmetaActionADD = byte(0)
 	// txmetaActionDELETE represents the DELETE action for txmeta batch messages
 	txmetaActionDELETE = byte(1)
+
+	// txmetaWireV2Magic is the first byte of a v2-format txmeta Kafka message.
+	// v1 messages start with the low byte of a uint32 entry count, which can
+	// never be 0xFF for any realistic batch size — see the receiver in
+	// services/subtreevalidation/txmetaHandler.go for the symmetric check.
+	txmetaWireV2Magic = byte(0xFF)
+	// txmetaWireV2Version identifies the v2 sub-version. Bump if the per-entry
+	// or header layout changes; the receiver rejects unknown sub-versions.
+	txmetaWireV2Version = byte(0x02)
 )
 
 // txmetaBatchItem represents an item to be batched for TxMeta Kafka messages.
@@ -84,10 +85,10 @@ type txmetaBatchItem struct {
 	isDelete  bool
 }
 
-// Validator implements comprehensive Bitcoin SV transaction validation and manages the complete lifecycle
+// Validator implements comprehensive BSV Blockchain transaction validation and manages the complete lifecycle
 // of transactions from initial validation through block assembly integration. This struct serves as the
 // primary validation engine, coordinating between multiple components to ensure transaction validity
-// according to Bitcoin SV consensus rules and policy constraints.
+// according to Bitcoin consensus rules and policy constraints.
 //
 // The Validator orchestrates the validation process by:
 // - Performing structural and semantic transaction validation
@@ -139,10 +140,28 @@ type Validator struct {
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
-	// mtpCache caches Median Time Past values keyed by block height.
-	// MTP values are immutable once stored, so entries never need invalidation.
-	// Caching avoids repeated gRPC calls for the same heights across all transactions in a block.
-	mtpCache sync.Map
+	// mtpStore is a dense in-memory array of Median Time Past values indexed by block height.
+	// mtpStore[h] = MTP for block h. Loaded from height 0 up to (blockHeight - 1) before
+	// each block's transactions are validated, then extended on demand as new heights arrive.
+	//
+	// MTP values are immutable once a block is persisted, so entries never need invalidation.
+	// Memory cost: ~4 MB per million blocks (one uint32 per block), negligible for any
+	// foreseeable chain length.
+	//
+	// mtpMu guards concurrent access to mtpStore.
+	//   - EnsureMTPLoaded acquires the write lock for the duration of the fetch + append +
+	//     in-place overlap patch. Concurrent EnsureMTPLoaded callers serialise; the second
+	//     one fast-paths out after acquiring the lock if the first already populated the
+	//     range it needs.
+	//   - validateTransaction acquires the read lock around its MTP lookups. This protects
+	//     against the cross-block case where block N's per-tx goroutines are still reading
+	//     while block N+1's EnsureMTPLoaded is appending or patching overlap entries (the
+	//     append re-allocates the backing array; the in-place patch mutates indices that
+	//     readers may be addressing).
+	// Same-block contention is negligible: EnsureMTPLoaded runs once per block before per-tx
+	// goroutines start, and per-tx readers only contend with each other on the read lock.
+	mtpMu    sync.RWMutex
+	mtpStore []uint32
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -192,7 +211,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		sendBatch := func(batch []*txmetaBatchItem) {
 			v.sendTxMetaBatch(batch)
 		}
-		b := batcher.New(txmetaKafkaBatchSize, duration, sendBatch, true)
+		b := batcher.NewWithPool(txmetaKafkaBatchSize, duration, sendBatch, true,
+			batcher.WithName("validator_txmeta_kafka"),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
+		)
 		v.txmetaKafkaBatcher = b
 		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}
@@ -316,38 +340,47 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	ctxLogger := v.logger.WithTraceContext(ctx)
 	ctxLogger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
 
-	// Retry logic for TX_LOCKED errors with exponential backoff
-	// TX_LOCKED occurs when multiple transactions try to spend the same UTXO concurrently
-	// This should resolve quickly once the first transaction completes, so we use short backoff times
-	const maxRetries = 3
+	// Configurable retry for TX_LOCKED errors with exponential backoff.
+	// TX_LOCKED occurs when a parent and child tx arrive nearly simultaneously and the
+	// parent hasn't finished its 2-phase commit (unlock). This is a short-lived race
+	// condition that resolves once the parent's lock clears. Set maxRetries to 0 to
+	// disable and return TX_LOCKED immediately to the caller.
+	maxRetries := v.settings.Validator.TxLockedMaxRetries
+	if maxRetries < 0 {
+		ctxLogger.Errorf("[ValidateWithOptions] invalid TxLockedMaxRetries (%d); clamping to 0", maxRetries)
+		maxRetries = 0
+	}
+	const maxSafeRetries = 10 // cap to prevent excessive backoff (2^10 * 10ms ≈ 10s max single sleep)
+	if maxRetries > maxSafeRetries {
+		ctxLogger.Warnf("[ValidateWithOptions] TxLockedMaxRetries (%d) exceeds safe limit; clamping to %d", maxRetries, maxSafeRetries)
+		maxRetries = maxSafeRetries
+	}
 	const baseBackoff = 10 * time.Millisecond
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	// Loop runs maxRetries+1 times: 1 initial attempt + maxRetries retries.
+	// e.g. maxRetries=3 → attempts 0,1,2,3 → 1 initial + 3 retries with 10/20/40ms backoff.
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
 
-		// If no error or not a TX_LOCKED error, return immediately (don't retry)
+		// If no error or not a TX_LOCKED error, break immediately (don't retry)
 		if err == nil || !errors.Is(err, errors.ErrTxLocked) {
 			break
 		}
 
-		// TX_LOCKED error - retry with exponential backoff if not last attempt
-		if attempt < maxRetries-1 {
-			// Exponential backoff: 10ms, 20ms, 40ms
-			backoff := time.Duration(1<<attempt) * baseBackoff
-			if attempt < 2 {
-				ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
-			} else {
-				ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
-			}
+		// TX_LOCKED error on the last attempt — give up
+		if attempt >= maxRetries {
+			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d retries, giving up: %v", tx.TxID(), attempt, err)
+			break
+		}
 
-			select {
-			case <-ctx.Done():
-				return txMetaData, ctx.Err()
-			case <-time.After(backoff):
-				// Continue to next attempt
-			}
-		} else {
-			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+		// Exponential backoff: 10ms, 20ms, 40ms, ...
+		backoff := time.Duration(1<<uint(attempt)) * baseBackoff
+		ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (retry %d/%d): %v", tx.TxID(), backoff, attempt+1, maxRetries, err)
+
+		select {
+		case <-ctx.Done():
+			return txMetaData, ctx.Err()
+		case <-time.After(backoff):
 		}
 	}
 
@@ -522,18 +555,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
+	// Run Teranode-owned checks and BDK transaction validation.
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
-	}
-
-	// validate the transaction scripts and signatures
-	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 		span.RecordError(err)
 
 		return nil, err
@@ -593,14 +617,31 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					if errors.Is(utxoMapErr, errors.ErrTxExists) {
 						txMetaData = &meta.Data{}
 						if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
-							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, err)
 							span.RecordError(err)
 
 							return nil, err
 						}
+
+						// Tx already exists — ensure it and all its spending descendants are marked conflicting.
+						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
+						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
+						if !txMetaData.Conflicting {
+							if _, _, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()}); setErr != nil {
+								err = errors.NewProcessingError("[Validate][%s] failed to mark existing tx as conflicting", txID, setErr)
+								span.RecordError(err)
+
+								return nil, err
+							}
+						}
+
+						err = errors.NewTxConflictingError("[Validate][%s] tx is conflicting (already exists)", txID, err)
+						span.RecordError(err)
+
+						return txMetaData, err
 					}
 
-					err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+					err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed: %v", txID, utxoMapErr)
 					span.RecordError(err)
 
 					return txMetaData, err
@@ -614,14 +655,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return txMetaData, err
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
-			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
-			// the utxo store. We can check whether the tx already exists, which means it has been validated and
-			// blessed. In this case we can just return early.
+			// The parent transaction was not found. This can legitimately happen when the parent has been DAH-evicted
+			// long after the child was mined. Only short-circuit if the stored metadata confirms prior full validation:
+			//   - tx has been included in at least one block (BlockIDs non-empty), AND
+			//   - tx is NOT marked conflicting, AND
+			//   - tx is NOT locked
+			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
+			// (a re-org or DAH window could expose a stale or mid-flight record).
 			txMetaData = &meta.Data{}
-			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err == nil {
-				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
+			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
+				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
+					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
-				return txMetaData, nil
+					return txMetaData, nil
+				}
 			}
 		}
 
@@ -692,15 +739,22 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// send the txMetaData over to the subtree validation kafka topic
-	if v.txmetaKafkaProducerClient != nil {
-		if err = v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); err != nil {
-			return nil, err
+	// Serialize and enqueue txmeta for the subtree validation kafka topic.
+	// If this fails (e.g. serialization error), log but continue to the two-phase commit
+	// so the tx doesn't remain locked. A missing txmeta message is recoverable; a stuck
+	// lock is not. We intentionally do NOT return this error to the caller: the tx has
+	// been validated, spent, and created in the UTXO store — returning an error would
+	// cause callers to treat an accepted tx as failed and trigger duplicate retries.
+	if v.txmetaKafkaProducerClient != nil && !validationOptions.SkipTxMetaPublishing {
+		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
+			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
 	}
 
 	if txMetaData.Locked {
 		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
+			v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, err)
+
 			return txMetaData, err
 		}
 
@@ -913,17 +967,23 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			isDelete:  false,
 		})
 	} else {
-		// Fallback: send single item as batch format for consistency
-		value := serializeTxMetaBatch([]*txmetaBatchItem{{
+		// Fallback: send single item as batch format for consistency.
+		item := &txmetaBatchItem{
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-		}})
-
-		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Key:   nil,
-			Value: value,
-		})
+		}
+		if v.settings.Validator.TxMetaWireFormat == "v2" {
+			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
+		} else {
+			value := serializeTxMetaBatch([]*txmetaBatchItem{item})
+			// Hash key spreads single-item fallback messages evenly across partitions
+			// instead of bunching on franz-go's StickyKeyPartitioner default for nil keys.
+			v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+				Key:   txHash[:],
+				Value: value,
+			})
+		}
 	}
 
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
@@ -932,15 +992,31 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 }
 
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
+//
+// The Kafka message key is set to the first item's tx hash. With franz-go's default
+// StickyKeyPartitioner this hashes onto a single partition deterministically, which:
+//  1. Distributes traffic evenly across the topic's partitions (tx hashes are uniform).
+//  2. Keeps every record from one batch on the same partition (preserves any
+//     intra-batch ordering the consumer might rely on).
+//
+// Previously Key was nil, which makes StickyKeyPartitioner equivalent to a
+// StickyPartitioner — bunching consecutive batches onto the same partition until
+// linger expires. That created bursty partition usage and the observed Kafka-read
+// throughput oscillation on the consumer side.
 func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 	if len(batch) == 0 {
+		return
+	}
+
+	if v.settings.Validator.TxMetaWireFormat == "v2" {
+		v.sendTxMetaBatchV2(batch)
 		return
 	}
 
 	value := serializeTxMetaBatch(batch)
 
 	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   nil,
+		Key:   batch[0].hash[:],
 		Value: value,
 	})
 }
@@ -999,6 +1075,156 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	}
 
 	return buf
+}
+
+// txmetaItemWithHash bundles a batch item with its pre-computed xxhash so
+// per-partition grouping and serialization don't re-hash.
+type txmetaItemWithHash struct {
+	item *txmetaBatchItem
+	h    uint64
+}
+
+// serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
+// items that have already been grouped into a single Kafka partition.
+//
+// Layout (see services/subtreevalidation/txmetaHandler.go for the symmetric
+// parser):
+//
+//	[1 byte]    magic = 0xFF
+//	[1 byte]    version = 0x02
+//	[2 bytes]   reserved (zero)
+//	[4 bytes]   entry count (uint32 LE)
+//	per entry:
+//	  [8 bytes]  xxhash(tx hash) (uint64 LE)
+//	  [32 bytes] tx hash
+//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [4 bytes]  content length (uint32 LE)
+//	  [N bytes]  content (only for ADD)
+//
+// Putting the pre-computed xxhash on the wire lets the receiver skip its own
+// xxhash on every entry — a small per-entry saving that compounds at the
+// production rates this is designed for.
+func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
+	size := 8 // header: magic + version + 2 reserved + count
+	for _, it := range items {
+		size += 8 + 32 + 1 + 4
+		if !it.item.isDelete {
+			size += len(it.item.metaBytes)
+		}
+	}
+
+	buf := make([]byte, size)
+	buf[0] = txmetaWireV2Magic
+	buf[1] = txmetaWireV2Version
+	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
+	off := 8
+
+	for _, it := range items {
+		binary.LittleEndian.PutUint64(buf[off:], it.h)
+		off += 8
+		copy(buf[off:], it.item.hash[:])
+		off += 32
+		if it.item.isDelete {
+			buf[off] = txmetaActionDELETE
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], 0)
+			off += 4
+		} else {
+			buf[off] = txmetaActionADD
+			off++
+			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
+			off += 4
+			copy(buf[off:], it.item.metaBytes)
+			off += len(it.item.metaBytes)
+		}
+	}
+
+	return buf
+}
+
+// sendTxMetaBatchV2 splits the batch into per-partition sub-batches keyed by
+// xxhash(tx hash) and emits one Kafka record per non-empty partition with the
+// partition number set explicitly on the record (requires the txmeta producer
+// to have been built with kafka.KafkaProducerConfig.ManualPartitioning=true).
+//
+// Routing rule:
+//
+//	bucketIdx           = xxhash(hash) % BucketsCount
+//	bucketsPerPartition = BucketsCount / NumPartitions
+//	partition           = bucketIdx / bucketsPerPartition
+//
+// Each partition therefore owns a contiguous, disjoint range of receiver
+// cache buckets. The subtreevalidation handler can write its partition's
+// records to the cache without taking locks contended by any other
+// partition's records (modulo the cache's own bucket-lock granularity).
+// txmetaPartitionsScratch is the per-call scratch held in
+// txmetaPartitionsScratchPool. partitions[p] is the per-partition group of
+// items being assembled before serialization. The outer slice header and the
+// per-partition inner slices' backing arrays are both reused across calls;
+// only newly-required capacity (e.g. when a hot partition gets a bigger
+// group than any prior call) triggers a fresh allocation. The byte buffer
+// produced by serializeTxMetaBatchV2 is NOT pooled — it is handed to
+// franz-go via Publish and we have no callback hook for safe return.
+type txmetaPartitionsScratch struct {
+	partitions [][]txmetaItemWithHash
+}
+
+var txmetaPartitionsScratchPool = sync.Pool{
+	New: func() any { return &txmetaPartitionsScratch{} },
+}
+
+func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
+	if len(batch) == 0 {
+		return
+	}
+
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+	if bucketsPerPartition < 1 {
+		bucketsPerPartition = 1
+	}
+
+	scratch := txmetaPartitionsScratchPool.Get().(*txmetaPartitionsScratch)
+	// Ensure outer slice has the right shape, growing only if needed.
+	if cap(scratch.partitions) < numPartitions {
+		scratch.partitions = make([][]txmetaItemWithHash, numPartitions)
+	} else {
+		scratch.partitions = scratch.partitions[:numPartitions]
+	}
+	// Reset every per-partition slice's length to 0 but retain capacity for
+	// reuse on the next pool hit. We do NOT nil the elements: they're past
+	// len, GC can still collect the txmetaBatchItem pointers when no live
+	// slice header references them, and they get overwritten the next time
+	// this partition is hit.
+	for i := range scratch.partitions {
+		scratch.partitions[i] = scratch.partitions[i][:0]
+	}
+	defer txmetaPartitionsScratchPool.Put(scratch)
+
+	for _, item := range batch {
+		h := xxhash.Sum64(item.hash[:])
+		bucket := int(h % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p >= numPartitions {
+			// Defensive cap; only fires if BucketsCount is not an exact
+			// multiple of NumPartitions, which is documented as a constraint.
+			p = numPartitions - 1
+		}
+		scratch.partitions[p] = append(scratch.partitions[p], txmetaItemWithHash{item: item, h: h})
+	}
+
+	for p, items := range scratch.partitions {
+		if len(items) == 0 {
+			continue
+		}
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
+			Value:     serializeTxMetaBatchV2(items),
+		})
+	}
 }
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
@@ -1105,13 +1331,106 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-// validateTransaction performs transaction-level validation checks in two phases:
-//  1. Full transaction validation (structure, scripts, fees) via txValidator.ValidateTransaction.
-//  2. BIP68 sequence-lock validation (block context only) via txValidator.ValidateBIP68.
+// mtpReorgOverlap is the number of already-stored MTP values that EnsureMTPLoaded
+// re-fetches on every extension call to detect and repair reorg-invalidated entries.
+//
+// A block reorg at depth D invalidates MTP values for the following 11 heights
+// (one full MTP window). Overlapping by D+11 therefore catches any reorg of depth D.
+// BSV reorgs are extremely shallow in practice (depth ≤ 1–2), so 12 is a safe,
+// cheap constant that covers the realistic worst case.
+const mtpReorgOverlap = 12
+
+// EnsureMTPLoaded pre-warms the in-memory MTP store up to (blockHeight - 1).
+// This must be called once per block, before concurrent per-transaction goroutines start,
+// so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
+//
+// If BIP68 is not yet active (blockHeight < CSVHeight) or no blockchain client is
+// configured, this is a no-op.
+//
+// When the store already covers the needed range this is a fast O(1) no-op.
+// When new heights extend beyond the loaded range, the fetch includes a backward
+// overlap of mtpReorgOverlap heights. Any already-stored values that differ from
+// the freshly fetched ones (reorg-invalidated) are corrected in-place before the
+// new tail is appended.
+func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
+	csvHeight := uint32(v.settings.ChainCfgParams.CSVHeight)
+	if v.blockchainClient == nil || blockHeight == 0 || blockHeight < csvHeight {
+		return nil
+	}
+
+	// The highest MTP index we guarantee is blockHeight:
+	//   - blockMTPHeight = blockHeight: GetMedianTimePastRange computes stored_mtp(N)
+	//     on the fly for the not-yet-persisted block N from block_time values [N-11, N-1].
+	//   - utxoHeights *may* exceed blockHeight when the chain tip advances during
+	//     validation (unconfirmed parents get blockState.Height+1); validateTransaction
+	//     clamps those lookups to blockMTPHeight.
+	needed := blockHeight
+
+	v.mtpMu.Lock()
+	defer v.mtpMu.Unlock()
+
+	// Fast path: store already covers the needed height.  A concurrent EnsureMTPLoaded
+	// that won the lock may have already populated the store; re-checking here avoids a
+	// redundant gRPC fetch.
+	currentLen := uint32(len(v.mtpStore))
+	if currentLen > needed {
+		return nil
+	}
+
+	// Compute the fetch start, extending back by mtpReorgOverlap so we re-check
+	// recently stored values. This repairs any MTP entries that were invalidated by
+	// a chain reorg: a reorg at depth D corrupts stored MTP values for the next 11
+	// heights, so overlapping by 12 catches reorgs of depth ≤ 1 (the realistic case).
+	var fromHeight uint32
+	if currentLen > mtpReorgOverlap {
+		fromHeight = currentLen - mtpReorgOverlap
+	}
+
+	isInitialLoad := currentLen == 0
+	start := time.Now()
+
+	fetched, err := v.blockchainClient.GetMedianTimePastRange(ctx, fromHeight, needed)
+	if err != nil {
+		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to fetch MTPs from height %d to %d", fromHeight, needed, err)
+	}
+
+	expected := needed - fromHeight + 1
+	if uint32(len(fetched)) != expected {
+		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] MTP count mismatch: expected %d, got %d", expected, len(fetched))
+	}
+
+	// Patch any overlap values that changed (reorg-invalidated entries).
+	for i := fromHeight; i < currentLen; i++ {
+		if v.mtpStore[i] != fetched[i-fromHeight] {
+			v.mtpStore[i] = fetched[i-fromHeight]
+		}
+	}
+
+	// Append the new tail beyond the previously loaded range.
+	v.mtpStore = append(v.mtpStore, fetched[currentLen-fromHeight:]...)
+
+	if isInitialLoad {
+		v.logger.Infof("[Validator][EnsureMTPLoaded] initial MTP store loaded: %d entries (heights 0..%d) in %s", len(v.mtpStore), needed, time.Since(start))
+	} else {
+		v.logger.Debugf("[Validator][EnsureMTPLoaded] extended MTP store to height %d (+%d entries) in %s", needed, needed-currentLen+1, time.Since(start))
+	}
+
+	return nil
+}
+
+// validateTransaction performs Teranode-owned transaction checks, BDK
+// transaction validation, and BIP68 sequence-lock validation.
+//
+// Phase 1 keeps checks that need local node context, including fee policy and
+// cache-size limits, and runs BDK transaction validation.
+//
+// Phase 2 is BIP68 sequence-lock validation (block context only) via
+// txValidator.ValidateBIP68.
 //
 // Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
 // This avoids the cost of MTP lookups when a transaction fails normal validation.
-// MTP values are cached in v.mtpCache to avoid repeated gRPC calls for the same heights.
+// MTP values are read from v.mtpStore, pre-loaded by EnsureMTPLoaded before concurrent
+// goroutines start, so no gRPC calls or locking are needed here.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -1129,23 +1448,24 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// Phase 1: run the internal tx validation, checking policies, scripts, signatures etc.
+	// Phase 1: run Teranode-owned checks and BDK transaction validation.
 	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		span.RecordError(err)
 		return err
 	}
 
-	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true).
+	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true)
+	// and only when BIP68 is active (blockHeight >= CSVHeight).
 	// Performed after phase 1 so that MTP lookups are skipped for invalid transactions.
-	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil {
+	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
 		return nil
 	}
 
-	// Build the list of distinct heights we need MTPs for, resolving cache hits first.
+	// Build utxoMTPs and blockMTP from the pre-loaded mtpStore (populated by EnsureMTPLoaded).
 	//
 	// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
-	// BSV's GetMedianTimePast() at block H = median of [H-10, H] (includes H itself),
-	// so BSV MTP(H) == Teranode stored_mtp(H+1).
+	// BSV's GetMedianTimePast() at block H = median of [H-11, H-1] (per BIP113, block H
+	// itself is never included), so BSV MTP(H) == Teranode stored_mtp(H).
 	//
 	// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
 	//   = median of [nCoinHeight-11, nCoinHeight-1]
@@ -1153,86 +1473,52 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	//
 	// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
 	//   = median of [blockHeight-11, blockHeight-1]
-	//   = Teranode stored_mtp(blockHeight). However, block N's MTP is only stored
-	//   AFTER block N is persisted, so during validation stored_mtp(blockHeight) is
-	//   unavailable (returns 0). We use stored_mtp(blockHeight-1) instead, which
-	//   covers [blockHeight-12, blockHeight-2] — a 1-block-shifted approximation.
+	//   = Teranode stored_mtp(blockHeight). Block N is not yet persisted during
+	//   validation, so stored_mtp(N) is not in the DB; GetMedianTimePastRange
+	//   computes it on the fly from the block_time values of [N-11, N-1] which
+	//   ARE in the DB, and EnsureMTPLoaded stores the result at mtpStore[blockHeight].
 	blockMTPHeight := blockHeight
-	if blockHeight > 0 {
-		blockMTPHeight = blockHeight - 1
-	}
 
-	// Gather all required heights (utxo heights + block MTP height).
-	allHeights := make([]uint32, 0, len(utxoHeights)+1)
-	allHeights = append(allHeights, utxoHeights...)
-	allHeights = append(allHeights, blockMTPHeight)
-
-	// Resolve from cache; collect uncached heights for batch fetch.
-	resolved := make(map[uint32]uint32, len(allHeights))
-	uncached := make([]uint32, 0, len(allHeights))
-	for _, h := range allHeights {
-		if val, ok := v.mtpCache.Load(h); ok {
-			resolved[h] = val.(uint32)
-		} else {
-			uncached = append(uncached, h)
-		}
+	// Hold the read lock only for the MTP lookups themselves, not for the subsequent
+	// ValidateBIP68 call which works on the copied utxoMTPs / blockMTP values. This
+	// serialises against EnsureMTPLoaded writers (append + in-place overlap patch) for
+	// the cross-block case (block N+1 extending mtpStore while block N's per-tx
+	// goroutines read it) without holding the lock through ECDSA / sequence-lock
+	// arithmetic. RLock is uncontended in the steady-state path where EnsureMTPLoaded
+	// has already populated the range.
+	utxoMTPs, blockMTP, err := v.readMTPsLocked(blockMTPHeight, utxoHeights)
+	if err != nil {
+		span.RecordError(err)
+		return err
 	}
-
-	// Deduplicate uncached heights before the gRPC call.
-	seen := make(map[uint32]struct{}, len(uncached))
-	deduped := uncached[:0]
-	for _, h := range uncached {
-		if _, exists := seen[h]; !exists {
-			seen[h] = struct{}{}
-			deduped = append(deduped, h)
-		}
-	}
-
-	if len(deduped) > 0 {
-		fetched, err := v.blockchainClient.GetMedianTimePastForHeights(ctx, deduped)
-		if err != nil {
-			span.RecordError(err)
-			return errors.NewProcessingError("[Validator][validateTransaction] failed to fetch MTPs for BIP68 validation", err)
-		}
-		if len(fetched) != len(deduped) {
-			return errors.NewProcessingError("[Validator][validateTransaction] MTP count mismatch: expected %d, got %d", len(deduped), len(fetched))
-		}
-		for i, h := range deduped {
-			v.mtpCache.Store(h, fetched[i])
-			resolved[h] = fetched[i]
-		}
-	}
-
-	// Build utxoMTPs and blockMTP from the resolved map.
-	utxoMTPs := make([]uint32, len(utxoHeights))
-	for i, h := range utxoHeights {
-		utxoMTPs[i] = resolved[h]
-	}
-	blockMTP := resolved[blockMTPHeight]
 
 	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 }
 
-// validateTransactionScripts performs script validation for a transaction
-// Returns error if validation fails
-func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32,
-	validationOptions *Options) error {
-	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransactionScripts",
-		tracing.WithHistogram(prometheusTransactionValidateScripts),
-	)
-	defer deferFn()
+// readMTPsLocked returns the per-input MTP values and the block MTP for use by
+// validateTransaction. It takes the mtpStore read lock for the duration of the
+// reads only and releases it before returning. The caller is free to use the
+// returned slice / value without further synchronisation.
+func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) ([]uint32, uint32, error) {
+	v.mtpMu.RLock()
+	defer v.mtpMu.RUnlock()
 
-	// 0) Check whether we have a complete transaction in extended format, with all input information
-	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !tx.IsExtended() {
-		err := v.extendTransaction(ctx, tx)
-		if err != nil {
-			// error is already wrapped in our errors package
-			span.RecordError(err)
-			return err
+	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
+	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.
+	if uint32(len(v.mtpStore)) <= blockMTPHeight {
+		return nil, 0, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockMTPHeight, len(v.mtpStore))
+	}
+
+	storeLen := uint32(len(v.mtpStore))
+	utxoMTPs := make([]uint32, len(utxoHeights))
+
+	for i, h := range utxoHeights {
+		if h >= storeLen {
+			utxoMTPs[i] = v.mtpStore[blockMTPHeight]
+		} else {
+			utxoMTPs[i] = v.mtpStore[h]
 		}
 	}
 
-	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
+	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
 }
