@@ -161,9 +161,14 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
+	if spend.SpendingData == nil {
+		return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
+	}
+
 	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
-		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
-		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
+		aerospike.NewIntegerValue(int(offset)),         // vout adjusted for utxoBatchSize
+		aerospike.NewValue(spend.UTXOHash[:]),          // utxo hash
+		aerospike.NewValue(spend.SpendingData.Bytes()), // expected stored spending data (mandatory ownership check)
 		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
 		aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 	)
@@ -194,6 +199,11 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
+
+		if res.ErrorCode == LuaErrorCodeTxNotFound {
+			return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+		}
+
 		return errors.NewStorageError("error in aerospike unspend record: %s", res.Message)
 	}
 

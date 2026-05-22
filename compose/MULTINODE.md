@@ -69,6 +69,16 @@ The blaster binary is located via `$BLASTER_BIN` (if set), otherwise `../teranod
 
 Blaster snapshot + embedded coinbase state goes to `data/multinode-blaster/` (outside the docker-managed `data/multinode/` tree so it stays user-owned). `multinode.sh down` wipes this alongside the chain state so a fresh stack doesn't inherit stale UTXOs.
 
+## Network chaos tests
+
+Go scenarios at `test/multinode/` drive this script through split-brain, crash-recovery, and slow-peer cases and assert invariants (tip convergence, reorg resolution, catchup). Run them with:
+
+```bash
+make network-chaos-test
+```
+
+The suite is gated behind the `network_chaos` build tag so it does not run under `go test ./...` or `make smoketest`. Scenarios refuse to start if another multinode stack is already running (set `MULTINODE_ALLOW_TAKEOVER=1` to override, or `MULTINODE_BYOS=1` to skip `up`/`down` entirely and reuse a running stack). Prereqs and per-scenario details are documented in `test/multinode/README.md`.
+
 ### Chaos commands
 
 | Command | Description |

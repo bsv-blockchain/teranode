@@ -218,6 +218,19 @@ func newTx(lockTime uint32) *bt.Tx {
 	return tx
 }
 
+// realMinedReturn returns a func that synthesizes a realistic blockIDsMap for use
+// with testify mock.Call.Return. Each submitted hash maps to [blockID] so the
+// SetMinedMulti coverage postcondition in UpdateTxMinedStatus is satisfied.
+func realMinedReturn(blockID uint32) func(context.Context, []*chainhash.Hash, utxo.MinedBlockInfo) map[chainhash.Hash][]uint32 {
+	return func(_ context.Context, hashes []*chainhash.Hash, _ utxo.MinedBlockInfo) map[chainhash.Hash][]uint32 {
+		m := make(map[chainhash.Hash][]uint32, len(hashes))
+		for _, h := range hashes {
+			m[*h] = []uint32{blockID}
+		}
+		return m
+	}
+}
+
 // TestUpdateTxMinedStatus_BlockIDCollisionDetection tests the critical new feature
 // where transactions are checked against current chain block IDs
 func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
@@ -253,10 +266,11 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	}
 
 	t.Run("should return BlockInvalidError when transaction already on chain", func(t *testing.T) {
-		// Mock SetMinedMulti to return block IDs indicating tx is already mined on current chain
+		// Mock SetMinedMulti to return block IDs indicating tx is already mined on current chain.
+		// The current blockID (15) is also present per the SetMinedMulti postcondition.
 		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx1.TxIDChainHash(): {5},  // Already mined in block 5 (current chain)
-			*testTx2.TxIDChainHash(): {10}, // Already mined in block 10 (current chain)
+			*testTx1.TxIDChainHash(): {5, 15},  // Historically in block 5, now also 15.
+			*testTx2.TxIDChainHash(): {10, 15}, // Historically in block 10, now also 15.
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -277,10 +291,11 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	t.Run("should succeed when transaction mined in different chain", func(t *testing.T) {
 		mockStore = &utxo.MockUtxostore{} // Reset mock
 
-		// Mock SetMinedMulti to return block IDs from different chain
+		// Mock SetMinedMulti to return block IDs from a different chain plus the current
+		// blockID (15) per the postcondition.
 		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx1.TxIDChainHash(): {99},  // Mined in block 99 (different chain)
-			*testTx2.TxIDChainHash(): {100}, // Mined in block 100 (different chain)
+			*testTx1.TxIDChainHash(): {99, 15},
+			*testTx2.TxIDChainHash(): {100, 15},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -300,9 +315,11 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	t.Run("should succeed when same block ID as current being mined", func(t *testing.T) {
 		mockStore = &utxo.MockUtxostore{} // Reset mock
 
-		// Mock SetMinedMulti to return the same block ID we're currently mining
+		// Mock SetMinedMulti to return the same block ID we're currently mining,
+		// for every submitted tx (postcondition requires coverage of all hashes).
 		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx1.TxIDChainHash(): {15}, // Same as blockID we're mining
+			*testTx1.TxIDChainHash(): {15},
+			*testTx2.TxIDChainHash(): {15},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -322,7 +339,8 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		mockStore = &utxo.MockUtxostore{} // Reset mock
 
 		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx1.TxIDChainHash(): {99},
+			*testTx1.TxIDChainHash(): {99, 15},
+			*testTx2.TxIDChainHash(): {15},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -341,10 +359,12 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	t.Run("should detect transaction mined outside retention window", func(t *testing.T) {
 		mockStore = &utxo.MockUtxostore{} // Reset mock
 
-		// Simulate a transaction that was mined in block 1000 (very old)
-		// but the chainBlockIDs includes all ancestors, not just retention*2
+		// Simulate a transaction that was mined in block 1000 (very old).
+		// The current blockID (1600) is also present per the SetMinedMulti
+		// postcondition; testTx2 is in the same subtree so must be covered too.
 		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx1.TxIDChainHash(): {1000}, // Mined in very old block 1000
+			*testTx1.TxIDChainHash(): {1000, 1600},
+			*testTx2.TxIDChainHash(): {1600},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -443,7 +463,6 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		inFlightBlocksMu.Unlock()
 
 		mockStore := &utxo.MockUtxostore{}
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
 
 		// Setup a controlled delay for SetMinedMulti to ensure we can test concurrent calls
 		processingStarted := make(chan struct{})
@@ -452,7 +471,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 				close(processingStarted)
 				time.Sleep(50 * time.Millisecond) // Delay to ensure the second call happens during processing
 			}).
-			Return(expectedBlockIDsMap, nil).Once()
+			Return(realMinedReturn(15), nil).Once()
 
 		// Start the first call in a goroutine
 		done1 := make(chan error)
@@ -486,12 +505,11 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 
 		mockStore1 := &utxo.MockUtxostore{}
 		mockStore2 := &utxo.MockUtxostore{}
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
 
 		mockStore1.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
-			Return(expectedBlockIDsMap, nil).Once()
+			Return(realMinedReturn(15), nil).Once()
 		mockStore2.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
-			Return(expectedBlockIDsMap, nil).Once()
+			Return(realMinedReturn(16), nil).Once()
 
 		// Call with different block IDs
 		done1 := make(chan error)
@@ -591,9 +609,8 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	// - idx=1: added to batch, condition met (1 > 0 && 1%1==0), calls SetMinedMulti with 2 hashes, clears batch
 	// - idx=2: added to batch, condition met (2 > 0 && 2%1==0), calls SetMinedMulti with 1 hash, clears batch
 	// - end: no remaining hashes, so no remainder call
-	expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
 	freshMockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
-		Return(expectedBlockIDsMap, nil).Times(2) // 2 calls: first with 2 hashes, second with 1 hash
+		Return(realMinedReturn(15), nil).Times(2) // 2 calls: first with 2 hashes, second with 1 hash
 
 	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, multiTxBlock, 15, []uint32{}, true, nil)
 
@@ -726,11 +743,9 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	}
 
 	t.Run("should process multiple subtrees concurrently", func(t *testing.T) {
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
-
 		// Should be called 3 times (once per subtree)
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
-			Return(expectedBlockIDsMap, nil).Times(3)
+			Return(realMinedReturn(15), nil).Times(3)
 
 		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
@@ -800,8 +815,6 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 			},
 		}
 
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
-
 		// With batch size 2 and 5 transactions:
 		// idx=0,1: accumulate → hashes=[0,1]
 		// idx=2: accumulate then trigger (2%2==0) → SetMinedMulti with 3 hashes [0,1,2], reset
@@ -814,7 +827,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 				// First call should have 3 hashes, second call should have 2 hashes
 				assert.True(t, len(hashes) == 3 || len(hashes) == 2, "Batch size should be 3 or 2")
 			}).
-			Return(expectedBlockIDsMap, nil).Times(2)
+			Return(realMinedReturn(15), nil).Times(2)
 
 		chainBlockIDsMap := map[uint32]bool{}
 
@@ -839,9 +852,10 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 			},
 		}
 
-		// Mock SetMinedMulti to return conflicting block ID
+		// Mock SetMinedMulti to return conflicting block IDs plus the current
+		// blockID 15 (required by the coverage postcondition).
 		conflictingBlockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx.TxIDChainHash(): {5, 10}, // Conflicting block IDs
+			*testTx.TxIDChainHash(): {5, 10, 15},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -907,11 +921,12 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 			},
 		}
 
-		// Mixed results: tx1 conflicts, tx2 is new, tx3 is same block
+		// Mixed results: tx1 conflicts, tx2 is new, tx3 is same block.
+		// All slices include the current blockID 15 per the coverage postcondition.
 		mixedBlockIDsMap := map[chainhash.Hash][]uint32{
-			*tx1.TxIDChainHash(): {5},  // Conflicts with current chain
-			*tx2.TxIDChainHash(): {99}, // Not on current chain (OK)
-			*tx3.TxIDChainHash(): {15}, // Same block being mined (OK)
+			*tx1.TxIDChainHash(): {5, 15},  // Conflicts with current chain
+			*tx2.TxIDChainHash(): {99, 15}, // Not on current chain (OK)
+			*tx3.TxIDChainHash(): {15},     // Same block being mined (OK)
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -930,7 +945,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("should handle empty blockIDsMap from SetMinedMulti", func(t *testing.T) {
+	t.Run("should error when SetMinedMulti returns empty blockIDsMap (coverage gap)", func(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 
 		testTx := newTx(100)
@@ -945,7 +960,8 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 			},
 		}
 
-		// Empty blockIDsMap (no existing blocks found)
+		// Empty blockIDsMap — every submitted hash is unaccounted for, which the
+		// SetMinedMulti coverage postcondition now treats as a hard error.
 		emptyBlockIDsMap := map[chainhash.Hash][]uint32{}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -955,9 +971,215 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
-		// Should succeed because no existing block IDs to conflict with
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status")
 
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should error when SetMinedMulti omits the current blockID for a hash", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(101)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// The hash is present but its slice does not contain blockID 15.
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {7, 9}, // current blockID 15 missing
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should error when SetMinedMulti partially omits hashes (expression path empty BlockIDs)", func(t *testing.T) {
+		// Simulates the Aerospike expression path returning an empty state.BlockIDs
+		// for one record: that hash gets dropped from blockIDsMap entirely while
+		// other hashes in the same batch are returned correctly. The model-layer
+		// coverage check must flag the missing hash as a postcondition violation.
+		mockStore := &utxo.MockUtxostore{}
+
+		tx1 := newTx(201)
+		tx2 := newTx(202) // expression path returns empty BlockIDs → omitted from map
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *tx1.TxIDChainHash()},
+					{Hash: *tx2.TxIDChainHash()},
+				},
+			},
+		}
+
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*tx1.TxIDChainHash(): {15},
+			// tx2 absent — simulates state.BlockIDs == 0 in the expression path
+			// where `if len(state.BlockIDs) > 0 { blockIDs[*hash] = ... }` skips
+			// the assignment.
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should tolerate empty blockIDsMap when unsetMined is true", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(102)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// Empty map is intentional during unset-mined (e.g. tx already gone).
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{}, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, true)
+
+		require.NoError(t, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("coverage-only failure reports a coverage-specific error", func(t *testing.T) {
+		// Pure coverage-gap scenario: SetMinedMulti returns nil error but omits the
+		// current blockID for one hash. The final error must identify this as a
+		// coverage gap, not as a batch I/O failure.
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(301)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{{Hash: *testTx.TxIDChainHash()}},
+			},
+		}
+
+		// Hash present, but slice does not contain current blockID 15.
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {7},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "coverage gap(s) from SetMinedMulti")
+		assert.NotContains(t, err.Error(), "batches", "pure coverage-gap error must not mention batches")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("I/O-only failure reports a batch-specific error", func(t *testing.T) {
+		// Pure I/O scenario: SetMinedMulti returns an error. The model layer logs
+		// and counts it, then surfaces a batches-failed error.
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(302)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{{Hash: *testTx.TxIDChainHash()}},
+			},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32(nil), errors.NewNetworkTimeoutError("simulated timeout")).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status for")
+		assert.Contains(t, err.Error(), "1 batches")
+		assert.NotContains(t, err.Error(), "coverage gap", "pure I/O error must not mention coverage gaps")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("mixed I/O and coverage failures report a combined error", func(t *testing.T) {
+		// Two SetMinedMulti calls: one returns success with a coverage gap, the
+		// other returns an I/O error. The final error must mention both counts
+		// so operators can tell them apart.
+		//
+		// With MaxMinedBatchSize=1 and 3 nodes the batching code flushes at
+		// idx==1 (2 hashes) and again at idx==2 (1 hash). See the comment in
+		// updateTxMinedStatus describing the idx > 0 && idx%MaxMinedBatchSize==0
+		// trigger.
+		freshSettings := test.CreateBaseTestSettings(t)
+		freshSettings.UtxoStore = settings.UtxoStoreSettings{
+			UpdateTxMinedStatus: true,
+			MaxMinedBatchSize:   1,
+			MaxMinedRoutines:    1,
+		}
+		setWorkerSettings(freshSettings)
+
+		mockStore := &utxo.MockUtxostore{}
+
+		tx1 := newTx(401)
+		tx2 := newTx(402)
+		tx3 := newTx(403)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *tx1.TxIDChainHash()},
+					{Hash: *tx2.TxIDChainHash()},
+					{Hash: *tx3.TxIDChainHash()},
+				},
+			},
+		}
+
+		// First batch ([tx1, tx2]): success but tx1's slice omits blockID 15 -> 1 coverage gap.
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{
+				*tx1.TxIDChainHash(): {7},  // coverage gap: 15 missing
+				*tx2.TxIDChainHash(): {15}, // covered
+			}, nil).Once()
+		// Second batch ([tx3]): I/O failure -> 1 batch error.
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32(nil), errors.NewNetworkTimeoutError("simulated timeout")).Once()
+
+		err := updateTxMinedStatus(ctx, logger, freshSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to set mined status for 1 batches and 1 coverage gap(s) detected")
 		mockStore.AssertExpectations(t)
 	})
 }
@@ -1046,15 +1268,13 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{largeBatchHash}
 		block.SubtreeSlices = []*subtree.Subtree{{Nodes: nodes}}
 
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
-
 		// Should be called once with all 500 transactions
 		mockStore.On("SetMinedMulti", mock.Anything, mock.AnythingOfType("[]*chainhash.Hash"), mock.Anything).
 			Run(func(args mock.Arguments) {
 				hashes := args.Get(1).([]*chainhash.Hash)
 				assert.Len(t, hashes, 500, "Should process all 500 transactions in one batch")
 			}).
-			Return(expectedBlockIDsMap, nil).Once()
+			Return(realMinedReturn(15), nil).Once()
 
 		chainBlockIDsMap := map[uint32]bool{}
 
@@ -1089,15 +1309,13 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 			},
 		}
 
-		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
-
 		// Should be called exactly once with all 3 transactions
 		mockStore.On("SetMinedMulti", mock.Anything, mock.AnythingOfType("[]*chainhash.Hash"), mock.Anything).
 			Run(func(args mock.Arguments) {
 				hashes := args.Get(1).([]*chainhash.Hash)
 				assert.Len(t, hashes, 3, "Should process exactly 3 transactions in one batch")
 			}).
-			Return(expectedBlockIDsMap, nil).Once()
+			Return(realMinedReturn(15), nil).Once()
 
 		chainBlockIDsMap := map[uint32]bool{}
 
@@ -1264,9 +1482,10 @@ func TestUpdateTxMinedStatus_SlowPathDetection(t *testing.T) {
 			},
 		}
 
-		// SetMinedMulti returns block ID 99 (which is NOT in chainBlockIDsMap)
+		// SetMinedMulti returns block IDs 99 (historical, NOT in chainBlockIDsMap)
+		// and 25 (the current blockID being mined; required by the postcondition).
 		blockIDsMap := map[chainhash.Hash][]uint32{
-			*testTx.TxIDChainHash(): {99},
+			*testTx.TxIDChainHash(): {99, 25},
 		}
 
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).

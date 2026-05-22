@@ -1500,7 +1500,7 @@ func opcodeNum2bin(op *parsedOpcode, vm *Engine) error {
 
 	if size > MaxScriptElementSize {
 		return scriptError(ErrNumberTooBig,
-			fmt.Sprintf("n is larger than the max of %d", defaultScriptNumLen))
+			fmt.Sprintf("n is larger than the max of %d", MaxScriptElementSize))
 	}
 
 	// encode a as a script num so that we we take the bytes it

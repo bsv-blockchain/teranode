@@ -94,8 +94,14 @@ func (o *Orphanage) Delete(txHash chainhash.Hash) {
 	defer o.lock.Unlock()
 
 	o.txMap.Delete(txHash)
-	o.logger.Debugf("[Orphanage] Removed transaction %s (size: %d/%d)",
-		txHash.String(), o.txMap.Len(), o.maxSize)
+	// Guard arg evaluation: Go evaluates Debugf arguments at the call site
+	// regardless of log level, so txHash.String() (hex-encodes 32 bytes,
+	// allocates ~64 B) runs on every delete. Profiling showed this single
+	// log line accounted for >1 TB of allocations / 45 s on a 1M-tx subtree.
+	if o.logger.LogLevel() <= ulogger.LogLevelDebug {
+		o.logger.Debugf("[Orphanage] Removed transaction %s (size: %d/%d)",
+			txHash.String(), o.txMap.Len(), o.maxSize)
+	}
 }
 
 // Len returns the current number of entries in the orphanage.

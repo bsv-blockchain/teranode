@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { mediaSize, MediaSize } from '$lib/stores/media'
+  import { mediaSize, MediaSize, theme } from '$lib/stores/media'
   import TextInput from '$lib/components/textinput/index.svelte'
+  import Icon from '$lib/components/icon/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
   import { failure } from '$lib/utils/notifications'
   import { getDetailsUrl } from '$internal/utils/urls'
@@ -41,6 +42,10 @@
   let w
 
   $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
+
+  function toggleTheme() {
+    $theme = $theme === 'dark' ? 'light' : 'dark'
+  }
 </script>
 
 <svelte:window bind:innerWidth={w} />
@@ -51,6 +56,16 @@
       <BreadCrumbs />
     </div>
     <div class="right">
+      <button
+        class="theme-toggle"
+        on:click={toggleTheme}
+        type="button"
+        title={$theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label={$theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        aria-pressed={$theme === 'light'}
+      >
+        <Icon name={$theme === 'dark' ? 'icon-sun-line' : 'icon-moon-line'} size={18} />
+      </button>
       <TextInput
         name="one"
         size="medium"
@@ -90,5 +105,24 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+    align-items: center;
+  }
+
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 6px;
+    cursor: pointer;
+    color: var(--comp-label-color);
+    border-radius: 6px;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+  }
+
+  .theme-toggle:hover {
+    opacity: 1;
   }
 </style>

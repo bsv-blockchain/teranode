@@ -20,9 +20,9 @@ func createTestMiningCandidate() *model.MiningCandidate {
 		PreviousHash:  subtree.CoinbasePlaceholderHash.CloneBytes(),
 		MerkleProof:   [][]byte{subtree.CoinbasePlaceholderHash.CloneBytes()},
 		Time:          uint32(time.Now().Unix()),
-		NBits:         []byte{0x20, 0x7f, 0xff, 0xff}, // Very easy difficulty for testing
+		NBits:         []byte{0xff, 0xff, 0x7f, 0x20}, // Very easy difficulty for testing (nBits 0x207fffff, little-endian)
 		Height:        100,
-		CoinbaseValue: 5000000000, // 50 BTC in satoshis
+		CoinbaseValue: 5000000000, // 50 BSV in satoshis
 	}
 }
 
@@ -82,7 +82,7 @@ func TestMine_ContextCancellation(t *testing.T) {
 
 	candidate := createTestMiningCandidate()
 	// Set impossible difficulty to ensure mining would never succeed
-	candidate.NBits = []byte{0x1d, 0x00, 0x00, 0x01} // Nearly impossible difficulty
+	candidate.NBits = []byte{0x01, 0x00, 0x00, 0x1d} // Nearly impossible difficulty (nBits 0x1d000001, little-endian)
 	tSettings := createTestSettings()
 
 	solution, err := Mine(ctx, tSettings, candidate, nil)
@@ -101,7 +101,7 @@ func TestMine_ContextCancellationDuringMining(t *testing.T) {
 
 	candidate := createTestMiningCandidate()
 	// Use easy difficulty but cancel immediately after starting
-	candidate.NBits = []byte{0x20, 0x7f, 0xff, 0xff} // Easy difficulty
+	candidate.NBits = []byte{0xff, 0xff, 0x7f, 0x20} // Easy difficulty (nBits 0x207fffff, little-endian)
 	tSettings := createTestSettings()
 
 	// Cancel the context after a very short delay to test the context check in the loop
@@ -169,19 +169,19 @@ func TestMine_DifferentDifficultyLevels(t *testing.T) {
 	}{
 		{
 			name:       "very easy difficulty",
-			nBits:      []byte{0x20, 0x7f, 0xff, 0xff}, // Very easy
+			nBits:      []byte{0xff, 0xff, 0x7f, 0x20}, // Very easy (nBits 0x207fffff, little-endian)
 			shouldFind: true,
 			timeout:    5 * time.Second,
 		},
 		{
 			name:       "easy difficulty",
-			nBits:      []byte{0x1f, 0x7f, 0xff, 0xff}, // Easy
+			nBits:      []byte{0xff, 0xff, 0x7f, 0x1f}, // Easy (nBits 0x1f7fffff, little-endian)
 			shouldFind: true,
 			timeout:    10 * time.Second,
 		},
 		{
 			name:       "moderate difficulty",
-			nBits:      []byte{0x1e, 0x7f, 0xff, 0xff}, // Moderate
+			nBits:      []byte{0xff, 0xff, 0x7f, 0x1e}, // Moderate (nBits 0x1e7fffff, little-endian)
 			shouldFind: true,
 			timeout:    30 * time.Second,
 		},
@@ -289,7 +289,7 @@ func TestMine_WithNilSettings(t *testing.T) {
 func BenchmarkMine_EasyDifficulty(b *testing.B) {
 	ctx := context.Background()
 	candidate := createTestMiningCandidate()
-	candidate.NBits = []byte{0x20, 0x7f, 0xff, 0xff} // Very easy difficulty
+	candidate.NBits = []byte{0xff, 0xff, 0x7f, 0x20} // Very easy difficulty (nBits 0x207fffff, little-endian)
 	tSettings := createTestSettings()
 
 	b.ResetTimer()
@@ -308,7 +308,7 @@ func BenchmarkMine_EasyDifficulty(b *testing.B) {
 func BenchmarkMine_WithAddress(b *testing.B) {
 	ctx := context.Background()
 	candidate := createTestMiningCandidate()
-	candidate.NBits = []byte{0x20, 0x7f, 0xff, 0xff} // Very easy difficulty
+	candidate.NBits = []byte{0xff, 0xff, 0x7f, 0x20} // Very easy difficulty (nBits 0x207fffff, little-endian)
 	tSettings := createTestSettings()
 	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 

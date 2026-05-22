@@ -1758,7 +1758,7 @@ func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
 	require.NoError(t, err, "Should create model block from wire.MsgBlock")
 
 	expectedHeight := fundingBlockHeight + 1
-	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "")
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0)
 	require.NoError(t, err, "Teranode should accept the floating block")
 	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)
 

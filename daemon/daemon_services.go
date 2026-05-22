@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,20 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" && !pprofRegistered.Load() {
 		pprofRegistered.Store(true)
+
+		// Enable block / mutex profiling when configured. Both are disabled by
+		// default (rate/fraction == 0) and incur negligible overhead at the
+		// recommended on-cluster sampling values. Required to capture
+		// wait-time data that CPU profiles cannot expose.
+		if rate := appSettings.BlockProfileRate; rate > 0 {
+			runtime.SetBlockProfileRate(rate)
+			logger.Infof("runtime.SetBlockProfileRate(%d) enabled — /debug/pprof/block now collecting", rate)
+		}
+
+		if frac := appSettings.MutexProfileFraction; frac > 0 {
+			runtime.SetMutexProfileFraction(frac)
+			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
+		}
 
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)

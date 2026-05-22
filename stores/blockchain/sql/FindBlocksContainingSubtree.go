@@ -35,7 +35,9 @@ func (s *SQL) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chai
 		subtreeSearchClause = "position($1 in b.subtrees) > 0"
 	}
 
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -75,6 +77,30 @@ func (s *SQL) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chai
 		ORDER BY b.height ASC
 		` + limitClause + `
 	`
+	} else {
+		q = `
+		SELECT
+		 b.ID
+		,b.version
+		,b.block_time
+		,b.n_bits
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.subtree_count
+		,b.subtrees
+		,b.height
+		,b.coinbase_bump
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND ` + subtreeSearchClause + `
+		ORDER BY b.height ASC
+		` + limitClause + `
+	`
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

@@ -78,7 +78,7 @@ func testUnknownDuplicateCoinbaseRejection(t *testing.T, utxoStore string) {
 	// A proper test would require manual block construction
 
 	// Verify the block was created successfully (no duplicate coinbase)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.NoError(t, err, "Block with unique coinbase should be accepted")
 
 	t.Logf("Note: Full coinbase duplication test requires manual block construction")
@@ -159,7 +159,7 @@ func testDuplicateAcrossSubtreeBoundary(t *testing.T, utxoStore string) {
 	)
 
 	// Process the block - should fail due to duplicate detection (or UTXO error with SQLite)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicate across subtrees should be rejected")
 
 	// Accept either duplicate detection error or UTXO locking error (both indicate block rejection)
@@ -247,7 +247,7 @@ func testDuplicateInLastIncompleteSubtree(t *testing.T, utxoStore string) {
 	)
 
 	// Process the block - should fail due to duplicate (or UTXO error with SQLite)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicate in incomplete last subtree should be rejected")
 
 	// Accept either duplicate detection error or UTXO locking error (both indicate block rejection)

@@ -93,10 +93,11 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	`
 		args = []any{n}
 	} else if fromHeight > 0 {
-		// When paginating, cap CTE walk depth to the lower of tip height and fromHeight,
-		// so that fromHeight > tip is handled gracefully (behaves like fromHeight = tip).
-		// Uses CASE instead of LEAST/MIN for cross-database compatibility (PostgreSQL + SQLite).
-		q = `
+		if s.mainChainRebuilding.Load() > 0 {
+			// When paginating, cap CTE walk depth to the lower of tip height and fromHeight,
+			// so that fromHeight > tip is handled gracefully (behaves like fromHeight = tip).
+			// Uses CASE instead of LEAST/MIN for cross-database compatibility (PostgreSQL + SQLite).
+			q = `
 		WITH RECURSIVE tip_block AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -133,9 +134,31 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		ORDER BY b.height DESC
 		LIMIT $1
 	`
+		} else {
+			q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height <= $2
+		ORDER BY b.height DESC
+		LIMIT $1
+	`
+		}
 		args = []any{n, fromHeight}
 	} else {
-		q = `
+		if s.mainChainRebuilding.Load() > 0 {
+			q = `
 		WITH RECURSIVE tip_block AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -171,6 +194,26 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		ORDER BY b.height DESC
 		LIMIT $1
 	`
+		} else {
+			q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		ORDER BY b.height DESC
+		LIMIT $1
+	`
+		}
 		args = []any{n}
 	}
 

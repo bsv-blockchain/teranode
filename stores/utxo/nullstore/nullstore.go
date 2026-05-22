@@ -173,6 +173,18 @@ func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return nil, nil
 }
 
+func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
+
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }

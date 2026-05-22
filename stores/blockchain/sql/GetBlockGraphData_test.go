@@ -47,4 +47,47 @@ func TestSQLGetBlockGraphData(t *testing.T) {
 		assert.NotEmpty(t, data.DataPoints)
 		assert.Len(t, data.DataPoints, 3)
 	})
+
+	t.Run("get graph data with periodMillis=0 returns all blocks", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		// periodMillis=0 means block_time >= 0, which matches every block.
+		data, err := s.GetBlockGraphData(context.Background(), 0)
+		require.NoError(t, err)
+		assert.Len(t, data.DataPoints, 3)
+	})
+
+	t.Run("get graph data via mainChainRebuilding CTE branch", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		// Simulate an in-progress rebuild so GetBlockGraphData uses the CTE branch.
+		s.mainChainRebuilding.Add(1)
+		defer s.mainChainRebuilding.Add(-1)
+
+		data, err := s.GetBlockGraphData(context.Background(), 0)
+		require.NoError(t, err)
+		assert.NotEmpty(t, data.DataPoints)
+	})
 }

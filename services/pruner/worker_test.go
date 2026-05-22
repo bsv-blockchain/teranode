@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	blockassembly_api "github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -306,4 +307,29 @@ func TestWaitForBlockMinedStatusSkippedWhenNoBAClient(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("pruning should proceed without blockAssemblyClient")
 	}
+}
+
+// TestStart_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func TestStart_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	server := &Server{
+		ctx:              ctx,
+		logger:           ulogger.New("test"),
+		settings:         &settings.Settings{},
+		blockchainClient: mockBlockchainClient,
+	}
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+	mockBlockchainClient.AssertExpectations(t)
 }

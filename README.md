@@ -8,7 +8,9 @@ See our [contributing guide](./CONTRIBUTING.md).
 
 ## Getting Started
 
-The easiest way to get started with Teranode is to [run on TeraTestnet](https://github.com/bsv-blockchain/teranode-teratestnet).
+The easiest way to get started with Teranode is to use
+[teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart),
+the Docker-based setup for mainnet, testnet, teratestnet, and regtest.
 
 To file a bug report, [open an issue](https://github.com/bsv-blockchain/teranode/issues/new?template=bug_report.md).
 

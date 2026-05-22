@@ -146,8 +146,16 @@ func Restore(t *testing.T, db utxostore.Store) {
 	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
+	// Build the unspend record with the SpendingData GetSpends populated inside Spend(spendTx).
+	restoreSpends := []*utxostore.Spend{{
+		TxID:         TXHash,
+		Vout:         0,
+		UTXOHash:     utxoHash0,
+		SpendingData: spend.NewSpendingData(spendTx.TxIDChainHash(), 0),
+	}}
+
 	// try to reset the utxo
-	err = db.Unspend(ctx, spends, false)
+	err = db.Unspend(ctx, restoreSpends, false)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, testSpend0.TxID)

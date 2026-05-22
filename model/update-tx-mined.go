@@ -217,7 +217,8 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	var (
 		blockInvalidError   error
 		blockInvalidErrorMu = sync.Mutex{}
-		setMinedErrorCount  = atomic.Uint64{}
+		setMinedErrorCount  = atomic.Uint64{}   // SetMinedMulti returned an error (I/O / store failure)
+		coverageGapCount    = atomic.Uint64{}   // SetMinedMulti returned success but a submitted tx was not durably tagged
 		oldBlockIDs         = make([]uint32, 0) // Collect old block IDs for slow-path
 		oldBlockIDsMu       sync.Mutex
 	)
@@ -255,6 +256,47 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 			// Local slice to collect old block IDs - merged at end to reduce lock contention
 			localOldBlockIDs := make([]uint32, 0)
 
+			// checkBatchResults runs the double-spend logic and coverage check in a
+			// single pass over blockIDsMap. The inner loop over bIDs was already here
+			// for double-spend detection; we piggyback the coverage decision on it so
+			// no new nested iteration is introduced.
+			checkBatchResults := func(submittedHashes []*chainhash.Hash, blockIDsMap map[chainhash.Hash][]uint32) {
+				if unsetMined {
+					return
+				}
+				covered := make(map[chainhash.Hash]bool, len(blockIDsMap))
+				needChainCheck := len(chainBlockIDsMap) > 0
+				for hash, bIDs := range blockIDsMap {
+					for _, bID := range bIDs {
+						if bID == blockID {
+							covered[hash] = true
+							continue
+						}
+						if !needChainCheck {
+							continue
+						}
+						// Phase 1: Fast path - check in-memory recent block IDs
+						if _, exists := chainBlockIDsMap[bID]; exists {
+							blockInvalidErrorMu.Lock()
+							blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
+							blockInvalidErrorMu.Unlock()
+							continue
+						}
+						// Phase 2: Slow path - collect locally (merged at end)
+						localOldBlockIDs = append(localOldBlockIDs, bID)
+					}
+				}
+				// Flat O(N) coverage check: any submitted hash that didn't see the
+				// current blockID is a postcondition violation.
+				for _, h := range submittedHashes {
+					if !covered[*h] {
+						logger.Warnf("[UpdateTxMinedStatus][%s] coverage gap for tx %s blockID %d after SetMinedMulti",
+							block.Hash().String(), h.String(), blockID)
+						coverageGapCount.Add(1)
+					}
+				}
+			}
+
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtree.Nodes[idx].Hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					if subtreeIdx != 0 || idx != 0 {
@@ -285,30 +327,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx for batch %d/%d: %v", block.Hash().String(), batchNr, batchTotal, err)
 						setMinedErrorCount.Add(1)
 					} else {
-						if !minedBlockInfo.UnsetMined {
-							// Phase 1 (Fast Path): Check against recent block IDs in memory
-							// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
-							if len(chainBlockIDsMap) > 0 {
-								for hash, bIDs := range blockIDsMap {
-									for _, bID := range bIDs {
-										if bID == blockID {
-											continue // Skip same block being mined
-										}
-
-										// Phase 1: Fast path - check in-memory recent block IDs
-										if _, exists := chainBlockIDsMap[bID]; exists {
-											blockInvalidErrorMu.Lock()
-											blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
-											blockInvalidErrorMu.Unlock()
-											continue
-										}
-
-										// Phase 2: Slow path - collect locally (merged at end)
-										localOldBlockIDs = append(localOldBlockIDs, bID)
-									}
-								}
-							}
-						}
+						checkBatchResults(hashes, blockIDsMap)
 					}
 
 					hashes = hashes[:0] // reuse the slice, just reset length
@@ -331,31 +350,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx for remainder batch: %v", block.Hash().String(), err)
 					setMinedErrorCount.Add(1)
 				} else {
-					if !minedBlockInfo.UnsetMined {
-						// Phase 1 (Fast Path): Check against recent block IDs in memory
-						// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
-						if len(chainBlockIDsMap) > 0 {
-							for hash, bIDs := range blockIDsMap {
-								for _, bID := range bIDs {
-									if bID == blockID {
-										continue // Skip same block being mined
-									}
-
-									// Phase 1: Fast path - check in-memory recent block IDs
-									if _, exists := chainBlockIDsMap[bID]; exists {
-										blockInvalidErrorMu.Lock()
-										blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
-										blockInvalidErrorMu.Unlock()
-										continue
-									}
-
-									// Phase 2: Slow path - collect locally (merged at end)
-									localOldBlockIDs = append(localOldBlockIDs, bID)
-								}
-							}
-						}
-					}
-
+					checkBatchResults(hashes, blockIDsMap)
 				}
 			}
 
@@ -410,14 +405,25 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not ancestors of this block", block.Hash().String(), len(oldBlockIDsSlice))
 	}
 
-	// Check if there were any SetMinedMulti errors
-	if setMinedErrorCount.Load() > 0 {
+	// Check if there were any SetMinedMulti errors or coverage gaps. We track these
+	// separately so operators can distinguish a store I/O failure from a postcondition
+	// violation (the store returned nil error but didn't durably tag every submitted tx).
+	ioErrs := setMinedErrorCount.Load()
+	covGaps := coverageGapCount.Load()
+	if ioErrs > 0 || covGaps > 0 {
 		if unsetMined {
 			// For invalid blocks, we've already logged the errors - continue without error
-			logger.Warnf("[UpdateTxMinedStatus][%s] completed with %d SetMinedMulti errors for invalid block (already logged)", block.Hash().String(), setMinedErrorCount.Load())
+			logger.Warnf("[UpdateTxMinedStatus][%s] completed with %d SetMinedMulti errors and %d coverage gaps for invalid block (already logged)", block.Hash().String(), ioErrs, covGaps)
 		} else {
 			// For valid blocks, SetMinedMulti errors are critical - return error
-			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), setMinedErrorCount.Load())
+			switch {
+			case ioErrs > 0 && covGaps > 0:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches and %d coverage gap(s) detected", block.Hash().String(), ioErrs, covGaps)
+			case ioErrs > 0:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), ioErrs)
+			default:
+				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status: %d coverage gap(s) from SetMinedMulti", block.Hash().String(), covGaps)
+			}
 		}
 	}
 

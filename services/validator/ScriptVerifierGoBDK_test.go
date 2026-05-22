@@ -2,14 +2,12 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -26,9 +24,11 @@ import (
 	"reflect"
 	"testing"
 
+	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -81,8 +81,192 @@ func Test_ScriptVerificationGoBDK(t *testing.T) {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
 		require.NoError(t, errTx)
 
-		err := verifier.VerifyScript(tx, test.BlockHeight, true, test.UTXOHeights)
+		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", test.TxID))
+	}
+}
+
+func TestBDKBlockHeight(t *testing.T) {
+	const maxInt32AsUint32 = uint32(1<<31 - 1)
+
+	genesis := chaincfg.MainNetParams.GenesisActivationHeight
+	chronicle := chaincfg.MainNetParams.ChronicleActivationHeight
+
+	tests := []struct {
+		name        string
+		blockHeight uint32
+		consensus   bool
+		want        int32
+		wantErr     bool
+	}{
+		{name: "consensus passes candidate height unchanged", blockHeight: 100, consensus: true, want: 100},
+		{name: "policy passes tip height because BDK adds one", blockHeight: 100, consensus: false, want: 99},
+		{name: "policy rejects zero height", blockHeight: 0, consensus: false, wantErr: true},
+		{name: "consensus rejects int32 overflow", blockHeight: maxInt32AsUint32 + 1, consensus: true, wantErr: true},
+		{name: "policy rejects adjusted int32 overflow", blockHeight: maxInt32AsUint32 + 2, consensus: false, wantErr: true},
+		{name: "policy accepts max int32 plus one after subtracting one", blockHeight: maxInt32AsUint32 + 1, consensus: false, want: int32(maxInt32AsUint32)},
+		{name: "consensus genesis minus one", blockHeight: genesis - 1, consensus: true, want: int32(genesis - 1)},
+		{name: "consensus genesis boundary", blockHeight: genesis, consensus: true, want: int32(genesis)},
+		{name: "consensus genesis plus one", blockHeight: genesis + 1, consensus: true, want: int32(genesis + 1)},
+		{name: "policy genesis minus one", blockHeight: genesis - 1, consensus: false, want: int32(genesis - 2)},
+		{name: "policy genesis boundary", blockHeight: genesis, consensus: false, want: int32(genesis - 1)},
+		{name: "policy genesis plus one", blockHeight: genesis + 1, consensus: false, want: int32(genesis)},
+		{name: "consensus chronicle minus one", blockHeight: chronicle - 1, consensus: true, want: int32(chronicle - 1)},
+		{name: "consensus chronicle boundary", blockHeight: chronicle, consensus: true, want: int32(chronicle)},
+		{name: "consensus chronicle plus one", blockHeight: chronicle + 1, consensus: true, want: int32(chronicle + 1)},
+		{name: "policy chronicle minus one", blockHeight: chronicle - 1, consensus: false, want: int32(chronicle - 2)},
+		{name: "policy chronicle boundary", blockHeight: chronicle, consensus: false, want: int32(chronicle - 1)},
+		{name: "policy chronicle plus one", blockHeight: chronicle + 1, consensus: false, want: int32(chronicle)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := bdkBlockHeight(tt.blockHeight, tt.consensus)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+type fakeBDKTxValidator struct {
+	calls       int
+	blockHeight int32
+	consensus   bool
+	utxoHeights []int32
+	err         error
+}
+
+func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, blockHeight int32, consensus bool) error {
+	f.calls++
+	f.utxoHeights = append([]int32(nil), utxoHeights...)
+	f.blockHeight = blockHeight
+	f.consensus = consensus
+	return f.err
+}
+
+func TestScriptVerifierGoBDKValidateTransactionCallsBDKValidateTransaction(t *testing.T) {
+	fake := &fakeBDKTxValidator{}
+	verifier := &scriptVerifierGoBDK{
+		logger: ulogger.TestLogger{},
+		se:     fake,
+	}
+
+	err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fake.calls)
+	assert.False(t, fake.consensus)
+	assert.Equal(t, int32(99), fake.blockHeight)
+	assert.Equal(t, []int32{1, 2}, fake.utxoHeights)
+}
+
+func TestScriptVerifierGoBDKValidateTransactionRejectsCoinbaseBeforeBDK(t *testing.T) {
+	coinbaseTx := &bt.Tx{
+		Version: 1,
+		Inputs: []*bt.Input{
+			{
+				PreviousTxOutIndex: bt.DefaultSequenceNumber,
+				SequenceNumber:     bt.DefaultSequenceNumber,
+			},
+		},
+	}
+	require.NoError(t, coinbaseTx.Inputs[0].PreviousTxIDAddStr(coinbaseTxID))
+	require.True(t, coinbaseTx.IsCoinbase())
+
+	fake := &fakeBDKTxValidator{}
+	verifier := &scriptVerifierGoBDK{
+		logger: ulogger.TestLogger{},
+		se:     fake,
+	}
+
+	err := verifier.ValidateTransaction(coinbaseTx, 100, true, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errors.ErrTxInvalid)
+	assert.Equal(t, 0, fake.calls)
+}
+
+func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	tests := []struct {
+		code       bdkscript.DoSErrorCode
+		wantPolicy bool
+	}{
+		{code: bdkscript.DOS_ERR_OK},
+		{code: bdkscript.DOS_ERR_NULL_PREVOUT},
+		{code: bdkscript.DOS_ERR_P2SH_OUTPUT_POST_GENESIS},
+		{code: bdkscript.DOS_ERR_SIGOPS_CONSENSUS},
+		{code: bdkscript.DOS_ERR_SIGOPS_POLICY, wantPolicy: true},
+		{code: bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION, wantPolicy: true},
+		{code: bdkscript.DOS_ERR_NOT_STANDARD, wantPolicy: true},
+		{code: bdkscript.DOS_ERR_VIN_EMPTY},
+		{code: bdkscript.DOS_ERR_VOUT_EMPTY},
+		{code: bdkscript.DOS_ERR_OVERSIZE},
+		{code: bdkscript.DOS_ERR_OUTPUT_NEGATIVE},
+		{code: bdkscript.DOS_ERR_OUTPUT_TOO_LARGE},
+		{code: bdkscript.DOS_ERR_OUTPUT_TOTAL_TOO_LARGE},
+		{code: bdkscript.DOS_ERR_COINBASE_NOT_ALLOWED},
+		{code: bdkscript.DOS_ERR_DUPLICATE_INPUTS},
+		{code: bdkscript.DOS_ERR_UNCONFIRMED_INPUT_IN_BLOCK},
+		{code: bdkscript.DOS_ERR_INPUT_VALUES_OUT_OF_RANGE},
+		{code: bdkscript.DOS_ERR_INPUTS_BELOW_OUTPUTS},
+		{code: bdkscript.DoSErrorCode(999)},
+	}
+
+	for _, tt := range tests {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("code_%d_consensus_%t", tt.code, consensus), func(t *testing.T) {
+				got := verifier.mapBDKValidationError(bdkscript.NewDoSError(tt.code), consensus)
+				assert.ErrorIs(t, got, errors.ErrTxInvalid)
+				assert.Equal(t, tt.wantPolicy, errors.Is(got, errors.ErrTxPolicy))
+			})
+		}
+	}
+}
+
+func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	policyCodes := []bdkscript.ScriptErrorCode{
+		bdkscript.SCRIPT_ERR_OP_COUNT,
+		bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW,
+		bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE,
+		bdkscript.SCRIPT_ERR_SCRIPT_SIZE,
+		bdkscript.SCRIPT_ERR_PUBKEY_COUNT,
+		bdkscript.SCRIPT_ERR_STACK_SIZE,
+	}
+
+	for _, code := range policyCodes {
+		t.Run(fmt.Sprintf("policy_code_%d_in_policy_mode", code), func(t *testing.T) {
+			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(code), false)
+			assert.ErrorIs(t, got, errors.ErrTxInvalid)
+			assert.ErrorIs(t, got, errors.ErrTxPolicy)
+		})
+
+		t.Run(fmt.Sprintf("policy_code_%d_in_consensus_mode", code), func(t *testing.T) {
+			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(code), true)
+			assert.ErrorIs(t, got, errors.ErrTxInvalid)
+			assert.Equal(t, code == bdkscript.SCRIPT_ERR_STACK_SIZE, errors.Is(got, errors.ErrTxPolicy))
+		})
+	}
+
+	for _, consensus := range []bool{false, true} {
+		t.Run(fmt.Sprintf("non_policy_script_error_consensus_%t", consensus), func(t *testing.T) {
+			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE), consensus)
+			assert.ErrorIs(t, got, errors.ErrTxInvalid)
+			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
+		})
+
+		t.Run(fmt.Sprintf("cgo_exception_consensus_%t", consensus), func(t *testing.T) {
+			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION), consensus)
+			assert.ErrorIs(t, got, errors.ErrProcessing)
+			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
+		})
 	}
 }
 
@@ -100,7 +284,7 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 		modifiedLockingScript := bscript.NewFromBytes(binUnlockingScript)
 		tx.Inputs[0].UnlockingScript = modifiedLockingScript
 
-		err := verifier.VerifyScript(tx, test.BlockHeight, true, test.UTXOHeights)
+		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.Error(t, err, fmt.Sprintf("Failed tx with TXID %v", test.TxID))
 	}
 }

@@ -451,9 +451,9 @@
   .spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    border: 2px solid var(--app-overlay-color);
     border-radius: 50%;
-    border-top-color: white;
+    border-top-color: var(--app-color);
     animation: spin 0.8s linear infinite;
   }
 

@@ -597,6 +597,18 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
+func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) HasBlockBelowHeightContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxHeight uint32) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ListBlockRefsAboveHeight(ctx context.Context, minHeight uint32) ([]model.BlockRef, error) {
+	panic(implementMe)
+}
+
 // GetBlockHeaderIDs retrieves block header IDs starting from a specific block hash.
 func (m *MockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	return []uint32{}, nil

@@ -640,8 +640,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 		}
 	}
 
-	// All peers failed
-	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s, last error: %v", subtreeHash.String(), lastErr)
+	// All peers failed. errors.NewServiceError extracts the trailing error param as
+	// the wrapped error, so a "%v" placeholder for lastErr would render as
+	// %!v(MISSING). The wrapped error is preserved in the chain.
+	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
@@ -656,8 +658,14 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] fetching subtree from %s", url)
 
+	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
+	// streams more than this is malicious — fail fast rather than ReadAll into memory.
+	// This must be independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which
+	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
+	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
 	// Use the existing HTTP utility to fetch subtree
-	subtreeBytes, err := util.DoHTTPRequest(ctx, url)
+	subtreeBytes, err := util.DoHTTPRequestBounded(ctx, url, maxSubtreeBytes)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] failed to fetch subtree from %s", url, err)
 	}
@@ -711,8 +719,10 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 
-	// Use the existing HTTP utility to fetch subtree data
-	subtreeDataReader, err := util.DoHTTPRequestBodyReader(ctx, url)
+	// Retry on 503 — peer's asset service may reject under admission control while it
+	// generates the file on-demand from Aerospike. The retry loop honors the peer's
+	// Retry-After header.
+	subtreeDataReader, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] failed to fetch subtree data from %s", url, err)
 	}

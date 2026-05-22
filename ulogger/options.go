@@ -4,10 +4,26 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
 )
+
+// cachedIsTerminal caches the result of term.IsTerminal so it is only
+// called once per process instead of on every DefaultOptions() invocation.
+// The ioctl syscall it performs is expensive under high concurrency.
+var (
+	cachedIsTerminal     bool
+	cachedIsTerminalOnce sync.Once
+)
+
+func isStdoutTerminal() bool {
+	cachedIsTerminalOnce.Do(func() {
+		cachedIsTerminal = term.IsTerminal(int(os.Stdout.Fd()))
+	})
+	return cachedIsTerminal
+}
 
 type Options struct {
 	logLevel      string
@@ -21,11 +37,9 @@ type Options struct {
 type Option func(*Options)
 
 func DefaultOptions() *Options {
-	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-
 	output := zerolog.ConsoleWriter{
 		Out:     os.Stdout,
-		NoColor: !isTerminal, // Disable color if output is not a terminal
+		NoColor: !isStdoutTerminal(), // Disable color if output is not a terminal
 	}
 
 	return &Options{

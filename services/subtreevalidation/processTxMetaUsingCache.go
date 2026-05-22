@@ -102,6 +102,7 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 	)
 
 	txMeta := meta.Data{}
+	cachedBytes := make([]byte, 0, 1024)
 
 	for j := 0; j < subtree.Min(p.batchSize, len(p.txHashes)-i); j++ {
 		if p.txMetaSlice[i+j].isSet {
@@ -120,7 +121,7 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 			continue
 		}
 
-		found, err = p.cache.GetMetaCached(p.ctx, txHash, &txMeta)
+		cachedBytes, found, err = p.cache.GetMetaCachedWithBuffer(p.ctx, txHash, &txMeta, cachedBytes)
 		if err != nil && !errors.Is(err, errors.ErrNotFound) {
 			p.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
 		}

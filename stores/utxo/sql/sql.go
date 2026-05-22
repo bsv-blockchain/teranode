@@ -49,13 +49,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -69,6 +70,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5"
@@ -190,6 +192,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:             ctx,
 	}
 
+	otelTracer := tracing.Tracer("utxo").OTelTracer()
+	batcherOpts := func(name string) []batcher.Option {
+		return []batcher.Option{
+			batcher.WithName(name),
+			batcher.WithLogger(logger),
+			batcher.WithMetrics(batchermetrics.Provider()),
+			batcher.WithTracer(otelTracer),
+		}
+	}
+
 	// Initialize spend batcher — mirrors aerospike/aerospike.go batcher setup.
 	// Batches individual spend operations to control DB connection concurrency.
 	// Always use background=false for SQL: batch callbacks must be serialized to
@@ -198,7 +210,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// DB-level row locking.
 	spendBatchSize := tSettings.UtxoStore.SpendBatcherSize
 	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
-	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, false)
+	s.spendBatcher = batcher.NewWithPool(spendBatchSize, spendBatchDuration, s.sendSpendBatch, false, batcherOpts("sql_spend")...)
 	if tSettings.BatcherDrainMode {
 		s.spendBatcher.SetDrainMode(true)
 	}
@@ -209,7 +221,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchSize := tSettings.UtxoStore.GetBatcherSize
 	getBatchDuration := time.Duration(tSettings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond
 	if getBatchSize > 1 {
-		s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, true)
+		s.getBatcher = batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, true, batcherOpts("sql_get")...)
 		if tSettings.BatcherDrainMode {
 			s.getBatcher.SetDrainMode(true)
 		}
@@ -222,7 +234,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.StoreBatcherSize > 1 {
 		storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 		storeBatchDuration := time.Duration(tSettings.UtxoStore.StoreBatcherDurationMillis) * time.Millisecond
-		s.createBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true)
+		s.createBatcher = batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true, batcherOpts("sql_create")...)
 		if tSettings.BatcherDrainMode {
 			s.createBatcher.SetDrainMode(true)
 		}
@@ -232,7 +244,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.LockedBatcherSize > 1 {
 		unlockBatchSize := tSettings.UtxoStore.LockedBatcherSize
 		unlockBatchDuration := time.Duration(tSettings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond
-		s.unlockBatcher = batcher.New(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true)
+		s.unlockBatcher = batcher.NewWithPool(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true, batcherOpts("sql_unlock")...)
 		if tSettings.BatcherDrainMode {
 			s.unlockBatcher.SetDrainMode(true)
 		}
@@ -337,7 +349,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 // Mirrors aerospike/create.go storeBatcher.Put pattern.
 func (s *Store) createBatched(ctx context.Context, tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions) (*meta.Data, error) {
 	done := make(chan batchCreateResult, 1)
-	s.createBatcher.Put(&batchCreateItem{
+	s.createBatcher.PutCtx(ctx, &batchCreateItem{
 		tx:          tx,
 		blockHeight: blockHeight,
 		options:     options,
@@ -1021,7 +1033,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", p.isCoinbase),
+					Err: errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v)", p.isCoinbase),
 				}})
 			} else {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{Data: p.txMeta}})
@@ -1301,7 +1313,7 @@ func (s *Store) getBatched(ctx context.Context, hash *chainhash.Hash, bins []fie
 	done := make(chan batchGetItemData, 1)
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
-	s.getBatcher.Put(item)
+	s.getBatcher.PutCtx(ctx, item)
 
 	select {
 	case data := <-done:
@@ -1365,6 +1377,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		,conflicting
 		,locked
 		,unmined_since
+		,inserted_at
 		FROM transactions
 		WHERE hash = $1
 	`
@@ -1377,9 +1390,13 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		lockTime          uint32
 		spendingDataBytes []byte
 		unminedSince      sql.NullInt64
+		// inserted_at is TIMESTAMPTZ on postgres but TEXT on sqlite (see schema
+		// in transactions table init). Postgres driver returns time.Time;
+		// sqlite returns string. Scan into interface{} and branch on type.
+		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1395,6 +1412,12 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
 	}
+
+	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
+	// Always populate so callers like selectCountersForDemotedTx have it without
+	// having to add fields.CreatedAt to every Get callsite that already passes
+	// other field selectors.
+	data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 	tx := bt.Tx{
 		Version:  version,
@@ -1595,6 +1618,64 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 	return false
 }
 
+// parseInsertedAtMillis converts the inserted_at column value into Unix
+// milliseconds. Postgres' driver returns time.Time; the sqlite driver
+// returns a string (the layout depends on whether DEFAULT CURRENT_TIMESTAMP
+// produced a "YYYY-MM-DD HH:MM:SS[.fff]" form). Returns 0 when the value is
+// nil, an unrecognised type, or unparseable — callers treat 0 as "no
+// CreatedAt hint available" (see isOlderCounter's missing-timestamp branch).
+func parseInsertedAtMillis(v any) int64 {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case time.Time:
+		return t.UnixMilli()
+	case []byte:
+		return parseInsertedAtMillis(string(t))
+	case string:
+		// Sqlite CURRENT_TIMESTAMP emits SQL-style "YYYY-MM-DD HH:MM:SS" by
+		// default; tolerate fractional seconds and trailing 'Z' for safety.
+		layouts := []string{
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+			time.RFC3339Nano,
+			time.RFC3339,
+		}
+
+		for _, l := range layouts {
+			if ts, err := time.Parse(l, t); err == nil {
+				return ts.UnixMilli()
+			}
+		}
+
+		return 0
+	default:
+		return 0
+	}
+}
+
+// handleSpendPanic processes a recovered value from Spend's deferred recover
+// and propagates it as an error. Without this, a panic during Spend would be
+// logged but the caller would observe (nil, nil) — a silent failure that can
+// mask UTXO state corruption.
+//
+// Uses ERR_UNKNOWN rather than ERR_PROCESSING so the block-validation retry
+// classifier (services/blockvalidation/BlockValidation.go) does not treat a
+// recovered panic as a transient infrastructure error and retry indefinitely
+// against a broken path.
+func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
+	if recovered == nil {
+		return
+	}
+
+	prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
+	logger.Errorf("ERROR panic in sql Spend: %v\n%s", recovered, debug.Stack())
+
+	if *err == nil {
+		*err = errors.NewUnknownError("panic in Spend: %v", recovered)
+	}
+}
+
 // Spend marks UTXOs as spent by updating their spending transaction ID.
 // It performs several validations:
 //   - Checks if the UTXO exists
@@ -1606,22 +1687,19 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 //
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
+	defer func() {
+		handleSpendPanic(recover(), &err, s.logger)
+	}()
+
 	if blockHeight == 0 {
 		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
 	}
 
-	defer func() {
-		if recoverErr := recover(); recoverErr != nil {
-			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in sql Spend: %v", recoverErr)
-		}
-	}()
-
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
-	spends, err := utxo.GetSpends(tx)
+	spends, err = utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -1639,6 +1717,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		g               errgroup.Group
 	)
 
+	// Cap per-tx concurrency into the spend batcher. Without this, a single tx
+	// with tens of thousands of inputs (e.g. a consolidation) can flood the
+	// batcher queue faster than its serialised callback can drain it, producing
+	// a single bulk SELECT whose parameter count exceeds PostgreSQL's 65535
+	// extended-protocol limit. Using SpendBatcherSize*SpendBatcherConcurrency
+	// matches the pattern used in services/legacy/netsync/handle_block.go.
+	if limit := s.settings.UtxoStore.SpendBatcherSize * s.settings.UtxoStore.SpendBatcherConcurrency; limit > 0 {
+		g.SetLimit(limit)
+	}
+
 	for idx, spend := range spends {
 		if spend == nil {
 			return nil, errors.NewProcessingError("spend should not be nil")
@@ -1648,8 +1736,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
+			// Per-worker panic recovery. The parent's defer only catches panics in the
+			// parent goroutine — errgroup propagates errors but does not recover panics
+			// inside g.Go bodies, so without this a worker panic would crash the process.
+			defer func() {
+				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
+			}()
+
 			errCh := make(chan error, 1)
-			s.spendBatcher.Put(&batchSpend{
+			s.spendBatcher.PutCtx(ctx, &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
@@ -1802,6 +1897,21 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		retryable := s.trySendSpendBatch(batch)
@@ -2702,6 +2812,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		_ = txn.Rollback()
 	}()
 
+	// Match-on-spending_data is the safety guarantee: we only clear spending_data
+	// when the caller's expected value matches what's stored. This prevents a stale
+	// or wrong Spend record from silently wiping the legitimate spend.
+	// SpendingData is mandatory: every production caller derives spends from
+	// Spend()/SetConflicting()/GetSpends(), all of which populate it.
 	q1 := `
 		UPDATE outputs
 		SET spending_data = NULL
@@ -2709,7 +2824,25 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			SELECT id FROM transactions WHERE hash = $1
 		)
 		AND idx = $2
+		AND spending_data = $3
 		RETURNING transaction_id
+	`
+
+	// qFindTxID runs after q1 returns 0 rows. Unspend is idempotent: if the output
+	// row exists but our caller doesn't own the spend (stored data is NULL or
+	// belongs to someone else), we no-op on spending_data but still need the
+	// transaction_id to apply the locked/DAH housekeeping below — callers like
+	// ProcessConflicting rely on the parent transaction's locked state being
+	// updated regardless of whether the spend was the loser's. Only a missing
+	// row is a real error (NotFound). Mirrors stores/utxo/aerospike/teranode.lua
+	// where the unspend UDF returns STATUS_OK with no bin mutation for the same
+	// non-owning cases.
+	qFindTxID := `
+		SELECT transaction_id FROM outputs
+		WHERE transaction_id IN (
+			SELECT id FROM transactions WHERE hash = $1
+		)
+		AND idx = $2
 	`
 
 	locked := false
@@ -2734,15 +2867,28 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				continue
 			}
 
+			if spend.SpendingData == nil {
+				return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
+			}
+
 			var transactionID int
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout, spend.SpendingData.Bytes()).Scan(&transactionID)
 			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+				if !errors.Is(err, sql.ErrNoRows) {
+					return err
 				}
 
-				return err
+				// q1 declined to clear — caller isn't the spend's current owner.
+				// Look up the transaction_id directly so the housekeeping below
+				// still runs; the only real error here is a missing row.
+				if err = txn.QueryRowContext(ctx, qFindTxID, spend.TxID[:], spend.Vout).Scan(&transactionID); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					}
+
+					return err
+				}
 			}
 
 			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
@@ -2918,6 +3064,19 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		existingHashes[h] = true
 	}
 	rows.Close()
+
+	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
+	// !UnsetMined every submitted hash MUST exist in the transactions table.
+	// A missing hash means the tx was never persisted (or was pruned) — mirrors
+	// the Aerospike KEY_NOT_FOUND handling so all backends fail closed identically.
+	// UnsetMined tolerates missing rows (the tx is already gone).
+	if !minedBlockInfo.UnsetMined && len(existingHashes) != len(hashes) {
+		for _, h := range hashes {
+			if !existingHashes[*h] {
+				return nil, errors.NewTxNotFoundError("transaction not found: %s", h.String())
+			}
+		}
+	}
 
 	if len(existingHashes) == 0 {
 		if err = txn.Commit(); err != nil {
@@ -3263,7 +3422,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since FROM transactions WHERE hash IN ` + inClause
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -3279,10 +3438,11 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		var (
 			hashBytes    []byte
 			unminedSince sql.NullInt64
+			insertedAt   any
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince); err != nil {
+		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -3295,6 +3455,8 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 				row.data.UnminedSince = uint32(unminedSince.Int64)
 			}
 		}
+
+		row.data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 		idToTx[row.id] = row
 		hashToTx[row.hash] = row
@@ -3546,14 +3708,34 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	// Collect unique parent hashes for chunked IN query
-	parentHashes := make([][]byte, 0, len(needsByParent))
-	for h := range needsByParent {
-		hCopy := h
-		parentHashes = append(parentHashes, hCopy[:])
+	// Collect unique composite (parent_hash, idx) pairs needed for decoration.
+	// A valid tx won't reference the same outpoint twice, but dedup defensively
+	// so we don't waste bind params / chunks on malformed input; also matches
+	// BatchPreviousOutputsDecorate's shape.
+	//
+	// Preallocate to an upper bound on pairs (sum of all refs across parents).
+	// Post-dedup the slice may be smaller, but this keeps append() from growing
+	// the backing array for whole-block-sized input sets.
+	pairCap := 0
+	for _, refs := range needsByParent {
+		pairCap += len(refs)
+	}
+	pairs := make([]outpointPair, 0, pairCap)
+	for parentHash, refs := range needsByParent {
+		// Hoist the hash copy outside the inner loop so each parent's array
+		// escapes once, not once per unique referenced output.
+		hCopy := parentHash
+		hashSlice := hCopy[:]
+		seenIdx := make(map[uint32]struct{}, len(refs))
+		for _, ref := range refs {
+			if _, seen := seenIdx[ref.outIdx]; seen {
+				continue
+			}
+			seenIdx[ref.outIdx] = struct{}{}
+			pairs = append(pairs, outpointPair{hash: hashSlice, idx: ref.outIdx})
+		}
 	}
 
-	// Bulk query: fetch all needed outputs in chunks
 	type outputKey struct {
 		hash chainhash.Hash
 		idx  uint32
@@ -3562,9 +3744,11 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 		lockingScript []byte
 		satoshis      uint64
 	}
-	results := make(map[outputKey]*outputInfo)
+	results := make(map[outputKey]*outputInfo, len(pairs))
 
-	for chunkStart := 0; chunkStart < len(parentHashes); chunkStart += maxINClauseSize {
+	// Chunk in maxINClauseSize-sized batches; 400 pairs = 800 params, safely
+	// under SQLite's default 999 variable limit (and well under Postgres' 65535).
+	for chunkStart := 0; chunkStart < len(pairs); chunkStart += maxINClauseSize {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -3572,16 +3756,21 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 		}
 
 		chunkEnd := chunkStart + maxINClauseSize
-		if chunkEnd > len(parentHashes) {
-			chunkEnd = len(parentHashes)
+		if chunkEnd > len(pairs) {
+			chunkEnd = len(pairs)
 		}
-		chunk := parentHashes[chunkStart:chunkEnd]
+		chunk := pairs[chunkStart:chunkEnd]
 
-		inClause, args := buildINClause(chunk, 1)
-		q := `SELECT t.hash, o.idx, o.locking_script, o.satoshis
-			FROM outputs o
-			JOIN transactions t ON o.transaction_id = t.id
-			WHERE t.hash IN ` + inClause
+		valuesClause, args := buildCompositeValuesPairs(chunk, 1, s.engine)
+		// CTE form is identical on Postgres (12+ inlines non-recursive
+		// single-use CTEs) and the only form SQLite accepts as a typed join
+		// source with column aliases — `FROM (VALUES ...) AS v(h, i)` is a
+		// Postgres-only extension.
+		q := `WITH v(h, i) AS (` + valuesClause + `)
+			SELECT t.hash, o.idx, o.locking_script, o.satoshis
+			FROM v
+			JOIN transactions t ON t.hash = v.h
+			JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.i`
 
 		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {
@@ -3679,88 +3868,164 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 		return nil
 	}
 
-	// Collect unique parent hashes into a slice for chunked querying
-	parentHashes := make([][]byte, 0, len(needsByParent))
-	for h := range needsByParent {
+	// Build the exact list of (parent-hash, output-index) pairs we need to fetch
+	// and an index mapping each pair to the input slots it must populate. Using a
+	// composite (t.hash, o.idx) IN predicate — instead of the older parent-hash IN
+	// predicate — avoids scanning every output of every referenced parent, which
+	// matters on data-carrier-heavy blocks where parents may have many MB of
+	// script bytes in unreferenced outputs.
+	//
+	// Preallocate to an upper bound on pairs (sum of all refs across parents).
+	// Post-dedup the slice may be smaller, but this keeps append() from growing
+	// the backing array for whole-block calls where refs can be in the tens of thousands.
+	estPairs := 0
+	for _, refs := range needsByParent {
+		estPairs += len(refs)
+	}
+	pairs := make([]outpointPair, 0, estPairs)
+	// pairToRefs[i] holds every input slot that needs to be populated from
+	// pairs[i]. One pair can satisfy multiple inputs (same outpoint referenced
+	// by more than one tx in the block), so the slice-of-slices is required.
+	// Keeping this per-pair means each chunk worker writes only into the input
+	// slots its own pairs cover, so parallel workers never touch the same slot
+	// and no synchronisation is needed between them.
+	pairToRefs := make([][]inputRef, 0, estPairs)
+	for h, refs := range needsByParent {
 		hCopy := h
-		parentHashes = append(parentHashes, hCopy[:])
+		hashSlice := hCopy[:]
+		// Group refs by output index so we can attach each pair to every ref
+		// that needs it (a parent output referenced by N inputs fetches once
+		// and dispatches to all N slots).
+		byIdx := make(map[uint32][]inputRef, len(refs))
+		for _, ref := range refs {
+			byIdx[ref.outIdx] = append(byIdx[ref.outIdx], ref)
+		}
+		for idx, idxRefs := range byIdx {
+			pairs = append(pairs, outpointPair{hash: hashSlice, idx: idx})
+			pairToRefs = append(pairToRefs, idxRefs)
+		}
 	}
 
-	// Query in chunks using IN clause
-	// Result key: (parentHash, outputIdx) -> (lockingScript, satoshis)
-	type outputInfo struct {
-		lockingScript []byte
-		satoshis      uint64
+	// Chunk the pair list, picking a size that fits comfortably under the
+	// dialect's bind-parameter limit:
+	//   - SQLite caps parameters at 999, and each pair uses 2 placeholders, so
+	//     400 pairs = 800 params keeps headroom.
+	//   - Postgres caps at 65535; fewer, larger queries win because the planner
+	//     fuses the IN list and we save round-trips. 4000 pairs = 8000 params.
+	chunkSize := maxINClauseSize
+	if s.engine == string(util.Postgres) {
+		chunkSize = postgresBatchDecorateChunkSize
 	}
-	type outputKey struct {
-		hash chainhash.Hash
-		idx  uint32
+	if batchDecorateChunkSizeOverride > 0 {
+		chunkSize = batchDecorateChunkSizeOverride
 	}
-	results := make(map[outputKey]*outputInfo)
 
-	for chunkStart := 0; chunkStart < len(parentHashes); chunkStart += maxINClauseSize {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Parallelise chunk queries when configured: each chunk fetches a disjoint
+	// set of pairs, and the per-pair input slots in `pairToRefs` are disjoint
+	// across chunks by construction, so workers write directly into
+	// tx.Inputs[] without any shared state. `missingInputs` is the only
+	// cross-worker counter and uses atomic.Int64.
+	concurrency := s.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	var missingInputs atomic.Int64
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, concurrency)
+
+	for chunkStart := 0; chunkStart < len(pairs); chunkStart += chunkSize {
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > len(pairs) {
+			chunkEnd = len(pairs)
 		}
+		chunkPairs := pairs[chunkStart:chunkEnd]
+		chunkRefs := pairToRefs[chunkStart:chunkEnd]
 
-		chunkEnd := chunkStart + maxINClauseSize
-		if chunkEnd > len(parentHashes) {
-			chunkEnd = len(parentHashes)
-		}
-		chunk := parentHashes[chunkStart:chunkEnd]
+		g.Go(func() error {
+			select {
+			case <-gCtx.Done():
+				return gCtx.Err()
+			default:
+			}
 
-		inClause, args := buildINClause(chunk, 1)
+			valuesClause, args := buildCompositeValuesPairs(chunkPairs, 1, s.engine)
+			// CTE form — same plan as a lateral-VALUES join on Postgres but
+			// also works on SQLite, whose parser rejects `FROM (VALUES ...)
+			// AS v(h, i)` with column aliases.
+			q := `WITH v(h, i) AS (` + valuesClause + `)
+				SELECT t.hash, o.idx, o.locking_script, o.satoshis
+				FROM v
+				JOIN transactions t ON t.hash = v.h
+				JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.i`
 
-		q := `SELECT t.hash, o.idx, o.locking_script, o.satoshis
-			FROM outputs o
-			JOIN transactions t ON o.transaction_id = t.id
-			WHERE t.hash IN ` + inClause
-
-		rows, err := s.db.QueryContext(ctx, q, args...)
-		if err != nil {
-			return err
-		}
-
-		for rows.Next() {
-			var hashBytes []byte
-			var idx uint32
-			var lockingScript []byte
-			var satoshis uint64
-			if err := rows.Scan(&hashBytes, &idx, &lockingScript, &satoshis); err != nil {
-				rows.Close()
+			rows, err := s.db.QueryContext(gCtx, q, args...)
+			if err != nil {
 				return err
 			}
-			var h chainhash.Hash
-			copy(h[:], hashBytes)
-			results[outputKey{hash: h, idx: idx}] = &outputInfo{
-				lockingScript: lockingScript,
-				satoshis:      satoshis,
+			defer rows.Close()
+
+			// Build a lookup from (hash, idx) to the index within this chunk so
+			// we can map each returned row back to its pairToRefs entry.
+			type chunkKey struct {
+				hash chainhash.Hash
+				idx  uint32
 			}
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
+			chunkIndex := make(map[chunkKey]int, len(chunkPairs))
+			for i, p := range chunkPairs {
+				var h chainhash.Hash
+				copy(h[:], p.hash)
+				chunkIndex[chunkKey{hash: h, idx: p.idx}] = i
+			}
+
+			found := make([]bool, len(chunkPairs))
+			for rows.Next() {
+				var hashBytes []byte
+				var idx uint32
+				var lockingScript []byte
+				var satoshis uint64
+				if err := rows.Scan(&hashBytes, &idx, &lockingScript, &satoshis); err != nil {
+					return err
+				}
+				var h chainhash.Hash
+				copy(h[:], hashBytes)
+				i, ok := chunkIndex[chunkKey{hash: h, idx: idx}]
+				if !ok {
+					// Postgres can return rows we didn't ask for only if the
+					// query is wrong; defend anyway.
+					continue
+				}
+				found[i] = true
+				for _, ref := range chunkRefs[i] {
+					txs[ref.txIdx].Inputs[ref.inputIdx].PreviousTxScript = bscript.NewFromBytes(lockingScript)
+					txs[ref.txIdx].Inputs[ref.inputIdx].PreviousTxSatoshis = satoshis
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			// Count any pairs the DB didn't return a row for; each maps to one
+			// or more input slots still missing after this chunk.
+			var localMissing int64
+			for i, ok := range found {
+				if !ok {
+					localMissing += int64(len(chunkRefs[i]))
+				}
+			}
+			if localMissing > 0 {
+				missingInputs.Add(localMissing)
+			}
+			return nil
+		})
 	}
 
-	// Map results back to inputs
-	var missingInputs int
-	for parentHash, refs := range needsByParent {
-		for _, ref := range refs {
-			key := outputKey{hash: parentHash, idx: ref.outIdx}
-			if info, ok := results[key]; ok {
-				txs[ref.txIdx].Inputs[ref.inputIdx].PreviousTxScript = bscript.NewFromBytes(info.lockingScript)
-				txs[ref.txIdx].Inputs[ref.inputIdx].PreviousTxSatoshis = info.satoshis
-			} else {
-				missingInputs++
-			}
-		}
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
-	if missingInputs > 0 {
-		return errors.NewProcessingError("failed to decorate previous outputs: %d inputs could not be resolved", missingInputs)
+	if m := missingInputs.Load(); m > 0 {
+		return errors.NewProcessingError("failed to decorate previous outputs: %d inputs could not be resolved", m)
 	}
 
 	return nil
@@ -3961,7 +4226,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 			return ctx.Err()
 		}
 		done := make(chan error, 1)
-		s.unlockBatcher.Put(&batchUnlockItem{hash: txHashes[0], done: done})
+		s.unlockBatcher.PutCtx(ctx, &batchUnlockItem{hash: txHashes[0], done: done})
 		select {
 		case err := <-done:
 			return err
@@ -4259,8 +4524,13 @@ type DBExecutor interface {
 	Close() error
 }
 
+// Advisory lock ID for UTXO schema creation serialization across pods.
+const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
+
 func createPostgresSchema(db *usql.DB) error {
-	return createPostgresSchemaImpl(db)
+	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
+		return createPostgresSchemaImpl(db)
+	})
 }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
@@ -4456,6 +4726,23 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not create conflicting_children table - [%+v]", err)
 	}
 
+	// Partial index over unspent outputs, keyed by parent transaction_id.
+	// Used by the spend-path bulk UPDATE's unspent_before CTE stage, which
+	// counts how many outputs of each touched parent are still unspent to
+	// decide whether this batch has drained the parent's last unspent output
+	// (so DAH can be set). Without this index Postgres falls back to the
+	// composite PK's leading column only — scanning every output of every
+	// touched parent and filtering spending_data IS NULL after the read.
+	// For data-carrier / large-fan-out parents that's thousands of rows per
+	// parent per batch and was surfacing as multi-second IO:DataFileRead
+	// waits inside sendSpendBatch on mainnet. With this partial index the
+	// count becomes an index-only scan over just the unspent rows, which on
+	// a healthy chain is a small minority of the outputs table.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_outputs_unspent_by_parent ON outputs (transaction_id) WHERE spending_data IS NULL;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_outputs_unspent_by_parent index - [%+v]", err)
+	}
+
 	return nil
 }
 
@@ -4529,6 +4816,13 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create outputs table - [%+v]", err)
+	}
+
+	// Partial index over unspent outputs — see Postgres schema for rationale.
+	// SQLite supports partial indexes via the WHERE clause.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_outputs_unspent_by_parent ON outputs (transaction_id) WHERE spending_data IS NULL;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_outputs_unspent_by_parent index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`
@@ -4886,6 +5180,20 @@ const maxPostgresParams = 999
 
 const maxINClauseSize = 400
 
+// postgresBatchDecorateChunkSize is used by BatchPreviousOutputsDecorate when
+// the store is backed by Postgres. Postgres allows up to 65535 bind parameters
+// per statement; each (hash, idx) pair uses 2 params, so 4000 pairs → 8000
+// params, well under the limit. Larger chunks cut the number of round-trips by
+// ~10× on a typical 1800-tx block, which is the dominant factor in per-block
+// wall time during legacy sync. SQLite keeps maxINClauseSize (400) to stay
+// under its 999-param default.
+const postgresBatchDecorateChunkSize = 4000
+
+// batchDecorateChunkSizeOverride is set by tests to force a smaller chunk size
+// so the multi-chunk path is exercised without building 400+ fixtures. Zero
+// means "use the engine-appropriate default". Never set in production.
+var batchDecorateChunkSizeOverride int
+
 // buildINClause generates a SQL IN clause placeholder string and corresponding args.
 // startIdx is the 1-based parameter index for the first placeholder ($startIdx, $startIdx+1, ...).
 // Returns the clause string like "($3,$4,$5)" and the args slice.
@@ -4897,6 +5205,56 @@ func buildINClause(hashes [][]byte, startIdx int) (string, []interface{}) {
 		args[i] = h
 	}
 	return "(" + strings.Join(placeholders, ",") + ")", args
+}
+
+// outpointPair represents a (transaction hash, output index) pair for a composite IN filter.
+type outpointPair struct {
+	hash []byte
+	idx  uint32
+}
+
+// buildCompositeValuesPairs generates a VALUES list for (hash, idx) pairs
+// intended to be used as a join source, e.g.
+//
+//	FROM (VALUES (...)) AS v(h, i) JOIN transactions t ON t.hash = v.h ...
+//
+// The Postgres variant annotates the FIRST row with `::bytea` / `::bigint`
+// type casts so the planner can resolve VALUES column types early — without
+// those, postgres defaults placeholder types to `text`, which forces runtime
+// coercion at every join and blocks index use on transactions(hash). SQLite
+// infers VALUES column types dynamically from the bound values and doesn't
+// need (or support) the `::` cast syntax.
+//
+// startIdx is the 1-based parameter index for the first placeholder. Returns
+// the `VALUES ...` clause (no surrounding parentheses — caller wraps it) and
+// the args slice. For empty input, returns ("", nil).
+//
+// Why not `WHERE (t.hash, o.idx) IN ((h1,i1),...)`? Postgres plans that as
+// `transaction_id = t.id`-only index scan on outputs_pkey with the idx
+// predicate as a post-read filter, which reads every output of every matched
+// parent. The VALUES-join form forces a per-pair composite-PK lookup
+// (`transaction_id = t.id AND idx = v.i`), an ~90× cost reduction on 3-pair
+// cases and a much larger reduction when parent txs have many outputs.
+func buildCompositeValuesPairs(pairs []outpointPair, startIdx int, engine string) (string, []interface{}) {
+	if len(pairs) == 0 {
+		return "", nil
+	}
+	groups := make([]string, len(pairs))
+	args := make([]interface{}, 0, len(pairs)*2)
+	postgres := engine == string(util.Postgres)
+	for i, p := range pairs {
+		a := startIdx + (2 * i)
+		b := a + 1
+		if i == 0 && postgres {
+			// Annotate types on the first row so postgres infers v.h as bytea
+			// and v.i as bigint instead of text/unknown.
+			groups[i] = fmt.Sprintf("($%d::bytea,$%d::bigint)", a, b)
+		} else {
+			groups[i] = fmt.Sprintf("($%d,$%d)", a, b)
+		}
+		args = append(args, p.hash, p.idx)
+	}
+	return "VALUES " + strings.Join(groups, ","), args
 }
 
 // buildMultiValueInsert generates a multi-row VALUES clause with positional parameters.

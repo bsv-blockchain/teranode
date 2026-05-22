@@ -85,7 +85,9 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	blockHeaders := make([]*model.BlockHeader, 0, capacity)
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -125,6 +127,30 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		WHERE cb.height >= $1 AND cb.height <= $2
 		ORDER BY cb.height ASC
 	`
+	} else {
+		q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.n_bits
+		,b.id
+		,b.height
+		,b.tx_count
+		,b.size_in_bytes
+		,b.peer_id
+		,b.block_time
+		,b.inserted_at
+		,b.median_time_past
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height >= $1
+		  AND b.height <= $2
+		ORDER BY b.height ASC
+	`
+	}
 	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

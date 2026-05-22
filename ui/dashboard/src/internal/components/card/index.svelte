@@ -70,7 +70,7 @@
   }
 
   .tui-card .header .title {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 22px;
@@ -81,7 +81,7 @@
   }
 
   .tui-card .header .subtitle {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 15px;

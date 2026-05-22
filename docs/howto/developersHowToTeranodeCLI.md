@@ -418,6 +418,6 @@ Developers can extend the Teranode-CLI by adding new commands to the `cmd/terano
 
 ## Further Resources
 
-- [Developer Setup Guide](../tutorials/developers/developerSetup.md)
+- [Developer Setup Guide](./developerSetup.md)
 - [Locally Running Services](locallyRunningServices.md)
 - [FSM State Management](../howto/miners/minersHowToInteractWithFSM.md)

@@ -264,6 +264,13 @@ chainintegrity:
 	@mkdir -p /tmp/teranode-test-results
 	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
 
+.PHONY: network-chaos-test
+network-chaos-test:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
 .PHONY: nightly-tests
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
@@ -866,6 +873,18 @@ show-hashes:
 		echo "  - Run 'make chain-integrity-test' first to generate the log file"; \
 	fi
 	@echo ""
+
+# Generate Swagger spec for Asset service from go-swagger annotations
+.PHONY: swagger-asset
+swagger-asset:
+	@echo "Generating Swagger spec for Asset service..."
+	swagger generate spec -m -o services/asset/httpimpl/swagger.json -w services/asset/httpimpl/
+	@echo "Swagger spec generated at services/asset/httpimpl/swagger.json"
+
+# Validate generated Swagger spec
+.PHONY: swagger-validate
+swagger-validate: swagger-asset
+	swagger validate services/asset/httpimpl/swagger.json
 
 # Quick chain integrity test (shorter wait times for faster testing)
 .PHONY: chain-integrity-test-quick

@@ -615,13 +615,13 @@
     </svelte:fragment>
     {#if !connected}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>WebSocket connection unavailable</p>
         <p class="sub">Please ensure the WebSocket service is running</p>
       </div>
     {:else if data.length === 0}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>No peers available</p>
         <p class="sub">Waiting for peer connections...</p>
       </div>
@@ -653,7 +653,7 @@
     align-items: center;
     gap: 4px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 13px;
@@ -671,7 +671,7 @@
     color: #15b241;
   }
   .live-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .title {
@@ -714,17 +714,17 @@
   :global(.hash) {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
   
   :global(.url) {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     word-break: break-all;
   }
   
   :global(.muted) {
-    color: rgba(255, 255, 255, 0.44);
+    color: var(--comp-label-color);
   }
   
   :global(.error-text) {
@@ -742,7 +742,7 @@
   }
   
   :global(.chainwork-score-other) {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
   
   :global(.num) {
@@ -761,12 +761,12 @@
   
   .no-data p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 16px;
   }
   
   .no-data p.sub {
-    color: rgba(255, 255, 255, 0.44);
+    color: var(--comp-label-color);
     font-size: 14px;
   }
 </style>

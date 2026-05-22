@@ -325,8 +325,11 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			v.logger.Infof("[Validator] Shutting down during FSM wait")
+			return err
+		}
 		v.logger.Errorf("[Validator] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -571,6 +574,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 			metaData[idx] = validatorResponse.Metadata
 			errReasons[idx] = errors.Wrap(err)
 
+			// Never return an error because we don't want to cancel the context for other transactions in the batch.
 			return nil
 		})
 	}
@@ -579,6 +583,8 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	_ = g.Wait()
 
 	return &validator_api.ValidateTransactionBatchResponse{
+		// Valid is always true at the batch level by design — callers must
+		// inspect per-item Errors. The field is retained for wire compatibility.
 		Valid:    true,
 		Errors:   errReasons,
 		Metadata: metaData,

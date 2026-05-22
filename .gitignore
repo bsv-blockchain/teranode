@@ -1,6 +1,10 @@
 # Local profiling artifacts
 /stores/txmetacache/testdata/pprof/
 
+# Python bytecode (mkdocs hooks)
+__pycache__/
+*.pyc
+
 
 .history/**
 *.tar.gz
@@ -56,6 +60,7 @@ kustomization.yaml.bak
 # Local Claude configuration (user-specific)
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/skills/*-workspace/
 
 *.log
 
@@ -104,7 +109,7 @@ teranode_peers.json
 *.key
 logs/
 teranode.logrotate
-teranode
+/teranode
 
 settings_local.conf
 .teranode-dev.yaml

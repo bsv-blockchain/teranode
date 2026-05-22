@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -136,8 +138,12 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		assert.Nil(t, metaGet.Tx) // Tx should be nil as it is not set in the cache
 		assert.Equal(t, len(metaData.TxInpoints.ParentTxHashes), len(metaGet.TxInpoints.ParentTxHashes))
 		assert.Equal(t, metaData.TxInpoints.ParentTxHashes[0], metaGet.TxInpoints.ParentTxHashes[0])
-		assert.Equal(t, len(metaData.TxInpoints.Idxs), len(metaGet.TxInpoints.Idxs))
-		assert.Equal(t, metaData.TxInpoints.Idxs[0], metaGet.TxInpoints.Idxs[0])
+
+		origVouts, err := metaData.TxInpoints.GetParentVoutsAtIndex(0)
+		require.NoError(t, err)
+		gotVouts, err := metaGet.TxInpoints.GetParentVoutsAtIndex(0)
+		require.NoError(t, err)
+		assert.Equal(t, origVouts, gotVouts)
 	})
 }
 
@@ -279,6 +285,44 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 			err = g.Wait()
 			require.NoError(b, err)
 		})
+	}
+}
+
+func Benchmark_txMetaCache_GetMetaCached_WithBuffer(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, ns, Unallocated, 1)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	hash := chainhash.HashH([]byte("cached-meta-buffer-benchmark"))
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+	}
+	require.NoError(b, cache.SetCache(&hash, metaData))
+
+	txMetaData := &meta.Data{}
+	cachedBytes := make([]byte, 0, txMetaCacheReadBufferInitialCapacity)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		var found bool
+		cachedBytes, found, err = cache.GetMetaCachedWithBuffer(ctx, hash, txMetaData, cachedBytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !found {
+			b.Fatal("expected cached tx meta")
+		}
 	}
 }
 
@@ -788,10 +832,15 @@ func Test_TxMetaCache_BatchDecorate(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("b6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 
 	// Create test metadata
+	in1 := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in1.PreviousTxIDAdd(hash1))
+	ti1, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in1})
+	require.NoError(t, err)
+
 	testMeta1 := &meta.Data{
 		Fee:         100,
 		SizeInBytes: 250,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash1}, Idxs: [][]uint32{{0}}},
+		TxInpoints:  ti1,
 		BlockIDs:    []uint32{1},
 	}
 
@@ -977,3 +1026,171 @@ func Test_TxMetaCache_AdditionalUTXOOperations(t *testing.T) {
 
 // Note: Additional complex UTXO operations tests would go here
 // but are skipped due to complex type requirements for this coverage run
+
+// TestTxMetaCacheSetMinedMulti_DelegatesToStoreAndEvicts verifies that SetMinedMulti
+// calls the underlying utxo.Store, returns its blockIDsMap, and removes the
+// transaction from the cache (mined txs are not cacheable per the read-path policy
+// in GetMeta). It must not Get or otherwise update the cache entry.
+func TestTxMetaCacheSetMinedMulti_DelegatesToStoreAndEvicts(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+	expectedMap := map[chainhash.Hash][]uint32{*hash: {42}}
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(expectedMap, nil).Once()
+	mockStore.On("GetBlockHeight").Return(uint32(0))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	// Pre-seed the cache so the eviction is observable.
+	require.NoError(t, cache.SetCache(hash, &meta.Data{Tx: coinbaseTx}))
+	gotCached, _ := cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.True(t, gotCached, "cache should be populated before SetMinedMulti")
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 42})
+	require.NoError(t, err)
+	require.Equal(t, expectedMap, got)
+
+	gotCached, _ = cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.False(t, gotCached, "cache entry should be evicted after SetMinedMulti")
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestTxMetaCacheSetMinedMulti_PropagatesStoreError verifies that a store error
+// short-circuits the call before any cache mutation.
+func TestTxMetaCacheSetMinedMulti_PropagatesStoreError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+	storeErr := assertErr("store unavailable")
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[chainhash.Hash][]uint32(nil), storeErr).Once()
+	mockStore.On("GetBlockHeight").Return(uint32(0))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	// Pre-seed the cache so we can confirm it stays untouched on error.
+	require.NoError(t, cache.SetCache(hash, &meta.Data{Tx: coinbaseTx}))
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 7})
+	require.ErrorIs(t, err, storeErr)
+	require.Nil(t, got)
+
+	gotCached, _ := cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.True(t, gotCached, "cache must not be evicted when the store call failed")
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestTxMetaCacheSetMinedMulti_PostconditionMissingHash pins the defensive
+// coverage check: as an implementation of utxo.Store, TxMetaCache must reject
+// a result map that omits a submitted hash when !UnsetMined, even if the
+// underlying store wrongly returns a nil error. The cache must also stay
+// populated — a broken store result is not a reason to evict.
+func TestTxMetaCacheSetMinedMulti_PostconditionMissingHash(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[chainhash.Hash][]uint32{}, nil).Once()
+	mockStore.On("GetBlockHeight").Return(uint32(0))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	require.NoError(t, cache.SetCache(hash, &meta.Data{Tx: coinbaseTx}))
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 42})
+	require.Error(t, err, "missing hash must be rejected by the cache wrapper postcondition")
+	require.True(t, errors.Is(err, errors.ErrTxNotFound), "missing hash should surface as ErrTxNotFound, got %v", err)
+	require.Nil(t, got)
+
+	gotCached, _ := cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.True(t, gotCached, "cache must not be evicted when the postcondition fails")
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestTxMetaCacheSetMinedMulti_PostconditionMissingBlockID pins the other
+// half of the postcondition: a hash present in the result map but whose slice
+// does NOT contain minedBlockInfo.BlockID still violates the contract.
+func TestTxMetaCacheSetMinedMulti_PostconditionMissingBlockID(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+	// Store returns a slice that does not include the current blockID (42).
+	storeMap := map[chainhash.Hash][]uint32{*hash: {17, 99}}
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(storeMap, nil).Once()
+	mockStore.On("GetBlockHeight").Return(uint32(0))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	require.NoError(t, cache.SetCache(hash, &meta.Data{Tx: coinbaseTx}))
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 42})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrProcessing), "missing blockID should surface as ErrProcessing, got %v", err)
+	require.Nil(t, got)
+
+	gotCached, _ := cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.True(t, gotCached, "cache must not be evicted when the postcondition fails")
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap mirrors the interface
+// contract: when UnsetMined=true, missing entries are legitimate and the
+// wrapper must not turn them into errors.
+func TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	hash := coinbaseTx.TxIDChainHash()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[chainhash.Hash][]uint32{}, nil).Once()
+	mockStore.On("GetBlockHeight").Return(uint32(0))
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, mockStore, Unallocated)
+	require.NoError(t, err)
+	cache := c.(*TxMetaCache)
+
+	require.NoError(t, cache.SetCache(hash, &meta.Data{Tx: coinbaseTx}))
+
+	got, err := cache.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 42, UnsetMined: true})
+	require.NoError(t, err, "UnsetMined must tolerate missing entries per the interface contract")
+	require.NotNil(t, got)
+
+	gotCached, _ := cache.GetMetaCached(ctx, *hash, &meta.Data{})
+	require.False(t, gotCached, "cache must be evicted on the unset path so subsequent reads go to the store")
+
+	mockStore.AssertExpectations(t)
+}
+
+// assertErr is a tiny sentinel error so the test can check propagation via errors.Is.
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
