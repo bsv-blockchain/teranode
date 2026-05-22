@@ -1,6 +1,7 @@
 package uaerospike
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -217,6 +218,10 @@ func TestBuildConnSemaphore(t *testing.T) {
 		{name: "double multiplier scales up", queueSize: 128, multiplier: 2.0, expectNil: false, expectedCap: 256},
 		{name: "tiny positive multiplier clamps to 1", queueSize: 128, multiplier: 0.001, expectNil: false, expectedCap: 1},
 		{name: "large multiplier passes through", queueSize: 256, multiplier: 8.0, expectNil: false, expectedCap: 2048},
+		{name: "NaN multiplier disables semaphore", queueSize: 128, multiplier: math.NaN(), expectNil: true},
+		{name: "positive infinity clamps to max", queueSize: 128, multiplier: math.Inf(1), expectNil: false, expectedCap: maxSemaphoreCapacity},
+		{name: "absurdly large multiplier clamps to max", queueSize: 128, multiplier: 1.0e10, expectNil: false, expectedCap: maxSemaphoreCapacity},
+		{name: "multiplier landing exactly at max passes through", queueSize: 1, multiplier: float64(maxSemaphoreCapacity), expectNil: false, expectedCap: maxSemaphoreCapacity},
 	}
 
 	for _, tt := range tests {
@@ -241,9 +246,11 @@ func TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp(t *testing.T) {
 	c := &Client{
 		Client:        nil,
 		connSemaphore: buildConnSemaphore(128, 0),
+		connQueueSize: 128,
 	}
 	assert.Nil(t, c.connSemaphore)
-	assert.Equal(t, 0, c.GetConnectionQueueSize(), "disabled semaphore reports 0 capacity")
+	assert.Equal(t, 128, c.GetConnectionQueueSize(),
+		"disabled semaphore must fall back to the underlying connection-queue size so external heuristics (e.g. pruner) keep a non-zero pool capacity")
 
 	// Acquire many "permits" in sequence — none of these should block or
 	// panic because the semaphore is disabled.
@@ -252,6 +259,22 @@ func TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp(t *testing.T) {
 		require.Nil(t, err)
 		c.releasePermit()
 	}
+}
+
+// TestGetConnectionQueueSize_FallsBackWhenDisabled exercises the
+// GetConnectionQueueSize fallback path directly: when the semaphore is nil,
+// the underlying connection-queue size must be reported.
+func TestGetConnectionQueueSize_FallsBackWhenDisabled(t *testing.T) {
+	t.Run("disabled semaphore reports underlying queue size", func(t *testing.T) {
+		c := &Client{connSemaphore: nil, connQueueSize: 256}
+		assert.Equal(t, 256, c.GetConnectionQueueSize())
+	})
+
+	t.Run("active semaphore reports its capacity", func(t *testing.T) {
+		c := &Client{connSemaphore: make(chan struct{}, 64), connQueueSize: 256}
+		assert.Equal(t, 64, c.GetConnectionQueueSize(),
+			"when the semaphore is active, its capacity is the binding throttle")
+	})
 }
 
 // TestWithSemaphoreMultiplier_Scaling verifies the option overrides the
