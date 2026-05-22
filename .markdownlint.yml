@@ -45,3 +45,4 @@ MD010: true
 # Allow fenced code blocks (preferred for syntax highlighting)
 MD046:
   style: "fenced"
+

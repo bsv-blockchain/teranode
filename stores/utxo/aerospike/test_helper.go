@@ -56,6 +56,7 @@
 package aerospike
 
 import (
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -67,6 +68,12 @@ import (
 // SetClient was implemented to facilitate testing
 func (s *Store) SetClient(c *uaerospike.Client) {
 	s.client = c
+}
+
+// SetBatchOperateFn was implemented to facilitate testing of error paths
+// that require BatchOperate to fail without disrupting the rest of the client.
+func (s *Store) SetBatchOperateFn(fn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error) {
+	s.batchOperateFn = fn
 }
 
 // GetSettings was implemented to facilitate testing

@@ -32,6 +32,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -750,7 +751,7 @@ func createSpendingTx(prevTx *bsvutil.Tx, index uint32, scriptSig []byte, addres
 }
 
 func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
-	t.Run("headers-first mode skips last block time violation", func(t *testing.T) {
+	t.Run("headers-first mode detects last block time violation", func(t *testing.T) {
 		sp := &peer.Peer{} // zero-value peer is sufficient for this test
 		sps := &syncPeerState{
 			lastBlockTime: time.Now().Add(-10 * time.Minute), // way past maxLastBlockTime (3 min)
@@ -765,11 +766,12 @@ func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
 		sm.headersFirstMode.Store(true)
 		sm.peerStates.Set(sp, &peerSyncState{})
 
-		// Should return early without panicking (no clearRequestedState/updateSyncPeer called)
-		sm.handleCheckSyncPeer()
-
-		// Sync peer should still be set (not replaced)
-		assert.Equal(t, sp, sm.loadSyncPeer())
+		// Last-block-time violations are no longer skipped during headers-first mode.
+		// The violation is detected and the peer rotation path is entered, which panics
+		// here because the test uses a minimal SyncManager without full peer setup.
+		assert.Panics(t, func() {
+			sm.handleCheckSyncPeer()
+		})
 	})
 
 	t.Run("headers-first mode skips network speed violation", func(t *testing.T) {
@@ -814,4 +816,39 @@ func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
 		// No violations, sync peer should still be set
 		assert.Equal(t, sp, sm.loadSyncPeer())
 	})
+}
+
+// TestHandleNewPeerMsg_NilFSMState exercises the path where the blockchain
+// client returns (nil, err) from GetFSMCurrentState — common during transient
+// gRPC failures or service restarts. The pre-fix code dereferenced the nil
+// pointer and panicked. The fix must guard the dereference and still register
+// the peer.
+func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return((*blockchain2.FSMStateType)(nil), errors.NewServiceError("transient gRPC error"))
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	smPeer := &peer.Peer{}
+
+	defer func() {
+		if r := recover(); r != nil {
+			require.Failf(t, "handleNewPeerMsg panicked", "panic: %v", r)
+		}
+	}()
+
+	sm.handleNewPeerMsg(smPeer)
+
+	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
+	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
 }

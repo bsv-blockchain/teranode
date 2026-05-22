@@ -1,39 +1,45 @@
 package version
 
 import (
-	"fmt"
 	"testing"
+
+	"github.com/ordishs/gocore"
 )
 
 func TestString(t *testing.T) {
-	base := fmt.Sprintf("%d.%d.%d-%s", AppMajor, AppMinor, AppPatch, AppPreRelease)
-
 	testCases := []struct {
 		name     string
-		build    string
+		version  string
 		expected string
 	}{
 		{
-			name:     "standard-release",
-			build:    "",
-			expected: base,
-		}, {
-			name:     "with-build",
-			build:    "012-abc",
-			expected: base + "+012-abc",
-		}, {
-			name:     "with-out-of-spec-build",
-			build:    "012_abc",
-			expected: base,
+			name:     "git tag version",
+			version:  "v1.2.3",
+			expected: "1.2.3",
+		},
+		{
+			name:     "dev version with timestamp",
+			version:  "v0.0.0-20260407-abc1234",
+			expected: "0.0.0-20260407-abc1234",
+		},
+		{
+			name:     "no v prefix",
+			version:  "1.0.0",
+			expected: "1.0.0",
+		},
+		{
+			name:     "empty version",
+			version:  "",
+			expected: "",
 		},
 	}
 
 	for _, tc := range testCases {
-		appBuild = tc.build
+		gocore.SetInfo("test", tc.version, "deadbeef")
 
 		v := String()
 		if v != tc.expected {
-			t.Fatalf("%s: expected %s, got %s", tc.name, tc.expected, v)
+			t.Fatalf("%s: expected %q, got %q", tc.name, tc.expected, v)
 		}
 	}
 }

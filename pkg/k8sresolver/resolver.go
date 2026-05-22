@@ -3,6 +3,7 @@ package k8sresolver
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -115,7 +116,10 @@ func (k *k8sResolver) lookup() (*resolver.State, error) {
 	cachedState := resolveCache.Get(k.host+":"+k.port, ttlcache.WithDisableTouchOnHit[string, *resolver.State]())
 	if cachedState != nil {
 		k.logger.Debugf("[k8s] returning cached endpoints for host: %s, port: %s", k.host, k.port)
-		return cachedState.Value(), nil
+		// Return a shuffled copy so each ClientConn starts round-robin
+		// at a different position, preventing hot-spotting when many
+		// ClientConns resolve the same service.
+		return shuffleState(cachedState.Value()), nil
 	}
 
 	k.logger.Debugf("[k8s] looking up service endpoints (%s:%s)", k.host, k.port)
@@ -144,5 +148,23 @@ func (k *k8sResolver) lookup() (*resolver.State, error) {
 		_ = resolveCache.Set(k.host+":"+k.port, state, resolveTTL)
 	}
 
-	return state, nil
+	return shuffleState(state), nil
+}
+
+// shuffleState returns a new resolver.State with the same addresses in
+// random order. This ensures each ClientConn gets a different round-robin
+// starting position, distributing load evenly across pods even when
+// multiple ClientConns resolve from the same cached endpoint list.
+func shuffleState(src *resolver.State) *resolver.State {
+	addrs := make([]resolver.Address, len(src.Addresses))
+	copy(addrs, src.Addresses)
+	rand.Shuffle(len(addrs), func(i, j int) {
+		addrs[i], addrs[j] = addrs[j], addrs[i]
+	})
+	return &resolver.State{
+		Addresses:     addrs,
+		Endpoints:     src.Endpoints,
+		ServiceConfig: src.ServiceConfig,
+		Attributes:    src.Attributes,
+	}
 }

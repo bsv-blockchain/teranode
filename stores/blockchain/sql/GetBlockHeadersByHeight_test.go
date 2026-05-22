@@ -50,12 +50,12 @@ func TestGetBlockHeadersByHeight_Success(t *testing.T) {
 	// Setup mock expectations
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(0), hashPrevBlock.CloneBytes(), hashMerkleRoot.CloneBytes(), bits.CloneBytes(),
-			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}).
+			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0)).
 		AddRow(1, int64(1729259727), uint32(1), block2PrevBlockHash.CloneBytes(), block2MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(1), uint32(2)).
@@ -109,7 +109,7 @@ func TestGetBlockHeadersByHeight_EmptyResult(t *testing.T) {
 	// Setup mock expectations - return empty result
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	})
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
@@ -138,10 +138,10 @@ func TestGetBlockHeadersByHeight_SameHeight(t *testing.T) {
 	// Setup mock expectations - return single block at height 2
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(1), block2PrevBlockHash.CloneBytes(), block2MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(2), uint32(2)).
@@ -175,7 +175,7 @@ func TestGetBlockHeadersByHeight_ReverseRange(t *testing.T) {
 	// Setup mock expectations - return empty result for impossible range
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	})
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
@@ -228,10 +228,10 @@ func TestGetBlockHeadersByHeight_ZeroHeight(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1296688602), uint32(2), genesisHash.CloneBytes(), genesisMerkleRoot.CloneBytes(), bits.CloneBytes(),
-			uint32(0), uint32(0), int64(1), int64(285), "", int64(1296688602), customtime.CustomTime{})
+			uint32(0), uint32(0), int64(1), int64(285), "", int64(1296688602), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(0), uint32(0)).
@@ -264,12 +264,12 @@ func TestGetBlockHeadersByHeight_LargeRange(t *testing.T) {
 	// Setup mock expectations - return a few blocks out of the large range
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(0), hashPrevBlock.CloneBytes(), hashMerkleRoot.CloneBytes(), bits.CloneBytes(),
-			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}).
+			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0)).
 		AddRow(1, int64(1729259727), uint32(1), block2PrevBlockHash.CloneBytes(), block2MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(0), uint32(1000000)).
@@ -321,7 +321,7 @@ func TestGetBlockHeadersByHeight_MaxValues(t *testing.T) {
 	// Setup mock expectations - return empty result for very high heights
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	})
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
@@ -349,12 +349,12 @@ func TestGetBlockHeadersByHeight_DataConsistency(t *testing.T) {
 	// Setup mock expectations
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(0), hashPrevBlock.CloneBytes(), hashMerkleRoot.CloneBytes(), bits.CloneBytes(),
-			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}).
+			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0)).
 		AddRow(1, int64(1729259727), uint32(1), block2PrevBlockHash.CloneBytes(), block2MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(0), uint32(5)).
@@ -393,7 +393,7 @@ func TestGetBlockHeadersByHeight_CapacityCalculation(t *testing.T) {
 	// Setup mock expectations - empty result for reverse range
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	})
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
@@ -421,14 +421,14 @@ func TestGetBlockHeadersByHeight_Ordering(t *testing.T) {
 	// Setup mock expectations - multiple blocks in order
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(0), hashPrevBlock.CloneBytes(), hashMerkleRoot.CloneBytes(), bits.CloneBytes(),
-			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}).
+			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0)).
 		AddRow(1, int64(1729259727), uint32(1), block2PrevBlockHash.CloneBytes(), block2MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}).
+			uint32(2), uint32(2), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0)).
 		AddRow(1, int64(1729259727), uint32(1), block3PrevBlockHash.CloneBytes(), block3MerkleRootHash.CloneBytes(), bits.CloneBytes(),
-			uint32(3), uint32(3), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(3), uint32(3), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(0), uint32(10)).
@@ -461,10 +461,10 @@ func TestGetBlockHeadersByHeight_ScanError(t *testing.T) {
 	invalidHash := []byte{0x01} // Too short for a valid hash (needs 32 bytes)
 	rows := sqlmock.NewRows([]string{
 		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
-		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
 	}).
 		AddRow(1, int64(1729259727), uint32(0), invalidHash, invalidHash, bits.CloneBytes(),
-			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{})
+			uint32(1), uint32(1), int64(1), int64(1000), "test_peer", int64(1729259727), customtime.CustomTime{}, uint32(0))
 
 	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).
 		WithArgs(uint32(1), uint32(10)).

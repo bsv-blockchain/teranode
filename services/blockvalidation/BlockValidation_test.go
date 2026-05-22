@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -292,7 +292,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -3494,6 +3494,38 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	// After success, block hash should be deleted from blockHashesCurrentlyValidated
 	_, exists := blockValidation.blockHashesCurrentlyValidated.Get(*blockHash)
 	require.False(t, exists, "block hash should be deleted from blockHashesCurrentlyValidated after success")
+}
+
+// TestSetMinedRetryBackoff pins the exponential-with-cap backoff sequence used
+// by the setMinedChan worker. Operators rely on this curve to size alert
+// thresholds: 1s + 2s + 4s + 8s + 6×16s = 111s total before drop on a
+// permanently-unrecoverable block.
+func TestSetMinedRetryBackoff(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 0, want: 1 * time.Second},  // defensive: 0/negative -> base
+		{attempt: 1, want: 1 * time.Second},  // first retry
+		{attempt: 2, want: 2 * time.Second},  // doubling
+		{attempt: 3, want: 4 * time.Second},  // doubling
+		{attempt: 4, want: 8 * time.Second},  // doubling
+		{attempt: 5, want: 16 * time.Second}, // hits the cap
+		{attempt: 6, want: 16 * time.Second}, // stays at the cap
+		{attempt: 9, want: 16 * time.Second}, // stays at the cap
+		{attempt: 63, want: 16 * time.Second},
+	}
+	for _, tc := range cases {
+		got := setMinedRetryBackoff(tc.attempt)
+		require.Equalf(t, tc.want, got, "setMinedRetryBackoff(%d)", tc.attempt)
+	}
+
+	// Sanity-check the total budget so changes to the constants are obvious in code review.
+	var total time.Duration
+	for i := 1; i <= setMinedMaxRetries; i++ {
+		total += setMinedRetryBackoff(i)
+	}
+	require.Equal(t, 111*time.Second, total, "total worst-case backoff before drop changed - update operator docs")
 }
 
 // TestBlockValidation_BlockchainSubscription_TriggersSetMined ensures that receiving a NotificationType_Block on the blockchainSubscription triggers setMined.

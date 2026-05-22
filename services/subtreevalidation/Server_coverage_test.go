@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -178,7 +179,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := &mockKafkaConsumer{}
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.Error(t, err)
 		require.Nil(t, server)
@@ -205,7 +206,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -239,7 +240,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -267,7 +268,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -737,4 +738,30 @@ func TestCheckSubtreeFromBlockInternal(t *testing.T) {
 		require.False(t, ok)
 		require.Contains(t, err.Error(), "Failed to parse previous block hash")
 	})
+}
+
+func TestResolveTxMetaCacheBucketType(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	tests := []struct {
+		input string
+		want  txmetacache.BucketType
+	}{
+		{"unallocated", txmetacache.Unallocated},
+		{"UNALLOCATED", txmetacache.Unallocated},
+		{"  unallocated  ", txmetacache.Unallocated},
+		{"", txmetacache.Unallocated}, // unset → default
+		{"preallocated", txmetacache.Preallocated},
+		{"trimmed", txmetacache.Trimmed},
+		{"native", txmetacache.Native},
+		{"Native", txmetacache.Native},
+		{"gibberish", txmetacache.Unallocated}, // unknown → fallback
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := resolveTxMetaCacheBucketType(logger, tc.input)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

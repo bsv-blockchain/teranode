@@ -11,17 +11,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/null"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/factory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
@@ -661,7 +666,13 @@ func TestStartHTTPServer(t *testing.T) {
 }
 
 // Test_handleMultipleTx tests the handleMultipleTx function.
-// This test makes sure chains of transactions are processed properly
+//
+// The batch endpoint processes transactions concurrently and the caller
+// contract forbids placing both a parent and any of its children in the same
+// batch — see ProcessTransactionBatch for the equivalent gRPC pattern. This
+// test honours that contract by submitting sibling transactions that each
+// spend a different output of a single coinbase. The coinbase is loaded into
+// the UTXO store but is itself NOT part of the batch.
 func Test_handleMultipleTx(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -672,7 +683,7 @@ func Test_handleMultipleTx(t *testing.T) {
 	tSettings.Propagation.HTTPListenAddress = ""
 	tSettings.BlockAssembly.Disabled = true
 
-	t.Run("Test handleMultipleTx with valid transactions", func(t *testing.T) {
+	t.Run("Test handleMultipleTx with valid sibling transactions", func(t *testing.T) {
 		ctx := context.Background()
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -695,16 +706,32 @@ func Test_handleMultipleTx(t *testing.T) {
 
 		handler := ps.handleMultipleTx(t.Context())
 
-		txBytes := make([]byte, 0, 1024)
-		txs := transactions.CreateTestTransactionChainWithCount(t, 20)
-		coinbaseTx := txs[0]
+		const numSiblings = 20
+
+		privKey, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+		// Coinbase with N outputs — pre-loaded into the UTXO store, not in batch.
+		coinbaseTx := transactions.Create(t,
+			transactions.WithCoinbaseData(100, "/Test miner/"),
+			transactions.WithP2PKHOutputs(numSiblings, 50e6, pubKey),
+		)
 
 		_, err = utxoStore.Create(t.Context(), coinbaseTx, 1)
 		require.NoError(t, err)
 
-		// Add all the transaction bytes to the byte slice for sending to the handler
-		for i := 1; i < len(txs); i++ {
-			txBytes = append(txBytes, txs[i].ExtendedBytes()...)
+		// N siblings, each spending a different coinbase output. No tx in the
+		// batch depends on any other tx in the batch.
+		siblings := make([]*bt.Tx, 0, numSiblings)
+		txBytes := make([]byte, 0, 1024)
+
+		for i := uint32(0); i < numSiblings; i++ {
+			tx := transactions.Create(t,
+				transactions.WithPrivateKey(privKey),
+				transactions.WithInput(coinbaseTx, i),
+				transactions.WithP2PKHOutputs(1, 1000),
+			)
+			siblings = append(siblings, tx)
+			txBytes = append(txBytes, tx.ExtendedBytes()...)
 		}
 
 		txsReader := bytes.NewReader(txBytes)
@@ -724,6 +751,87 @@ func Test_handleMultipleTx(t *testing.T) {
 
 		assert.Equal(t, "OK", string(responseBody))
 	})
+}
+
+// orderedErrValidator returns a Validator whose Validate method fails with an
+// error that embeds the tx's txid, so a caller can verify per-tx error order.
+type orderedErrValidator struct {
+	validator.MockValidatorClient
+}
+
+func (m *orderedErrValidator) Validate(_ context.Context, tx *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return nil, errors.NewTxInvalidError("validator rejected tx %s", tx.TxIDChainHash().String())
+}
+
+// Test_handleMultipleTx_ErrorOrderPreserved verifies that when every tx in a
+// batch fails validation, the errors returned in the response body appear in
+// the same order as the transactions were submitted, even though processing
+// happens concurrently.
+func Test_handleMultipleTx_ErrorOrderPreserved(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	txStore, err := null.New(logger)
+	require.NoError(t, err)
+
+	ps := &PropagationServer{
+		logger:    logger,
+		validator: &orderedErrValidator{},
+		txStore:   txStore,
+		settings:  tSettings,
+	}
+
+	handler := ps.handleMultipleTx(t.Context())
+
+	const numSiblings = 32
+
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(numSiblings, 50e6, pubKey),
+	)
+
+	expectedTxids := make([]string, 0, numSiblings)
+	txBytes := make([]byte, 0, 1024)
+
+	for i := uint32(0); i < numSiblings; i++ {
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privKey),
+			transactions.WithInput(coinbaseTx, i),
+			transactions.WithP2PKHOutputs(1, 1000),
+		)
+		expectedTxids = append(expectedTxids, tx.TxIDChainHash().String())
+		txBytes = append(txBytes, tx.ExtendedBytes()...)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(txBytes))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/txs")
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	responseBody, err := io.ReadAll(rec.Body)
+	require.NoError(t, err)
+
+	// Every tx fails, so the response should contain numSiblings error lines,
+	// each naming its tx's txid, in the same order the txs were submitted.
+	body := string(responseBody)
+	prev := 0
+
+	for i, txid := range expectedTxids {
+		idx := strings.Index(body[prev:], txid)
+		require.GreaterOrEqualf(t, idx, 0, "txid for submission %d (%s) not found in response after position %d; body=%q", i, txid, prev, body)
+		prev += idx + len(txid)
+	}
 }
 
 func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
@@ -1432,4 +1540,29 @@ func TestProcessTransactionBatch_BatchConcurrencyLimit(t *testing.T) {
 		require.NotNil(t, resp)
 		assert.Len(t, resp.Errors, 2)
 	})
+}
+
+// TestPropagationServer_Start_FSMContextCancellation verifies graceful shutdown
+// handling when the context is cancelled during the FSM wait. The error must be
+// returned (not swallowed) and must be a context error so the service manager
+// can distinguish it from a real failure.
+func TestPropagationServer_Start_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+	tSettings.Propagation.IPv6Addresses = ""
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	ps := New(logger, tSettings, nil, nil, mockBlockchainClient, nil, nil)
+
+	readyCh := make(chan struct{})
+	err := ps.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+	mockBlockchainClient.AssertExpectations(t)
 }

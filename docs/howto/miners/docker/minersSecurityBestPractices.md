@@ -1,64 +1,94 @@
-# Security Best Practices
+# Docker Security Best Practices
 
-Last modified: 22-January-2025
+Last modified: 28-April-2026
 
-## Firewall Configuration
+The quickstart deployment is designed to keep most services local by default.
+Do not expose internal ports unless you have a specific operational reason and
+an authentication or network-control layer in front of them.
 
+## Default Exposure
 
-While Docker Compose creates an isolated network for the Teranode services, some ports are exposed to the host system and potentially to the external network. Here are some firewall configuration recommendations:
+In [teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart),
+`HOST_IP` controls only these ports:
 
-### 1. Publicly Exposed Ports
+| Port | Service | Expose publicly? |
+| --- | --- | --- |
+| `8090` | Asset viewer UI | Only to trusted networks |
+| `8000` | Asset cache | Only through a controlled HTTPS reverse proxy |
+| `9905` | P2P | Required for full mode inbound peers |
 
-Review the ports exposed in the Docker Compose configuration file(s) and ensure your firewall is configured to handle these appropriately:
+These services remain bound to `127.0.0.1` in the quickstart Compose files:
 
-- `9292`: RPC Server. Open to receive RPC API requests.
-- `8090`: Asset Server. Open for incoming HTTP asset requests.
-- `9905,9906`: P2P Server. Open for incoming connections to allow peer discovery and communication.
+- RPC: `9292`
+- Grafana: `3005`
+- Prometheus: `9090`
+- Kafka Console: `8080`
+- Redpanda/Kafka: `9092`
+- PostgreSQL: `5432`
+- Aerospike: `3000`
+- Internal gRPC ports
 
-### 2. Host Firewall
+Setting `HOST_IP=0.0.0.0` does not expose those loopback-only services.
 
-- Configure your host's firewall to allow incoming connections only on the necessary ports.
-- For ports that don't need external access, strictly restrict them to localhost (127.0.0.1) or your internal network.
+## Listen-Only Mode
 
-### 3. External Access
+Listen-only mode is the safest default:
 
-- Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P, RPC and Asset server ports).
-- Use strong authentication for any services that require external access. See the section 4.1 of this document for more details.
+```env
+listen_mode=listen_only
+HOST_IP=127.0.0.1
+```
 
-### 4. Docker's Built-in Firewall
+Use it when the node does not need inbound P2P participation or public asset API
+access.
 
-- Docker manages its own iptables rules. Ensure these don't conflict with your host firewall rules.
+## Full Mode
 
-### 5. Network Segmentation
+Full mode requires public reachability. At minimum:
 
-- If possible, place your Teranode host on a separate network segment with restricted access to other parts of your infrastructure.
+- Expose P2P TCP on port `9905`.
+- Serve the asset API through HTTPS and a reverse proxy to port `8000`.
+- Set `asset_httpPublicAddress` to the public URL including `/api/v1`.
+- Set `p2p_advertise_addresses` to the public libp2p multiaddr.
+- Keep RPC on loopback unless a separate authenticated access layer is in place.
 
-### 6. Regular Audits
+Do not expose raw internal service ports to the internet.
 
-- Periodically review your firewall rules and exposed ports to ensure they align with your security requirements.
+## RPC
 
-### 7. Service-Specific Recommendations
+Quickstart generates RPC credentials in `.env` and binds RPC to
+`127.0.0.1:9292`. Keep it that way for normal deployments.
 
-- **PostgreSQL (5432)**: If you want to expose it, restrict to internal network, never publicly.
-- **Kafka (9092, 9093)**: If you want to expose it, restrict to internal network, never publicly.
-- **Aerospike (3000)**: If you want to expose it, restrict to internal network, never publicly.
-- **Grafana (3005)**: Secure with strong authentication if exposed externally.
+If remote RPC is required, use a dedicated authenticated tunnel or reverse proxy
+with TLS, access logging, rate limits, and source restrictions.
 
-### 8. P2P Communication
+## Secrets
 
-- Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
+`.env` contains RPC and PostgreSQL secrets. On multi-user hosts, restrict file
+permissions:
 
+```bash
+chmod 600 .env
+```
 
+Back up `.env` securely before destructive reset operations.
 
-!!! info "Important Security Principle"
-    Remember, the exact firewall configuration will depend on your specific network setup, security requirements, and how you intend to operate your Teranode. Always follow the principle of least privilege, exposing only what is necessary for operation.
+## Monitoring Interfaces
 
+Grafana, Prometheus, and Kafka Console are local development and operations
+interfaces. If you expose them beyond localhost, put them behind authentication
+and restrict source networks.
 
+## DHT Mode
 
+Quickstart defaults `p2p_dht_mode=off`. Only use `server` mode if the node is
+intended to act as a reachable DHT participant and the hosting provider allows
+the peer probing behavior required for DHT routing.
 
-## Regular System Updates
+## Host Maintenance
 
-
-
-!!! tip "System Update Recommendations"
-    In order to receive the latest bug fixes and vulnerability patches, please ensure you perform periodic system updates, as regularly as feasible. Please refer to the Teranode update process outlined in the Section 6 of this document.
+- Keep Docker, the host OS, and reverse-proxy software patched.
+- Use host firewall rules in addition to Docker port bindings.
+- Monitor disk usage; verbose logs and archival mode can grow quickly.
+- Keep backup and restore procedures separate from the running quickstart
+  checkout.

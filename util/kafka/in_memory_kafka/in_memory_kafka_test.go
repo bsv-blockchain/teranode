@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,797 +17,284 @@ func TestInMemoryBrokerProduceConsume(t *testing.T) {
 	topic := "test-topic"
 	messageValue := []byte("hello world")
 
-	// Create Producer
 	producer := NewInMemorySyncProducer(broker)
-	defer func() {
-		_ = producer.Close()
-	}()
+	defer func() { _ = producer.Close() }()
 
-	// Create Consumer
-	consumer, err := broker.NewInMemoryConsumer(topic)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
-	defer func() {
-		_ = consumer.Close()
-	}()
+	received := make(chan *Message, 1)
+	handler := &captureHandler{received: received}
+	cg := NewInMemoryConsumerGroup(broker, topic, "test-group")
+	defer cg.Close()
 
-	// Consume Partition (only partition 0 is supported in this mock)
-	partitionConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetNewest) // Start from newest for this test
-	if err != nil {
-		t.Fatalf("Failed to consume partition: %v", err)
-	}
-	defer func() {
-		_ = partitionConsumer.Close()
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = cg.Consume(ctx, []string{topic}, handler) }()
 
-	// Use a channel to signal message reception
-	messageReceived := make(chan *sarama.ConsumerMessage, 1)
-	errCh := make(chan error, 1) // Renamed errs to errCh
+	time.Sleep(50 * time.Millisecond)
+	require.NoError(t, producer.Send(topic, nil, messageValue))
 
-	// Start consumer goroutine
-	go func() {
-		select {
-		case msg := <-partitionConsumer.Messages():
-			messageReceived <- msg
-		case consumerErr := <-partitionConsumer.Errors():
-			// This channel is nil in the mock, so this case shouldn't be hit
-			if consumerErr != nil { // Check if error is actually non-nil
-				errCh <- consumerErr
-			}
-		case <-time.After(5 * time.Second): // Timeout
-			errCh <- errors.NewServiceError("timeout waiting for message")
-		}
-	}()
-
-	// Produce Message
-	msg := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(messageValue),
-	}
-
-	_, _, err = producer.SendMessage(msg)
-	if err != nil {
-		t.Fatalf("Failed to send message: %v", err)
-	}
-
-	// Wait for message or error
 	select {
-	case receivedMsg := <-messageReceived:
-		if receivedMsg.Topic != topic {
-			t.Errorf("Received message with wrong topic: got %s, want %s", receivedMsg.Topic, topic)
-		}
-
-		if !bytes.Equal(receivedMsg.Value, messageValue) {
-			t.Errorf("Received message with wrong value: got %s, want %s", string(receivedMsg.Value), string(messageValue))
-		}
-
-		// Check offset - should be 0 for the first message
-		if receivedMsg.Offset != 0 {
-			t.Errorf("Received message with wrong offset: got %d, want %d", receivedMsg.Offset, 0)
-		}
-	case consumerErr := <-errCh:
-		t.Fatalf("Consumer error: %v", consumerErr)
+	case msg := <-received:
+		assert.Equal(t, topic, msg.Topic)
+		assert.True(t, bytes.Equal(msg.Value, messageValue))
+		assert.Equal(t, int64(0), msg.Offset)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message")
 	}
+}
+
+type captureHandler struct{ received chan *Message }
+
+func (h *captureHandler) Setup(ConsumerGroupSession) error   { return nil }
+func (h *captureHandler) Cleanup(ConsumerGroupSession) error { return nil }
+func (h *captureHandler) ConsumeClaim(_ ConsumerGroupSession, claim ConsumerGroupClaim) error {
+	for msg := range claim.Messages() {
+		h.received <- msg
+	}
+	return nil
 }
 
 func TestInMemoryBrokerProduceToNewTopic(t *testing.T) {
 	broker := NewInMemoryBroker()
-	topic := "new-topic"
-	messageValue := []byte("message for new topic")
-
 	producer := NewInMemorySyncProducer(broker)
-	defer func() {
-		_ = producer.Close()
-	}()
+	defer producer.Close()
+	require.NoError(t, producer.Send("new-topic", nil, []byte("message for new topic")))
 
-	msg := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(messageValue),
-	}
-
-	_, _, err := producer.SendMessage(msg)
-	if err != nil {
-		t.Fatalf("Failed to send message to new topic: %v", err)
-	}
-
-	// Verify topic was created
 	broker.mu.RLock()
-	_, ok := broker.topics[topic]
+	_, ok := broker.topics["new-topic"]
 	broker.mu.RUnlock()
-
-	if !ok {
-		t.Errorf("Topic '%s' was not created automatically after producing", topic)
-	}
+	assert.True(t, ok)
 }
 
 func TestInMemoryBrokerConsumeFromNewTopic(t *testing.T) {
 	broker := NewInMemoryBroker()
-	topic := "another-new-topic"
+	cg := NewInMemoryConsumerGroup(broker, "another-new-topic", "test-group")
+	defer cg.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := cg.Consume(ctx, []string{"another-new-topic"}, &captureHandler{received: make(chan *Message)})
+	require.Error(t, err)
+	assert.Equal(t, context.Canceled, err)
 
-	consumer, err := broker.NewInMemoryConsumer(topic)
-	if err != nil {
-		t.Fatalf("Failed to create consumer for new topic: %v", err)
-	}
-	defer func() {
-		_ = consumer.Close()
-	}()
-
-	// Verify topic was created
 	broker.mu.RLock()
-	_, ok := broker.topics[topic]
+	_, ok := broker.topics["another-new-topic"]
 	broker.mu.RUnlock()
-
-	if !ok {
-		t.Errorf("Topic '%s' was not created automatically after consuming", topic)
-	}
+	assert.True(t, ok)
 }
 
-func TestInMemoryConsumerConsumePartitionError(t *testing.T) {
-	broker := NewInMemoryBroker()
-	topic := "test-topic-partition"
-
-	// Produce a fake message to ensure a topic exists
-	producer := NewInMemorySyncProducer(broker)
-	msg := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("dummy")}
-
-	_, _, err := producer.SendMessage(msg) // Assign error from SendMessage
-	if err != nil {
-		t.Fatalf("Failed to produce setup message: %v", err)
-	}
-
-	_ = producer.Close()
-
-	consumer, err := broker.NewInMemoryConsumer(topic)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
-	defer func() {
-		_ = consumer.Close()
-	}()
-
-	// Try consuming unsupported partition 1
-	_, err = consumer.ConsumePartition(topic, 1, sarama.OffsetOldest)
-	if err == nil {
-		t.Errorf("Expected error when consuming unsupported partition 1, but got nil")
-	} else {
-		t.Logf("Got expected error for unsupported partition: %v", err) // Log success
-	}
-}
-
-func TestInMemorySyncProducerUnimplementedMethods(t *testing.T) {
+func TestInMemorySyncProducerSend(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemorySyncProducer(broker)
-
-	defer func() {
-		_ = producer.Close()
-	}()
-
-	if err := producer.SendMessages(nil); err == nil {
-		t.Error("Expected error for unimplemented SendMessages, got nil")
-	}
-
-	if err := producer.BeginTxn(); err == nil {
-		t.Error("Expected error for unimplemented BeginTxn, got nil")
-	}
-
-	if err := producer.CommitTxn(); err == nil {
-		t.Error("Expected error for unimplemented CommitTxn, got nil")
-	}
+	defer producer.Close()
+	require.NoError(t, producer.Send("test-topic", []byte("key"), []byte("value")))
 }
 
 func TestInMemoryAsyncProducerProduceSuccess(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "async-test-success"
-	messageValue := "hello async world"
-	msgToSend := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.StringEncoder(messageValue),
-	}
+	messageValue := []byte("hello async world")
+	received := make(chan *Message, 1)
+	handler := &captureHandler{received: received}
+	cg := NewInMemoryConsumerGroup(broker, topic, "test-group")
+	defer cg.Close()
 
-	// 1. Create Consumer FIRST to register its channel with the broker
-	consumer, err := broker.NewInMemoryConsumer(topic)
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = cg.Consume(ctx, []string{topic}, handler) }()
+	time.Sleep(50 * time.Millisecond)
 
-	defer func() {
-		_ = consumer.Close()
-	}()
-
-	pConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetOldest) // Read from start
-	require.NoError(t, err)
-
-	defer func() {
-		_ = pConsumer.Close()
-	}()
-
-	// 2. Create Producer
-	producer := NewInMemoryAsyncProducer(broker, 1) // Buffer size 1
-	defer func() {
-		_ = producer.Close()
-	}()
-
-	// Use WaitGroups to coordinate producer success and consumer reception
-	var (
-		wgProducer sync.WaitGroup
-		wgConsumer sync.WaitGroup
-	)
-
-	wgProducer.Add(1)
-	wgConsumer.Add(1)
-
-	// Goroutine to wait for producer success
-	go func() {
-		defer wgProducer.Done()
-
-		select {
-		case successMsg := <-producer.Successes():
-			assert.Equal(t, msgToSend, successMsg, "Success message should match sent message")
-			// Add other assertions if needed
-		case err := <-producer.Errors():
-			t.Errorf("Expected success, but got error: %v", err)
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for producer success message") // Use t.Errorf for goroutines
-		}
-	}()
-
-	// Goroutine to wait for a consumer message
-	go func() {
-		defer wgConsumer.Done()
-
-		select {
-		case msg := <-pConsumer.Messages():
-			assert.Equal(t, messageValue, string(msg.Value), "Consumed message value mismatch")
-		case <-time.After(2 * time.Second): // Increased timeout slightly
-			t.Errorf("Timeout waiting for consumer message") // Use t.Errorf for goroutines
-		}
-	}()
-
-	// 3. Send the message AFTER consumer is ready
-	producer.Input() <- msgToSend
-
-	// 4. Wait for both producer and consumer operations to complete
-	wgProducer.Wait()
-	wgConsumer.Wait()
-}
-
-func TestInMemoryAsyncProducerProduceError(t *testing.T) {
-	broker := NewInMemoryBroker()
 	producer := NewInMemoryAsyncProducer(broker, 1)
-
-	defer func() {
-		_ = producer.Close()
-	}()
-
-	topic := "async-test-error"
-	msgToSend := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: FaultyEncoder{}, // Use the faulty encoder
-	}
+	defer producer.Close()
 
 	var wg sync.WaitGroup
-
-	wg.Add(1)
-
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
-
 		select {
 		case <-producer.Successes():
-			t.Error("Expected error, but got success")
-		case prodErr := <-producer.Errors():
-			assert.Error(t, prodErr.Err, "Expected an encoding error")
-			assert.Equal(t, msgToSend, prodErr.Msg, "Error message should match sent message")
-			assert.Contains(t, prodErr.Err.Error(), "failed to encode")
+		case err := <-producer.Errors():
+			t.Errorf("expected success, got error: %v", err)
 		case <-time.After(2 * time.Second):
-			t.Error("Timeout waiting for error message")
+			t.Error("timeout waiting for success")
 		}
 	}()
-
-	producer.Input() <- msgToSend
+	go func() {
+		defer wg.Done()
+		select {
+		case msg := <-received:
+			assert.Equal(t, messageValue, msg.Value)
+		case <-time.After(2 * time.Second):
+			t.Error("timeout waiting for message")
+		}
+	}()
+	producer.Produce(topic, nil, messageValue)
 	wg.Wait()
 }
 
 func TestInMemoryAsyncProducerClose(t *testing.T) {
 	broker := NewInMemoryBroker()
-	producer := NewInMemoryAsyncProducer(broker, 10) // Larger buffer
-
-	topic := "async-test-close"
-	msg1 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("msg1")}
-	msg2 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("msg2")}
-
-	producer.Input() <- msg1
-
-	producer.Input() <- msg2
-
-	// Give some time for messages to potentially be processed, although Close should handle it
+	producer := NewInMemoryAsyncProducer(broker, 10)
+	defer producer.Close()
+	producer.Produce("async-test-close", nil, []byte("msg1"))
+	producer.Produce("async-test-close", nil, []byte("msg2"))
 	time.Sleep(50 * time.Millisecond)
-
-	err := producer.Close()
-	require.NoError(t, err)
-
-	// Drain channels after close before checking closure state
+	require.NoError(t, producer.Close())
 	for range producer.Successes() {
-		// Drain successes
 	}
-
 	for range producer.Errors() {
-		// Drain errors
 	}
-
-	// Now check if channels are closed
 	_, okSuccess := <-producer.Successes()
-	assert.False(t, okSuccess, "Successes channel should be closed")
-
+	assert.False(t, okSuccess)
 	_, okError := <-producer.Errors()
-	assert.False(t, okError, "Errors channel should be closed")
+	assert.False(t, okError)
 }
 
-type FaultyEncoder struct{}
-
-// Encode simulates a faulty encoding process that always returns an error.
-func (fe FaultyEncoder) Encode() ([]byte, error) {
-	return nil, errors.New(errors.ERR_UNKNOWN, "failed to encode")
-}
-
-// Length returns 0, simulating a faulty encoder that does not produce valid output.
-func (fe FaultyEncoder) Length() int {
-	return 0
-}
-
-// TestBrokerTopics tests the Topics() method
 func TestBrokerTopics(t *testing.T) {
 	broker := NewInMemoryBroker()
-
-	// Initially no topics
-	topics := broker.Topics()
-	assert.Empty(t, topics, "Initially broker should have no topics")
-
-	// Add some topics by producing messages
+	assert.Empty(t, broker.Topics())
 	producer := NewInMemorySyncProducer(broker)
 	defer producer.Close()
-
-	msg1 := &sarama.ProducerMessage{Topic: "topic1", Value: sarama.StringEncoder("msg1")}
-	msg2 := &sarama.ProducerMessage{Topic: "topic2", Value: sarama.StringEncoder("msg2")}
-	msg3 := &sarama.ProducerMessage{Topic: "topic1", Value: sarama.StringEncoder("msg3")} // Same topic
-
-	_, _, err := producer.SendMessage(msg1)
-	require.NoError(t, err)
-	_, _, err = producer.SendMessage(msg2)
-	require.NoError(t, err)
-	_, _, err = producer.SendMessage(msg3)
-	require.NoError(t, err)
-
-	topics = broker.Topics()
-	assert.Len(t, topics, 2, "Should have 2 unique topics")
+	require.NoError(t, producer.Send("topic1", nil, []byte("msg1")))
+	require.NoError(t, producer.Send("topic2", nil, []byte("msg2")))
+	require.NoError(t, producer.Send("topic1", nil, []byte("msg3")))
+	topics := broker.Topics()
+	assert.Len(t, topics, 2)
 	assert.Contains(t, topics, "topic1")
 	assert.Contains(t, topics, "topic2")
 }
 
-// TestSyncProducerSendMessageKeyEncodingError tests key encoding error path
-func TestSyncProducerSendMessageKeyEncodingError(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemorySyncProducer(broker)
-	defer producer.Close()
-
-	msg := &sarama.ProducerMessage{
-		Topic: "test-topic",
-		Key:   FaultyEncoder{}, // Faulty key encoder
-		Value: sarama.StringEncoder("value"),
-	}
-
-	_, _, err := producer.SendMessage(msg)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to encode key")
-}
-
-// TestSyncProducerUnimplementedMethodsCoverage tests all unimplemented methods
-func TestSyncProducerUnimplementedMethodsCoverage(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemorySyncProducer(broker)
-	defer producer.Close()
-
-	// Test all unimplemented transaction methods
-	assert.Error(t, producer.AddMessageToTxn(nil, "group", nil))
-	assert.Error(t, producer.AddOffsetsToTxn(nil, "group"))
-	assert.Error(t, producer.AbortTxn())
-
-	// Test status methods
-	assert.Equal(t, sarama.ProducerTxnFlagReady, producer.TxnStatus())
-	assert.False(t, producer.IsTransactional())
-}
-
-// TestConsumerUnimplementedMethods tests unimplemented consumer methods
-func TestConsumerUnimplementedMethods(t *testing.T) {
-	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-	defer consumer.Close()
-
-	// Test unimplemented methods
-	_, err = consumer.Topics()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Topics not implemented")
-
-	_, err = consumer.Partitions("topic")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Partitions not implemented")
-
-	// Test methods that don't return errors (no-op methods)
-	assert.Nil(t, consumer.HighWaterMarks())
-	consumer.Pause(nil)  // Should not panic
-	consumer.PauseAll()  // Should not panic
-	consumer.Resume(nil) // Should not panic
-	consumer.ResumeAll() // Should not panic
-}
-
-// TestPartitionConsumerMethods tests partition consumer methods
-func TestPartitionConsumerMethods(t *testing.T) {
-	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-	defer consumer.Close()
-
-	partConsumer, err := consumer.ConsumePartition("test-topic", 0, sarama.OffsetOldest)
-	require.NoError(t, err)
-	defer partConsumer.Close()
-
-	// Test Errors() method
-	assert.Nil(t, partConsumer.Errors())
-
-	// Test AsyncClose method
-	partConsumer.AsyncClose() // Should not panic
-
-	// Test HighWaterMarkOffset with no messages
-	assert.Equal(t, int64(0), partConsumer.HighWaterMarkOffset())
-
-	// Add a message and test HighWaterMarkOffset
-	producer := NewInMemorySyncProducer(broker)
-	msg := &sarama.ProducerMessage{Topic: "test-topic", Value: sarama.StringEncoder("test")}
-	_, _, err = producer.SendMessage(msg)
-	require.NoError(t, err)
-	producer.Close()
-
-	assert.Equal(t, int64(1), partConsumer.HighWaterMarkOffset())
-
-	// Test pause/resume methods
-	assert.False(t, partConsumer.IsPaused())
-	partConsumer.Pause()  // Should not panic
-	partConsumer.Resume() // Should not panic
-}
-
-// TestAsyncProducerNewWithZeroBuffer tests buffer size validation
-func TestAsyncProducerNewWithZeroBuffer(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemoryAsyncProducer(broker, 0) // Zero buffer should default to 100
-	defer producer.Close()
-
-	// Test that it doesn't panic and has proper channels
-	assert.NotNil(t, producer.Input())
-	assert.NotNil(t, producer.Successes())
-	assert.NotNil(t, producer.Errors())
-}
-
-// TestAsyncProducerMessageHandlerErrorPaths tests error paths in messageHandler
-func TestAsyncProducerMessageHandlerErrorPaths(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemoryAsyncProducer(broker, 1)
-	defer producer.Close()
-
-	// Test with faulty key encoder
-	msgWithFaultyKey := &sarama.ProducerMessage{
-		Topic: "test-topic",
-		Key:   FaultyEncoder{},
-		Value: sarama.StringEncoder("value"),
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		select {
-		case err := <-producer.Errors():
-			assert.Error(t, err.Err)
-			assert.Contains(t, err.Err.Error(), "failed to encode key")
-			assert.Equal(t, msgWithFaultyKey, err.Msg)
-		case <-time.After(2 * time.Second):
-			t.Error("Timeout waiting for error")
-		}
-	}()
-
-	producer.Input() <- msgWithFaultyKey
-	wg.Wait()
-}
-
-// TestAsyncProducerUnimplementedMethods tests unimplemented async producer methods
-func TestAsyncProducerUnimplementedMethods(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemoryAsyncProducer(broker, 1)
-	defer producer.Close()
-
-	// Test transaction methods
-	assert.False(t, producer.IsTransactional())
-	assert.Equal(t, sarama.ProducerTxnFlagReady, producer.TxnStatus())
-	assert.Error(t, producer.BeginTxn())
-	assert.Error(t, producer.CommitTxn())
-	assert.Error(t, producer.AbortTxn())
-	assert.Error(t, producer.AddMessageToTxn(nil, "group", nil))
-	assert.Error(t, producer.AddOffsetsToTxn(nil, "group"))
-}
-
-// TestGetSharedBroker tests the singleton broker
 func TestGetSharedBroker(t *testing.T) {
-	broker1 := GetSharedBroker()
-	broker2 := GetSharedBroker()
-
-	// Should return the same instance
-	assert.Equal(t, broker1, broker2)
-	assert.NotNil(t, broker1)
+	assert.Equal(t, GetSharedBroker(), GetSharedBroker())
+	assert.NotNil(t, GetSharedBroker())
 }
 
-// TestConsumerGroupBasicFunctionality tests consumer group creation and basic methods
 func TestConsumerGroupBasicFunctionality(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	// Test basic getters
 	assert.NotNil(t, cg.Errors())
-
-	// Test pause/resume methods (no-ops)
 	cg.PauseAll()
 	cg.ResumeAll()
 	cg.Pause(nil)
 	cg.Resume(nil)
 }
 
-// TestConsumerGroupCloseWithoutRunning tests closing a non-running consumer group
 func TestConsumerGroupCloseWithoutRunning(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
-
-	// Close without running Consume
-	err := cg.Close()
-	assert.NoError(t, err)
-
-	// Second close should also not error
-	err = cg.Close()
-	assert.NoError(t, err)
+	assert.NoError(t, cg.Close())
+	assert.NoError(t, cg.Close())
 }
 
-// MockConsumerGroupHandler for testing
-type MockConsumerGroupHandler struct {
-	setupCalled   bool
-	cleanupCalled bool
-	consumeError  error
-	setupError    error
-	cleanupError  error
-	messageCount  int
-	maxMessages   int
-}
-
-func (h *MockConsumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
-	h.setupCalled = true
-	return h.setupError
-}
-
-func (h *MockConsumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	h.cleanupCalled = true
-	return h.cleanupError
-}
-
-func (h *MockConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	if h.consumeError != nil {
-		return h.consumeError
-	}
-
-	for {
-		select {
-		case msg := <-claim.Messages():
-			if msg == nil {
-				return nil // Channel closed
-			}
-			h.messageCount++
-			if h.maxMessages > 0 && h.messageCount >= h.maxMessages {
-				return nil // Stop after max messages
-			}
-		case <-session.Context().Done():
-			return session.Context().Err()
-		}
-	}
-}
-
-// TestConsumerGroupConsumeMultipleTopics tests error for multiple topics
 func TestConsumerGroupConsumeMultipleTopics(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	handler := &MockConsumerGroupHandler{}
-
+	handler := &captureHandler{received: make(chan *Message)}
 	err := cg.Consume(context.Background(), []string{"topic1", "topic2"}, handler)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "only supports exactly one topic")
 }
 
-// TestConsumerGroupConsumeSetupError tests handler setup error
 func TestConsumerGroupConsumeSetupError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	handler := &MockConsumerGroupHandler{
-		setupError: errors.New(errors.ERR_UNKNOWN, "setup failed"),
-	}
-
+	handler := &errorSetupHandler{setupErr: errors.New(errors.ERR_UNKNOWN, "setup failed")}
 	err := cg.Consume(context.Background(), []string{"test-topic"}, handler)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "handler setup failed")
+	assert.Contains(t, err.Error(), "setup failed")
 	assert.True(t, handler.setupCalled)
 }
 
-// TestConsumerGroupConsumeCleanupError tests handler cleanup error
+type errorSetupHandler struct {
+	setupCalled bool
+	setupErr    error
+}
+
+func (h *errorSetupHandler) Setup(ConsumerGroupSession) error {
+	h.setupCalled = true
+	return h.setupErr
+}
+func (h *errorSetupHandler) Cleanup(ConsumerGroupSession) error                          { return nil }
+func (h *errorSetupHandler) ConsumeClaim(ConsumerGroupSession, ConsumerGroupClaim) error { return nil }
+
 func TestConsumerGroupConsumeCleanupError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	handler := &MockConsumerGroupHandler{
-		cleanupError: errors.New(errors.ERR_UNKNOWN, "cleanup failed"),
-		consumeError: errors.New(errors.ERR_UNKNOWN, "consume done"), // Return immediately
+	handler := &errorCleanupHandler{
+		consumeErr: errors.New(errors.ERR_UNKNOWN, "consume done"),
+		cleanupErr: errors.New(errors.ERR_UNKNOWN, "cleanup failed"),
 	}
-
 	err := cg.Consume(context.Background(), []string{"test-topic"}, handler)
-	// The primary error should be from ConsumeClaim, but cleanup error should be logged
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "consume done") // Primary error from ConsumeClaim
-	assert.True(t, handler.setupCalled)
+	assert.Contains(t, err.Error(), "consume done")
 	assert.True(t, handler.cleanupCalled)
 }
 
-// TestConsumerGroupConsumeContextCancel tests context cancellation
+type errorCleanupHandler struct {
+	consumeErr    error
+	cleanupErr    error
+	cleanupCalled bool
+}
+
+func (h *errorCleanupHandler) Setup(ConsumerGroupSession) error { return nil }
+func (h *errorCleanupHandler) Cleanup(ConsumerGroupSession) error {
+	h.cleanupCalled = true
+	return h.cleanupErr
+}
+func (h *errorCleanupHandler) ConsumeClaim(ConsumerGroupSession, ConsumerGroupClaim) error {
+	return h.consumeErr
+}
+
 func TestConsumerGroupConsumeContextCancel(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	handler := &MockConsumerGroupHandler{}
-
+	handler := &captureHandler{received: make(chan *Message)}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
+	cancel()
 	err := cg.Consume(ctx, []string{"test-topic"}, handler)
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 }
 
-// TestConsumerGroupSessionMethods tests session interface methods
 func TestConsumerGroupSessionMethods(t *testing.T) {
 	broker := NewInMemoryBroker()
-
-	// Add some topics
 	producer := NewInMemorySyncProducer(broker)
-	msg1 := &sarama.ProducerMessage{Topic: "topic1", Value: sarama.StringEncoder("test1")}
-	msg2 := &sarama.ProducerMessage{Topic: "topic2", Value: sarama.StringEncoder("test2")}
-	_, _, err := producer.SendMessage(msg1)
-	require.NoError(t, err)
-	_, _, err = producer.SendMessage(msg2)
-	require.NoError(t, err)
+	require.NoError(t, producer.Send("topic1", nil, []byte("test1")))
+	require.NoError(t, producer.Send("topic2", nil, []byte("test2")))
 	producer.Close()
 
-	session := &InMemoryConsumerGroupSession{
-		ctx:     context.Background(),
-		broker:  broker,
-		groupID: "test-group",
-	}
-
-	// Test Claims()
+	session := &InMemoryConsumerGroupSession{ctx: context.Background(), broker: broker, groupID: "test-group"}
 	claims := session.Claims()
 	assert.Len(t, claims, 2)
 	assert.Contains(t, claims, "topic1")
 	assert.Contains(t, claims, "topic2")
 	assert.Equal(t, []int32{0}, claims["topic1"])
-
-	// Test other methods (no-ops)
 	assert.Equal(t, "mock-member-test-group", session.MemberID())
 	assert.Equal(t, int32(1), session.GenerationID())
 	assert.Equal(t, context.Background(), session.Context())
-
-	// Test no-op methods
 	session.MarkOffset("topic", 0, 0, "")
 	session.Commit()
 	session.ResetOffset("topic", 0, 0, "")
 	session.MarkMessage(nil, "")
 }
 
-// TestConsumerGroupClaimMethods tests claim interface methods
 func TestConsumerGroupClaimMethods(t *testing.T) {
-	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-	defer consumer.Close()
-
-	partConsumer, err := consumer.ConsumePartition("test-topic", 0, sarama.OffsetOldest)
-	require.NoError(t, err)
-	defer partConsumer.Close()
-
-	claim := &InMemoryConsumerGroupClaim{
-		topic:        "test-topic",
-		partition:    0,
-		partConsumer: partConsumer,
-	}
-
+	ch := make(chan *Message, 1)
+	close(ch)
+	claim := &InMemoryConsumerGroupClaim{topic: "test-topic", partition: 0, messages: ch}
 	assert.Equal(t, "test-topic", claim.Topic())
 	assert.Equal(t, int32(0), claim.Partition())
-	assert.Equal(t, sarama.OffsetOldest, claim.InitialOffset())
+	assert.Equal(t, int64(0), claim.InitialOffset())
 	assert.Equal(t, int64(0), claim.HighWaterMarkOffset())
 	assert.NotNil(t, claim.Messages())
 }
 
-// TestConsumerGroupClaimWithNilPartConsumer tests claim with nil partition consumer
-func TestConsumerGroupClaimWithNilPartConsumer(t *testing.T) {
-	claim := &InMemoryConsumerGroupClaim{
-		topic:        "test-topic",
-		partition:    0,
-		partConsumer: nil,
-	}
-
-	assert.Equal(t, int64(0), claim.HighWaterMarkOffset())
-
-	// Messages should return a closed channel
-	msgChan := claim.Messages()
-	assert.NotNil(t, msgChan)
-
-	// Channel should be closed (reading should return nil, false)
-	msg, ok := <-msgChan
-	assert.Nil(t, msg)
-	assert.False(t, ok)
-}
-
-// TestConsumerCloseBehavior tests consumer close behavior with multiple calls
-func TestConsumerCloseBehavior(t *testing.T) {
-	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-
-	// First close should succeed
-	err = consumer.Close()
-	assert.NoError(t, err)
-
-	// Second close should also succeed (sync.Once behavior)
-	err = consumer.Close()
-	assert.NoError(t, err)
-}
-
-// TestSyncProducerSendMessageErrorPaths tests error paths in SendMessage
-func TestSyncProducerSendMessageErrorPaths(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemorySyncProducer(broker)
-	defer producer.Close()
-
-	// Test value encoding error
-	msg := &sarama.ProducerMessage{
-		Topic: "test-topic",
-		Value: FaultyEncoder{}, // Faulty value encoder
-	}
-
-	_, _, err := producer.SendMessage(msg)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to encode")
-}
-
-// TestConsumerGroupSessionNoOpMethods tests no-op session methods for coverage
 func TestConsumerGroupSessionNoOpMethods(t *testing.T) {
 	broker := NewInMemoryBroker()
-	session := &InMemoryConsumerGroupSession{
-		ctx:     context.Background(),
-		broker:  broker,
-		groupID: "test-group",
-	}
-
-	// Test no-op methods for coverage
+	session := &InMemoryConsumerGroupSession{ctx: context.Background(), broker: broker, groupID: "test-group"}
 	assert.NotPanics(t, func() {
 		session.MarkOffset("topic", 0, 100, "metadata")
 		session.Commit()
@@ -817,13 +303,10 @@ func TestConsumerGroupSessionNoOpMethods(t *testing.T) {
 	})
 }
 
-// TestConsumerGroupPauseResumeMethods tests pause/resume methods for coverage
 func TestConsumerGroupPauseResumeMethods(t *testing.T) {
 	broker := NewInMemoryBroker()
 	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
 	defer cg.Close()
-
-	// Test pause/resume methods (no-ops)
 	partitions := map[string][]int32{"topic1": {0, 1}, "topic2": {0}}
 	assert.NotPanics(t, func() {
 		cg.PauseAll()
@@ -833,203 +316,61 @@ func TestConsumerGroupPauseResumeMethods(t *testing.T) {
 	})
 }
 
-// TestPartitionConsumerPauseResumeMethods tests partition consumer pause/resume
-func TestPartitionConsumerPauseResumeMethods(t *testing.T) {
+func TestAsyncProducerNewWithZeroBuffer(t *testing.T) {
 	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-	defer consumer.Close()
-
-	// Test consumer pause/resume methods (no-ops)
-	partitions := map[string][]int32{"topic1": {0, 1}}
-	assert.NotPanics(t, func() {
-		consumer.Pause(partitions)
-		consumer.PauseAll()
-		consumer.Resume(partitions)
-		consumer.ResumeAll()
-	})
-
-	// Test partition consumer methods
-	partConsumer, err := consumer.ConsumePartition("test-topic", 0, sarama.OffsetOldest)
-	require.NoError(t, err)
-	defer partConsumer.Close()
-
-	assert.NotPanics(t, func() {
-		partConsumer.Pause()
-		partConsumer.Resume()
-	})
+	producer := NewInMemoryAsyncProducer(broker, 0)
+	defer producer.Close()
+	assert.NotNil(t, producer.Input())
+	assert.NotNil(t, producer.Successes())
+	assert.NotNil(t, producer.Errors())
 }
 
-// TestHighWaterMarkOffsetWithNonExistentTopic tests HighWaterMarkOffset edge case
-func TestHighWaterMarkOffsetWithNonExistentTopic(t *testing.T) {
-	broker := NewInMemoryBroker()
-	consumer, err := broker.NewInMemoryConsumer("test-topic")
-	require.NoError(t, err)
-	defer consumer.Close()
-
-	partConsumer, err := consumer.ConsumePartition("test-topic", 0, sarama.OffsetOldest)
-	require.NoError(t, err)
-	defer partConsumer.Close()
-
-	// Test with non-existent topic in broker's internal state
-	// This tests the "topic not found" case in HighWaterMarkOffset
-	pc := partConsumer.(*InMemoryPartitionConsumer)
-	pc.consumer.topic = "non-existent-topic" // Change to non-existent topic
-
-	offset := partConsumer.HighWaterMarkOffset()
-	assert.Equal(t, int64(0), offset) // Should return 0 for non-existent topic
-}
-
-// TestAsyncProducerCloseChannelPath tests the close channel in messageHandler
-func TestAsyncProducerCloseChannelPath(t *testing.T) {
-	broker := NewInMemoryBroker()
-	producer := NewInMemoryAsyncProducer(broker, 1)
-
-	// Just test normal close to cover the close paths
-	err := producer.Close()
-	assert.NoError(t, err)
-}
-
-// TestConsumerGroupCloseNotRunning tests Close() when not running
-func TestConsumerGroupCloseNotRunning(t *testing.T) {
-	broker := NewInMemoryBroker()
-	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
-
-	// Close without ever running Consume
-	err := cg.Close()
-	assert.NoError(t, err)
-
-	// Second close should also work
-	err = cg.Close()
-	assert.NoError(t, err)
-}
-
-// PauseTestHandler is a handler specifically for testing pause/resume
-type PauseTestHandler struct {
-	receivedMessages *[]string
-	mu               *sync.Mutex
-}
-
-func (h *PauseTestHandler) Setup(sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (h *PauseTestHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (h *PauseTestHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for {
-		select {
-		case msg := <-claim.Messages():
-			if msg == nil {
-				return nil // Channel closed
-			}
-			h.mu.Lock()
-			*h.receivedMessages = append(*h.receivedMessages, string(msg.Value))
-			h.mu.Unlock()
-		case <-session.Context().Done():
-			return session.Context().Err()
-		}
-	}
-}
-
-// TestConsumerGroupPauseResumeBehavior tests that pause/resume actually stops message delivery
 func TestConsumerGroupPauseResumeBehavior(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "pause-test-topic"
 	cg := NewInMemoryConsumerGroup(broker, topic, "test-group")
-
-	// Create a handler that tracks messages received
 	var receivedMessages []string
 	var mu sync.Mutex
-	handler := &PauseTestHandler{
-		receivedMessages: &receivedMessages,
-		mu:               &mu,
-	}
+	handler := &PauseTestHandler{received: &receivedMessages, mu: &mu}
 
-	// Start consuming in a goroutine
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	consumeDone := make(chan error, 1)
-	go func() {
-		consumeDone <- cg.Consume(ctx, []string{topic}, handler)
-	}()
-
-	// Give consumer time to start
+	go func() { consumeDone <- cg.Consume(ctx, []string{topic}, handler) }()
 	time.Sleep(100 * time.Millisecond)
 
-	// Produce some messages while not paused
 	producer := NewInMemorySyncProducer(broker)
 	defer producer.Close()
-
-	msg1 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("message1")}
-	_, _, err := producer.SendMessage(msg1)
-	require.NoError(t, err)
-
-	msg2 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("message2")}
-	_, _, err = producer.SendMessage(msg2)
-	require.NoError(t, err)
-
-	// Wait for messages to be received
+	require.NoError(t, producer.Send(topic, nil, []byte("message1")))
+	require.NoError(t, producer.Send(topic, nil, []byte("message2")))
 	time.Sleep(100 * time.Millisecond)
-
 	mu.Lock()
 	beforePauseCount := len(receivedMessages)
 	mu.Unlock()
+	assert.Equal(t, 2, beforePauseCount)
 
-	// Should have received 2 messages
-	assert.Equal(t, 2, beforePauseCount, "Should receive messages when not paused")
-
-	// Now pause consumption
 	cg.PauseAll()
-
-	// Give pause time to take effect
 	time.Sleep(50 * time.Millisecond)
-
-	// Produce messages while paused
-	msg3 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("message3")}
-	_, _, err = producer.SendMessage(msg3)
-	require.NoError(t, err)
-
-	msg4 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("message4")}
-	_, _, err = producer.SendMessage(msg4)
-	require.NoError(t, err)
-
-	// Wait to ensure messages aren't delivered while paused
+	require.NoError(t, producer.Send(topic, nil, []byte("message3")))
+	require.NoError(t, producer.Send(topic, nil, []byte("message4")))
 	time.Sleep(200 * time.Millisecond)
-
 	mu.Lock()
 	pausedCount := len(receivedMessages)
 	mu.Unlock()
+	assert.Equal(t, 2, pausedCount)
 
-	// Should still be at 2 messages (no new messages received while paused)
-	assert.Equal(t, 2, pausedCount, "Should not receive messages while paused")
-
-	// Now resume consumption
 	cg.ResumeAll()
-
-	// Wait for resumed messages to be delivered
 	time.Sleep(200 * time.Millisecond)
-
 	mu.Lock()
 	afterResumeCount := len(receivedMessages)
 	allMessages := make([]string, len(receivedMessages))
-	copy(allMessages, receivedMessages)
+	for i, m := range receivedMessages {
+		allMessages[i] = m
+	}
 	mu.Unlock()
-
-	// Should now have received all 4 messages
-	assert.Equal(t, 4, afterResumeCount, "Should receive paused messages after resume")
+	assert.Equal(t, 4, afterResumeCount)
 	assert.Equal(t, []string{"message1", "message2", "message3", "message4"}, allMessages)
-
-	// Test IsPaused on partition consumer
-	assert.False(t, cg.isPaused, "Consumer group should not be paused after resume")
-
-	// Cancel context to stop consume
 	cancel()
-
-	// Wait for consume to finish
 	select {
 	case err := <-consumeDone:
 		assert.Error(t, err)
@@ -1037,4 +378,44 @@ func TestConsumerGroupPauseResumeBehavior(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Consume did not exit after context cancel")
 	}
+}
+
+type PauseTestHandler struct {
+	received *[]string
+	mu       *sync.Mutex
+}
+
+func (h *PauseTestHandler) Setup(ConsumerGroupSession) error   { return nil }
+func (h *PauseTestHandler) Cleanup(ConsumerGroupSession) error { return nil }
+func (h *PauseTestHandler) ConsumeClaim(session ConsumerGroupSession, claim ConsumerGroupClaim) error {
+	msgs := claim.Messages()
+	for {
+		select {
+		case <-session.Context().Done():
+			return session.Context().Err()
+		case msg, ok := <-msgs:
+			if !ok {
+				return nil
+			}
+			if msg == nil {
+				return nil
+			}
+			h.mu.Lock()
+			*h.received = append(*h.received, string(msg.Value))
+			h.mu.Unlock()
+		}
+	}
+}
+
+func TestConsumerGroupCloseNotRunning(t *testing.T) {
+	broker := NewInMemoryBroker()
+	cg := NewInMemoryConsumerGroup(broker, "test-topic", "test-group")
+	assert.NoError(t, cg.Close())
+	assert.NoError(t, cg.Close())
+}
+
+func TestAsyncProducerCloseChannelPath(t *testing.T) {
+	broker := NewInMemoryBroker()
+	producer := NewInMemoryAsyncProducer(broker, 1)
+	assert.NoError(t, producer.Close())
 }

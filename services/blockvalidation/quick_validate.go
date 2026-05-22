@@ -1076,34 +1076,11 @@ func (u *BlockValidation) processSubtreeBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Phase 3: Extend remaining transactions in parallel using UTXO store
+	// Phase 3: Extend remaining transactions using bulk UTXO store lookup
 	if len(txsNeedingExtension) > 0 {
-		extendG, extendCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(extendG, 256)
-
-		for _, tx := range txsNeedingExtension {
-			tx := tx
-			extendG.Go(func() error {
-				return u.utxoStore.PreviousOutputsDecorate(extendCtx, tx)
-			})
-		}
-
-		if err := extendG.Wait(); err != nil {
+		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			cancelReaders()
 			return nil, errors.NewProcessingError("[processSubtreeBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
-		}
-
-		// Verify all inputs are now extended
-		for _, tx := range txsNeedingExtension {
-			for j, input := range tx.Inputs {
-				if input.PreviousTxSatoshis == 0 && input.PreviousTxScript == nil {
-					parentHash := input.PreviousTxIDChainHash()
-					cancelReaders()
-					return nil, errors.NewProcessingError(
-						"[processSubtreeBatch][%s] parent tx %s not found for input %d of tx %s",
-						block.Hash().String(), parentHash.String(), j, tx.TxIDChainHash().String())
-				}
-			}
 		}
 	}
 
@@ -1437,32 +1414,10 @@ func (u *BlockValidation) extendBatch(
 		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
 	}
 
-	// Extend remaining transactions in parallel using UTXO store
+	// Extend remaining transactions using bulk UTXO store lookup
 	if len(txsNeedingExtension) > 0 {
-		extendG, extendCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(extendG, 256)
-
-		for _, tx := range txsNeedingExtension {
-			tx := tx
-			extendG.Go(func() error {
-				return u.utxoStore.PreviousOutputsDecorate(extendCtx, tx)
-			})
-		}
-
-		if err := extendG.Wait(); err != nil {
+		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			return errors.NewProcessingError("[extendBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
-		}
-
-		// Verify all inputs are now extended
-		for _, tx := range txsNeedingExtension {
-			for j, input := range tx.Inputs {
-				if input.PreviousTxSatoshis == 0 && input.PreviousTxScript == nil {
-					parentHash := input.PreviousTxIDChainHash()
-					return errors.NewProcessingError(
-						"[extendBatch][%s] parent tx %s not found for input %d of tx %s",
-						block.Hash().String(), parentHash.String(), j, tx.TxIDChainHash().String())
-				}
-			}
 		}
 	}
 

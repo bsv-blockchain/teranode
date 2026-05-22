@@ -54,12 +54,10 @@ memory://test_blocks?partitions=2&consumer_ratio=1
 | `partitions` | int | 1 | Number of topic partitions |
 | `replay` | int | 1 | Start from beginning (1) or latest (0) for new consumer groups |
 | `offsetReset` | string | "" | Offset reset strategy: "latest", "earliest", or "" (uses replay). Overrides replay setting |
-| `maxProcessingTime` | int | 100 | Max time (ms) to process a message before Sarama stops fetching. Must exceed actual processing time |
+| `maxProcessingTime` | int | 100 | Max time (ms) broker waits before returning fetch results when no records are available (franz-go FetchMaxWait) |
 | `sessionTimeout` | int | 10000 | Time (ms) broker waits for heartbeat before considering consumer dead. Must be >= 3 * heartbeatInterval |
 | `heartbeatInterval` | int | 3000 | Frequency (ms) of heartbeats sent to broker |
 | `rebalanceTimeout` | int | 60000 | Max time (ms) for all consumers to join rebalance |
-| `channelBufferSize` | int | 256 | Number of messages buffered in internal channels |
-| `consumerTimeout` | int | 90000 | Watchdog timeout (ms). Triggers recovery if no messages received and Setup() not called |
 
 ### Producer Parameters (Async)
 
@@ -86,7 +84,7 @@ memory://test_blocks?partitions=2&consumer_ratio=1
 **Example Consumer URL:**
 
 ```text
-kafka://localhost:9092/subtrees?partitions=8&sessionTimeout=15000&heartbeatInterval=5000&maxProcessingTime=30000
+kafka://localhost:9092/subtrees?partitions=8&sessionTimeout=15000&heartbeatInterval=5000
 ```
 
 **Example Async Producer URL:**
@@ -166,7 +164,7 @@ The Block Persister appends a random 16-character suffix to its TxMeta consumer 
 
 | Setting | Default | Environment Variable | Usage |
 |---------|---------|---------------------|-------|
-| EnableDebugLogging | false | kafka_enable_debug_logging | Verbose Sarama logging |
+| EnableDebugLogging | false | kafka_enable_debug_logging | Verbose Kafka client logging |
 
 ## URL-Based Configuration
 
@@ -194,11 +192,12 @@ URL-based configuration overrides individual settings when provided:
 ## Consumer Timeout Constraints
 
 **Critical Validation Rule:**
+
 ```text
 sessionTimeout >= 3 * heartbeatInterval
 ```
 
-This constraint is enforced by Sarama. Consumer creation will fail if violated.
+This constraint is validated during consumer creation for both URL-based and direct configuration. Consumer creation will fail if this rule is violated.
 
 **Example Valid Configuration:**
 
@@ -207,53 +206,46 @@ This constraint is enforced by Sarama. Consumer creation will fail if violated.
 
 **Example Invalid Configuration:**
 
-- `heartbeatInterval=5000` (5s)  
+- `heartbeatInterval=5000` (5s)
 - `sessionTimeout=10000` (10s) ✗ Invalid: 10000 < 15000
-
-## Consumer Watchdog
-
-The consumer watchdog monitors for stuck consumers and automatically recovers by recreating the consumer group.
-
-**Behavior:**
-
-- Checks every 30 seconds
-- Triggers recovery if `Consume()` is stuck for longer than `consumerTimeout` (default 90s)
-- Detects RefreshMetadata hangs and offset-related issues
-- Automatically recreates consumer group on recovery
-
-**Configuration:**
-
-- `consumerTimeout` URL parameter (default: 90000ms)
 
 ## Service Usage
 
 ### Block Assembly Service
+
 - **Producer**: `BlocksConfig` - publishes blocks
 - **Producer**: `SubtreesConfig` - publishes subtrees
 
 ### Block Validation Service
+
 - **Consumer**: `BlocksConfig` - consumes blocks for validation
 - **Producer**: `InvalidBlocksConfig` - publishes invalid blocks (optional)
 
 ### Blockchain Service
+
 - **Producer**: `BlocksFinalConfig` - publishes finalized blocks
 
 ### Subtree Validation Service
+
 - **Consumer**: `SubtreesConfig` - consumes subtrees for validation
 - **Producer**: `InvalidSubtreesConfig` - publishes invalid subtrees (optional)
 
 ### Validator Service
+
 - **Consumer**: `ValidatorTxsConfig` - consumes transactions for validation (optional)
 - **Producer**: `ValidatorTxsConfig` - publishes validation results (optional)
 - **Producer**: `RejectedTxConfig` - publishes rejected transactions
 
 ### Propagation Service
+
 - **Consumer**: `RejectedTxConfig` - consumes rejected transactions
 
 ### Block Persister Service
+
 - **Consumer**: `TxMetaConfig` - consumes transaction metadata (with random consumer group suffix)
 
 ### Legacy Service
+
 - **Producer**: `LegacyInvConfig` - publishes legacy inventory messages
 - **Consumer**: `BlocksFinalConfig` - consumes finalized blocks
 - **Consumer**: `TxMetaConfig` - consumes transaction metadata
@@ -264,12 +256,12 @@ The consumer watchdog monitors for stuck consumers and automatically recovers by
 - Applies TLS settings from KafkaSettings
 - Consumer group: `{topic}-consumer`
 
-### Legacy Service
+### Legacy Service (TLS)
 
 - Uses `LegacyInvConfig`, `BlocksFinalConfig`, `TxMetaConfig`
 - Applies TLS settings from KafkaSettings
 
-### Blockchain Service
+### Blockchain Service (TLS)
 
 - Uses async producer for block notifications
 - Applies TLS settings from KafkaSettings
@@ -285,7 +277,7 @@ kafka://localhost:9092/blocks?partitions=8&replication=3&retention=3600000&flush
 ### Slow Processing Consumer
 
 ```text
-kafka://localhost:9092/subtrees?partitions=4&maxProcessingTime=30000&sessionTimeout=60000&heartbeatInterval=20000&consumerTimeout=120000
+kafka://localhost:9092/subtrees?partitions=4&sessionTimeout=60000&heartbeatInterval=20000
 ```
 
 ### Low-Latency Producer
@@ -303,6 +295,7 @@ kafka://localhost:9092/blocks?partitions=2&offsetReset=latest&replay=0
 ### TLS-Enabled Configuration
 
 Environment variables:
+
 ```bash
 KAFKA_ENABLE_TLS=true
 KAFKA_TLS_CA_FILE=/path/to/ca.pem

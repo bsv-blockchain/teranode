@@ -1,4 +1,4 @@
-// Package propagation implements Bitcoin SV transaction propagation and validation services.
+// Package propagation implements BSV Blockchain transaction propagation and validation services.
 // It provides functionality for processing, validating, and distributing BSV transactions
 // across the network using multiple protocols including GRPC and UDP6 multicast.
 //
@@ -82,9 +82,9 @@ var (
 	ipv6Port = 9999
 )
 
-// PropagationServer implements the transaction propagation service for Bitcoin SV.
+// PropagationServer implements the transaction propagation service for BSV Blockchain.
 // This server provides the core transaction processing infrastructure for the Teranode system,
-// handling transaction validation, storage, and distribution across the Bitcoin SV network.
+// handling transaction validation, storage, and distribution across the BSV Blockchain network.
 // It serves as the primary entry point for transaction ingress and manages the complete
 // transaction lifecycle from initial receipt through validation and network propagation.
 //
@@ -319,6 +319,10 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	// Blocks until the FSM transitions from the IDLE state
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			ps.logger.Infof("[Propagation Service] Shutting down during FSM wait")
+			return err
+		}
 		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
@@ -607,10 +611,47 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+errors.UserMessage(err))
+			status := httpStatusForTxError(err)
+			if status >= 200 && status < 300 {
+				return c.String(status, "OK")
+			}
+			return c.String(status, "Failed to process transaction: "+errors.UserMessage(err))
 		}
 
 		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// httpStatusForTxError maps a transaction processing error to the appropriate
+// HTTP status code so clients can distinguish tx rejections from system
+// failures. Walks the error chain via errors.Is so wrapped inner errors are
+// classified by their actual cause.
+func httpStatusForTxError(err error) int {
+	switch {
+	case errors.Is(err, errors.ErrTxExists):
+		// Duplicate submission of a tx Teranode has already accepted. The
+		// resource is already in the desired state — surface as success so
+		// clients don't treat idempotent resubmits as failures.
+		return http.StatusOK
+	case errors.Is(err, errors.ErrFrozen):
+		return http.StatusForbidden
+	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
+		errors.Is(err, errors.ErrTxConflicting),
+		errors.Is(err, errors.ErrSpent),
+		errors.Is(err, errors.ErrTxLocked):
+		return http.StatusConflict
+	case errors.Is(err, errors.ErrTxMissingParent):
+		return http.StatusUnprocessableEntity
+	case errors.Is(err, errors.ErrInvalidArgument),
+		errors.Is(err, errors.ErrTxInvalid),
+		errors.Is(err, errors.ErrTxLockTime),
+		errors.Is(err, errors.ErrNonFinal),
+		errors.Is(err, errors.ErrTxPolicy),
+		errors.Is(err, errors.ErrTxCoinbaseImmature),
+		errors.Is(err, errors.ErrUtxoInvalidSize):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
 	}
 }
 
@@ -643,34 +684,47 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		)
 		defer deferFn()
 
-		processTxs := make(chan *bt.Tx, maxTransactionsPerRequest)
-		processErrors := make(chan error, maxTransactionsPerRequest)
+		// Errors are reported in stream submission order. Each parse attempt and
+		// each dispatched transaction is assigned a monotonically increasing
+		// submission index; workers write into a pre-allocated slot at that
+		// index. After all workers finish, the slots are walked in order to
+		// produce a deterministic ordered error list — independent of the order
+		// in which concurrent workers complete.
+		//
+		// errSlots has len == cap and is never resized, so the slice header is
+		// never written by the producer after workers start. Workers write to
+		// distinct indices, the producer writes to its own indices, and reads
+		// happen only after processingWg.Wait() establishes happens-before.
+		const maxSubmissions = maxTransactionsPerRequest + 1 // +1 for ctx-cancel slot
+		errSlots := make([]error, maxSubmissions)
+		nextSlot := 0
 		processingWg := sync.WaitGroup{}
-		processingErrorWg := sync.WaitGroup{}
 		totalNrTransactions := 0
 		totalBytesRead := int64(0)
 
-		go func() {
-			// Process transactions in a separate goroutine
-			for tx := range processTxs {
-				if err := ps.processTransactionInternal(ctx, tx); err != nil {
-					processingErrorWg.Add(1)
-					processErrors <- err
+		// Caller contract: a batch must NOT contain both a parent and any of
+		// its children. The server does not enforce this — violating it will
+		// surface as missing-parent errors because txs in a batch are processed
+		// concurrently here with no in-batch ordering. See ProcessTransactionBatch
+		// for the gRPC equivalent of this pattern.
+		processOne := func(tx *bt.Tx, slot int) {
+			defer processingWg.Done()
+
+			if ps.batchWorkerPool != nil {
+				defer func() { <-ps.batchWorkerPool }()
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					ps.logger.Errorf("Recovered from panic in processTransactionInternal: %v", r)
+					errSlots[slot] = errors.NewProcessingError("transaction processing panic: %v", r)
 				}
+			}()
 
-				processingWg.Done()
+			if err := ps.processTransactionInternal(ctx, tx); err != nil {
+				errSlots[slot] = err
 			}
-		}()
-
-		// Collect errors in a slice - single goroutine writes, WaitGroup provides synchronization
-		var errMsgs []string
-
-		go func() {
-			for err := range processErrors {
-				errMsgs = append(errMsgs, errors.UserMessage(err))
-				processingErrorWg.Done()
-			}
-		}()
+		}
 
 		// Track early-exit error to return after cleanup
 		var earlyExitMsg string
@@ -685,6 +739,14 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 			if totalBytesRead >= maxDataPerRequest {
 				earlyExitMsg = "Invalid request body: too much data"
+				break
+			}
+
+			// All submission slots consumed (parse errors + successful txs).
+			// Cut off the stream to prevent unbounded parse-error accumulation
+			// from outgrowing the pre-allocated slot budget.
+			if nextSlot >= maxSubmissions {
+				earlyExitMsg = "Invalid request body: too many submissions"
 				break
 			}
 
@@ -709,8 +771,9 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 					break
 				}
 
-				processingErrorWg.Add(1)
-				processErrors <- err
+				// Record the parse error in submission order.
+				errSlots[nextSlot] = err
+				nextSlot++
 
 				// if the error came from panic recovery, the stream is likely corrupted
 				if terr, ok := err.(*errors.Error); ok && terr.Code() == errors.ERR_PROCESSING {
@@ -725,17 +788,50 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			totalNrTransactions++
 			totalBytesRead += bytesRead
 
-			// Send transaction to processing channel
+			// Acquire the server-wide batch semaphore before spawning a goroutine,
+			// so total concurrent tx-processing goroutines stay bounded across all
+			// HTTP and gRPC batch calls. If the limit is disabled (nil), spawn
+			// immediately. Respect context cancellation so a disconnected client
+			// can drain the handler.
+			cancelled := false
+
+			if ps.batchWorkerPool != nil {
+				select {
+				case ps.batchWorkerPool <- struct{}{}:
+				case <-ctx.Done():
+					errSlots[nextSlot] = errors.WrapPublic(ctx.Err())
+					nextSlot++
+					earlyExitMsg = "request context cancelled"
+					cancelled = true
+				}
+			}
+
+			if cancelled {
+				break
+			}
+
+			// Reserve a submission slot for this tx and dispatch the worker.
+			slot := nextSlot
+			nextSlot++
 			processingWg.Add(1)
-			processTxs <- tx
+
+			go processOne(tx, slot)
 		}
 
-		// Close processTxs to signal the processing goroutine to exit,
-		// then wait for all in-flight work and errors to drain
-		close(processTxs)
+		// Wait for all worker goroutines to finish writing their slots before
+		// reading errSlots. The Done/Wait pair establishes the happens-before
+		// edge for the writes.
 		processingWg.Wait()
-		close(processErrors)
-		processingErrorWg.Wait()
+
+		var errMsgs []string
+
+		for _, err := range errSlots[:nextSlot] {
+			if err == nil {
+				continue
+			}
+
+			errMsgs = append(errMsgs, errors.UserMessage(err))
+		}
 
 		if earlyExitMsg != "" {
 			return c.String(http.StatusBadRequest, earlyExitMsg)
@@ -994,11 +1090,10 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				e := errors.WrapPublic(err)
 				// Use context-aware logger for trace correlation
-				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
+				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
 
-				response.Errors[idx] = e
+				response.Errors[idx] = errors.WrapPublic(err)
 			} else {
 				response.Errors[idx] = nil
 			}
@@ -1114,26 +1209,24 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return err
 	}
 
-	// // decouple the tracing context to not cancel the context when the tx is being saved in the background
-	// decoupledCtx, decoupledSpan, decoupledEndSpan := tracing.DecoupleTracingSpan(ctx, "processTransactionInternal", "decoupled")
-	// defer decoupledEndSpan()
+	// Serialize once and reuse everywhere downstream to avoid redundant allocations
+	txBytes := btTx.SerializeBytes()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(ctx, btTx); err != nil {
+	if err = ps.storeTransaction(ctx, btTx, txBytes); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
-		// Check transaction size first - if it's too large, use HTTP endpoint instead
-		txSize := len(btTx.SerializeBytes())
+		txSize := len(txBytes)
 		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
 
 		if txSize > maxKafkaMessageSize {
-			return ps.validateTransactionViaHTTP(ctx, btTx, txSize, maxKafkaMessageSize)
+			return ps.validateTransactionViaHTTP(ctx, btTx, txBytes, txSize, maxKafkaMessageSize)
 		}
 
 		// For normal-sized transactions, continue with Kafka
-		return ps.validateTransactionViaKafka(btTx)
+		return ps.validateTransactionViaKafka(btTx, txBytes)
 	} else {
 		ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
@@ -1186,7 +1279,7 @@ func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
 	seen := make(map[inputKey]struct{}, numInputs)
 	for _, input := range btTx.Inputs {
 		var key inputKey
-		copy(key.prevTxID[:], input.PreviousTxID())
+		key.prevTxID = *input.PreviousTxIDChainHash()
 		key.vout = input.PreviousTxOutIndex
 
 		if _, exists := seen[key]; exists {
@@ -1211,12 +1304,13 @@ func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
 // Parameters:
 //   - ctx: Context for HTTP request with cancellation support
 //   - btTx: Bitcoin transaction to validate
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //   - txSize: Size of the transaction in bytes (pre-calculated)
 //   - maxKafkaMessageSize: Maximum Kafka message size for logging/comparison
 //
 // Returns:
 //   - error: Error if HTTP validation fails or is not available
-func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error {
+func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txBytes []byte, txSize int, maxKafkaMessageSize int) error {
 	if ps.validatorHTTPAddr == nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), but no HTTP endpoint configured for validator",
 			btTx.TxID(), txSize, maxKafkaMessageSize)
@@ -1238,7 +1332,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 
 	fullURL := ps.validatorHTTPAddr.ResolveReference(endpoint)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.SerializeBytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(txBytes))
 	if err != nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", btTx.TxID(), err)
 	}
@@ -1276,14 +1370,15 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 //
 // Parameters:
 //   - btTx: Bitcoin transaction to validate
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //
 // Returns:
 //   - error: Error if message preparation or publishing fails
-func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
+func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx, txBytes []byte) error {
 	validationOptions := validator.NewDefaultOptions()
 
 	msg := &kafkamessage.KafkaTxValidationTopicMessage{
-		Tx:     btTx.SerializeBytes(),
+		Tx:     txBytes,
 		Height: 0,
 		Options: &kafkamessage.KafkaTxValidationOptions{
 			SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
@@ -1323,15 +1418,16 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 // Parameters:
 //   - ctx: context for the storage operation with tracing and timeout
 //   - btTx: Bitcoin transaction to store (must be properly parsed)
+//   - txBytes: pre-serialized transaction bytes to avoid redundant serialization
 //
 // Returns:
 //   - error: error with detailed context if the storage operation fails
-func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
+func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx, txBytes []byte) error {
 	ctx, _, deferFn := tracing.Tracer("propagation").Start(ctx, "PropagationServer:Set:Store")
 	defer deferFn()
 
 	if ps.txStore != nil {
-		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.SerializeBytes()); err != nil {
+		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, txBytes); err != nil {
 			// Duplicate transactions are acceptable - the transaction already exists
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
 				return nil

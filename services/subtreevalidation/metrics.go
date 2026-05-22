@@ -77,6 +77,13 @@ var (
 	// This counter tracks how often errors occur when updating the transaction metadata cache
 	// from Kafka messages, which helps identify issues with the cache or Kafka connection.
 	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors prometheus.Counter
+
+	// prometheusSubtreeKafkaMalformed counts malformed Kafka subtree messages that were dropped,
+	// labelled by the reason for the drop. Returning nil from the consumer for permanently-malformed
+	// messages preserves Kafka offset progression (avoids a poison-pill retry loop), but ops still
+	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
+	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
+	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
 )
 
 var (
@@ -184,5 +191,15 @@ func _initPrometheusMetrics() {
 			Name:      "set_tx_meta_cache_kafka_errors",
 			Help:      "Number of errors setting tx meta cache from kafka",
 		},
+	)
+
+	prometheusSubtreeKafkaMalformed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "kafka_malformed_messages_total",
+			Help:      "Number of malformed Kafka subtree messages dropped, by reason",
+		},
+		[]string{"reason"},
 	)
 }

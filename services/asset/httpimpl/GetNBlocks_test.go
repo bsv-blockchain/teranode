@@ -92,7 +92,7 @@ func TestGetNBlocks(t *testing.T) {
 
 		// Check response body
 		responseBytes := responseRecorder.Body.Bytes()
-		assert.Len(t, responseBytes, 229)
+		assert.Len(t, responseBytes, 230)
 
 		// read the response bytes into a block
 		block, err := model.NewBlockFromBytes(responseBytes)
@@ -132,7 +132,7 @@ func TestGetNBlocks(t *testing.T) {
 
 		// Check response body
 		responseHex := responseRecorder.Body.String()
-		assert.Len(t, responseHex, 458)
+		assert.Len(t, responseHex, 460)
 
 		// read the response bytes into a block
 		responseBytes, err := hex.DecodeString(responseHex)
@@ -180,7 +180,7 @@ func TestGetNBlocks(t *testing.T) {
 
 		// Check response body
 		responseBytes := responseRecorder.Body.Bytes()
-		assert.Len(t, responseBytes, 229*3)
+		assert.Len(t, responseBytes, 230*3)
 
 		reader := bytes.NewReader(responseBytes)
 

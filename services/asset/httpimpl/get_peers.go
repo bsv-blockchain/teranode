@@ -9,8 +9,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// PeerInfoResponse represents the JSON response for a single peer
-// Matches the structure from P2P service's HandlePeers.go
+// PeerInfoResponse represents the JSON response for a single peer.
+//
+// swagger:model PeerInfoResponse
 type PeerInfoResponse struct {
 	ID              string `json:"id"`
 	ClientName      string `json:"client_name"`
@@ -39,7 +40,9 @@ type PeerInfoResponse struct {
 	LastCatchupErrorTime   int64   `json:"last_catchup_error_time"`
 }
 
-// PeersResponse represents the JSON response containing all peers
+// PeersResponse represents the JSON response containing all peers.
+//
+// swagger:model PeersResponse
 type PeersResponse struct {
 	Peers []PeerInfoResponse `json:"peers"`
 	Count int                `json:"count"`

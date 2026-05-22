@@ -23,7 +23,7 @@ var (
 )
 
 // The following JSON strings are used to test the NewBlockHeaderFromJSON function
-// They are taken from the Bitcoin SV regtest and the candidate was taken just before the block was mined,
+// They are taken from the BSV regtest and the candidate was taken just before the block was mined,
 // so the candidate and block are related.
 var (
 	getMiningCandidateJSON = `{

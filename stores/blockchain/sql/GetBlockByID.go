@@ -101,6 +101,7 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 		,b.coinbase_tx
 		,b.subtree_count
 		,b.subtrees
+		,b.coinbase_bump
 		FROM blocks b
 		WHERE id = $1
 	`
@@ -117,6 +118,7 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 		hashPrevBlock    []byte
 		hashMerkleRoot   []byte
 		coinbaseTx       []byte
+		coinbaseBump     []byte
 		nBits            []byte
 		err              error
 	)
@@ -135,6 +137,7 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 		&coinbaseTx,
 		&subtreeCount,
 		&subtreeBytes,
+		&coinbaseBump,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewBlockNotFoundError("failed to get block by ID", err)
@@ -170,6 +173,8 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 	if err != nil {
 		return nil, errors.NewInvalidArgumentError("failed to convert subtrees", err)
 	}
+
+	block.CoinbaseBUMP = coinbaseBump
 
 	cacheOp.Set(block, s.cacheTTL)
 

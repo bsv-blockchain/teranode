@@ -138,12 +138,12 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Create block2b with grandparent (same tx in both chains)
 	_, block3b := td.CreateTestBlock(t, block2, 10202, grandparent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy", 0),
 		"Failed to process block3b")
 
 	// Create block3b with conflictingChild
 	_, block4b := td.CreateTestBlock(t, block3b, 10302, conflictingChild)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b")
 
 	//        / 2a [grandparent] -> 3a [parent] (*)
@@ -170,7 +170,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Now make chain B longer by mining block4b
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0),
 		"Failed to process block5b")
 
 	//        / 2a [grandparent] -> 3a [parent]
@@ -310,7 +310,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Create block4b with childB (skipping parent entirely)
 	_, block4b := td.CreateTestBlock(t, block3a, 10302, childB)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b")
 
 	//                  / 3a [parent] -> 4a [childA] (*)
@@ -329,10 +329,10 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Make fork longer to trigger reorg
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0))
 
 	_, block6b := td.CreateTestBlock(t, block5b, 10502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0))
 
 	//                  / 3a [parent] -> 4a [childA]
 	// 0 -> 1 -> 2 [grandparent]

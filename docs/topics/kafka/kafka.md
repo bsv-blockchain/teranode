@@ -10,7 +10,7 @@
     - [Blockchain](#blockchain)
     - [Additional Kafka Topics](#additional-kafka-topics)
 3. [Reliability and Recoverability](#3-reliability-and-recoverability)
-    - [Consumer Watchdog and Recovery](#consumer-watchdog-and-recovery)
+    - [Consumer Resilience](#consumer-resilience)
 4. [Configuration](#4-configuration)
     - [TLS and Authentication](#tls-and-authentication)
 5. [Operational Guidelines](#5-operational-guidelines)
@@ -117,49 +117,23 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 2. During Kafka downtime or unreliability, the node enters a safe state, preventing potential data inconsistencies or processing errors.
 3. Once Kafka is reported as healthy again, the node automatically resumes normal operation without manual intervention.
 
-### Consumer Watchdog and Recovery
+### Consumer Resilience
 
-Teranode implements a consumer watchdog mechanism to detect and recover from stuck Kafka consumer situations. This addresses a known issue in the Sarama Kafka client where `Consume()` calls can hang indefinitely in `RefreshMetadata` operations.
+The franz-go Kafka client handles broker disconnections, metadata refresh, and reconnection internally. Key timeout settings that control this behavior:
 
-#### How the Watchdog Works
-
-The watchdog monitors consumer health by tracking two key states:
-
-1. **Initial Stuck Detection** - Detects when `Consume()` is called but `Setup()` is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)
-2. **Post-Error Stuck Detection** - Detects when `Consume()` returns with an error, but subsequent retry attempts hang without completing `Setup()`
-
-#### Watchdog Configuration
-
-- **Check Interval**: 30 seconds (watchdog runs periodic checks)
-- **Stuck Threshold**: Configurable via `consumerTimeout` URL parameter (default: 90 seconds)
-- **Recovery Action**: Force recovery by closing and recreating the consumer group
-
-#### Force Recovery Process
-
-When a stuck consumer is detected, the watchdog triggers force recovery:
-
-1. Closes the existing consumer group (unblocks the stuck `Consume()` call)
-2. Creates a new consumer group with identical configuration
-3. The retry loop automatically uses the new consumer
-4. Metrics are recorded for monitoring stuck duration and recovery attempts
-
-This mechanism simulates what happens when restarting a Kafka server in production, providing automatic recovery without manual intervention.
+- **`FetchMaxWait`** (configured via `maxProcessingTime`, default 100ms): Broker responds within this time even with no data, preventing indefinite blocking.
+- **`SessionTimeout`** (default 10s): Broker detects dead consumers automatically.
+- **`HeartbeatInterval`** (default 3s): Consumer sends periodic heartbeats to the broker.
+- **`RebalanceTimeout`** (default 60s): Maximum time for consumer group rebalancing.
 
 #### Offset Out of Range Handling
 
-Teranode also handles offset out of range errors automatically:
+Teranode handles offset out of range errors automatically:
 
 - **Cause**: Committed offset has been deleted due to retention policies
-- **Detection**: Error handler detects `ErrOffsetOutOfRange` from Sarama
-- **Recovery**: Consumer is recreated, and Sarama's `offsetReset` configuration automatically resets to the configured offset (typically "latest")
+- **Detection**: franz-go detects offset out of range internally
+- **Recovery**: The `offsetReset` configuration resets to the configured offset (typically "latest")
 - **No Data Loss**: For critical topics, longer retention periods prevent offset expiration
-
-#### Watchdog Monitoring
-
-Prometheus metrics track watchdog activity:
-
-- `teranode_kafka_watchdog_recovery_attempts_total`: Counter of recovery attempts per topic and consumer group
-- `teranode_kafka_watchdog_stuck_duration_seconds`: Histogram of how long consumers were stuck before recovery (in seconds)
 
 ## 4. Configuration
 
@@ -197,7 +171,7 @@ KAFKA_TLS_KEY_FILE = /path/to/client-key.pem
 
 #### Debug Logging
 
-Enable verbose Sarama (Kafka client library) logging for troubleshooting connection issues:
+Enable verbose Kafka client library logging for troubleshooting connection issues:
 
 ```properties
 kafka_enable_debug_logging = true
@@ -333,32 +307,29 @@ Advanced URL parameters for fine-tuning consumer behavior and timeout configurat
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `maxProcessingTime` | int (ms) | 100 | Max time to process message before Sarama stops fetching |
+| `maxProcessingTime` | int (ms) | 100 | Max time broker waits before returning fetch results when no records are available (franz-go FetchMaxWait) |
 | `sessionTimeout` | int (ms) | 10000 | Time broker waits for heartbeat before declaring consumer dead |
 | `heartbeatInterval` | int (ms) | 3000 | Frequency of heartbeats sent to broker |
 | `rebalanceTimeout` | int (ms) | 60000 | Max time for all consumers to join rebalance |
-| `channelBufferSize` | int | 256 | Number of messages buffered in internal channels |
-| `consumerTimeout` | int (ms) | 90000 | Watchdog timeout for detecting stuck consumers |
 | `offsetReset` | string | - | Offset reset strategy: "latest", "earliest", or "" (uses replay) |
 
 **Important Constraints**:
 
-- `sessionTimeout` must be >= 3 × `heartbeatInterval` (Sarama requirement)
-- For slow processing services (e.g., subtree validation), increase `maxProcessingTime` and `sessionTimeout` proportionally
+- `sessionTimeout` must be >= 3 × `heartbeatInterval` (validated at consumer creation for both URL-based and direct configuration)
+- For slow processing services (e.g., subtree validation), increase `sessionTimeout` and `heartbeatInterval` to prevent the broker from declaring the consumer dead during long processing
 
 #### Timeout Configuration for Slow Processing Services
 
 Services that process messages slowly (e.g., subtree validation with large datasets) need increased timeouts to prevent partition abandonment:
 
 ```text
-kafka://localhost:9092/subtrees?partitions=4&consumer_ratio=1&maxProcessingTime=30000&sessionTimeout=90000&heartbeatInterval=20000
+kafka://localhost:9092/subtrees?partitions=4&consumer_ratio=1&sessionTimeout=90000&heartbeatInterval=20000
 ```
 
 This configuration:
 
-- Allows 30 seconds for message processing
-- Gives 90 seconds before broker declares consumer dead (3× heartbeat interval)
-- Sends heartbeats every 20 seconds
+- Gives 90 seconds before broker declares consumer dead (3x heartbeat interval)
+- Sends heartbeats every 20 seconds, allowing up to ~60 seconds of processing between heartbeats
 
 #### Offset Reset Configuration
 
@@ -377,19 +348,6 @@ kafka://localhost:9092/blocks?offsetReset=earliest
 - `latest`: Skip to newest message (data loss acceptable)
 - `earliest`: Reprocess from oldest available message (no data loss if within retention)
 - `""` (empty): Use `replay` parameter setting (legacy behavior)
-
-#### Channel Buffer Tuning
-
-Increase channel buffer size for high-throughput consumers to reduce context switching:
-
-```text
-kafka://localhost:9092/validator-txs?partitions=8&consumer_ratio=2&channelBufferSize=1024
-```
-
-**Trade-offs**:
-
-- Larger buffers improve throughput but increase memory usage
-- Smaller buffers reduce memory but may cause processing delays
 
 ## 7. Service-Specific Kafka Settings
 

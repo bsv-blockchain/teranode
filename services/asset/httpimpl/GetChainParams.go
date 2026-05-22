@@ -6,6 +6,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// ChainParamsResponse contains the blockchain network parameters.
+//
+// swagger:model ChainParamsResponse
 type ChainParamsResponse struct {
 	LegacyPubKeyHashAddrID uint8  `json:"legacyPubKeyHashAddrID"`
 	LegacyScriptHashAddrID uint8  `json:"legacyScriptHashAddrID"`

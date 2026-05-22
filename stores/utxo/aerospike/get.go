@@ -80,6 +80,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -348,7 +349,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
 	if s.getBatcher != nil {
-		s.getBatcher.Put(item)
+		s.getBatcher.PutCtx(ctx, item)
 	} else {
 		// if the batcher is disabled, we still want to process the request in a go routine
 		go func() {
@@ -810,6 +811,16 @@ NEXT_BATCH_RECORD:
 
 					items[idx].Data.UnminedSince = unminedSinceUint32
 				}
+
+			case fields.CreatedAt:
+				if v := bins[key.String()]; v != nil {
+					switch t := v.(type) {
+					case int:
+						items[idx].Data.CreatedAt = int64(t)
+					case int64:
+						items[idx].Data.CreatedAt = t
+					}
+				}
 			}
 		}
 	}
@@ -1175,6 +1186,36 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 	}
 
 	return nil
+}
+
+// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+// multiple transactions, fanning the per-tx decorations out across goroutines so the
+// shared outpoint batcher fills by size from concurrent pushes instead of idling at
+// its per-tx duration timer.
+//
+// A serial per-tx loop was correct but pathologically slow during legacy sync: a
+// typical tx contributes ~2 inputs - far below OutpointBatcherSize - so each call
+// waited the full OutpointBatcherDurationMillis before the batch fired, making wall
+// time scale as O(N_tx * duration) - e.g. 2856 tx x 5 ms ~= 14 s observed in
+// production.
+//
+// Fan-out is bounded by UtxoStore.OutpointBatcherSize to keep memory predictable
+// on large blocks and to mirror the Phase 1 errgroup bound in the legacy caller
+// (services/legacy/netsync/handle_block.go). Throughput is not affected by the
+// bound: the actual ceiling is BatcherMaxConcurrent aerospike batches in flight,
+// not the goroutine count, since producers are mostly parked on errChan receives.
+func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, s.settings.UtxoStore.OutpointBatcherSize)
+
+	for _, tx := range txs {
+		tx := tx
+		g.Go(func() error {
+			return s.PreviousOutputsDecorate(gCtx, tx)
+		})
+	}
+
+	return g.Wait()
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {

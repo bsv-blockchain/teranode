@@ -125,6 +125,10 @@ build-tx-blaster: set_debug_flags
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
 
+.PHONY: build-teranode-dev
+build-teranode-dev:
+	CGO_ENABLED=0 go build -o teranode-dev ./cmd/teranodedev
+
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
@@ -152,6 +156,26 @@ build-blockchainstatus:
 .PHONY: build-dashboard
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
+
+# Generate a docker-compose stack for a multinode teranode network (3 <= N <= 10).
+# Output is written to compose/generated/. Bring it up with:
+#   docker compose -f compose/generated/docker-compose-multinode.yml up -d
+# Example: make gen-multinode N=5
+.PHONY: gen-multinode
+gen-multinode:
+	@test -n "$(N)" || { echo "usage: make gen-multinode N=<3..10>"; exit 2; }
+	go run ./compose/cmd/gennodes -n $(N) -o compose/generated
+
+.PHONY: open-dashboards
+open-dashboards:
+	@test -f compose/generated/open-dashboards.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/open-dashboards.sh
+
+# Generate blocks on specific nodes. Usage: make generate-blocks ARGS="1,10 3,5"
+.PHONY: generate-blocks
+generate-blocks:
+	@test -f compose/generated/generate-blocks.sh || { echo "run 'make gen-multinode N=<3..10>' first"; exit 2; }
+	@compose/generated/generate-blocks.sh $(ARGS)
 
 .PHONY: install-tools
 install-tools:
@@ -230,7 +254,7 @@ prunertest:
 legacy-sync:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestBIP68' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency
@@ -239,6 +263,13 @@ chainintegrity:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
 	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
+
+.PHONY: network-chaos-test
+network-chaos-test:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
 
 .PHONY: nightly-tests
 nightly-tests:
@@ -842,6 +873,18 @@ show-hashes:
 		echo "  - Run 'make chain-integrity-test' first to generate the log file"; \
 	fi
 	@echo ""
+
+# Generate Swagger spec for Asset service from go-swagger annotations
+.PHONY: swagger-asset
+swagger-asset:
+	@echo "Generating Swagger spec for Asset service..."
+	swagger generate spec -m -o services/asset/httpimpl/swagger.json -w services/asset/httpimpl/
+	@echo "Swagger spec generated at services/asset/httpimpl/swagger.json"
+
+# Validate generated Swagger spec
+.PHONY: swagger-validate
+swagger-validate: swagger-asset
+	swagger validate services/asset/httpimpl/swagger.json
 
 # Quick chain integrity test (shorter wait times for faster testing)
 .PHONY: chain-integrity-test-quick

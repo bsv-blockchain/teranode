@@ -3,17 +3,20 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/IBM/sarama"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -21,15 +24,10 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
-	"github.com/rcrowley/go-metrics"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
-
-// init disables go-metrics globally to prevent memory leak from exponential decay sample heap.
-// This must be set before any Sarama clients are created.
-// See: https://github.com/IBM/sarama/issues/1321
-func init() {
-	metrics.UseNilMetrics = true
-}
 
 // KafkaAsyncProducerI defines the interface for asynchronous Kafka producer operations.
 type KafkaAsyncProducerI interface {
@@ -68,7 +66,17 @@ type KafkaProducerConfig struct {
 	TLSKeyFile    string // Path to client key file
 
 	// Debug logging
-	EnableDebugLogging bool // Enable verbose Sarama (Kafka client) debug logging
+	EnableDebugLogging bool // Enable verbose debug logging
+
+	// Transfer rate monitoring
+	SlowTransfer SlowTransferConfig // Thresholds for slow-send detection (zero value uses defaults)
+
+	// ManualPartitioning routes every record to Message.Partition without any
+	// hashing or sticky-batching by franz-go. Callers MUST set Partition on
+	// every Message they publish — there is no fallback. Used by the validator
+	// when emitting v2-format txmeta messages so each Kafka message lands on a
+	// partition aligned with the receiver's cache bucket range.
+	ManualPartitioning bool
 }
 
 // MessageStatus represents the status of a produced message.
@@ -79,35 +87,52 @@ type MessageStatus struct {
 }
 
 // Message represents a Kafka message with key and value.
+//
+// Partition is honored only when the producer was created with
+// KafkaProducerConfig.ManualPartitioning=true. In that mode the producer is
+// registered with kgo.ManualPartitioner, which writes the record to exactly
+// the partition number specified — there is no fallback, so callers MUST set
+// Partition explicitly for every Message. With ManualPartitioning=false the
+// field is ignored (franz-go's default StickyKeyPartitioner picks the
+// partition from Key).
 type Message struct {
-	Key   []byte
-	Value []byte
+	Key       []byte
+	Value     []byte
+	Partition int32
 }
 
-// KafkaAsyncProducer implements asynchronous Kafka producer functionality.
+// KafkaAsyncProducer implements asynchronous Kafka producer functionality using franz-go.
 type KafkaAsyncProducer struct {
-	Config         KafkaProducerConfig  // Producer configuration
-	Producer       sarama.AsyncProducer // Underlying Sarama async producer
-	publishChannel chan *Message        // Channel for publishing messages
-	closed         atomic.Bool          // Flag indicating if producer is closed
-	channelMu      sync.RWMutex         // Mutex to protect publishChannel access
-	publishWg      sync.WaitGroup       // WaitGroup to track publish goroutine
+	Config         KafkaProducerConfig // Producer configuration
+	client         *kgo.Client         // Underlying franz-go client
+	publishChannel chan *Message       // Channel for publishing messages
+	shuttingDown   atomic.Bool         // Flag indicating shutdown has started (reject new publishes)
+	closed         atomic.Bool         // Flag indicating if producer is closed
+	adaptiveSlow   atomic.Bool         // Flag enabling adaptive batching during constrained bandwidth
+	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
+	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
+
+	// For in-memory support
+	inMemoryProducer *inmemorykafka.InMemoryAsyncProducer
+	isInMemory       bool
+}
+
+// ProducerOption mutates the KafkaProducerConfig built from a URL before the
+// underlying client is constructed. Use with NewKafkaAsyncProducerFromURL to
+// override flags that aren't expressible in the URL (e.g. ManualPartitioning).
+type ProducerOption func(*KafkaProducerConfig)
+
+// WithManualPartitioning switches the producer to franz-go's ManualPartitioner.
+// Every Message.Partition is honored verbatim; there is no fallback for
+// records without an explicit partition. Use when the caller wants strict
+// control over partition routing (e.g. the validator emitting v2 txmeta
+// messages aligned to receiver-side cache bucket ranges).
+func WithManualPartitioning() ProducerOption {
+	return func(c *KafkaProducerConfig) { c.ManualPartitioning = true }
 }
 
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
-// This is a convenience function for production code that extracts settings from kafkaSettings.
-// For tests, use NewKafkaAsyncProducer directly with a manually constructed config.
-//
-// Parameters:
-//   - ctx: Context for producer operations
-//   - logger: Logger instance
-//   - url: URL containing Kafka configuration
-//   - kafkaSettings: Kafka settings for TLS and debug logging (can be nil for defaults)
-//
-// Returns:
-//   - *KafkaAsyncProducer: Configured async producer
-//   - error: Any error encountered during setup
-func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings, opts ...ProducerOption) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := safeconversion.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
@@ -118,7 +143,6 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		return nil, err
 	}
 
-	// Extract TLS and debug logging settings from kafkaSettings (if provided)
 	var enableTLS, tlsSkipVerify, enableDebugLogging bool
 	var tlsCAFile, tlsCertFile, tlsKeyFile string
 	if kafkaSettings != nil {
@@ -137,18 +161,21 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		Topic:                 strings.TrimPrefix(url.Path, "/"),
 		Partitions:            partitionsInt32,
 		ReplicationFactor:     replicationFactorInt16,
-		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),         // 10 minutes
-		SegmentBytes:          util.GetQueryParam(url, "segment_bytes", "1073741824"), // 1GB default
+		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),
+		SegmentBytes:          util.GetQueryParam(url, "segment_bytes", "1073741824"),
 		FlushBytes:            util.GetQueryParamInt(url, "flush_bytes", 1024*1024),
 		FlushMessages:         util.GetQueryParamInt(url, "flush_messages", 50_000),
 		FlushFrequency:        util.GetQueryParamDuration(url, "flush_frequency", 10*time.Second),
-		// TLS/Auth configuration
-		EnableTLS:          enableTLS,
-		TLSSkipVerify:      tlsSkipVerify,
-		TLSCAFile:          tlsCAFile,
-		TLSCertFile:        tlsCertFile,
-		TLSKeyFile:         tlsKeyFile,
-		EnableDebugLogging: enableDebugLogging,
+		EnableTLS:             enableTLS,
+		TLSSkipVerify:         tlsSkipVerify,
+		TLSCAFile:             tlsCAFile,
+		TLSCertFile:           tlsCertFile,
+		TLSKeyFile:            tlsKeyFile,
+		EnableDebugLogging:    enableDebugLogging,
+	}
+
+	for _, opt := range opts {
+		opt(&producerConfig)
 	}
 
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
@@ -162,121 +189,208 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 	return producer, nil
 }
 
-// NewKafkaAsyncProducer creates a new async producer with the given configuration.
+// defaultBatchMaxBytes is the default max batch size for franz-go, matching the
+// Kafka broker default for max.message.bytes (1 MiB). This must not be derived
+// from flush_bytes, which was a Sarama flush-trigger threshold, not a size limit.
+const defaultBatchMaxBytes int32 = 1_048_576
+
+// clampBatchMaxBytes returns a safe ProducerBatchMaxBytes value. The flush_bytes
+// config parameter controlled flush timing in Sarama, not max batch size. In
+// franz-go, ProducerBatchMaxBytes is a hard limit — setting it too low causes
+// Redpanda/Kafka to reject messages with MESSAGE_TOO_LARGE.
 //
-// Parameters:
-//   - logger: Logger instance
-//   - cfg: Producer configuration (includes TLS and debug logging settings)
-//
-// Returns:
-//   - *KafkaAsyncProducer: Configured async producer
-//   - error: Any error encountered during setup
+// When flush_bytes <= defaultBatchMaxBytes (which includes all legacy configs like
+// flush_bytes=64 or flush_bytes=1024), we use the 1 MiB default. Only when
+// flush_bytes explicitly exceeds 1 MiB do we respect it as a batch size override.
+func clampBatchMaxBytes(flushBytes int) int32 {
+	if flushBytes <= int(defaultBatchMaxBytes) {
+		return defaultBatchMaxBytes
+	}
+	if flushBytes > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(flushBytes) //nolint:gosec // bounds checked above
+}
+
+// NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
-	if cfg.URL.Scheme == memoryScheme {
-		// --- Use the in-memory implementation ---
-		broker := inmemorykafka.GetSharedBroker() // Use alias 'imk'
-		// Use a reasonable default buffer size for the mock async producer, or take from config if available
-		bufferSize := 256                                                      // Default buffer size for the publish channel
-		producer := inmemorykafka.NewInMemoryAsyncProducer(broker, bufferSize) // Use alias 'imk'
+	producer := &KafkaAsyncProducer{
+		Config: cfg,
+	}
+
+	if cfg.URL != nil && cfg.URL.Scheme == memoryScheme {
+		broker := inmemorykafka.GetSharedBroker()
+		bufferSize := 256
+		producer := inmemorykafka.NewInMemoryAsyncProducer(broker, bufferSize)
 
 		cfg.Logger.Infof("Using in-memory Kafka async producer")
-		// No error expected from mock creation
 
 		client := &KafkaAsyncProducer{
-			Producer: producer,
-			Config:   cfg,
+			Config:           cfg,
+			inMemoryProducer: producer,
+			isInMemory:       true,
 		}
 
 		return client, nil
 	}
 
-	// --- Use the real Sarama implementation ---
-
-	config := sarama.NewConfig()
-	config.Producer.Flush.Bytes = cfg.FlushBytes
-	config.Producer.Flush.Messages = cfg.FlushMessages
-	config.Producer.Flush.Frequency = cfg.FlushFrequency
-	// config.Producer.Return.Successes = true
-
-	// Enable Sarama debug logging if configured
-	if cfg.EnableDebugLogging {
-		sarama.Logger = &saramaLoggerAdapter{logger: logger}
-		logger.Infof("Kafka debug logging enabled for async producer topic %s", cfg.Topic)
+	batchMaxBytes := clampBatchMaxBytes(cfg.FlushBytes)
+	if int(batchMaxBytes) != cfg.FlushBytes {
+		logger.Warnf("flush_bytes=%d for topic %s clamped to %d for franz-go compatibility", cfg.FlushBytes, cfg.Topic, batchMaxBytes)
 	}
 
-	// Apply authentication settings if TLS is enabled
+	// Build franz-go client options
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(cfg.BrokersURL...),
+		kgo.DefaultProduceTopic(cfg.Topic),
+		kgo.ProducerBatchMaxBytes(batchMaxBytes),
+		kgo.ProducerLinger(cfg.FlushFrequency),
+		kgo.MaxBufferedRecords(cfg.FlushMessages),
+		kgo.DisableIdempotentWrite(),
+	}
+
+	if cfg.ManualPartitioning {
+		opts = append(opts, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	}
+
+	// Configure TLS if enabled
 	if cfg.EnableTLS {
-		cfg.Logger.Debugf("Configuring Kafka TLS authentication - EnableTLS: %v, SkipVerify: %v, CA: %s, Cert: %s",
-			cfg.EnableTLS, cfg.TLSSkipVerify, cfg.TLSCAFile, cfg.TLSCertFile)
-
-		if err := configureKafkaAuthFromFields(config, cfg.EnableTLS, cfg.TLSSkipVerify, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
-			return nil, errors.NewConfigurationError("failed to configure Kafka authentication", err)
+		tlsConfig, err := buildFranzTLSConfig(cfg.EnableTLS, cfg.TLSSkipVerify, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, errors.NewConfigurationError("failed to configure TLS for kafka async producer", err)
 		}
-
-		cfg.Logger.Debugf("Successfully configured Kafka TLS authentication for async producer topic %s", cfg.Topic)
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 
-	cfg.Logger.Infof("Starting Kafka async producer for %s topic", cfg.Topic)
-
-	// try turning off acks
-	// config.Producer.RequiredAcks = sarama.NoResponse // Equivalent to 'acks=0'
-	// config.Producer.Return.Successes = false
-
-	clusterAdmin, err := sarama.NewClusterAdmin(cfg.BrokersURL, config)
-	if err != nil {
-		return nil, errors.NewConfigurationError("error while creating cluster admin", err)
-	}
-	defer func(clusterAdmin sarama.ClusterAdmin) {
-		_ = clusterAdmin.Close()
-	}(clusterAdmin)
-
-	if err := createTopic(clusterAdmin, cfg); err != nil {
-		return nil, err
+	// Enable debug logging if configured
+	if cfg.EnableDebugLogging {
+		opts = append(opts, kgo.WithLogger(&franzLoggerAdapter{logger: logger}))
 	}
 
-	producer, err := sarama.NewAsyncProducer(cfg.BrokersURL, config)
+	// Wire transfer-rate monitoring hooks
+	slowCfg := cfg.SlowTransfer
+	if slowCfg.ThresholdBps == 0 {
+		slowCfg = DefaultSlowTransferConfig()
+	}
+	hook := newProducerMetricsHook(logger, cfg.Topic, slowCfg)
+	hook.setSlowStateHandler(func(slow bool, rateBps float64) {
+		producer.adaptiveSlow.Store(slow)
+		if slow {
+			logger.Infof("[kafka] enabling adaptive batching on topic %s (observed %.1f KB/s)", cfg.Topic, rateBps/1024)
+			return
+		}
+		logger.Infof("[kafka] restoring normal batching on topic %s", cfg.Topic)
+	})
+	opts = append(opts, kgo.WithHooks(hook))
+
+	// Create the franz-go client
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, errors.NewServiceError("Failed to create Kafka async producer for %s", cfg.Topic, err)
 	}
 
-	client := &KafkaAsyncProducer{
-		Producer: producer,
-		Config:   cfg,
+	// Create topic if it doesn't exist (uses Background; constructor is not cancelable)
+	if err := createTopicWithFranz(context.Background(), client, cfg); err != nil {
+		client.Close()
+		return nil, err
 	}
 
-	return client, nil
+	producer.client = client
+
+	return producer, nil
 }
 
-func (c *KafkaAsyncProducer) decodeKeyOrValue(encoder sarama.Encoder) string {
-	if encoder == nil {
-		return ""
+func (c *KafkaAsyncProducer) currentBatchLinger() time.Duration {
+	if c.adaptiveSlow.Load() {
+		linger := c.Config.FlushFrequency * 4
+		if linger < 200*time.Millisecond {
+			linger = 200 * time.Millisecond
+		}
+		if linger > 5*time.Second {
+			linger = 5 * time.Second
+		}
+		return linger
 	}
-
-	bytes := encoder.(sarama.ByteEncoder)
-
-	if len(bytes) > 80 {
-		return fmt.Sprintf("%x", bytes[:80]) + "... (truncated)"
+	if c.Config.FlushFrequency <= 0 {
+		return 10 * time.Second
 	}
+	return c.Config.FlushFrequency
+}
 
-	return fmt.Sprintf("%x", bytes)
+func (c *KafkaAsyncProducer) currentBatchSize() int {
+	base := c.Config.FlushMessages
+	if base <= 0 {
+		base = 1000
+	}
+	if c.adaptiveSlow.Load() {
+		sz := base * 4
+		if sz < 100 {
+			sz = 100
+		}
+		if sz > 20000 {
+			sz = 20000
+		}
+		return sz
+	}
+	if base < 1 {
+		return 1
+	}
+	return base
+}
+
+func (c *KafkaAsyncProducer) currentBackpressureThreshold() int {
+	threshold := c.currentBatchSize() * 2
+	if threshold < 200 {
+		return 200
+	}
+	return threshold
+}
+
+func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered []*Message) {
+	for _, msgBytes := range buffered {
+		if c.closed.Load() || c.shuttingDown.Load() {
+			return
+		}
+		record := &kgo.Record{
+			Topic: c.Config.Topic,
+			Key:   msgBytes.Key,
+			Value: msgBytes.Value,
+		}
+		if c.Config.ManualPartitioning {
+			record.Partition = msgBytes.Partition
+		}
+		c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
+			if err != nil {
+				c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %x", r.Topic, err, r.Key)
+			} else {
+				c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
+			}
+		})
+	}
 }
 
 // Start begins the async producer operation.
-// It sets up message handling and error handling goroutines.
 func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
+		return
+	}
+	c.shuttingDown.Store(false)
+	c.closed.Store(false)
+
+	// Handle in-memory case
+	if c.isInMemory {
+		c.startInMemory(ctx, ch)
 		return
 	}
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.publishWg.Add(1) // Track the publish goroutine
+	c.publishWg.Add(1)
 
 	go func() {
-		context, cancel := context.WithCancel(ctx)
-
+		internalCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		c.channelMu.Lock()
@@ -284,24 +398,175 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 		c.channelMu.Unlock()
 
 		go func() {
-			for s := range c.Producer.Successes() {
-				key := c.decodeKeyOrValue(s.Key)
-				value := c.decodeKeyOrValue(s.Value)
+			defer c.publishWg.Done()
+			wg.Done()
 
-				c.Config.Logger.Debugf("Successfully sent message to topic %s, offset: %d, key: %v, value: %v",
-					s.Topic, s.Offset, key, value)
+			c.channelMu.RLock()
+			ch := c.publishChannel
+			c.channelMu.RUnlock()
+
+			buffered := make([]*Message, 0, 256)
+			backpressureLogged := false
+			bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
+			backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
+			bufferedGauge.Set(0)
+
+			slowMode := c.adaptiveSlow.Load()
+			linger := c.currentBatchLinger()
+			maxBatch := c.currentBatchSize()
+			backpressureThreshold := c.currentBackpressureThreshold()
+
+			const metricsUpdateInterval = 64
+			metricTick := 0
+
+			var lingerTimer *time.Timer
+			var lingerCh <-chan time.Time
+			defer func() {
+				if lingerTimer == nil {
+					return
+				}
+				if !lingerTimer.Stop() {
+					select {
+					case <-lingerTimer.C:
+					default:
+					}
+				}
+			}()
+
+			resetLingerTimer := func(d time.Duration) {
+				if lingerTimer == nil {
+					lingerTimer = time.NewTimer(d)
+				} else {
+					if !lingerTimer.Stop() {
+						select {
+						case <-lingerTimer.C:
+						default:
+						}
+					}
+					lingerTimer.Reset(d)
+				}
+				lingerCh = lingerTimer.C
 			}
+
+			flushBufferedFinal := func() {
+				if len(buffered) == 0 {
+					return
+				}
+				// Use a fresh context so final drain still runs after parent cancellation.
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer flushCancel()
+				c.flushBuffered(flushCtx, buffered)
+				buffered = buffered[:0]
+				bufferedGauge.Set(0)
+			}
+
+			for {
+				if c.closed.Load() || c.shuttingDown.Load() {
+					break
+				}
+
+				newSlowMode := c.adaptiveSlow.Load()
+				if newSlowMode != slowMode {
+					slowMode = newSlowMode
+					linger = c.currentBatchLinger()
+					maxBatch = c.currentBatchSize()
+					backpressureThreshold = c.currentBackpressureThreshold()
+				}
+
+				metricTick++
+				if metricTick >= metricsUpdateInterval {
+					bufferedGauge.Set(float64(len(buffered)))
+					metricTick = 0
+				}
+
+				if len(buffered) > backpressureThreshold {
+					if !backpressureLogged {
+						backpressureLogged = true
+						backpressureCounter.Inc()
+						c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
+							c.Config.Topic, len(buffered), backpressureThreshold)
+					}
+				} else {
+					backpressureLogged = false
+				}
+
+				if len(buffered) == 0 {
+					msgBytes, ok := <-ch
+					if !ok {
+						break
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+					continue
+				}
+
+				if len(buffered) >= maxBatch {
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+					continue
+				}
+
+				resetLingerTimer(linger)
+
+				select {
+				case msgBytes, ok := <-ch:
+					if !ok {
+						flushBufferedFinal()
+						return
+					}
+					if msgBytes != nil {
+						buffered = append(buffered, msgBytes)
+					}
+				case <-lingerCh:
+					lingerCh = nil
+					c.flushBuffered(internalCtx, buffered)
+					buffered = buffered[:0]
+					bufferedGauge.Set(0)
+				case <-internalCtx.Done():
+					flushBufferedFinal()
+					return
+				}
+			}
+
 		}()
+
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 		go func() {
-			for err := range c.Producer.Errors() {
-				key := c.decodeKeyOrValue(err.Msg.Key)
-				value := c.decodeKeyOrValue(err.Msg.Value)
-
-				c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %v, Value: %v",
-					err.Msg.Topic, err.Err, key, value)
-			}
+			<-signals
+			cancel()
 		}()
+
+		select {
+		case <-signals:
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			cancel()
+		case <-internalCtx.Done():
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+		}
+
+		_ = c.Stop()
+	}()
+
+	wg.Wait()
+}
+
+// startInMemory handles the in-memory producer case
+func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message) {
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	c.publishWg.Add(1)
+
+	go func() {
+		internalCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		c.channelMu.Lock()
+		c.publishChannel = ch
+		c.channelMu.Unlock()
 
 		go func() {
 			defer c.publishWg.Done()
@@ -316,61 +581,39 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					break
 				}
 
-				message := &sarama.ProducerMessage{
-					Topic: c.Config.Topic,
-					Value: sarama.ByteEncoder(msgBytes.Value),
-				}
-				if msgBytes.Key != nil {
-					message.Key = sarama.ByteEncoder(msgBytes.Key)
-				}
+				c.inMemoryProducer.Produce(c.Config.Topic, msgBytes.Key, msgBytes.Value)
+			}
+		}()
 
-				// Check if closed again right before sending to avoid race condition
-				// where Close() is called between the check above and the send below
-				if c.closed.Load() {
-					break
-				}
+		// Handle successes
+		go func() {
+			for range c.inMemoryProducer.Successes() {
+				c.Config.Logger.Debugf("Successfully sent message to topic %s", c.Config.Topic)
+			}
+		}()
 
-				// Use a function with recover to safely handle sends to potentially closed channel
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							// Check if this is the expected "send on closed channel" panic
-							panicMsg := fmt.Sprint(r)
-							if strings.Contains(panicMsg, "closed channel") {
-								// Expected during shutdown, log at debug level
-								c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
-							} else {
-								// Unexpected panic - log error and re-throw to expose the bug
-								c.Config.Logger.Errorf("[kafka] Unexpected panic while sending message: %v", r)
-								panic(r)
-							}
-						}
-					}()
-					c.Producer.Input() <- message
-				}()
+		// Handle errors
+		go func() {
+			for err := range c.inMemoryProducer.Errors() {
+				c.Config.Logger.Errorf("Failed to deliver message: %v", err)
 			}
 		}()
 
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
-		go func() {
-			<-signals
-			cancel()
-		}()
-
 		select {
 		case <-signals:
 			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
-			cancel() // Ensure the context is canceled
-		case <-context.Done():
+			cancel()
+		case <-internalCtx.Done():
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
 		_ = c.Stop()
 	}()
 
-	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
+	wg.Wait()
 }
 
 // Stop gracefully shuts down the async producer.
@@ -379,36 +622,54 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
+	if c.shuttingDown.Load() {
+		return nil
+	}
+
+	c.shuttingDown.Store(true)
+
 	if c.closed.Load() {
 		return nil
 	}
 
-	c.closed.Store(true)
-
-	// Close the publish channel to signal the publish goroutine to exit
 	c.channelMu.Lock()
 	ch := c.publishChannel
 	if ch != nil {
-		c.publishChannel = nil // Set to nil BEFORE closing to prevent sends to closed channel
+		c.publishChannel = nil
 		close(ch)
 	}
 	c.channelMu.Unlock()
 
-	// Wait for the publish goroutine to finish processing
 	c.publishWg.Wait()
+	c.closed.Store(true)
 
-	// Now it's safe to close the producer
-	if err := c.Producer.Close(); err != nil {
-		c.closed.Store(false)
-		return err
+	if c.isInMemory {
+		if c.inMemoryProducer != nil {
+			if err := c.inMemoryProducer.Close(); err != nil {
+				c.closed.Store(false)
+				return err
+			}
+		}
+	} else {
+		if c.client != nil {
+			if err := c.client.Flush(context.Background()); err != nil {
+				c.Config.Logger.Warnf("Error flushing kafka producer: %v", err)
+			}
+			c.client.Close()
+		}
 	}
 
 	return nil
 }
 
 // BrokersURL returns the list of configured Kafka broker URLs.
+// Returns nil for in-memory producers since there are no real brokers.
 func (c *KafkaAsyncProducer) BrokersURL() []string {
 	if c == nil {
+		return nil
+	}
+
+	if c.inMemoryProducer != nil {
 		return nil
 	}
 
@@ -420,56 +681,141 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.channelMu.RLock()
 	defer c.channelMu.RUnlock()
 
-	if c.closed.Load() || c.publishChannel == nil {
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
 		return
 	}
-
-	c.channelMu.RLock()
-	defer c.channelMu.RUnlock()
 
 	if c.publishChannel != nil {
 		util.SafeSend(c.publishChannel, msg)
 	}
 }
 
-// createTopic creates a new Kafka topic with the specified configuration.
-//
-// Parameters:
-//   - admin: Kafka cluster administrator
-//   - cfg: Producer configuration containing topic settings
-//
-// Returns:
-//   - error: Any error encountered during topic creation
-func createTopic(admin sarama.ClusterAdmin, cfg KafkaProducerConfig) error {
-	err := admin.CreateTopic(cfg.Topic, &sarama.TopicDetail{
-		NumPartitions:     cfg.Partitions,
-		ReplicationFactor: cfg.ReplicationFactor,
-		ConfigEntries: map[string]*string{
-			"retention.ms":        &cfg.RetentionPeriodMillis,
-			"delete.retention.ms": &cfg.RetentionPeriodMillis,
-			"segment.ms":          &cfg.RetentionPeriodMillis,
-			"segment.bytes":       &cfg.SegmentBytes,
-		},
-	}, false)
+// createTopicWithFranz creates a new Kafka topic with the specified configuration.
+func createTopicWithFranz(ctx context.Context, client *kgo.Client, cfg KafkaProducerConfig) error {
+	admin := kadm.NewClient(client)
 
+	retentionMs, err := strconv.ParseInt(cfg.RetentionPeriodMillis, 10, 64)
 	if err != nil {
-		if errors.Is(err, sarama.ErrTopicAlreadyExists) {
-			err = admin.AlterConfig(sarama.TopicResource, cfg.Topic, map[string]*string{
-				"retention.ms":        &cfg.RetentionPeriodMillis,
-				"delete.retention.ms": &cfg.RetentionPeriodMillis,
-				"segment.ms":          &cfg.RetentionPeriodMillis,
-				"segment.bytes":       &cfg.SegmentBytes,
-			}, false)
+		retentionMs = 600000
+	}
 
-			if err != nil {
-				return errors.NewProcessingError("unable to alter topic config", err)
-			}
+	segmentBytes, err := strconv.ParseInt(cfg.SegmentBytes, 10, 64)
+	if err != nil {
+		segmentBytes = 1073741824
+	}
 
-			return nil
+	configs := map[string]*string{
+		"retention.ms":        stringPtr(fmt.Sprintf("%d", retentionMs)),
+		"delete.retention.ms": stringPtr(fmt.Sprintf("%d", retentionMs)),
+		"segment.ms":          stringPtr(fmt.Sprintf("%d", retentionMs)),
+		"segment.bytes":       stringPtr(fmt.Sprintf("%d", segmentBytes)),
+	}
+
+	topicAlreadyExists := false
+
+	resp, err := admin.CreateTopic(ctx, cfg.Partitions, cfg.ReplicationFactor, configs, cfg.Topic)
+	if err != nil {
+		if errors.Is(err, kerr.TopicAlreadyExists) {
+			topicAlreadyExists = true
+		} else {
+			return errors.NewProcessingError("unable to create topic", err)
 		}
+	} else if resp.Err != nil {
+		if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
+			topicAlreadyExists = true
+		} else {
+			return errors.NewProcessingError("unable to create topic", resp.Err)
+		}
+	}
 
-		return errors.NewProcessingError("unable to create topic", err)
+	// If topic already existed, ensure configs are up to date
+	if topicAlreadyExists {
+		_, alterErr := admin.AlterTopicConfigs(ctx, []kadm.AlterConfig{
+			{Name: "retention.ms", Value: stringPtr(fmt.Sprintf("%d", retentionMs))},
+			{Name: "delete.retention.ms", Value: stringPtr(fmt.Sprintf("%d", retentionMs))},
+			{Name: "segment.ms", Value: stringPtr(fmt.Sprintf("%d", retentionMs))},
+			{Name: "segment.bytes", Value: stringPtr(fmt.Sprintf("%d", segmentBytes))},
+		}, cfg.Topic)
+		if alterErr != nil {
+			return errors.NewProcessingError("unable to alter topic config", alterErr)
+		}
 	}
 
 	return nil
+}
+
+// buildFranzTLSConfig builds a TLS configuration for franz-go
+func buildFranzTLSConfig(enableTLS bool, tlsSkipVerify bool, tlsCAFile string, tlsCertFile string, tlsKeyFile string) (*tls.Config, error) {
+	if !enableTLS {
+		return nil, nil
+	}
+
+	// #nosec G402 -- InsecureSkipVerify is configurable and may be needed for testing environments
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: tlsSkipVerify,
+	}
+
+	if tlsCAFile != "" {
+		caCert, err := os.ReadFile(tlsCAFile)
+		if err != nil {
+			return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read TLS CA file: "+tlsCAFile, err)
+		}
+
+		if tlsConfig.RootCAs == nil {
+			tlsConfig.RootCAs = loadSystemCertPool()
+		}
+
+		if !tlsConfig.RootCAs.AppendCertsFromPEM(caCert) {
+			return nil, errors.New(errors.ERR_CONFIGURATION, "failed to append CA certificate to RootCAs from file: "+tlsCAFile)
+		}
+	}
+
+	if tlsCertFile != "" && tlsKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+		if err != nil {
+			return nil, errors.New(errors.ERR_CONFIGURATION, "failed to load TLS certificate/key pair", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsConfig, nil
+}
+
+// loadSystemCertPool loads the system certificate pool
+func loadSystemCertPool() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return x509.NewCertPool()
+	}
+	return pool
+}
+
+// franzLoggerAdapter adapts ulogger.Logger to franz-go's logger interface
+type franzLoggerAdapter struct {
+	logger ulogger.Logger
+}
+
+func (f *franzLoggerAdapter) Level() kgo.LogLevel {
+	return kgo.LogLevelDebug
+}
+
+func (f *franzLoggerAdapter) Log(level kgo.LogLevel, msg string, keyvals ...interface{}) {
+	formatted := fmt.Sprintf("[FRANZ-GO] %s %v", msg, keyvals)
+	switch level {
+	case kgo.LogLevelError:
+		f.logger.Errorf("%s", formatted)
+	case kgo.LogLevelWarn:
+		f.logger.Warnf("%s", formatted)
+	case kgo.LogLevelInfo:
+		f.logger.Infof("%s", formatted)
+	case kgo.LogLevelDebug:
+		f.logger.Debugf("%s", formatted)
+	default:
+		f.logger.Infof("%s", formatted)
+	}
+}
+
+// stringPtr returns a pointer to the string
+func stringPtr(s string) *string {
+	return &s
 }

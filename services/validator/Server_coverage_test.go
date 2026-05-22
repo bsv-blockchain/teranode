@@ -12,7 +12,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -220,7 +219,7 @@ func TestServerValidateTransaction(t *testing.T) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
-					TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+					TxInpoints:  singleParentInpoints(txid, 0),
 				}, nil
 			},
 		}
@@ -266,7 +265,7 @@ func TestServerValidateTransaction(t *testing.T) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
-					TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+					TxInpoints:  singleParentInpoints(txid, 0),
 				}, nil
 			},
 		}
@@ -328,7 +327,7 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 				return &meta.Data{
 					Fee:         32279815860,
 					SizeInBytes: 245,
-					TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+					TxInpoints:  singleParentInpoints(txid, 0),
 				}, nil
 			},
 		}
@@ -363,7 +362,7 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 					return &meta.Data{
 						Fee:         32279815860,
 						SizeInBytes: 245,
-						TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+						TxInpoints:  singleParentInpoints(txid, 0),
 					}, nil
 				}
 				return nil, errors.NewServiceError("validation error")

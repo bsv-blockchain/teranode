@@ -592,3 +592,84 @@ func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint3
 func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
 	return errors.NewProcessingError("not implemented")
 }
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+// MTP values are read from pre-stored block metadata rather than recomputed on demand.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
+func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	if len(heights) == 0 {
+		return []uint32{}, nil
+	}
+
+	minHeight, maxHeight := heights[0], heights[0]
+	for _, h := range heights[1:] {
+		if h < minHeight {
+			minHeight = h
+		}
+		if h > maxHeight {
+			maxHeight = h
+		}
+	}
+
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
+	}
+
+	mtpByHeight := make(map[uint32]uint32, len(metas))
+	for _, meta := range metas {
+		mtpByHeight[meta.Height] = meta.MedianTimePast
+	}
+
+	mtps := make([]uint32, len(heights))
+	for i, height := range heights {
+		mtps[i] = mtpByHeight[height]
+	}
+
+	return mtps, nil
+}
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Blocks missing from the canonical chain (e.g. heights below 11) are left as zero.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
+func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
+	}
+
+	result := make([]uint32, toHeight-fromHeight+1)
+	for _, meta := range metas {
+		result[meta.Height-fromHeight] = meta.MedianTimePast
+	}
+
+	// If the top height is not in the database (block not yet persisted), compute its MTP
+	// on the fly from the block_time values of the preceding 11 blocks already in metas.
+	topMissing := len(metas) == 0 || metas[len(metas)-1].Height < toHeight
+	if topMissing && toHeight >= uint32(MedianTimeBlocks) {
+		computed, err := computeMTPForMissingHeight(metas, toHeight)
+		if err != nil {
+			return nil, err
+		}
+		result[toHeight-fromHeight] = computed
+	}
+
+	return result, nil
+}

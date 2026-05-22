@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1270,4 +1271,98 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 			t.Logf("Reorg failed with error: %v", err)
 		}
 	})
+}
+
+// TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing verifies that SubtreeProcessor.reset()
+// marks all currently-in-assembly transactions as NOT on longest chain in the UTXO store BEFORE
+// clearing its internal state.
+//
+// The bug: when reset() clears chainedSubtrees and currentSubtree (lines 1071-1092), it loses
+// track of which transactions were in assembly. If any of those transactions had unmined_since=NULL
+// (mined) in the UTXO store — e.g., because a competing fork's BlockValidation processed them —
+// they won't appear in the unmined_since index scan used by loadUnminedTransactions(). As a result,
+// those transactions are silently dropped from block assembly after the reset.
+//
+// The fix: call markNotOnLongestChain() on all assembly transactions before clearing state, mirroring
+// what reorgBlocks() does at lines 2665-2710.
+func TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	settings := test.CreateBaseTestSettings(t)
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings, utxoStoreURL)
+	require.NoError(t, err)
+
+	blobStore := blob_memory.New()
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	t.Cleanup(func() { close(newSubtreeChan) })
+
+	mockBlockchainClient := &blockchain.Mock{}
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
+	require.NoError(t, err)
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(context.Background()) })
+
+	// Insert coinbaseTx into the UTXO store so markNotOnLongestChain can update it.
+	const blockHeight = uint32(100)
+	require.NoError(t, utxoStore.SetBlockHeight(blockHeight))
+	_, err = utxoStore.Create(ctx, coinbaseTx, blockHeight)
+	require.NoError(t, err)
+
+	txHash := coinbaseTx.TxIDChainHash()
+
+	// Mark it as ON longest chain (unmined_since = NULL).
+	// This simulates what BlockValidation does when a competing fork mines this tx —
+	// the tx is "mined" in the UTXO store but hasn't been removed from block assembly yet.
+	require.NoError(t, utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, true))
+
+	// Verify precondition: UnminedSince == 0 means unmined_since is NULL (mined state).
+	metaBefore, err := utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), metaBefore.UnminedSince,
+		"precondition: tx must be marked as mined (unmined_since=NULL) before reset")
+
+	// Add the tx to block assembly so reset() sees it in its state.
+	stp.AddBatch([]subtree.Node{{
+		Hash:        *txHash,
+		Fee:         100,
+		SizeInBytes: 200,
+	}}, []*subtree.TxInpoints{{}})
+
+	// Wait for the async queue to process the add.
+	time.Sleep(100 * time.Millisecond)
+	require.True(t, stp.GetCurrentTxMap().Exists(*txHash), "tx must be in block assembly before reset")
+
+	// Call Reset with no moveBack/moveForward — we are testing the assembly-clearing step only.
+	targetHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          9999,
+	}
+	response := stp.Reset(targetHeader, nil, nil, false, nil)
+	require.NoError(t, response.Err)
+
+	// After Reset, the tx must have unmined_since != 0 (i.e., NOT NULL).
+	// Only then will loadUnminedTransactions() find it via the unmined_since index
+	// and add it back to block assembly.
+	//
+	// WITHOUT THE FIX: unmined_since remains NULL → loadUnminedTransactions misses it → tx LOST.
+	// WITH THE FIX:    reset marks it NOT on longest chain → unmined_since is set → tx RECOVERED.
+	metaAfter, err := utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotEqual(t, uint32(0), metaAfter.UnminedSince,
+		"after reset, an assembly tx that had unmined_since=NULL must be marked as NOT on longest chain "+
+			"so loadUnminedTransactions can recover it; without the fix this tx is silently lost from block assembly")
 }

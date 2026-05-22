@@ -317,12 +317,11 @@ func TestRetryPermanent(t *testing.T) {
 		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 
-	gotState = cr.State()
-	wantState = ConnPending
-
-	if gotState != wantState {
-		t.Fatalf("retry: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
-	}
+	// Intermediate ConnPending state is not observable deterministically:
+	// OnDisconnection is invoked from its own goroutine with no happens-before
+	// relation to the ConnPending update that precedes the retry dial. With
+	// RetryDuration: time.Millisecond, the retry can flip the state to
+	// ConnEstablished before we read it. Rely on the <-connected sync below.
 
 	gotConnReq = <-connected
 	wantID = cr.ID()

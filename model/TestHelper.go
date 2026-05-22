@@ -131,10 +131,17 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		binary.LittleEndian.PutUint64(parentTxID[:], uint64(i-1)) // Reference the previous transaction as parent
 		parentHash := chainhash.Hash(parentTxID)
 
-		if err = subtreeMeta.SetTxInpoints(len(subtree.Nodes)-1, subtreepkg.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parentHash},
-			Idxs:           [][]uint32{{0}}, // Reference output 0 of parent transaction
-		}); err != nil {
+		parentInput := &bt.Input{PreviousTxOutIndex: 0}
+		if err = parentInput.PreviousTxIDAdd(&parentHash); err != nil {
+			return nil, err
+		}
+
+		txInpoints, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+		if err != nil {
+			return nil, err
+		}
+
+		if err = subtreeMeta.SetTxInpoints(len(subtree.Nodes)-1, txInpoints); err != nil {
 			return nil, err
 		}
 

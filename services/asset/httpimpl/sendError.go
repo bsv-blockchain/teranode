@@ -12,6 +12,8 @@ import (
 
 // errorResponse defines the standard error response structure used across all API endpoints.
 // It provides a consistent format that includes both HTTP and application-level error details.
+//
+// swagger:model errorResponse
 type errorResponse struct {
 	// Status contains the HTTP status code
 	// Required: true

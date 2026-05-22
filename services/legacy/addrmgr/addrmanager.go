@@ -1,8 +1,8 @@
-// Package addrmgr provides a comprehensive address manager for Bitcoin SV peer-to-peer networking.
+// Package addrmgr provides a comprehensive address manager for BSV Blockchain peer-to-peer networking.
 //
 // This package implements a sophisticated address management system that maintains a database
 // of known Bitcoin network peers, their connection statistics, and their reliability scores.
-// It is designed to optimize peer discovery and connection management for Bitcoin SV nodes.
+// It is designed to optimize peer discovery and connection management for BSV Blockchain nodes.
 //
 // Key Features:
 // - Concurrent-safe address storage and retrieval
@@ -58,7 +58,7 @@ import (
 )
 
 // AddrManager provides a concurrency-safe address manager for caching and managing potential
-// peers on the Bitcoin SV network.
+// peers on the BSV Blockchain network.
 //
 // AddrManager implements a sophisticated peer address management system that maintains
 // two separate buckets for organizing known network addresses:

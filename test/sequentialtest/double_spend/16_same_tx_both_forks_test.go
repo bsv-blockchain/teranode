@@ -178,7 +178,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Now make chain B longer to trigger reorg
 	_, block6b := td.CreateTestBlock(t, block5b, 60002) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0),
 		"Failed to process block6b")
 
 	//                                              / 5a [tx1Conflicting]

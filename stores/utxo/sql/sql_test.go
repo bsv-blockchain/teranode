@@ -72,6 +72,7 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true // batcher fires immediately in tests
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
 		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
@@ -229,6 +230,78 @@ func TestSpend(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSpendBatchRejectsDuplicateDifferentSpendersSQLite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, _ := setup(ctx, t)
+	assertSpendBatchRejectsDuplicateDifferentSpenders(t, ctx, store)
+}
+
+func TestSpendBatchRejectsDuplicateDifferentSpendersPostgresBulk(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	store.settings.UtxoStore.BatchSQLOperations = true
+
+	assertSpendBatchRejectsDuplicateDifferentSpenders(t, ctx, store)
+}
+
+func assertSpendBatchRejectsDuplicateDifferentSpenders(t *testing.T, ctx context.Context, store *Store) {
+	t.Helper()
+
+	err := store.Delete(ctx, tests.Tx.TxIDChainHash())
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tests.Tx, 0)
+	require.NoError(t, err)
+
+	winnerTx := utxo2.GetSpendingTx(tests.Tx, 0)
+	loserTx := utxo2.GetSpendingTx(tests.Tx, 0)
+	loserTx.Version = winnerTx.Version + 1
+
+	winnerSpends, err := utxo.GetSpends(winnerTx)
+	require.NoError(t, err)
+	require.Len(t, winnerSpends, 1)
+
+	loserSpends, err := utxo.GetSpends(loserTx)
+	require.NoError(t, err)
+	require.Len(t, loserSpends, 1)
+	require.NotEqual(t, winnerSpends[0].SpendingData.Bytes(), loserSpends[0].SpendingData.Bytes())
+
+	winnerErrCh := make(chan error, 1)
+	loserErrCh := make(chan error, 1)
+	store.sendSpendBatch([]*batchSpend{
+		{
+			spend:       winnerSpends[0],
+			blockHeight: store.GetBlockHeight() + 1,
+			errCh:       winnerErrCh,
+		},
+		{
+			spend:       loserSpends[0],
+			blockHeight: store.GetBlockHeight() + 1,
+			errCh:       loserErrCh,
+		},
+	})
+
+	require.NoError(t, <-winnerErrCh)
+	loserErr := <-loserErrCh
+	require.ErrorIs(t, loserErr, errors.ErrSpent)
+
+	var terr *errors.Error
+	require.ErrorAs(t, loserErr, &terr)
+	var spentData *errors.UtxoSpentErrData
+	require.True(t, errors.AsData(terr, &spentData))
+	require.Equal(t, winnerSpends[0].SpendingData.Bytes(), spentData.SpendingData.Bytes())
+
+	spendResp, err := store.GetSpend(ctx, winnerSpends[0])
+	require.NoError(t, err)
+	require.NotNil(t, spendResp.SpendingData)
+	require.Equal(t, winnerSpends[0].SpendingData.Bytes(), spendResp.SpendingData.Bytes())
+}
+
 func TestUnspend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -243,14 +316,14 @@ func TestUnspend(t *testing.T) {
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
-	test1Hash := chainhash.HashH([]byte("test1"))
-	spendingData1 := spendpkg.NewSpendingData(&test1Hash, 1)
+	// Match the SpendingData populated by GetSpends inside Spend(spendTx).
+	storedSpendingData := spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0)
 
 	spend := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxohash,
-		SpendingData: spendingData1,
+		SpendingData: storedSpendingData,
 	}
 
 	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
@@ -260,11 +333,7 @@ func TestUnspend(t *testing.T) {
 	err = utxoStore.Unspend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
-	// Spend again with a different spendingTxID
-	test2Hash := chainhash.HashH([]byte("test2"))
-	spendingData2 := spendpkg.NewSpendingData(&test2Hash, 2)
-	spend.SpendingData = spendingData2
-
+	// Spend again with the same spending tx — should succeed because the UTXO is now unspent.
 	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 }
@@ -304,7 +373,7 @@ func TestSetMinedMulti(t *testing.T) {
 		require.NoError(t, err)
 
 		// check that the tx is marked as unmined
-		it, err := utxoStore.GetUnminedTxIterator(false)
+		it, err := utxoStore.GetUnminedTxIterator()
 		require.NoError(t, err)
 
 		rec, err := it.Next(ctx)
@@ -332,7 +401,7 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.Equal(t, uint32(1), metaData.BlockIDs[0])
 
 		// check that the tx is marked as unmined
-		it, err = utxoStore.GetUnminedTxIterator(false)
+		it, err = utxoStore.GetUnminedTxIterator()
 		require.NoError(t, err)
 
 		rec, err = it.Next(ctx)
@@ -396,6 +465,111 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.Equal(t, []uint32{1, 2}, txMeta.BlockIDs)
 		assert.False(t, txMeta.Locked)
 		assert.Zero(t, txMeta.UnminedSince)
+	})
+
+	t.Run("unset last block_id sets unmined_since to current block height", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		utxoStore, tx := setup(ctx, t)
+
+		// Set the store's current block height to 500
+		err := utxoStore.SetBlockHeight(500)
+		require.NoError(t, err)
+
+		// Create tx as unmined at height 100
+		_, err = utxoStore.Create(ctx, tx, 100)
+		require.NoError(t, err)
+
+		// Mine the tx into block at height 200 (not on longest chain)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		// Verify tx has block_id 10
+		txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		require.Len(t, txMeta.BlockIDs, 1)
+		require.Equal(t, uint32(10), txMeta.BlockIDs[0])
+
+		// Now unset mined (block invalidation) -- this removes the only block_id
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+			UnsetMined:     true,
+		})
+		require.NoError(t, err)
+
+		// Verify: tx should have zero block_ids and unmined_since set to current block height (501 = 500+1)
+		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		assert.Len(t, txMeta.BlockIDs, 0, "tx should have no block_ids after unsetting the only one")
+		assert.Equal(t, uint32(501), txMeta.UnminedSince,
+			"unmined_since should be set to current block height (store height + 1), not the invalidated block's height")
+		assert.False(t, txMeta.Locked, "tx should be unlocked after unset mined")
+	})
+
+	t.Run("unset one of two block_ids does not set unmined_since", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		utxoStore, tx := setup(ctx, t)
+
+		// Set the store's current block height to 500
+		err := utxoStore.SetBlockHeight(500)
+		require.NoError(t, err)
+
+		// Create tx as unmined at height 100
+		_, err = utxoStore.Create(ctx, tx, 100)
+		require.NoError(t, err)
+
+		// Mine the tx into two blocks (not on longest chain)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        20,
+			BlockHeight:    201,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		// Verify tx has both block_ids and capture unmined_since before the unset
+		txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		require.Len(t, txMeta.BlockIDs, 2)
+		unminedSinceBefore := txMeta.UnminedSince
+
+		// Unset one block_id (invalidate block 10)
+		_, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:        10,
+			BlockHeight:    200,
+			SubtreeIdx:     0,
+			OnLongestChain: false,
+			UnsetMined:     true,
+		})
+		require.NoError(t, err)
+
+		// Verify: tx still has one block_id and unmined_since is unchanged
+		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		require.NoError(t, err)
+		assert.Len(t, txMeta.BlockIDs, 1, "tx should have one block_id remaining")
+		assert.Equal(t, uint32(20), txMeta.BlockIDs[0], "remaining block_id should be 20")
+		// unmined_since should be unchanged because the tx still has a remaining block_id
+		assert.Equal(t, unminedSinceBefore, txMeta.UnminedSince,
+			"unmined_since should be unchanged when tx still has block_ids")
 	})
 }
 
@@ -483,6 +657,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true        // batcher fires immediately in tests
 	tSettings.GlobalBlockHeightRetention = 5 // Use low retention but compatible with child stability checks
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
@@ -550,7 +725,9 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
-	spendingData := spendpkg.NewSpendingData(spendTx01.TxIDChainHash(), 1)
+	// spendTx01 spends tx[0] via input vin=0 and tx[1] via input vin=1. Match the
+	// SpendingData GetSpends populates for input vin=0 (which spends tx[0]).
+	spendingData := spendpkg.NewSpendingData(spendTx01.TxIDChainHash(), 0)
 
 	// Create a spend record
 	spend0 := &utxo.Spend{
@@ -647,6 +824,72 @@ func Test_SmokeTests(t *testing.T) {
 
 		tests.Conflicting(t, db)
 	})
+
+	t.Run("spend error types", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendErrorTypes(t, db)
+	})
+
+	t.Run("get spend not found", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.GetSpendNotFound(t, db)
+	})
+
+	t.Run("set block height zero", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetBlockHeightZero(t, db)
+	})
+
+	t.Run("set locked behavior", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetLockedBehavior(t, db)
+	})
+
+	t.Run("set conflicting behavior", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetConflictingBehavior(t, db)
+	})
+
+	t.Run("set mined unmined since", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMinedUnminedSince(t, db)
+	})
+
+	t.Run("spend idempotent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendIdempotent(t, db)
+	})
+
+	t.Run("set mined with spent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMinedWithSpent(t, db)
+	})
 }
 
 func TestSetTTL(t *testing.T) {
@@ -686,7 +929,7 @@ func TestSetTTL(t *testing.T) {
 
 	assert.Nil(t, tombstoneMillis)
 
-	// update all outputs to be spent
+	// update all outputs to be spent (but tx is NOT mined yet)
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = $1 WHERE transaction_id = $2", spendpkg.NewSpendingData(tx.TxIDChainHash(), 1).Bytes(), transactionID)
 	require.NoError(t, err)
 
@@ -696,7 +939,69 @@ func TestSetTTL(t *testing.T) {
 	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
+	// DAH should NOT be set for unmined tx (mirrors aerospike: requires hasBlockIDs AND isOnLongestChain)
+	assert.Nil(t, tombstoneMillis)
+
+	// Now mark the tx as mined (add block_id and clear unmined_since) to simulate being on longest chain
+	_, err = txn.ExecContext(ctx, "INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx) VALUES ($1, $2, $3, $4)", transactionID, 100, 100, 0)
+	require.NoError(t, err)
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = NULL WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	// Now DAH should be set: all outputs spent AND mined AND on longest chain
 	assert.NotNil(t, tombstoneMillis)
+
+	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
+	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	expectedDAH := int64(store.blockHeight.Load() + 1 + retention)
+	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
+
+	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
+	oldDAH := *tombstoneMillis
+	store.blockHeight.Store(store.blockHeight.Load() + 100) // advance 100 blocks
+	expectedBumpedDAH := int64(store.blockHeight.Load() + 1 + retention)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+	assert.Greater(t, *tombstoneMillis, oldDAH, "DAH should increase when block height advances")
+	require.Equal(t, expectedBumpedDAH, *tombstoneMillis, "bumped DAH should be new blockHeight + 1 + retention")
+
+	// Verify DAH clear on lock: set locked=true → setDAH should NOT clear DAH (that's done by SetLocked directly).
+	// However, when conditions no longer met (e.g., mark as unmined_since), setDAH should clear it.
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = 100 WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	// DAH should be cleared because isOnLongestChain is now false (unmined_since IS NOT NULL)
+	assert.Nil(t, tombstoneMillis, "DAH should be cleared when tx is no longer on longest chain")
+
+	// Restore on longest chain
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET unmined_since = NULL WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis, "DAH should be restored when tx is back on longest chain")
 
 	// unset one of the outputs to be unspent
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
@@ -710,7 +1015,7 @@ func TestSetTTL(t *testing.T) {
 
 	assert.Nil(t, tombstoneMillis)
 
-	// mark the tx as conflicting, should set a tombstone
+	// mark the tx as conflicting, should set a tombstone (conflicting doesn't need to be mined)
 	_, err = txn.ExecContext(ctx, "UPDATE transactions SET conflicting = true WHERE id = $1", transactionID)
 	require.NoError(t, err)
 
@@ -721,6 +1026,19 @@ func TestSetTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotNil(t, tombstoneMillis)
+
+	// Verify conflicting COALESCE: DAH is already set, calling setDAH again should NOT overwrite it
+	existingConflictingDAH := *tombstoneMillis
+	store.blockHeight.Store(store.blockHeight.Load() + 50) // advance more
+
+	err = store.setDAH(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+	assert.Equal(t, existingConflictingDAH, *tombstoneMillis, "conflicting DAH should not be overwritten (COALESCE behavior)")
 }
 
 func TestUnmined(t *testing.T) {
@@ -1080,6 +1398,7 @@ func TestCreatePostgresSchemaWithMockConnection(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 1 * time.Second // Short timeout for quick failure
+	tSettings.BatcherDrainMode = true
 
 	// Attempt to create with PostgreSQL - this should fail quickly if PG is not available
 	// but it exercises the code path that calls createPostgresSchema
@@ -1167,6 +1486,7 @@ func TestCreateSqliteSchemaDirectly(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true // batcher fires immediately in tests
 
 	// Create a fresh SQLite in-memory database to test schema creation
 	utxoStoreURL, err := url.Parse("sqlitememory:///test_sqlite_schema")
@@ -1346,6 +1666,7 @@ func TestNewFunctionErrorPaths(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BatcherDrainMode = true
 
 	// Test with invalid URL scheme
 	invalidURL := &url.URL{Scheme: "invalid", Host: "test"}
@@ -1435,6 +1756,269 @@ func TestPreviousOutputsDecorateEdgeCases(t *testing.T) {
 	}
 }
 
+func TestBatchPreviousOutputsDecorate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, childTx := setup(ctx, t)
+
+	// Create a parent transaction that the child tx references
+	parentTx, err := bt.NewTxFromString("010000000000000000ef012935b177236ec1cb75cd9fba86d84acac9d76ced9c1b22ba8de4cd2de85a8393000000004948304502200f653627aff050093a83dabc12a2a9b627041d424f2eb18849a2d587f1acd38f022100a23f94acd94a4d24049140d5fbe12448a880fd8f8c1c2b4141f83bef2be409be01ffffffff00f2052a01000000434104ed83808a903a7e25be91349815f5d545f0c9dbec60b8ea914a6d6cbe9f830628039641231e2dbc1c0ca809f13405eb01f3a06614717f7859b788bd1305d9a3f2ac0100f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac00000000")
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, parentTx, 0)
+	require.NoError(t, err)
+
+	t.Run("single tx batch", func(t *testing.T) {
+		// Reset input decoration
+		childTx.Inputs[0].PreviousTxScript = nil
+		childTx.Inputs[0].PreviousTxSatoshis = 0
+
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript, "Input should have previous tx script")
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{})
+		require.NoError(t, err)
+
+		err = store.BatchPreviousOutputsDecorate(ctx, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("already decorated inputs are skipped", func(t *testing.T) {
+		// childTx was already decorated above, calling again should be a no-op
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("multiple txs referencing same parent", func(t *testing.T) {
+		// Create a second child that also references the same parent tx
+		childTx2, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+			"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+			"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+			"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+			"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+			"2f6b52de3d7c88ac00000000")
+		require.NoError(t, err)
+
+		// Clear decoration
+		childTx.Inputs[0].PreviousTxScript = nil
+		childTx.Inputs[0].PreviousTxSatoshis = 0
+		childTx2.Inputs[0].PreviousTxScript = nil
+		childTx2.Inputs[0].PreviousTxSatoshis = 0
+
+		err = store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{childTx, childTx2})
+		require.NoError(t, err)
+
+		assert.NotNil(t, childTx.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx.Inputs[0].PreviousTxSatoshis)
+		assert.NotNil(t, childTx2.Inputs[0].PreviousTxScript)
+		assert.Equal(t, uint64(5_000_000_000), childTx2.Inputs[0].PreviousTxSatoshis)
+	})
+
+	t.Run("missing parent returns error", func(t *testing.T) {
+		// Build a tx with an input that references a non-existent parent
+		fakeHash := chainhash.HashH([]byte("non-existent-parent-tx"))
+		missingParentTx := bt.NewTx()
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     0xffffffff,
+		}
+		require.NoError(t, input.PreviousTxIDAdd(&fakeHash))
+		missingParentTx.Inputs = append(missingParentTx.Inputs, input)
+
+		err := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{missingParentTx})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decorate previous outputs")
+	})
+}
+
+// TestBatchPreviousOutputsDecorate_MultiChunkParallel forces a small chunk size
+// so a modest fixture covers many chunks, then runs the decorate with
+// concurrency > 1 to exercise the parallel path. Every child must end up fully
+// decorated; no slot may be written twice. We verify both pre-conditions.
+func TestBatchPreviousOutputsDecorate_MultiChunkParallel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Shrink the chunk size so 15 unique parents = 5 chunks, which requires
+	// parallel dispatch to actually cover anything interesting.
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 3
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+
+	// Push the store into the parallel path. Value of 1 would be serial.
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 4
+
+	// Build 15 distinct parent txs by cloning the template and varying Version.
+	// Each parent has one output (the template has one spendable output at idx 0
+	// — the second output on the template tx is empty/script-only, we only need
+	// one locking script per parent for this test).
+	parents := make([]*bt.Tx, 15)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(1_000_000 + i) // guarantee unique hash
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err, "create parent %d", i)
+		parents[i] = p
+	}
+
+	// One child per parent, each referencing output index 0 of its parent.
+	// Keeping the child graph simple means every chunk covers one parent only,
+	// which is the worst case for the chunk-to-input dispatch: a bug in the
+	// per-chunk refs slicing would produce wrong scripts or missing inputs.
+	children := make([]*bt.Tx, len(parents))
+	for i, parent := range parents {
+		child := bt.NewTx()
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     0xffffffff,
+		}
+		parentHash := parent.TxIDChainHash()
+		require.NoError(t, input.PreviousTxIDAdd(parentHash))
+		child.Inputs = append(child.Inputs, input)
+		children[i] = child
+	}
+
+	err := store.BatchPreviousOutputsDecorate(ctx, children)
+	require.NoError(t, err, "multi-chunk parallel decorate must succeed")
+
+	// Each child's sole input must now have both PreviousTxScript and
+	// PreviousTxSatoshis populated from its corresponding parent's output 0.
+	for i, child := range children {
+		require.NotNil(t, child.Inputs[0].PreviousTxScript, "child %d missing script", i)
+		expectedScript := parents[i].Outputs[0].LockingScript
+		require.Equal(t, expectedScript.String(), child.Inputs[0].PreviousTxScript.String(),
+			"child %d got wrong script (suggests per-chunk refs dispatch bug)", i)
+		require.Equal(t, parents[i].Outputs[0].Satoshis, child.Inputs[0].PreviousTxSatoshis,
+			"child %d got wrong satoshis", i)
+	}
+}
+
+// TestBatchPreviousOutputsDecorate_MultipleInputsSharingParent checks the case
+// where several inputs across different txs all reference the same (parent,
+// outIdx) — exactly one DB row must fan out to every slot, and chunking must
+// not drop any slot. Bug surface: a per-chunk dispatch that loses the "one row
+// -> N input refs" mapping would leave some slots undecorated.
+func TestBatchPreviousOutputsDecorate_MultipleInputsSharingParent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Force 1-pair chunks so each shared-parent group crosses a chunk boundary
+	// and the parallel dispatch must still fan-out correctly.
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 1
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 2
+
+	// Two parents, each referenced by three child inputs.
+	parents := make([]*bt.Tx, 2)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(2_000_000 + i)
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err)
+		parents[i] = p
+	}
+
+	// 6 children total: 3 per parent.
+	children := make([]*bt.Tx, 0, 6)
+	for _, parent := range parents {
+		for r := 0; r < 3; r++ {
+			child := bt.NewTx()
+			input := &bt.Input{
+				PreviousTxOutIndex: 0,
+				SequenceNumber:     0xffffffff,
+			}
+			parentHash := parent.TxIDChainHash()
+			require.NoError(t, input.PreviousTxIDAdd(parentHash))
+			child.Inputs = append(child.Inputs, input)
+			children = append(children, child)
+		}
+	}
+
+	err := store.BatchPreviousOutputsDecorate(ctx, children)
+	require.NoError(t, err)
+
+	// Every child must be decorated with its parent's output 0.
+	for i, child := range children {
+		parent := parents[i/3]
+		require.NotNil(t, child.Inputs[0].PreviousTxScript, "child %d missing script", i)
+		require.Equal(t, parent.Outputs[0].LockingScript.String(),
+			child.Inputs[0].PreviousTxScript.String(), "child %d wrong script", i)
+		require.Equal(t, parent.Outputs[0].Satoshis,
+			child.Inputs[0].PreviousTxSatoshis, "child %d wrong satoshis", i)
+	}
+}
+
+// TestBatchPreviousOutputsDecorate_SerialEquivalence asserts that concurrency=1
+// still works (kill-switch path) and produces identical output to concurrency>1.
+// This pins the invariant that the parallel path is a pure perf optimisation,
+// not a behaviour change.
+func TestBatchPreviousOutputsDecorate_SerialEquivalence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prevOverride := batchDecorateChunkSizeOverride
+	batchDecorateChunkSizeOverride = 2
+	defer func() { batchDecorateChunkSizeOverride = prevOverride }()
+
+	store, template := setup(ctx, t)
+
+	// Seed 7 parents (ensuring at least 4 chunks at chunk size 2).
+	parents := make([]*bt.Tx, 7)
+	for i := range parents {
+		p := template.Clone()
+		p.Version = uint32(3_000_000 + i)
+		_, err := store.Create(ctx, p, 0)
+		require.NoError(t, err)
+		parents[i] = p
+	}
+
+	makeChildren := func() []*bt.Tx {
+		out := make([]*bt.Tx, len(parents))
+		for i, parent := range parents {
+			child := bt.NewTx()
+			input := &bt.Input{PreviousTxOutIndex: 0, SequenceNumber: 0xffffffff}
+			require.NoError(t, input.PreviousTxIDAdd(parent.TxIDChainHash()))
+			child.Inputs = append(child.Inputs, input)
+			out[i] = child
+		}
+		return out
+	}
+
+	// Run serial
+	serial := makeChildren()
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 1
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, serial))
+
+	// Run parallel
+	parallel := makeChildren()
+	store.settings.UtxoStore.BatchPreviousOutputsDecorateConcurrency = 4
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, parallel))
+
+	// Both runs must produce identical decoration for every input.
+	for i := range parents {
+		require.Equal(t, serial[i].Inputs[0].PreviousTxScript.String(),
+			parallel[i].Inputs[0].PreviousTxScript.String(),
+			"serial vs parallel disagreed on script at child %d", i)
+		require.Equal(t, serial[i].Inputs[0].PreviousTxSatoshis,
+			parallel[i].Inputs[0].PreviousTxSatoshis,
+			"serial vs parallel disagreed on satoshis at child %d", i)
+	}
+}
+
 func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1456,7 +2040,8 @@ func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
-	spendingData := spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 1)
+	// Match the vin GetSpends used inside Spend(spendTx) — spendTx has only one input (vin=0).
+	spendingData := spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0)
 	spend := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
@@ -1481,10 +2066,8 @@ func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	}
 
 	err = store.Unspend(ctx, []*utxo.Spend{nonExistentSpend})
-	// This might not error, but we're testing the code path
-	if err != nil {
-		t.Logf("Unspend non-existent UTXO returned error (acceptable): %v", err)
-	}
+	require.Error(t, err, "Unspend against a non-existent output must error")
+	require.True(t, errors.Is(err, errors.ErrNotFound), "expected NotFoundError for non-existent output, got: %v", err)
 
 	// Test spending multiple outputs if transaction has them
 	if len(tx.Outputs) > 1 {
@@ -1535,12 +2118,9 @@ func TestGetSpendEdgeCases(t *testing.T) {
 	}
 
 	result, err = store.GetSpend(ctx, nonExistentSpend)
-	// Should handle non-existent spends gracefully
-	if err != nil {
-		t.Logf("GetSpend for non-existent UTXO returned error: %v", err)
-	} else {
-		assert.NotNil(t, result)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int(utxo.Status_NOT_FOUND), result.Status)
 }
 
 func TestCreateCoinbaseAndFeeCalculation(t *testing.T) {
@@ -1888,4 +2468,56 @@ func TestUnspendSimple(t *testing.T) {
 
 	err = store.Unspend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
+}
+
+func TestBuildCompositeValuesPairs(t *testing.T) {
+	t.Run("single pair sqlite (no casts)", func(t *testing.T) {
+		pairs := []outpointPair{{hash: []byte{0x01, 0x02}, idx: 7}}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "sqlite")
+		require.Equal(t, "VALUES ($1,$2)", clause)
+		require.Equal(t, []interface{}{[]byte{0x01, 0x02}, uint32(7)}, args)
+	})
+
+	t.Run("single pair postgres (first row cast)", func(t *testing.T) {
+		pairs := []outpointPair{{hash: []byte{0x01, 0x02}, idx: 7}}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "postgres")
+		require.Equal(t, "VALUES ($1::bytea,$2::bigint)", clause)
+		require.Equal(t, []interface{}{[]byte{0x01, 0x02}, uint32(7)}, args)
+	})
+
+	t.Run("multiple pairs postgres — only first row cast", func(t *testing.T) {
+		pairs := []outpointPair{
+			{hash: []byte{0xaa}, idx: 0},
+			{hash: []byte{0xbb}, idx: 5},
+			{hash: []byte{0xcc}, idx: 9},
+		}
+		clause, args := buildCompositeValuesPairs(pairs, 3, "postgres")
+		// First row carries the casts to anchor column types; subsequent rows
+		// inherit. Repeating the casts would work but wastes bytes.
+		require.Equal(t, "VALUES ($3::bytea,$4::bigint),($5,$6),($7,$8)", clause)
+		require.Equal(t, []interface{}{
+			[]byte{0xaa}, uint32(0),
+			[]byte{0xbb}, uint32(5),
+			[]byte{0xcc}, uint32(9),
+		}, args)
+	})
+
+	t.Run("multiple pairs sqlite", func(t *testing.T) {
+		pairs := []outpointPair{
+			{hash: []byte{0xaa}, idx: 0},
+			{hash: []byte{0xbb}, idx: 5},
+		}
+		clause, args := buildCompositeValuesPairs(pairs, 1, "sqlite")
+		require.Equal(t, "VALUES ($1,$2),($3,$4)", clause)
+		require.Equal(t, []interface{}{
+			[]byte{0xaa}, uint32(0),
+			[]byte{0xbb}, uint32(5),
+		}, args)
+	})
+
+	t.Run("empty pairs returns empty clause", func(t *testing.T) {
+		clause, args := buildCompositeValuesPairs(nil, 1, "postgres")
+		require.Equal(t, "", clause)
+		require.Nil(t, args)
+	})
 }

@@ -256,7 +256,11 @@ func (sm *ServiceManager) Wait() error {
 	// Wait for all services to complete or error
 	err := sm.g.Wait()
 	if err != nil {
-		sm.logger.Errorf("Received error: %v", err)
+		if errors.Is(err, context.Canceled) {
+			sm.logger.Infof("Shutdown signal received, stopping services...")
+		} else {
+			sm.logger.Errorf("Received error: %v", err)
+		}
 	}
 
 	for i := len(sm.services) - 1; i >= 0; i-- {
@@ -298,6 +302,10 @@ func (sm *ServiceManager) HealthHandler(ctx context.Context, checkLiveness bool)
 
 		if err != nil || status != http.StatusOK {
 			overallStatus = http.StatusServiceUnavailable
+		}
+
+		if !json.Valid([]byte(details)) {
+			details = fmt.Sprintf(`{"message": "%s"}`, details)
 		}
 
 		jsonStr := fmt.Sprintf(`{"service": "%s","status": "%d","dependencies": [%s]}`, service.name, status, details)

@@ -1,4 +1,4 @@
-// Package propagation implements Bitcoin SV transaction propagation and validation services.
+// Package propagation implements BSV Blockchain transaction propagation and validation services.
 // This file contains the Prometheus metrics definitions and initialization for comprehensive
 // monitoring of the propagation service's performance, throughput, and operational health.
 //

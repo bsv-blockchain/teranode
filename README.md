@@ -8,18 +8,16 @@ See our [contributing guide](./CONTRIBUTING.md).
 
 ## Getting Started
 
-The easiest way to get started with Teranode is to [run on TeraTestnet](https://github.com/bsv-blockchain/teranode-teratestnet).
+The easiest way to get started with Teranode is to use
+[teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart),
+the Docker-based setup for mainnet, testnet, teratestnet, and regtest.
 
 To file a bug report, [open an issue](https://github.com/bsv-blockchain/teranode/issues/new?template=bug_report.md).
 
 To ask a question or start a conversation, [create a new discussion](https://github.com/bsv-blockchain/teranode/discussions/new?category=q-a).
 
-## 📖 Documentation
+## Documentation
 
-The official documentation is now available at:
+The full documentation is available at [bsv-blockchain.github.io/teranode](https://bsv-blockchain.github.io/teranode/), or you can browse the [documentation source](docs/index.md) directly in the repository.
 
-👉 **[Teranode Documentation (GitHub Pages)](https://bsv-blockchain.github.io/teranode/)**
-
-Alternatively, you can view the raw documentation inside this repository:
-
-👉 **[View Documentation in GitHub](docs/index.md)**
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bsv-blockchain/teranode)

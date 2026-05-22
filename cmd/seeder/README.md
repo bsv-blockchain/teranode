@@ -8,14 +8,14 @@ This package is typically used to process blockchain data from specified input f
 
 ### Features
 - Process UTXO headers and sets
-- Store processed data in Aerospike
+- Store processed data in configurable storage backends (PostgreSQL, SQLite, or Aerospike based on settings)
 - Handle system signals for graceful termination
 - Start a profiler server for debugging
 
 ## Development
 
 - See `seeder.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ---
 

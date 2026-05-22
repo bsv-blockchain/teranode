@@ -95,6 +95,7 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 		,b.subtree_count
 		,b.subtrees
 		,b.height
+		,b.coinbase_bump
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id
 		ORDER BY b.height DESC

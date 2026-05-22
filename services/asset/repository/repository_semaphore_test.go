@@ -24,9 +24,12 @@ func TestSemaphoreUnlimitedByDefault(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	// Default settings should have all concurrency values at 0 (unlimited)
+	// Default transaction fetches remain unlimited, but subtree-heavy paths are bounded.
 	require.Equal(t, 0, settings.Asset.ConcurrencyGetTransaction)
-	require.Equal(t, 0, settings.Asset.ConcurrencyGetSubtreeData)
+	require.Equal(t, 2, settings.Asset.ConcurrencyGetSubtreeData)
+	require.Equal(t, 4, settings.Asset.ConcurrencyGetSubtreeDataReader)
+	require.Equal(t, 2, settings.Asset.ConcurrencyGetSubtreeTransactions)
+	require.Equal(t, 2, settings.Asset.SubtreeDataStreamingConcurrency)
 
 	txStore := getMemoryStore(t)
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")

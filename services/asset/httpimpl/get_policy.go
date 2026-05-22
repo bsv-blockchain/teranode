@@ -8,13 +8,17 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// FeeAmount represents the mining fee as satoshis per bytes
+// FeeAmount represents the mining fee as satoshis per bytes.
+//
+// swagger:model FeeAmount
 type FeeAmount struct {
 	Satoshis uint64 `json:"satoshis"`
 	Bytes    uint64 `json:"bytes"`
 }
 
-// Policy contains the node's policy settings in ARC format
+// Policy contains the node's policy settings in ARC format.
+//
+// swagger:model Policy
 type Policy struct {
 	MaxScriptSizePolicy     uint64    `json:"maxscriptsizepolicy"`
 	MaxTxSigopsCountsPolicy uint64    `json:"maxtxsigopscountspolicy"`
@@ -23,7 +27,9 @@ type Policy struct {
 	StandardFormatSupported bool      `json:"standardFormatSupported"`
 }
 
-// PolicyResponse is the response format for GET /v1/policy
+// PolicyResponse is the response format for GET /v1/policy.
+//
+// swagger:model PolicyResponse
 type PolicyResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 	Policy    Policy    `json:"policy"`

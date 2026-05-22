@@ -128,7 +128,7 @@
   .tui-menu-item:focus {
     font-weight: 700;
     margin: -1px;
-    border: 1px solid rgba(255, 255, 255, 0.66);
+    border: 1px solid var(--comp-label-color);
   }
   .tui-menu-item:focus .icon,
   .tui-menu-item:focus .label {

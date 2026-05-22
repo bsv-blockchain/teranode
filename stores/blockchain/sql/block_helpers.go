@@ -134,7 +134,7 @@ func (s *SQL) processFullBlockRows(rows *sql.Rows) ([]*model.Block, error) {
 // scanFullBlockRow scans a single row and constructs a complete Block object.
 // Expects columns in order: ID, version, block_time, n_bits, nonce, previous_hash, merkle_root,
 //
-//	tx_count, size_in_bytes, coinbase_tx, subtree_count, subtrees, height
+//	tx_count, size_in_bytes, coinbase_tx, subtree_count, subtrees, height, coinbase_bump
 func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
 	var (
 		subtreeCount     uint64
@@ -144,6 +144,7 @@ func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
 		hashPrevBlock    []byte
 		hashMerkleRoot   []byte
 		coinbaseTx       []byte
+		coinbaseBump     []byte
 		height           uint32
 		nBits            []byte
 	)
@@ -166,6 +167,7 @@ func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
 		&subtreeCount,
 		&subtreeBytes,
 		&height,
+		&coinbaseBump,
 	)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to scan row", err)
@@ -200,6 +202,7 @@ func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
 	}
 
 	block.Height = height
+	block.CoinbaseBUMP = coinbaseBump
 
 	return block, nil
 }

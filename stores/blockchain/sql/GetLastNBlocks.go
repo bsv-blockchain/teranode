@@ -69,12 +69,8 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	fromHeightQuery := ""
-	if fromHeight > 0 {
-		fromHeightQuery = fmt.Sprintf("WHERE b.height <= %d", fromHeight)
-	}
-
 	var q string
+	var args []any
 
 	if includeOrphans {
 		q = `
@@ -95,8 +91,74 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		ORDER BY height DESC
 	  LIMIT $1
 	`
+		args = []any{n}
+	} else if fromHeight > 0 {
+		if s.mainChainRebuilding.Load() > 0 {
+			// When paginating, cap CTE walk depth to the lower of tip height and fromHeight,
+			// so that fromHeight > tip is handled gracefully (behaves like fromHeight = tip).
+			// Uses CASE instead of LEAST/MIN for cross-database compatibility (PostgreSQL + SQLite).
+			q = `
+		WITH RECURSIVE tip_block AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		ChainBlocks AS (
+			SELECT id, parent_id, height FROM tip_block
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			CROSS JOIN tip_block tb
+			WHERE bb.id != cb.id
+			  AND bb.invalid = false
+			  AND bb.height >= (CASE WHEN tb.height < $2 THEN tb.height ELSE $2 END) - $1
+		)
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		JOIN ChainBlocks cb ON b.id = cb.id
+		WHERE b.height <= $2
+		ORDER BY b.height DESC
+		LIMIT $1
+	`
+		} else {
+			q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height <= $2
+		ORDER BY b.height DESC
+		LIMIT $1
+	`
+		}
+		args = []any{n, fromHeight}
 	} else {
-		q = `
+		if s.mainChainRebuilding.Load() > 0 {
+			q = `
 		WITH RECURSIVE tip_block AS (
 			SELECT id, parent_id, height
 			FROM blocks
@@ -129,13 +191,33 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		,b.inserted_at
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id
-		` + fromHeightQuery + `
 		ORDER BY b.height DESC
 		LIMIT $1
 	`
+		} else {
+			q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.n_bits
+	  ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	  ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.height
+		,b.inserted_at
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		ORDER BY b.height DESC
+		LIMIT $1
+	`
+		}
+		args = []any{n}
 	}
 
-	rows, err := s.db.QueryContext(ctx, q, n)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to get blocks", err)
 	}

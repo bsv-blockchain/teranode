@@ -141,7 +141,7 @@ The Validator Service checks transactions against network rules and updates thei
 - Go programming language
 - gRPC for service communication
 - Kafka for message queuing (optional)
-- BSV libraries for transaction validation
+- BSV Blockchain libraries for transaction validation
 
 You can read more about this service in the [Validator Service documentation](../services/validator.md).
 
@@ -339,7 +339,7 @@ The UTXO Persister maintains an up-to-date record of all unspent transaction out
 
 - Go programming language
 - Blob store for file storage
-- Bitcoin SV libraries for blockchain operations
+- BSV Blockchain libraries for blockchain operations
 
 You can read more about this service in the [UTXO Persister Service documentation](../services/utxoPersister.md).
 
@@ -370,7 +370,7 @@ You can read more about this service in the [P2P Service documentation](../servi
 
 ### 3.4 Legacy Service
 
-The Legacy Service facilitates communication between Teranode and traditional Bitcoin SV nodes.
+The Legacy Service facilitates communication between Teranode and traditional BSV Blockchain nodes.
 
 ![P2P_Legacy_Container_Diagram.png](../services/img/Legacy_Container_Diagram.png)
 
@@ -403,7 +403,7 @@ The RPC Service provides compatibility with the Bitcoin RPC interface, allowing 
 
 **Supported RPC Commands:**
 
-- createrawtransaction, generate, getbestblockhash, getblock, sendrawtransaction, stop, version, getminingcandidate, submitminingsolution, getblockchaininfo, getinfo, getpeerinfo
+- clearbanned, createrawtransaction, generate, generatetoaddress, getbestblockhash, getblock, getblockbyheight, getblockchaininfo, getblockhash, getblockheader, getchaintips, getdifficulty, getinfo, getminingcandidate, getmininginfo, getpeerinfo, getrawmempool, getrawtransaction, help, invalidateblock, isbanned, listbanned, reconsiderblock, sendrawtransaction, setban, stop, submitminingsolution, version
 
 **Key Processes:**
 
@@ -436,13 +436,11 @@ The Blob Server is a generic datastore used for storing transactions (extended t
 
 **Supported Storage Backends:**
 
-- File System
-- Google Cloud Storage (GCS)
-- Amazon S3
-- MinIO
-- SeaweedFS
-- SQL (PostgreSQL)
-- In-memory storage
+- File System (`file://`)
+- Amazon S3 and S3-compatible services such as MinIO and SeaweedFS (`s3://`)
+- HTTP (`http://`)
+- In-memory storage (`memory://`)
+- Null/no-op (`null://`)
 
 **Key Interactions:**
 
@@ -508,7 +506,6 @@ Kafka serves as the messaging middleware for inter-service communication in Tera
 **Key Topics and Use Cases:**
 
 - `kafka_validatortxsConfig`: Used for transmitting new transaction notifications from Propagation to Validator
-- `kafka_txsConfig`: Used for forwarding valid transactions from Validator to Block Assembly
 - `kafka_txmetaConfig`: Used for sending new UTXO metadata from Validator to Subtree Validation
 - `kafka_rejectedTxConfig`: Used for notifying P2P about rejected transactions
 - `kafka_blocksConfig`: Used for propagating new blocks from P2P to Block Validation

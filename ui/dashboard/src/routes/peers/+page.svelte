@@ -827,12 +827,12 @@
       </div>
     {:else if isLoading && data.length === 0}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>Loading peer data...</p>
       </div>
     {:else if data.length === 0}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>No peers available</p>
         <p class="sub">Waiting for peer connections...</p>
       </div>
@@ -1043,7 +1043,7 @@
   }
 
   .stat-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 13px;
   }
 
@@ -1058,7 +1058,7 @@
     align-items: center;
     gap: 4px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 13px;
@@ -1079,7 +1079,7 @@
   }
 
   .live-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .no-data {
@@ -1093,12 +1093,12 @@
 
   .no-data p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 16px;
   }
 
   .no-data p.sub {
-    color: rgba(255, 255, 255, 0.44);
+    color: var(--comp-label-color);
     font-size: 14px;
   }
 
@@ -1106,19 +1106,19 @@
   :global(.peer-name) {
     font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
   }
 
   :global(.hash) {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   :global(.url) {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     word-break: break-all;
   }
 
@@ -1131,7 +1131,7 @@
 
   :global(.time) {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   /* Status indicators */
@@ -1321,7 +1321,7 @@
 
   .catchup-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1329,7 +1329,7 @@
 
   .catchup-value {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -1344,7 +1344,7 @@
 
   .url-value {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     word-break: break-all;
     line-height: 1.4;
   }
@@ -1352,7 +1352,7 @@
   .hash-value {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--app-color);
   }
 
   .height-badge {
@@ -1447,7 +1447,7 @@
 
   .attempt-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1455,7 +1455,7 @@
 
   .attempt-value {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -1478,7 +1478,7 @@
 
   .error-message-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1491,7 +1491,7 @@
     padding: 10px 12px;
     border-radius: 4px;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
     line-height: 1.5;
     font-family: 'JetBrains Mono', monospace;
     word-wrap: break-word;
@@ -1534,19 +1534,19 @@
     padding: 0;
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     cursor: pointer;
     transition: all 0.2s ease;
     border-radius: 4px;
   }
 
   .clear-sort-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.9);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .clear-sort-btn:active {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--app-overlay-strong-color);
   }
 
   /* Modal styles */
@@ -1574,7 +1574,7 @@
   }
 
   .modal-content {
-    background: #1a1b23;
+    background: var(--app-bg-color);
     border-radius: 8px;
     padding: 0;
     max-height: 80vh;
@@ -1592,21 +1592,21 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    background: #15161d;
+    border-bottom: 1px solid var(--app-border-color);
+    background: var(--app-subtle-bg-color);
   }
 
   .modal-title {
     margin: 0;
     font-size: 18px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
   }
 
   .modal-close {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-size: 28px;
     cursor: pointer;
     padding: 0;
@@ -1620,8 +1620,8 @@
   }
 
   .modal-close:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.8);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .modal-body {
@@ -1641,7 +1641,7 @@
   .section-title {
     font-size: 14px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
     margin: 0 0 16px 0;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1665,7 +1665,7 @@
 
   .metric-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1673,7 +1673,7 @@
 
   .metric-value {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -1732,14 +1732,14 @@
 
   .error-time {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     margin-bottom: 8px;
   }
 
   .error-message {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
     line-height: 1.5;
     word-wrap: break-word;
     overflow-wrap: break-word;

@@ -356,7 +356,7 @@ func createTestTransactions(t *testing.T, count int) []*bt.Tx {
 
 // getUnminedTransactions returns all unmined transaction hashes using the unmined iterator
 func getUnminedTransactions(t *testing.T, ctx context.Context, store utxo.Store) []chainhash.Hash {
-	iterator, err := store.GetUnminedTxIterator(false)
+	iterator, err := store.GetUnminedTxIterator()
 	require.NoError(t, err, "Should be able to get unmined tx iterator")
 
 	var hashes []chainhash.Hash

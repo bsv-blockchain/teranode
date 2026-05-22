@@ -36,15 +36,14 @@ func TestHealthCheckerNilBrokers(t *testing.T) {
 func TestHealthCheckerEmptyBrokers(t *testing.T) {
 	healthCheck := HealthChecker(context.Background(), []string{})
 
-	status, message, err := healthCheck(context.Background(), true)
+	status, message, err := healthCheck(context.Background(), false)
 
-	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Equal(t, "Failed to connect to Kafka", message)
-	assert.Error(t, err)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "Kafka is not configured - skipping health check", message)
+	assert.NoError(t, err)
 }
 
 func TestHealthCheckerInvalidBrokers(t *testing.T) {
-	// Use non-existent hosts with dynamic ports to ensure connection failure
 	unusedPort1 := getUnusedPort(t)
 	unusedPort2 := getUnusedPort(t)
 	brokers := []string{
@@ -53,7 +52,7 @@ func TestHealthCheckerInvalidBrokers(t *testing.T) {
 	}
 	healthCheck := HealthChecker(context.Background(), brokers)
 
-	status, message, err := healthCheck(context.Background(), true)
+	status, message, err := healthCheck(context.Background(), false)
 
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.Equal(t, "Failed to connect to Kafka", message)
@@ -61,23 +60,43 @@ func TestHealthCheckerInvalidBrokers(t *testing.T) {
 }
 
 func TestHealthCheckerLivenessParameter(t *testing.T) {
+	unusedPort := getUnusedPort(t)
+	invalidBrokers := []string{fmt.Sprintf("localhost:%d", unusedPort)}
+
 	tests := []struct {
 		name          string
 		checkLiveness bool
 		brokers       []string
 		expectedMsg   string
+		expectedOK    bool
 	}{
 		{
 			name:          "Liveness check with nil brokers",
 			checkLiveness: true,
 			brokers:       nil,
 			expectedMsg:   "Kafka is not configured - skipping health check",
+			expectedOK:    true,
 		},
 		{
 			name:          "Readiness check with nil brokers",
 			checkLiveness: false,
 			brokers:       nil,
 			expectedMsg:   "Kafka is not configured - skipping health check",
+			expectedOK:    true,
+		},
+		{
+			name:          "Liveness check with brokers skips ping",
+			checkLiveness: true,
+			brokers:       invalidBrokers,
+			expectedMsg:   "Kafka liveness (skipped)",
+			expectedOK:    true,
+		},
+		{
+			name:          "Readiness check with invalid brokers pings and fails",
+			checkLiveness: false,
+			brokers:       invalidBrokers,
+			expectedMsg:   "Failed to connect to Kafka",
+			expectedOK:    false,
 		},
 	}
 
@@ -87,28 +106,29 @@ func TestHealthCheckerLivenessParameter(t *testing.T) {
 
 			status, message, err := healthCheck(context.Background(), tt.checkLiveness)
 
-			assert.Equal(t, http.StatusOK, status)
+			if tt.expectedOK {
+				assert.Equal(t, http.StatusOK, status)
+				assert.NoError(t, err)
+			} else {
+				assert.Equal(t, http.StatusServiceUnavailable, status)
+				assert.Error(t, err)
+			}
 			assert.Equal(t, tt.expectedMsg, message)
-			assert.NoError(t, err)
 		})
 	}
 }
 
 func TestHealthCheckerContextHandling(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Use a port that's guaranteed to be closed
 	unusedPort := getUnusedPort(t)
 	brokers := []string{fmt.Sprintf("localhost:%d", unusedPort)}
 
 	healthCheck := HealthChecker(ctx, brokers)
 
-	// Cancel context before calling health check
 	cancel()
 
-	status, message, err := healthCheck(ctx, true)
+	status, message, err := healthCheck(ctx, false)
 
-	// Should still attempt the check despite canceled context in creation
-	// The actual connection attempt will fail due to invalid broker
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.Equal(t, "Failed to connect to Kafka", message)
 	assert.Error(t, err)
@@ -179,7 +199,7 @@ func TestHealthCheckerErrorScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			healthCheck := HealthChecker(context.Background(), tt.brokers)
 
-			status, message, err := healthCheck(context.Background(), true)
+			status, message, err := healthCheck(context.Background(), false)
 
 			assert.Equal(t, tt.expectedStatus, status)
 			assert.Equal(t, tt.expectedMessage, message)

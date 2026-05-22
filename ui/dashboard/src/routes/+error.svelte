@@ -50,10 +50,10 @@
     <Logo name={logoName} width={162} />
   </div>
   <div class="title">
-    <Typo variant="title" size="h5" value={title} color="rgba(255, 255, 255, 0.88)" />
+    <Typo variant="title" size="h5" value={title} color="var(--app-color)" />
   </div>
   <div class="body">
-    <Typo variant="text" size="md" value={body} color="rgba(255, 255, 255, 0.66)" />
+    <Typo variant="text" size="md" value={body} color="var(--comp-label-color)" />
   </div>
   <div class="btn">
     <Button variant="tertiary" width={140} on:click={onHome}>{btnLabel}</Button>

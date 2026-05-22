@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -58,6 +59,19 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 
 		// close the reader
 		require.NoError(t, r.Close())
+	})
+
+	t.Run("returns NotFound when neither subtreeData nor subtree exists", func(t *testing.T) {
+		// Regression: previously the on-demand fallback committed to 200 OK and then
+		// failed inside a goroutine, leaving peers with a truncated body that parsed
+		// as ErrSubtreeLengthMismatch. With no source data on disk the repository
+		// must surface NotFound up front so the HTTP layer can emit 404.
+		resetQuorumForTests()
+		ctx, subtree, _ := setupSubtreeReaderTest(t)
+
+		_, err := ctx.repo.GetSubtreeDataReader(t.Context(), subtree.RootHash())
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrNotFound), "expected ErrNotFound, got: %v", err)
 	})
 
 	t.Run("get subtree from utxo store and verify file creation", func(t *testing.T) {

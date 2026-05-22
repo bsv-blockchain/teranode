@@ -1,26 +1,67 @@
 site_name: Teranode
+site_description: Horizontally scalable BSV blockchain node
+site_url: https://bsv-blockchain.github.io/teranode/
+
+# Files inside docs/ that should not be copied into the built site.
+# `hooks/` holds the cache-bust build hook (Python, executed at build time
+# via the top-level `hooks:` key) — its source and __pycache__ should not
+# ship to GitHub Pages.
+exclude_docs: |
+  hooks/
+
 theme:
   name: material
-  logo: topics/architecture/img/bsvblockchain_logo.svg
-  favicon: topics/architecture/img/bsvblockchain_blue_logo.svg
+  logo: assets/bsv-logo.png
+  favicon: assets/favicon.png
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
-    - navigation.tabs  # Enables top navigation tabs
-    - navigation.tabs.sticky  # Keeps tabs visible when scrolling
-    - navigation.sections  # Enables subsections in top navigation
-    - navigation.expand  # Expands all sections by default
-    - navigation.instant  # Enables faster navigation
-    - search.suggest  # Improves search results
-    - search.highlight  # Highlights search terms in results
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.path
+    - navigation.indexes
+    - navigation.top
+    - navigation.instant
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+repo_name: bsv-blockchain/teranode
+repo_url: https://github.com/bsv-blockchain/teranode
+edit_uri: edit/main/docs/
 
 nav:
   - Home: index.md
-  - Tutorials:
-      - Fork and Pull Request Guidelines: tutorials/developers/forkAndPullRequestGuidelines.md
-      - Developer Setup: tutorials/developers/developerSetup.md
-      - Miners Getting Started: tutorials/miners/minersGettingStarted.md
   - How-To Guides:
-      - Running Services Locally: howto/locallyRunningServices.md
-      - Debugging Teranode: howto/howToRemoteDebugTeranode.md
+      - Development:
+          - Developer Setup: howto/developerSetup.md
+          - Fork and Pull Request Guidelines: howto/forkAndPullRequestGuidelines.md
+          - Running Services Locally: howto/locallyRunningServices.md
+          - Debugging Teranode: howto/howToRemoteDebugTeranode.md
       - Generating Protobuf: howto/generatingProtobuf.md
       - Adding Protobuf: howto/addingNewProtobufServices.md
       - Configuring gRPC Logging: howto/configuringGrpcLogging.md
@@ -34,8 +75,6 @@ nav:
           - Installation:
               - Docker: howto/miners/docker/minersHowToInstallation.md
               - Kubernetes: howto/miners/kubernetes/minersHowToInstallation.md
-              - AWS POC Setup: staging/TeranodePOC/AWS-POC-Setup.md
-              - Deprecated: howto/miners/kubernetes/minersHowToInstallationDeprecated.md
           - Configuration:
               - Docker: howto/miners/docker/minersHowToConfigureTheNode.md
               - Kubernetes: howto/miners/kubernetes/minersHowToConfigureTheNode.md
@@ -190,26 +229,40 @@ nav:
 
 
 markdown_extensions:
-  - toc
+  - toc:
+      permalink: true
   - tables
   - admonition
-  - attr_list  # Enables target="_blank" and other attributes in links
-  - pymdownx.highlight
-  - pymdownx.superfences  # Ensures correct nested list behavior
-  - pymdownx.tasklist  # Enables checkbox-style lists
-  - pymdownx.betterem  # Fixes bold/italic parsing issues
-  - pymdownx.tabbed
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.betterem
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.smartsymbols
   - pymdownx.caret
+  - pymdownx.tilde
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
-
-copyright: "Copyright © 2026 BSV Blockchain Org."
 
 extra:
-  generator: false  # Hides "Made with Material for MkDocs"
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/bsv-blockchain/teranode
+  generator: false
+
+hooks:
+  - docs/hooks/cache_bust.py
 
 plugins:
   - search

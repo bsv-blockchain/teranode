@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -73,8 +72,8 @@ func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash
 	return args.Error(0)
 }
 
-func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
-	args := m.Called(ctx, block, blockHeight, peerID, baseURL)
+func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+	args := m.Called(ctx, block, blockHeight, peerID, baseURL, blockID)
 	return args.Error(0)
 }
 
@@ -1066,6 +1065,35 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 	mockBlockchainClient.AssertExpectations(t)
 }
 
+// Test_Start_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func Test_Start_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.GRPCListenAddress = ""
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
+
+	server := &Server{
+		logger:           logger,
+		settings:         tSettings,
+		blockchainClient: mockBlockchainClient,
+	}
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+	mockBlockchainClient.AssertExpectations(t)
+}
+
 func Test_Stop(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -1630,9 +1658,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		require.NoError(t, err)
 
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)
@@ -1675,9 +1701,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 
 		// Invalid message that will cause a parsing error
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: []byte("invalid protobuf"),
-			},
+			Value: []byte("invalid protobuf"),
 		}
 
 		handler := server.consumerMessageHandler(ctx)
@@ -1703,17 +1727,23 @@ func Test_consumerMessageHandler(t *testing.T) {
 		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
-			logger:              logger,
-			settings:            tSettings,
-			blockFoundCh:        make(chan processBlockFound, 10),
+			logger:   logger,
+			settings: tSettings,
+			// Unbuffered: the inner blockHandler goroutine blocks on this send
+			// (no reader in the test), so the handler's select can only fire
+			// ctx.Done(). Without this, the buffered send returned immediately
+			// and racy select could pick errCh=nil.
+			blockFoundCh:        make(chan processBlockFound),
 			blockValidation:     bv,
 			stats:               gocore.NewStat("test"),
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		}
 
-		// Create a cancellable context
+		// Create a cancellable context, then cancel before invoking the handler
+		// so ctx.Done() is selectable for the very first iteration.
 		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 
 		kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
 			Hash: hashStr,
@@ -1723,15 +1753,10 @@ func Test_consumerMessageHandler(t *testing.T) {
 		require.NoError(t, err)
 
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)
-
-		// Cancel the context immediately
-		cancel()
 
 		err = handler(msg)
 		require.Error(t, err)

@@ -367,7 +367,7 @@
     height: var(--height-local);
     gap: 4px;
 
-    background-color: rgba(255, 255, 255, 0.8);
+    background-color: var(--comp-bg-color);
     z-index: 2;
     margin-left: -40px;
   }

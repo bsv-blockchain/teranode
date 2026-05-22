@@ -132,6 +132,21 @@ func (m *Mock) ResetBlockAssemblyFully(ctx context.Context) error {
 	return nil
 }
 
+func (m *Mock) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	args := m.Called(ctx)
+
+	if args.Error(0) != nil {
+		return args.Error(0)
+	}
+
+	return nil
+}
+
+func (m *Mock) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	args := m.Called(ctx)
 
@@ -164,6 +179,16 @@ func (m *Mock) GetTransactionHashes(ctx context.Context) ([]string, error) {
 	}
 
 	return args.Get(0).([]string), nil
+}
+
+func (m *Mock) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	args := m.Called(ctx, candidateID)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), nil
 }
 
 // mockBlockAssemblyAPIClient is a mock implementation of BlockAssemblyAPIClient
@@ -251,6 +276,22 @@ func (m *mockBlockAssemblyAPIClient) ResetBlockAssemblyFully(ctx context.Context
 	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
 }
 
+func (m *mockBlockAssemblyAPIClient) ResetBlockAssemblyValidateInputs(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) CheckBlockAssemblyValidateInputs(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.EmptyMessage, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.EmptyMessage), args.Error(1)
+}
+
 func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *blockassembly_api.EmptyMessage, opts ...grpc.CallOption) (*blockassembly_api.StateMessage, error) {
 	args := m.Called(ctx, in, opts)
 	if args.Get(0) == nil {
@@ -289,4 +330,12 @@ func (m *mockBlockAssemblyAPIClient) GetBlockAssemblyTxs(ctx context.Context, in
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*blockassembly_api.GetBlockAssemblyTxsResponse), args.Error(1)
+}
+
+func (m *mockBlockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *blockassembly_api.GetCandidateBlockRequest, opts ...grpc.CallOption) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.GetCandidateBlockResponse), args.Error(1)
 }

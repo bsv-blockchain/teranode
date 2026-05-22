@@ -2,9 +2,9 @@
 
 ## Overview
 
-The TX Validator Service is responsible for validating transactions in a Bitcoin SV blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.
+The TX Validator Service is responsible for validating transactions in a BSV Blockchain system. It ensures that transactions conform to the network's consensus rules and policy requirements before they are added to the blockchain. The service provides both gRPC and HTTP endpoints for transaction validation and integrates with block assembly for mining operations.
 
-The validator package implements comprehensive transaction validation functionality for Bitcoin SV nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin SV consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.
+The validator package implements comprehensive transaction validation functionality for BSV Blockchain nodes, including script verification, UTXO management, and policy enforcement. It is a critical component of the Teranode architecture that handles transaction validation according to Bitcoin consensus rules, manages UTXO state transitions, and ensures that only valid transactions are accepted into the mempool and blocks.
 
 ## Core Components
 
@@ -106,6 +106,7 @@ Creates and initializes a new validator server instance with the specified compo
 #### Methods
 
 ##### gRPC Endpoints
+
 - `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the validator service and its dependencies. When used as a liveness check (checkLiveness=true), it only verifies basic service operation. When used as a readiness check (checkLiveness=false), it performs comprehensive dependency checks.
 - `HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error)`: Implements the gRPC health check endpoint. This method provides the gRPC interface for health checking and records metrics for monitoring purposes.
 - `ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error)`: Validates a single transaction. This method is part of the validator_api.ValidatorAPIServer interface and serves as the public API entry point for transaction validation requests.
@@ -114,19 +115,21 @@ Creates and initializes a new validator server instance with the specified compo
 - `GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetMedianBlockTimeResponse, error)`: Returns the median time of recent blocks. This method provides access to the median timestamp of the last several blocks, which is critical for time-based transaction features like nLockTime.
 
 ##### HTTP Endpoints
+
 - `handleSingleTx(ctx context.Context) echo.HandlerFunc`: Handles HTTP requests for single transaction validation. This method implements an HTTP handler for validating a single Bitcoin transaction submitted via POST request.
 - `handleMultipleTx(ctx context.Context) echo.HandlerFunc`: Handles HTTP requests for validating multiple transactions. This method implements an HTTP handler for validating a stream of Bitcoin transactions submitted via POST request.
 - `startHTTPServer(ctx context.Context, httpAddresses string) error`: Initializes and starts the HTTP server for transaction processing. This method configures and launches an Echo web server that provides HTTP REST endpoints for transaction validation.
 - `startAndMonitorHTTPServer(ctx context.Context, httpAddresses string)`: Starts the HTTP server and monitors for shutdown. This method launches the HTTP server in a non-blocking manner using goroutines, allowing the main server thread to continue execution.
 
 ##### Lifecycle Methods
+
 - `Init(ctx context.Context) error`: Initializes the validator server and sets up the core validation engine. This method must be called before Start() and after NewServer(). It creates the core validator component and performs necessary setup operations.
 - `Start(ctx context.Context, readyCh chan<- struct{}) error`: Begins the validator server operation and registers handlers for validation requests. This method initiates all background processing, including Kafka consumer setup, HTTP API servers, and synchronization with the blockchain FSM.
 - `Stop(_ context.Context) error`: Gracefully shuts down the validator server and all associated components. This method performs an orderly shutdown of all server resources, including Kafka producers/consumers and any background tasks.
 
 ### Validator
 
-The `Validator` struct implements Bitcoin SV transaction validation and manages the lifecycle of transactions from validation through block assembly.
+The `Validator` struct implements BSV Blockchain transaction validation and manages the lifecycle of transactions from validation through block assembly.
 
 ```go
 type Validator struct {
@@ -153,6 +156,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 Creates a new `Validator` instance with the provided configuration. It initializes the validator with the given logger, UTXO store, and Kafka producers. Returns an error if initialization fails.
 
+> **Note**: The `blockAssemblyClient` parameter is conditionally assigned to the `blockAssembler` field. When `settings.BlockAssembly.Disabled` is `true`, the field is set to `nil` and block assembly integration is disabled. When `nil`, calls to `sendToBlockAssembler` are skipped.
+
 #### Methods
 
 - `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the validator and its dependencies. When checkLiveness is true, only checks service liveness. When false, performs full readiness check including dependencies.
@@ -161,77 +166,54 @@ Creates a new `Validator` instance with the provided configuration. It initializ
 - `Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error)`: Performs comprehensive validation of a transaction. It checks transaction finality, validates inputs and outputs, updates the UTXO set, and optionally adds the transaction to block assembly.
 - `ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)`: Performs comprehensive validation of a transaction with explicit options. This method is the core transaction validation entry point that implements the full Bitcoin validation ruleset.
 - `TriggerBatcher()`: Triggers the batcher (currently a no-op).
-- `CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)`: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.
+- `CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)`: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.
 
 ### TxValidator
 
-The `TxValidator` implements transaction validation logic based on Bitcoin SV consensus rules and configurable policy settings.
+The `TxValidator` implements transaction validation logic based on Bitcoin consensus rules and configurable policy settings.
 
 ```go
 type TxValidator struct {
-    logger      ulogger.Logger
-    settings    *settings.Settings
-    interpreter TxScriptInterpreter
-    options     *TxValidatorOptions
+    logger   ulogger.Logger
+    settings *settings.Settings
+    bdk      bdkValidator
+    options  *TxValidatorOptions
 }
 ```
 
-The validator package defines multiple interfaces for transaction validation:
+The validator package defines the transaction validation interface:
 
 #### TxValidatorI Interface
 
 ```go
 type TxValidatorI interface {
-    // ValidateTransaction performs comprehensive validation of a transaction.
-    // This method enforces all consensus and policy rules against the transaction,
-    // including format, structure, inputs/outputs, signature verification, and fees.
-    ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error
+    // ValidateTransaction performs Teranode-owned validation that needs node context
+    // and BDK-side transaction validation.
+    ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 
-    // ValidateTransactionScripts performs script validation for a transaction.
-    // This method specifically handles the script execution and signature verification
-    // portion of validation, which is typically the most computationally intensive part.
-    ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
+    // ValidateBIP68 verifies relative lock-time constraints for block validation.
+    ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
 }
 ```
 
-#### TxScriptInterpreter Interface
-
-```go
-type TxScriptInterpreter interface {
-    // VerifyScript implements script verification for a transaction
-    VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
-
-    // Interpreter returns the interpreter being used
-    Interpreter() TxInterpreter
-}
-```
-
-The validator supports multiple script interpreters through a factory pattern:
-
-- **GoBT**: Pure Go implementation from the libsv/go-bt library
-- **GoSDK**: Bitcoin SV SDK implementation
-- **GoBDK**: Bitcoin Development Kit implementation
+`TxValidator` uses GoBDK directly through a private adapter. The old GoBT/GoSDK script-interpreter variants are no longer part of this validator package.
 
 ## Key Functions
 
 ### TxValidator Methods
 
-- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs comprehensive validation checks on a transaction. This includes checking input and output presence, transaction size limits, input values and coinbase restrictions, output values and dust limits, lock time requirements, script operation limits, script validation, and fee requirements.
-- `ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Validates transaction scripts using the configured script interpreter.
-- `checkOutputs(tx *bt.Tx, blockHeight uint32) error`: Validates transaction outputs, checking for dust values and other output-specific rules.
-- `checkInputs(tx *bt.Tx, blockHeight uint32) error`: Validates transaction inputs, checking for proper formatting and sequence values.
-- `checkTxSize(txSize int) error`: Checks if the transaction size is within the allowed policy limit.
-- `checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error`: Verifies if the transaction fee is sufficient according to the fee policy.
-- `sigOpsCheck(tx *bt.Tx, validationOptions *Options) error`: Checks the number of signature operations in the transaction against policy limits.
+- `ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks that need node context, including coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and consolidation-fee exemption, then calls BDK `ValidateTransaction`.
+- `ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error`: Verifies BIP68 relative lock-time constraints for block validation.
+- `checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Validates Teranode-owned input constraints, including the stricter all-zero previous-txid guard and `MaxCoinsViewCacheSize`.
+- `checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error`: Verifies if the transaction fee is sufficient according to the fee policy.
 - `pushDataCheck(tx *bt.Tx) error`: Ensures that unlocking scripts only push data onto the stack, enforcing Bitcoin's signature script policy.
 
 ### Validator Methods
 
 - `validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)`: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.
-- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs transaction-level validation checks. Ensures transaction is properly extended and meets all validation rules.
-- `validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs script validation for a transaction. Returns error if validation fails.
-- `spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
-- `sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error`: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.
+- `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs Teranode-owned transaction checks, BDK transaction validation, then optional BIP68 block-context validation.
+- `spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
+- `sendToBlockAssembler(ctx context.Context, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error`: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.
 - `extendTransaction(ctx context.Context, tx *bt.Tx) error`: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.
 
 ## Configuration
@@ -242,7 +224,7 @@ The TX Validator Service uses various configuration options, including:
 - **Policy settings**: Transaction validation policy parameters, including fee rates, size limits, and other enforcement rules
 - **Network parameters**: Mainnet, testnet, or regtest configuration affecting consensus rules
 - **Block assembly settings**: Configuration for integrating validation with block template generation
-- **Script interpreter selection**: Choice of script validation engine (GoBT, GoSDK, GoBDK)
+- **Script interpreter**: Hardcoded to GoBDK; cannot be changed via configuration
 
 ## Error Handling
 

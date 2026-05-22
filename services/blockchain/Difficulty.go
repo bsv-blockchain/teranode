@@ -24,7 +24,7 @@ const DifficultyAdjustmentWindow = 144
 // The CalcWork function has been moved to the work package as CalcBlockWork
 
 // Difficulty handles the calculation and management of blockchain mining difficulty.
-// Implements the Bitcoin SV Difficulty Adjustment Algorithm (DAA) with caching for performance.
+// Implements the Bitcoin Difficulty Adjustment Algorithm (DAA) with caching for performance.
 //
 // Thread-safe: uses sync.RWMutex to protect cached values.
 type Difficulty struct {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -240,14 +241,12 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		// Use a common parent hash for all transactions (simulating they all spend from same output)
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
+			// Different output index for each tx
 			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{{
-				ParentTxHashes: []chainhash.Hash{genesisHash},
-				Idxs:           [][]uint32{{uint32(i)}}, // Different output index for each tx
-			}})
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))})
 		}
 
 		require.Eventually(t, func() bool {
@@ -299,7 +298,15 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, s
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
+		in0 := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in0.PreviousTxIDAdd(&previousHash))
+		in1 := &bt.Input{PreviousTxOutIndex: 1}
+		require.NoError(t, in1.PreviousTxIDAdd(&previousHash))
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in0, in1})
+		require.NoError(t, err)
+
+		txMap.Set(txHash, &ti)
 		previousHash = txHash
 	}
 

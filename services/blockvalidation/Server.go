@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -91,7 +91,7 @@ type processBlockCatchup struct {
 	peerID string
 }
 
-// Server implements a high-performance block validation service for Bitcoin SV.
+// Server implements a high-performance block validation service for BSV Blockchain.
 // It coordinates block validation, subtree management, and transaction metadata processing
 // across multiple subsystems while maintaining chain consistency. The server supports
 // both synchronous and asynchronous validation modes, with automatic catchup capabilities
@@ -524,19 +524,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
 
-	// if our FSM state is CATCHINGBLOCKS, this is probably a remnant of a crash, put the node back in RUNNING state
-	isCatchingBlocks, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateCATCHINGBLOCKS)
-	if err != nil {
-		u.logger.Errorf("[Init] failed to check if FSM currently catching blocks: %v", err)
-	}
-
-	if isCatchingBlocks {
-		u.logger.Infof("[Init] FSM is in CATCHINGBLOCKS state, setting it to RUNNING")
-		if err = u.blockchainClient.Run(ctx, "blockvalidation"); err != nil {
-			return errors.NewServiceError("[Init] failed to set FSM state to RUNNING", err)
-		}
-	}
-
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
 
@@ -618,6 +605,22 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						// Check if the error is due to another catchup in progress
 						if errors.Is(err, errors.ErrCatchupInProgress) {
 							u.logger.Warnf("[catchup] Catchup already in progress, requeueing block %s from peer %s", c.block.Hash().String(), c.peerID)
+							continue
+						}
+
+						// FSM rejected the transition (e.g. LEGACYSYNCING active) — not a peer issue
+						if errors.Is(err, errors.ErrStateError) {
+							u.logger.Warnf("[catchup] FSM rejected catchup for block %s (node not in RUNNING state), clearing markers", c.block.Hash().String())
+							u.processBlockNotify.Delete(*c.block.Hash())
+							u.catchupAlternatives.Delete(*c.block.Hash())
+							continue
+						}
+
+						// Local infrastructure/service failure (e.g. blockchain service unavailable) — not a peer issue
+						if errors.Is(err, errors.ErrServiceError) {
+							u.logger.Warnf("[catchup] Local service error during catchup for block %s, clearing markers to allow retry: %v", c.block.Hash().String(), err)
+							u.processBlockNotify.Delete(*c.block.Hash())
+							u.catchupAlternatives.Delete(*c.block.Hash())
 							continue
 						}
 
@@ -1014,6 +1017,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		// Blocks until the FSM transitions from the IDLE state
 		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
 		if err != nil {
+			if errors.IsContextError(err) {
+				u.logger.Infof("[Block Validation Service] Shutting down during FSM wait")
+				return err
+			}
 			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 			return err
 		}
@@ -1177,7 +1184,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		} else if peer != nil {
 			baseURL = peer.DataHubURL
 		}
-		if err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+		if _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
 		}
 	}
@@ -1244,6 +1251,13 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	block.Height = height
+
+	// If a block ID was pre-assigned by the caller (e.g. legacy netsync in LEGACYSYNCING mode),
+	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
+	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	if request.BlockId != 0 {
+		block.ID = request.BlockId
+	}
 
 	baseURL := request.BaseUrl
 	if baseURL == "" {

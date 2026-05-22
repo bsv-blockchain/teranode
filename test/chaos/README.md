@@ -143,7 +143,7 @@ go test -v ./test/chaos -run TestScenario01_DatabaseLatency
 **What it tests:**
 - System behavior when Kafka broker is unavailable
 - Producer error handling and retry logic
-- Consumer watchdog detection of stuck states
+- Consumer recovery via franz-go's built-in reconnection
 - Message delivery guarantees
 - Recovery after broker restoration
 - Offset management and message consistency
@@ -160,7 +160,7 @@ go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure
 4. Test async producer with latency
 5. Inject 100% connection drops (simulate broker failure)
 6. Verify producer failure handling
-7. Verify consumer watchdog detects stuck state
+7. Verify consumer detects broker failure
 8. Remove toxic and verify recovery
 9. Verify message consistency and no data loss
 
@@ -168,7 +168,7 @@ go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure
 - ✅ Producers handle latency gracefully (slow but successful)
 - ✅ Async producers continue operating with latency
 - ✅ Producers fail appropriately when broker is down
-- ✅ Consumer watchdog detects stuck/failed connections
+- ✅ Consumer detects and recovers from failed connections
 - ✅ System recovers fully after broker restoration
 - ✅ No message loss (all published messages are retrievable)
 - ✅ Consumer offsets maintained correctly
