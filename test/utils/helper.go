@@ -1218,9 +1218,9 @@ func RemoveDataDirectory(dir string, useSudo bool) error {
 	return nil
 }
 
-// WaitForHealthLiveness checks the health readiness endpoint of a service running on the specified port until it becomes healthy or the timeout is reached.
+// WaitForHealthLiveness checks the health liveness endpoint of a service running on the specified port until it becomes healthy or the timeout is reached.
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
-	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+	healthLivenessEndpoint := fmt.Sprintf("http://localhost:%d/health/liveness", port)
 	timeoutElapsed := time.After(timeout)
 	localHealthClient := &http.Client{Timeout: time.Second}
 
@@ -1231,7 +1231,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 		case <-timeoutElapsed:
 			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
-			resp, requestErr := localHealthClient.Get(healthReadinessEndpoint)
+			resp, requestErr := localHealthClient.Get(healthLivenessEndpoint)
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}

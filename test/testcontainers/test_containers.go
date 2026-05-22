@@ -24,7 +24,6 @@ import (
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
@@ -291,7 +290,7 @@ func (tc *TestContainer) Cleanup(t *testing.T) {
 }
 
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
-	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+	healthLivenessEndpoint := fmt.Sprintf("http://localhost:%d/health/liveness", port)
 	timeoutElapsed := time.After(timeout)
 	localHealthClient := &http.Client{Timeout: time.Second}
 
@@ -302,7 +301,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 		case <-timeoutElapsed:
 			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
-			resp, requestErr := localHealthClient.Get(healthReadinessEndpoint)
+			resp, requestErr := localHealthClient.Get(healthLivenessEndpoint)
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}

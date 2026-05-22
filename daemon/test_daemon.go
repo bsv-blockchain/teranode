@@ -1773,7 +1773,7 @@ func (td *TestDaemon) GetTxStore() (blob.Store, error) {
 	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
 }
 
-// WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+// WaitForHealthLiveness waits for the health liveness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	timeoutElapsed := time.After(timeout)
 	localHealthClient := &http.Client{Timeout: time.Second}
@@ -1781,7 +1781,7 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	var err error
 
 	for _, port := range ports {
-		healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+		healthLivenessEndpoint := fmt.Sprintf("http://localhost:%d/health/liveness", port)
 
 	out:
 		for {
@@ -1789,7 +1789,7 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 			case <-timeoutElapsed:
 				return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 			default:
-				resp, requestErr := localHealthClient.Get(healthReadinessEndpoint)
+				resp, requestErr := localHealthClient.Get(healthLivenessEndpoint)
 				if resp != nil && resp.Body != nil {
 					_ = resp.Body.Close()
 				}
