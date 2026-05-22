@@ -16,6 +16,25 @@ type SplitSwissMap struct {
 	nrOfBuckets uint16
 }
 
+// swissBucketHeadroomNumerator / swissBucketHeadroomDenominator give the
+// per-bucket sizeHint multiplier (1.3x) we pass to swiss.NewMap.
+//
+// dolthub/swiss has a 7/8 = 0.875 load factor: it pre-allocates capacity for
+// `sizeHint` entries and triggers a full bucket rehash once that capacity is
+// exceeded. With xxhash-routed keys, per-bucket fill is not perfectly uniform —
+// the heaviest bucket typically runs ~10-15 % above the mean. Without the
+// headroom, that heavy bucket trips the resize threshold mid-fill and each
+// resize is O(bucket_size) memcpy of the entire bucket's metadata + entry
+// arrays. Profiling a 664 M-tx block movement showed swiss.Map.Put +
+// runtime.memmove / memclrNoHeapPointers together consuming ~30 % of
+// CreateTransactionMap's CPU — almost entirely resize work.
+//
+// 1.3x covers both the 0.875 load factor (≈ 1.143x worst-case fill) and ~14 %
+// distribution skew on top, eliminating mid-fill resizes in steady state.
+// Cost: ~30 % more peak memory for the transaction map.
+const swissBucketHeadroomNumerator = 13
+const swissBucketHeadroomDenominator = 10
+
 // NewSplitSwissMap creates a new SplitSwissMap with the specified number of buckets and total length.
 // The length is divided equally among the buckets.
 // This map is safe for concurrent writes, but does not lock when reading.
@@ -29,8 +48,15 @@ type SplitSwissMap struct {
 func NewSplitSwissMap(nrOfBuckets uint16, length int) *SplitSwissMap {
 	m := make(map[uint16]*swiss.Map[chainhash.Hash, struct{}], nrOfBuckets)
 	mu := make(map[uint16]*sync.RWMutex, nrOfBuckets)
+
+	perBucketSizeHint := length / int(nrOfBuckets)
+	if perBucketSizeHint > 0 {
+		perBucketSizeHint = (perBucketSizeHint*swissBucketHeadroomNumerator +
+			swissBucketHeadroomDenominator - 1) / swissBucketHeadroomDenominator
+	}
+
 	for i := uint16(0); i < nrOfBuckets; i++ {
-		m[i] = swiss.NewMap[chainhash.Hash, struct{}](uint32(length / int(nrOfBuckets)))
+		m[i] = swiss.NewMap[chainhash.Hash, struct{}](uint32(perBucketSizeHint))
 		mu[i] = &sync.RWMutex{}
 	}
 
