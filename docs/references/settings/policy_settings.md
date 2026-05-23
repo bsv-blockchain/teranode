@@ -9,43 +9,68 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 ### Block Size Limits
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | BlockMaxSize | int | 0 (unlimited) | blockmaxsize | **CRITICAL** - Maximum block size policy limit |
 | ExcessiveBlockSize | int | 4294967296 (4GB) | excessiveblocksize | Excessive block size threshold |
 
 ### Transaction Size and Script Limits
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | MaxTxSizePolicy | int | 10485760 (10MB) | maxtxsizepolicy | **CRITICAL** - Maximum transaction size policy |
+| MaxOrphanTxSize | int | 1000000 (1MB) | maxorphantxsize | Maximum orphan transaction size |
 | MaxScriptSizePolicy | int | 500000 (500KB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
 | MaxScriptNumLengthPolicy | int | 10000 | maxscriptnumlengthpolicy | Maximum script number length |
+| MaxOpsPerScriptPolicy | int64 | 1000000 | maxopsperscriptpolicy | Maximum operations per script |
 
 ### Multisig and Signature Limits
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | MaxPubKeysPerMultisigPolicy | int64 | 0 (unlimited) | maxpubkeyspermultisigpolicy | Maximum public keys per multisig |
 | MaxTxSigopsCountsPolicy | int64 | 0 (unlimited) | maxtxsigopscountspolicy | Maximum signature operations per transaction |
 
 ### Memory and Stack Limits
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | MaxStackMemoryUsagePolicy | int | 104857600 (100MB) | maxstackmemoryusagepolicy | **CRITICAL** - Maximum stack memory usage (policy) |
 | MaxStackMemoryUsageConsensus | int | 0 (unlimited) | maxstackmemoryusageconsensus | **CRITICAL** - Maximum stack memory usage (consensus) |
+
+### Validation Timeout Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+| --------- | ------ | --------- | --------------------- | ------- |
+| MaxStdTxValidationDuration | int | 3 | maxstdtxvalidationduration | Maximum validation time for standard transactions (ms) |
+| MaxNonStdTxValidationDuration | int | 1000 | maxnonstdtxvalidationduration | Maximum validation time for non-standard transactions (ms) |
+| MaxTxChainValidationBudget | int | 50 | maxtxchainvalidationbudget | Total time budget for chain validation (ms) |
+| ValidationClockCPU | bool | false | validationclockcpu | Use CPU time instead of wall-clock for validation timeouts |
+
+### Data Carrier Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+| --------- | ------ | --------- | --------------------- | ------- |
+| DataCarrier | bool | false | datacarrier | Enable relaying of OP_RETURN data carrier transactions |
+| DataCarrierSize | int64 | 1000000 (1MB) | datacarriersize | Maximum OP_RETURN data size when DataCarrier is enabled |
+
+### Transaction Chain Limits
+
+| Setting | Type | Default | Environment Variable | Usage |
+| --------- | ------ | --------- | --------------------- | ------- |
+| LimitAncestorCount | int | 1000000 | limitancestorcount | Maximum unconfirmed ancestor count in mempool |
+| LimitCPFPGroupMembersCount | int | 1000000 | limitcpfpgroupmemberscount | Maximum CPFP group members |
 
 ### Mining and Fee Settings
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | MinMiningTxFee | float64 | 0.00000500 | minminingtxfee | Minimum transaction fee for mining |
 | AcceptNonStdOutputs | bool | true | acceptnonstdoutputs | **CRITICAL** - Accept non-standard output scripts |
 
 ### Consolidation Transaction Settings
 
 | Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| --------- | ------ | --------- | --------------------- | ------- |
 | MinConsolidationFactor | int | 20 | minconsolidationfactor | Minimum consolidation factor |
 | MaxConsolidationInputScriptSize | int | 150 | maxconsolidationinputscriptsize | Maximum input script size for consolidation |
 | MinConfConsolidationInput | int | 6 | minconfconsolidationinput | Minimum confirmations for consolidation input |
@@ -58,7 +83,7 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 
 - `BlockMaxSize = 0` means unlimited block size (default behavior for BSV)
 - `ExcessiveBlockSize` defines the threshold for considering blocks "excessive"
-- Both settings work together to enforce Bitcoin SV's unbounded block size philosophy
+- Both settings work together to enforce BSV Blockchain's unbounded block size philosophy
 
 ### Script Validation
 
@@ -74,7 +99,7 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 
 - `MaxPubKeysPerMultisigPolicy = 0` means unlimited public keys (BSV default)
 - `MaxTxSigopsCountsPolicy = 0` means unlimited signature operations (BSV default)
-- These unlimited defaults reflect Bitcoin SV's restoration of original Bitcoin capabilities
+- These unlimited defaults reflect BSV Blockchain's restoration of original Bitcoin capabilities
 
 ### Non-Standard Transactions
 
@@ -90,11 +115,11 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 - `MaxConsolidationInputScriptSize` limits input script complexity
 - `AcceptNonStdConsolidationInput` controls whether non-standard inputs can be consolidated
 
-## Bitcoin SV Specifics
+## BSV Blockchain Specifics
 
 ### Restored Protocol Features
 
-Bitcoin SV restores the original Bitcoin protocol, which is reflected in these policy settings:
+BSV Blockchain restores the original Bitcoin protocol, which is reflected in these policy settings:
 
 1. **Unlimited Block Size**: `BlockMaxSize = 0` (unlimited)
 2. **Unlimited Script Capabilities**: Most limits set to 0 (unlimited)
@@ -113,7 +138,7 @@ The settings allow operators to configure policy rules while maintaining consens
 ## Validation Rules
 
 | Setting | Validation | Impact |
-|---------|------------|--------|
+| --------- | ------------ | -------- |
 | BlockMaxSize | 0 means unlimited | Block acceptance criteria |
 | MaxTxSizePolicy | Must be positive or 0 | Transaction size validation |
 | MaxStackMemoryUsagePolicy | Policy enforcement | Script execution limits |

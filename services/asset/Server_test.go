@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -19,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,7 +73,7 @@ func testSetup(t *testing.T) *testCtx {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
-	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil)
+	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil, nil)
 
 	return &testCtx{
 		server:           server,
@@ -211,6 +213,7 @@ func TestHealth_LivenessCheck(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	status, msg, err := server.Health(context.Background(), true)
@@ -223,6 +226,7 @@ func TestHealth_ReadinessWithNoDependencies(t *testing.T) {
 	server := NewServer(
 		ulogger.New("asset"),
 		test.CreateBaseTestSettings(t),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -532,6 +536,7 @@ func TestHealth_ErrorCases(t *testing.T) {
 			nil, // blockchainClient is nil - will cause health check to report error
 			nil, // blockvalidationClient
 			nil, // p2pClient
+			nil, // banList
 		)
 
 		// Readiness check should still return OK status even with nil dependencies
@@ -568,4 +573,34 @@ func TestInit_ErrorCases(t *testing.T) {
 		// Should handle invalid address gracefully
 		_ = err
 	})
+}
+
+// TestServerStart_FSMContextCancellation verifies graceful shutdown handling
+// when the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func TestServerStart_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Asset.HTTPListenAddress = fmt.Sprintf("localhost:%d", getFreePort(t))
+	tSettings.Asset.CentrifugeDisable = true
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	server := NewServer(logger, tSettings, utxoStore, blobMemory.New(), blobMemory.New(), blobMemory.New(), mockBlockchainClient, nil, nil, nil)
+	require.NoError(t, server.Init(ctx))
+
+	readyCh := make(chan struct{})
+	startErr := server.Start(ctx, readyCh)
+
+	require.Error(t, startErr)
+	require.True(t, errors.IsContextError(startErr), "expected context error, got %v", startErr)
+	mockBlockchainClient.AssertExpectations(t)
 }

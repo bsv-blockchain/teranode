@@ -405,6 +405,7 @@
   }
   :global(table .num) {
     text-align: right;
+    font-variant-numeric: tabular-nums;
     display: block;
     width: 100%;
   }

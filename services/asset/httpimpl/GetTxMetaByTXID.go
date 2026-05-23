@@ -2,16 +2,17 @@ package httpimpl
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 
 	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
 )
 
+// swagger:model aerospikeRecord
 type aerospikeRecord struct {
 	Key        string                 `json:"key"`
 	Digest     string                 `json:"digest"`
@@ -156,7 +157,9 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 
 		switch mode {
 		case JSON:
-			response.Bins["tx"] = hex.EncodeToString(response.Bins["tx"].([]byte))
+			if tx, ok := response.Bins["tx"].([]byte); ok {
+				response.Bins["tx"] = hex.EncodeToString(tx)
+			}
 			record := aerospikeRecord{
 				Key:        response.Key.String(),
 				Digest:     hex.EncodeToString(response.Key.Digest()),
@@ -166,9 +169,6 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 				Bins:       response.Bins,
 				Generation: response.Generation,
 			}
-
-			// convert to json using jsoniter, since Bins cannot be marshalled by encoding/json
-			var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 			b, err := json.MarshalIndent(record, "", "  ")
 			if err != nil {

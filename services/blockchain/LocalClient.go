@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -254,6 +255,10 @@ func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs [
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
 
+func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	return c.store.CheckBlockIsAncestorOfBlock(ctx, blockIDs, blockHash)
+}
+
 func (c *LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
 }
@@ -351,6 +356,18 @@ func (c *LocalClient) Subscribe(ctx context.Context, source string) (chan *block
 	// We don't close the channel here as it should be managed by the receiver
 	// to avoid race conditions with concurrent send operations
 	return ch, nil
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (c *LocalClient) GetSubscribers(_ context.Context) ([]string, error) {
+	c.subscribersMu.RLock()
+	defer c.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(c.subscribers))
+	for source := range c.subscribers {
+		sources = append(sources, source)
+	}
+	return sources, nil
 }
 
 func (c *LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
@@ -527,4 +544,132 @@ func (c *LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32,
 	}
 
 	return meta.Height, medianTimestampUint32, nil
+}
+
+// Blob deletion methods - LocalClient implementations
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (c *LocalClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, false, errors.NewProcessingError("not implemented")
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (c *LocalClient) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	return false, errors.NewProcessingError("not implemented")
+}
+
+// ListScheduledDeletions lists scheduled blob deletions with optional filtering.
+func (c *LocalClient) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	return nil, 0, errors.NewProcessingError("not implemented")
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (c *LocalClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	return nil, errors.NewProcessingError("not implemented")
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule.
+func (c *LocalClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	return errors.NewProcessingError("not implemented")
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (c *LocalClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	return false, 0, errors.NewProcessingError("not implemented")
+}
+
+// CompleteBlobDeletions completes multiple blob deletions in a single batch call.
+func (c *LocalClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	return 0, 0, errors.NewProcessingError("not implemented")
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	return "", nil, errors.NewProcessingError("not implemented")
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	return errors.NewProcessingError("not implemented")
+}
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+// MTP values are read from pre-stored block metadata rather than recomputed on demand.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
+func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	if len(heights) == 0 {
+		return []uint32{}, nil
+	}
+
+	minHeight, maxHeight := heights[0], heights[0]
+	for _, h := range heights[1:] {
+		if h < minHeight {
+			minHeight = h
+		}
+		if h > maxHeight {
+			maxHeight = h
+		}
+	}
+
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
+	}
+
+	mtpByHeight := make(map[uint32]uint32, len(metas))
+	for _, meta := range metas {
+		mtpByHeight[meta.Height] = meta.MedianTimePast
+	}
+
+	mtps := make([]uint32, len(heights))
+	for i, height := range heights {
+		mtps[i] = mtpByHeight[height]
+	}
+
+	return mtps, nil
+}
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Blocks missing from the canonical chain (e.g. heights below 11) are left as zero.
+//
+// Note: this implementation intentionally bypasses the in-process MTP cache held by
+// the Blockchain service instance (mtpCache). LocalClient is used by callers that do
+// not share a Blockchain service instance — it wraps the store directly. Wiring a
+// shared cache across the LocalClient/Server boundary is out of scope; callers that
+// need cache-accelerated MTP lookups should use the Blockchain gRPC/service interface
+// instead.
+func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
+	}
+
+	result := make([]uint32, toHeight-fromHeight+1)
+	for _, meta := range metas {
+		result[meta.Height-fromHeight] = meta.MedianTimePast
+	}
+
+	// If the top height is not in the database (block not yet persisted), compute its MTP
+	// on the fly from the block_time values of the preceding 11 blocks already in metas.
+	topMissing := len(metas) == 0 || metas[len(metas)-1].Height < toHeight
+	if topMissing && toHeight >= uint32(MedianTimeBlocks) {
+		computed, err := computeMTPForMissingHeight(metas, toHeight)
+		if err != nil {
+			return nil, err
+		}
+		result[toHeight-fromHeight] = computed
+	}
+
+	return result, nil
 }

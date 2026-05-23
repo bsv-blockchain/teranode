@@ -81,6 +81,10 @@ service BlockchainAPI {
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
 
+  // GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+  // This is used for BIP68 relative locktime verification.
+  rpc GetMedianTimePastByHeights(GetMedianTimePastByHeightsRequest) returns (GetMedianTimePastByHeightsResponse) {}
+
   // GetBlocksByHeight retrieves full blocks between two specified heights.
   rpc GetBlocksByHeight(GetBlocksByHeightRequest) returns (GetBlocksByHeightResponse) {}
 
@@ -95,6 +99,10 @@ service BlockchainAPI {
 
   // CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
   rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
+
+  // CheckBlockIsAncestorOfBlock verifies if specified blocks are ancestors of a given block.
+  // Used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+  rpc CheckBlockIsAncestorOfBlock(CheckBlockIsAncestorOfBlockRequest) returns (CheckBlockIsAncestorOfBlockResponse) {}
 
   // GetChainTips retrieves information about all known tips in the block tree.
   rpc GetChainTips(google.protobuf.Empty) returns (GetChainTipsResponse) {}
@@ -113,6 +121,9 @@ service BlockchainAPI {
 
   // SendNotification broadcasts a notification to subscribers.
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
+
+  // GetSubscribers returns the list of currently active subscriber source strings.
+  rpc GetSubscribers(google.protobuf.Empty) returns (GetSubscribersResponse) {}
 
   // GetState retrieves state data by key.
   rpc GetState(GetStateRequest) returns (StateResponse) {}
@@ -186,6 +197,38 @@ service BlockchainAPI {
 
   // GetBestHeightAndTime retrieves the current best height and median time.
   rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
+
+  // Blob deletion scheduling methods
+
+  // ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+  rpc ScheduleBlobDeletion(ScheduleBlobDeletionRequest) returns (ScheduleBlobDeletionResponse) {}
+
+  // CancelBlobDeletion cancels a previously scheduled blob deletion.
+  rpc CancelBlobDeletion(CancelBlobDeletionRequest) returns (CancelBlobDeletionResponse) {}
+
+  // ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+  rpc ListScheduledDeletions(ListScheduledDeletionsRequest) returns (ListScheduledDeletionsResponse) {}
+
+  // GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+  rpc GetPendingBlobDeletions(GetPendingBlobDeletionsRequest) returns (GetPendingBlobDeletionsResponse) {}
+
+  // RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+  rpc RemoveBlobDeletion(RemoveBlobDeletionRequest) returns (google.protobuf.Empty) {}
+
+  // IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+  rpc IncrementBlobDeletionRetry(IncrementBlobDeletionRetryRequest) returns (IncrementBlobDeletionRetryResponse) {}
+
+  // CompleteBlobDeletions completes multiple blob deletions in a single call (batch API).
+  // This is more efficient than calling RemoveBlobDeletion multiple times.
+  rpc CompleteBlobDeletions(CompleteBlobDeletionsRequest) returns (CompleteBlobDeletionsResponse) {}
+
+  // AcquireBlobDeletionBatch acquires a batch of deletions with locking for processing.
+  // This uses SELECT...FOR UPDATE SKIP LOCKED to ensure only one pruner processes each batch.
+  rpc AcquireBlobDeletionBatch(AcquireBlobDeletionBatchRequest) returns (AcquireBlobDeletionBatchResponse) {}
+
+  // CompleteBlobDeletionBatch completes a previously acquired batch in a single call.
+  // This reports all results (successes and failures) for the batch.
+  rpc CompleteBlobDeletionBatch(CompleteBlobDeletionBatchRequest) returns (google.protobuf.Empty) {}
 }
 
 // HealthResponse represents the health status of the blockchain service.
@@ -207,7 +250,8 @@ message AddBlockRequest {
   bool optionMinedSet = 8;                      // Option to mark block as mined
   bool optionSubtreesSet = 9;                   // Option to mark subtrees as set
   bool optionInvalid = 10;                      // Option to invalidate block when adding
-  uint64 optionID = 11;                            // Optional block ID
+  uint64 optionID = 11;                         // Optional block ID
+  bytes coinbase_bump = 12;                     // Coinbase BUMP (BRC-74 merkle proof)
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
@@ -256,6 +300,7 @@ message GetBlockResponse {
   repeated bytes subtree_hashes = 5;   // Merkle tree subtree hashes
   uint64 size_in_bytes = 6;            // Total block size in bytes
   uint32 id = 7;                       // Block identifier
+  bytes coinbase_bump = 8;             // Coinbase BUMP (BRC-74 merkle proof)
 }
 
 // GetFullBlockResponse contains a complete serialized block.
@@ -336,6 +381,16 @@ message GetBlockHeadersByHeightResponse {
   repeated bytes metas = 2;         // List of serialized metadata
 }
 
+// GetMedianTimePastByHeightsRequest requests MTP values for specified block heights.
+message GetMedianTimePastByHeightsRequest {
+  repeated uint32 heights = 1;  // List of block heights to get MTP for
+}
+
+// GetMedianTimePastByHeightsResponse contains MTP values for the requested heights.
+message GetMedianTimePastByHeightsResponse {
+  repeated uint32 median_time_past = 1;  // MTP values corresponding to requested heights (0 if height < 11)
+}
+
 // GetBlocksByHeightRequest requests full blocks between two heights.
 message GetBlocksByHeightRequest {
   uint32 startHeight = 1;  // Starting height
@@ -409,11 +464,23 @@ message GetBlockHeaderResponse {
   bool subtrees_set = 12;     // Subtrees status
   bool invalid = 13;          // Validity status
   google.protobuf.Timestamp processed_at = 14; // Timestamp when block was processed
+  uint32 median_time_past = 15; // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
 message CheckBlockIsCurrentChainResponse {
   bool isPartOfCurrentChain = 1;  // True if blocks are in main chain
+}
+
+// CheckBlockIsAncestorOfBlockRequest checks if blocks are ancestors of a specific block.
+message CheckBlockIsAncestorOfBlockRequest {
+  repeated uint32 blockIDs = 1;  // List of block IDs to check
+  bytes blockHash = 2;           // Hash of the block to check ancestry against
+}
+
+// CheckBlockIsAncestorOfBlockResponse indicates if any blocks are ancestors.
+message CheckBlockIsAncestorOfBlockResponse {
+  bool isAncestor = 1;  // True if any block ID is an ancestor
 }
 
 // SubscribeRequest initiates a subscription to blockchain events.
@@ -432,6 +499,11 @@ message Notification {
 // NotificationMetadata contains additional notification information.
 message NotificationMetadata {
   map<string, string> metadata = 1;  // Key-value pairs of metadata
+}
+
+// GetSubscribersResponse contains the list of active subscriber sources.
+message GetSubscribersResponse {
+  repeated string sources = 1;  // Source identifiers of active subscribers
 }
 
 // GetStateRequest requests state data by key.
@@ -647,4 +719,119 @@ message GetBlocksNotPersistedRequest {
 // GetBlocksNotPersistedResponse contains blocks not yet persisted.
 message GetBlocksNotPersistedResponse {
   repeated bytes block_bytes = 1;  // List of serialized blocks
+}
+
+// Blob deletion scheduling messages
+// Note: store_type values map to storetypes.BlobStoreType:
+// 0=TXSTORE, 1=SUBTREESTORE, 2=BLOCKSTORE, 3=TEMPSTORE, 4=BLOCKPERSISTERSTORE
+
+message ScheduleBlobDeletionRequest {
+  bytes blob_key = 1;
+  string file_type = 2;
+  int32 store_type = 3;
+  uint32 delete_at_height = 4;
+}
+
+message ScheduleBlobDeletionResponse {
+  int64 deletion_id = 1;
+  bool scheduled = 2;
+  string message = 3;
+}
+
+message CancelBlobDeletionRequest {
+  bytes blob_key = 1;
+  string file_type = 2;
+  int32 store_type = 3;
+  string cancel_reason = 4;
+}
+
+message CancelBlobDeletionResponse {
+  bool cancelled = 1;
+  string message = 2;
+}
+
+message ListScheduledDeletionsRequest {
+  uint32 min_height = 1;
+  uint32 max_height = 2;
+  int32 store_type = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+  bool filter_by_store = 6;
+}
+
+message ScheduledDeletion {
+  int64 id = 1;
+  bytes blob_key = 2;
+  string file_type = 3;
+  int32 store_type = 4;
+  uint32 delete_at_height = 5;
+  uint32 retry_count = 6;
+}
+
+message ListScheduledDeletionsResponse {
+  repeated ScheduledDeletion deletions = 1;
+  int32 total_count = 2;
+}
+
+message GetPendingBlobDeletionsRequest {
+  uint32 height = 1;
+  int32 limit = 2;
+}
+
+message GetPendingBlobDeletionsResponse {
+  repeated ScheduledDeletion deletions = 1;
+}
+
+message RemoveBlobDeletionRequest {
+  int64 deletion_id = 1;
+}
+
+message IncrementBlobDeletionRetryRequest {
+  int64 deletion_id = 1;
+  int32 max_retries = 2;
+}
+
+message IncrementBlobDeletionRetryResponse {
+  bool should_remove = 1;
+  int32 new_retry_count = 2;
+}
+
+// Batch completion API messages
+
+message CompleteBlobDeletionsRequest {
+  repeated int64 completed_ids = 1;  // IDs of successfully deleted blobs
+  repeated int64 failed_ids = 2;     // IDs of deletions that failed (will increment retry count)
+  int32 max_retries = 3;             // Maximum retries for failed deletions
+}
+
+message CompleteBlobDeletionsResponse {
+  int32 removed_count = 1;           // Number of deletions removed (completed or max retries)
+  int32 retry_incremented_count = 2; // Number of deletions with incremented retry count
+}
+
+// Batch acquisition API messages (with locking)
+
+message AcquireBlobDeletionBatchRequest {
+  uint32 height = 1;
+  int32 limit = 2;
+  int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+}
+
+message AcquireBlobDeletionBatchResponse {
+  string batch_token = 1;
+  repeated ScheduledDeletion deletions = 2;
+}
+
+message CompleteBlobDeletionBatchRequest {
+  string batch_token = 1;
+  repeated int64 completed_ids = 2;
+  repeated int64 failed_ids = 3;
+  int32 max_retries = 4;
+}
+
+message BatchTokenInfo {
+  string token = 1;
+  int64 acquired_at = 2;  // Unix timestamp
+  int32 deletion_count = 3;
+  repeated int64 deletion_ids = 4;
 }

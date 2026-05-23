@@ -3,7 +3,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -30,6 +29,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -83,10 +83,6 @@ var (
 	// userAgentName is the user agent name and is used to help identify
 	// ourselves to other bitcoin peers.
 	userAgentName = "/teranode-legacy-p2p"
-
-	// userAgentVersion is the user agent version and is used to help
-	// identify ourselves to other bitcoin peers.
-	userAgentVersion = fmt.Sprintf("%d.%d.%d", version.AppMajor, version.AppMinor, version.AppPatch)
 )
 
 // addrMe specifies the server address to send peers.
@@ -318,6 +314,9 @@ type server struct {
 	assetHTTPAddress  string
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
+
+	// multistream association tracking
+	associationMgr *peer.AssociationManager
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -430,6 +429,48 @@ func (sp *serverPeer) relayTxDisabled() bool {
 	return isDisabled
 }
 
+// QueueMessageRouted queues a message for sending, routing it to the
+// appropriate stream based on the association's stream policy.
+// Falls back to the GENERAL stream (primary peer) if the target stream
+// is not available.
+func (sp *serverPeer) QueueMessageRouted(msg wire.Message, doneChan chan<- struct{}) {
+	assoc := sp.Peer.AssociationRef()
+	if assoc == nil || assoc.Policy() == "" {
+		sp.QueueMessage(msg, doneChan)
+		return
+	}
+
+	policy := peer.PolicyForName(assoc.Policy())
+	targetType := policy.StreamForMessage(msg)
+
+	stream := assoc.Stream(targetType)
+	if stream == nil || stream.Peer == nil {
+		// Target stream not available, fall back to GENERAL.
+		sp.QueueMessage(msg, doneChan)
+		return
+	}
+
+	stream.Peer.QueueMessage(msg, doneChan)
+}
+
+// associationIDString returns the hex-encoded association ID for this peer,
+// or an empty string if no association exists.
+func (sp *serverPeer) associationIDString() string {
+	if assoc := sp.Peer.AssociationRef(); assoc != nil {
+		return assoc.ID()
+	}
+	return ""
+}
+
+// streamPolicyString returns the stream policy name for this peer's
+// association, or an empty string if no association exists.
+func (sp *serverPeer) streamPolicyString() string {
+	if assoc := sp.Peer.AssociationRef(); assoc != nil {
+		return assoc.Policy()
+	}
+	return ""
+}
+
 // pushAddrMsg sends an addr message to the connected peer using the provided
 // addresses.
 func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
@@ -506,7 +547,7 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnVersion",
 		tracing.WithHistogram(peerServerMetrics["OnVersion"]),
-		tracing.WithLogMessage(sp.server.logger, "OnVersion from %s", p),
+		tracing.WithLogMessage(sp.server.logger, "OnVersion from %s (assocID len: %d, userAgent: %s)", p, len(msg.AssociationID), msg.UserAgent),
 	)
 
 	// Update the address manager with the advertised services for outbound
@@ -533,16 +574,16 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Only allow connections from peers running Bitcoin SV
+	// Only allow connections from peers running BSV Blockchain nodes
 	// This prevents connections from BCH/BTC/BTG and other incompatible forks
 	userAgent := msg.UserAgent
 	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
-		sp.server.logger.Warnf("Rejecting and banning peer %s with non-Bitcoin SV user agent: %s", sp.Peer, userAgent)
+		sp.server.logger.Warnf("Rejecting and banning peer %s with non-BSV user agent: %s", sp.Peer, userAgent)
 
 		// Ban the peer to prevent repeated connection attempts from incompatible clients
 		sp.server.BanPeer(sp)
 
-		reason := "Only Bitcoin SV clients are supported"
+		reason := "Only BSV Blockchain clients are supported"
 
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
@@ -581,12 +622,31 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// the local clock to keep the network time in sync.
 	sp.server.timeSource.AddTimeSample(sp.Addr(), msg.Timestamp)
 
-	// Signal the sync manager this peer is a new sync candidate.
-	sp.server.syncManager.NewPeer(sp.Peer, nil)
-
 	// Choose whether to relay transactions before a filter command
 	// is received.
 	sp.setDisableRelayTx(msg.DisableRelayTx)
+
+	// Set up multistream association if the remote peer provided an
+	// AssociationID and block priority is enabled locally.
+	isMultistream := sp.server.settings.Legacy.AllowBlockPriority && len(msg.AssociationID) > 0
+	if isMultistream {
+		assoc := peer.NewAssociation(msg.AssociationID, sp.Peer)
+		sp.Peer.SetAssociation(assoc)
+		sp.Peer.SetStreamType(wire.StreamTypeGeneral)
+		sp.server.associationMgr.Register(assoc)
+		sp.server.logger.Infof("Registered multistream association %s for peer %s",
+			assoc.ID(), sp)
+	}
+
+	// Signal the sync manager this peer is a new sync candidate.
+	// For multistream peers, defer this until OnProtoconf after stream
+	// setup completes. Registering now would race startSync (which sends
+	// getblocks) against openRequiredStreams (which creates DATA1). If
+	// getblocks arrives at svnode before DATA1 exists, svnode has no
+	// stream to route blocks on and the sync stalls.
+	if !isMultistream {
+		sp.server.syncManager.NewPeer(sp.Peer, nil)
+	}
 
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
@@ -605,8 +665,169 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 	if msg.NumberOfFields > 0 {
 		sp.maxRecvPayloadLength.Store(msg.MaxRecvPayloadLength)
 
-		sp.server.logger.Debugf("Peer %v sent a valid protoconf '%v'", sp.String(), msg)
+		sp.server.logger.Infof("Peer %v sent protoconf: maxPayload=%d, streamPolicies=%v", sp.String(), msg.MaxRecvPayloadLength, msg.StreamPolicies)
 	}
+
+	// Negotiate stream policy if both sides support BlockPriority.
+	if sp.server.settings.Legacy.AllowBlockPriority {
+		assoc := sp.Peer.AssociationRef()
+		if assoc != nil && msg.NumberOfFields > 1 {
+			for _, policy := range msg.StreamPolicies {
+				if policy == wire.BlockPriorityStreamPolicy {
+					assoc.SetPolicy(wire.BlockPriorityStreamPolicy)
+					sp.server.logger.Infof("Negotiated BlockPriority stream policy with peer %s", sp)
+
+					// For outbound peers, open required streams synchronously
+					// so DATA1 is ready before the sync manager requests
+					// blocks. Running this async races with startSync,
+					// causing svnode to route blocks to a DATA1 stream that
+					// does not exist yet.
+					if !sp.Inbound() {
+						sp.openRequiredStreams()
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// For multistream peers, register with the sync manager now that
+	// stream setup is complete. This was deferred from OnVersion to
+	// ensure DATA1 is established before startSync sends getblocks.
+	if sp.Peer.AssociationRef() != nil {
+		sp.server.syncManager.NewPeer(sp.Peer, nil)
+	}
+}
+
+// OnCreateStream is invoked when a peer sends a createstream message as the
+// first message on a new inbound TCP connection, requesting to join an
+// existing multistream association.
+func (sp *serverPeer) OnCreateStream(p *peer.Peer, msg *wire.MsgCreateStream) {
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnCreateStream",
+		tracing.WithHistogram(peerServerMetrics["OnCreateStream"]),
+		tracing.WithLogMessage(sp.server.logger, "OnCreateStream from %s", p),
+	)
+
+	if !sp.server.settings.Legacy.AllowBlockPriority {
+		sp.server.logger.Warnf("Received createstream from %s but AllowBlockPriority is disabled", p)
+		p.DisconnectWithInfo("AllowBlockPriority is disabled")
+		return
+	}
+
+	// Look up the association.
+	assoc := sp.server.associationMgr.Lookup(msg.AssociationID)
+	if assoc == nil {
+		sp.server.logger.Warnf("Received createstream with unknown association ID from %s", p)
+		p.DisconnectWithInfo("unknown association ID")
+		return
+	}
+
+	// Validate that the requesting peer's IP matches the primary peer's IP
+	// to prevent DDoS via spoofed association IDs.
+	primaryHost, _, _ := net.SplitHostPort(assoc.PrimaryPeer().Addr())
+	streamHost, _, _ := net.SplitHostPort(p.Addr())
+	if primaryHost != streamHost {
+		sp.server.logger.Warnf("Createstream IP mismatch: primary=%s, stream=%s", primaryHost, streamHost)
+		p.DisconnectWithInfo("IP mismatch for association")
+		return
+	}
+
+	// Add the stream to the association.
+	if !assoc.AddStream(msg.StreamType, p) {
+		sp.server.logger.Warnf("Stream type %d already exists for association %s", msg.StreamType, assoc.ID())
+		p.DisconnectWithInfo("duplicate stream type")
+		return
+	}
+
+	// Configure the peer as a stream peer.
+	p.SetAssociation(assoc)
+	p.SetStreamType(msg.StreamType)
+
+	// Send STREAMACK response.
+	ack := wire.NewMsgStreamAck(msg.AssociationID, msg.StreamType)
+	p.QueueMessage(ack, nil)
+
+	sp.server.logger.Infof("Accepted stream type %d for association %s from %s",
+		msg.StreamType, assoc.ID(), p)
+}
+
+// OnStreamAck is invoked when a peer sends a streamack message confirming
+// that our createstream request was accepted.
+func (sp *serverPeer) OnStreamAck(p *peer.Peer, msg *wire.MsgStreamAck) {
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnStreamAck",
+		tracing.WithHistogram(peerServerMetrics["OnStreamAck"]),
+		tracing.WithLogMessage(sp.server.logger, "OnStreamAck from %s", p),
+	)
+
+	sp.server.logger.Infof("Received streamack for stream type %d from %s", msg.StreamType, p)
+}
+
+// openRequiredStreams opens additional TCP streams required by the negotiated
+// stream policy. For BlockPriority, this means opening a DATA1 stream.
+func (sp *serverPeer) openRequiredStreams() {
+	assoc := sp.Peer.AssociationRef()
+	if assoc == nil {
+		return
+	}
+
+	// For BlockPriority, we need a DATA1 stream.
+	if assoc.Policy() != wire.BlockPriorityStreamPolicy {
+		return
+	}
+
+	// Check if DATA1 stream already exists.
+	if assoc.Stream(wire.StreamTypeData1) != nil {
+		return
+	}
+
+	peerAddr := sp.Peer.Addr()
+	sp.server.logger.Infof("Opening DATA1 stream to %s for association %s", peerAddr, assoc.ID())
+
+	// Dial a new TCP connection to the same peer address.
+	conn, err := net.DialTimeout("tcp", peerAddr, 30*time.Second)
+	if err != nil {
+		sp.server.logger.Warnf("Failed to open DATA1 stream to %s: %v", peerAddr, err)
+		return
+	}
+
+	// Send CREATESTREAM message on the new connection.
+	createMsg := wire.NewMsgCreateStream(assoc.RawID(), wire.StreamTypeData1, wire.BlockPriorityStreamPolicy)
+	if err := wire.WriteMessage(conn, createMsg, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net); err != nil {
+		sp.server.logger.Warnf("Failed to send createstream to %s: %v", peerAddr, err)
+		conn.Close()
+		return
+	}
+
+	// Read STREAMACK response before creating the peer to avoid resource
+	// leaks if the remote side rejects or fails to acknowledge the stream.
+	_, msg, _, err := wire.ReadMessageWithEncodingN(conn, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
+	if err != nil {
+		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
+		conn.Close()
+		return
+	}
+
+	if _, ok := msg.(*wire.MsgStreamAck); !ok {
+		sp.server.logger.Warnf("Expected streamack from %s, got %s", peerAddr, msg.Command())
+		conn.Close()
+		return
+	}
+
+	// Create a serverPeer wrapper for the stream connection, matching the
+	// pattern used by inboundPeerConnected/outboundPeerConnected so that
+	// callbacks reference the correct serverPeer instance.
+	streamSP := newServerPeer(sp.server, false)
+	streamPeerCfg := newPeerConfig(streamSP)
+	streamPeerCfg.AllowBlockPriority = true
+	streamSP.Peer = peer.NewInboundPeer(sp.server.logger, sp.server.settings, streamPeerCfg)
+
+	streamSP.Peer.SetAssociation(assoc)
+	streamSP.Peer.SetStreamType(wire.StreamTypeData1)
+	assoc.AddStream(wire.StreamTypeData1, streamSP.Peer)
+	streamSP.AssociateConnection(conn)
+
+	go sp.server.peerDoneHandler(streamSP)
+	sp.server.logger.Infof("DATA1 stream established to %s for association %s", peerAddr, assoc.ID())
 }
 
 // OnMemPool is invoked when a peer receives a mempool bitcoin message.
@@ -691,13 +912,11 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 	sp.AddKnownInventory(iv)
 
-	exists, err := sp.server.blockchainClient.GetBlockExists(sp.ctx, block.Hash())
-	if err != nil {
-		sp.server.logger.Errorf("Block exists check error: %v", err)
-		return
-	}
+	// single round-trip: GetBlockHeader tells us both existence and validity
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, block.Hash())
+	blockIsKnownValid := err == nil && !meta.Invalid
 
-	if !exists {
+	if !blockIsKnownValid {
 		// Queue the block up to be handled by the block
 		// manager and intentionally block further receives
 		// until the bitcoin block is fully processed and known
@@ -714,6 +933,14 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		err = <-sp.blockProcessed
 		if err != nil {
 			sp.server.logger.Errorf("block processing failed: %v", err)
+
+			// Only disconnect on block validation failures, not on local
+			// infrastructure issues (database, Kafka, etc.) which would
+			// just cause unnecessary sync peer rotation.
+			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
+				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", block.Hash()))
+				return
+			}
 		}
 	}
 }
@@ -974,6 +1201,13 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		// 	// skip genesis block
 		// 	continue
 		// }
+		// continue for regtest only
+		if sp.server.settings.ChainCfgParams.Net == chaincfg.RegressionNetParams.Net {
+			if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+				// skip genesis block
+				continue
+			}
+		}
 
 		wireBlockHeaders = append(wireBlockHeaders, blockHeader.ToWireBlockHeader())
 
@@ -1267,8 +1501,13 @@ func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
 // transactions.  This function should be called whenever new transactions
 // are added to the mempool.
 func (s *server) AnnounceNewTransactions(txns []*netsync.TxHashAndFee) {
-	// check listen mode - if listen_only, don't announce new transactions
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't announce new transactions
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return
+	}
+
+	// Suppress tx relay while the node is not in RUNNING state. See canRelayTx.
+	if !s.canRelayTx() {
 		return
 	}
 
@@ -1312,7 +1551,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	if txMeta == nil || txMeta.Tx == nil {
 		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
 
-		sp.server.logger.Warnf(err.Error())
+		sp.server.logger.Warnf("%s", err.Error())
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1596,6 +1835,13 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		}
 	}
 
+	// Stream peers are managed by their association, not counted against
+	// per-IP or total peer limits.
+	if sp.Peer.IsStreamPeer() {
+		sp.server.logger.Debugf("Stream peer %s added (managed by association)", sp)
+		return true
+	}
+
 	// Limit max number of total peers per ip.
 	if state.CountIP(host) >= cfg.MaxPeersPerIP {
 		reason := fmt.Sprintf("Max peers per IP reached [%d] - disconnecting peer", cfg.MaxPeersPerIP)
@@ -1644,6 +1890,25 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 // handleDonePeerMsg deals with peers that have signalled they are done.  It is
 // invoked from the peerHandler goroutine.
 func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
+	// Clean up multistream association state.
+	if assoc := sp.Peer.AssociationRef(); assoc != nil {
+		if sp.Peer.IsStreamPeer() {
+			// Secondary stream disconnected - remove from association.
+			assoc.RemoveStream(sp.Peer.StreamType())
+			s.logger.Debugf("Removed stream type %d from association %s",
+				sp.Peer.StreamType(), assoc.ID())
+		} else {
+			// Primary peer disconnected - remove the entire association.
+			s.associationMgr.Remove(assoc.RawID())
+			s.logger.Debugf("Removed association %s (primary peer disconnected)", assoc.ID())
+		}
+	}
+
+	// Stream peers are not tracked in the main peer lists.
+	if sp.Peer.IsStreamPeer() {
+		return
+	}
+
 	var list *txmap.SyncedMap[int32, *serverPeer]
 
 	switch {
@@ -1959,16 +2224,16 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		// TODO: duplicate oneshots?
 		// Limit max number of total peers.
 		if state.Count() >= cfg.MaxPeers {
-			msg.reply <- errors.New("max peers reached")
+			msg.reply <- errors.NewProcessingError("max peers reached")
 			return
 		}
 
 		for _, persistentPeer := range state.persistentPeers.Range() {
 			if persistentPeer.Addr() == msg.addr {
 				if msg.permanent {
-					msg.reply <- errors.New("peer already connected")
+					msg.reply <- errors.NewProcessingError("peer already connected")
 				} else {
-					msg.reply <- errors.New("peer exists as a permanent peer")
+					msg.reply <- errors.NewProcessingError("peer exists as a permanent peer")
 				}
 
 				return
@@ -2001,7 +2266,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		if found {
 			msg.reply <- nil
 		} else {
-			msg.reply <- errors.New("peer not found")
+			msg.reply <- errors.NewProcessingError("peer not found")
 		}
 	case getOutboundGroup:
 		count, ok := state.outboundGroups.Get(msg.key)
@@ -2049,7 +2314,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			return
 		}
 
-		msg.reply <- errors.New("peer not found")
+		msg.reply <- errors.NewProcessingError("peer not found")
 	}
 }
 
@@ -2107,19 +2372,22 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnWrite:        sp.OnWrite,
 			OnReject:       sp.OnReject,
 			OnNotFound:     sp.OnNotFound,
+			OnCreateStream: sp.OnCreateStream,
+			OnStreamAck:    sp.OnStreamAck,
 		},
-		AddrMe:            addrMe,
-		NewestBlock:       sp.newestBlock,
-		HostToNetAddress:  sp.server.addrManager.HostToNetAddress,
-		Proxy:             cfg.Proxy,
-		UserAgentName:     userAgentName,
-		UserAgentVersion:  userAgentVersion,
-		UserAgentComments: cfg.UserAgentComments,
-		ChainParams:       sp.server.settings.ChainCfgParams,
-		Services:          sp.server.services,
-		DisableRelayTx:    cfg.BlocksOnly,
-		ProtocolVersion:   peer.MaxProtocolVersion,
-		TrickleInterval:   cfg.TrickleInterval,
+		AddrMe:             addrMe,
+		NewestBlock:        sp.newestBlock,
+		HostToNetAddress:   sp.server.addrManager.HostToNetAddress,
+		Proxy:              cfg.Proxy,
+		UserAgentName:      userAgentName,
+		UserAgentVersion:   version.String(),
+		UserAgentComments:  cfg.UserAgentComments,
+		ChainParams:        sp.server.settings.ChainCfgParams,
+		Services:           sp.server.services,
+		DisableRelayTx:     cfg.BlocksOnly,
+		ProtocolVersion:    peer.MaxProtocolVersion,
+		TrickleInterval:    cfg.TrickleInterval,
+		AllowBlockPriority: sp.server.settings.Legacy.AllowBlockPriority,
 	}
 }
 
@@ -2327,11 +2595,38 @@ func (s *server) BanPeer(sp *serverPeer) {
 	s.banPeers <- sp
 }
 
+// canRelayTx reports whether the legacy server may emit transaction inventory
+// to its peers. Transactions must only be relayed once the node is fully
+// synced (FSM RUNNING). While syncing (LEGACYSYNCING/CATCHINGBLOCKS) the local
+// chain tip may sit below the Genesis activation height, in which case the
+// validator accepts pre-Genesis-only outputs such as P2SH. Re-broadcasting
+// those to post-Genesis peers earns an instant ban for `bad-txns-vout-p2sh`.
+//
+// The check is cheap: blockchain.Client serves GetFSMCurrentState from a
+// locally-cached atomic, so callers may invoke this per-inv without RPC cost.
+// Fails closed: any error reading the state suppresses relay.
+func (s *server) canRelayTx() bool {
+	if s.blockchainClient == nil {
+		return true
+	}
+	running, err := s.blockchainClient.IsFSMCurrentState(s.ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return false
+	}
+	return running
+}
+
 // RelayInventory relays the passed inventory vector to all connected peers
 // that are not already known to have it.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
-	// check listen mode - if listen_only, don't relay inventory
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't relay inventory
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return
+	}
+
+	// Suppress tx invs while the node is not in RUNNING state. Block invs
+	// are still relayed (block sync is gated separately in netsync.manager).
+	if invVect != nil && invVect.Type == wire.InvTypeTx && !s.canRelayTx() {
 		return
 	}
 
@@ -2344,8 +2639,8 @@ func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 // BroadcastMessage sends msg to all peers currently connected to the server
 // except those in the passed peers to exclude.
 func (s *server) BroadcastMessage(msg wire.Message, exclPeers ...*serverPeer) {
-	// check listen mode - if listen_only, don't broadcast messages
-	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+	// check listen mode - if listen_only or silent, don't broadcast messages
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return
 	}
 
@@ -2712,7 +3007,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, err
 	}
 
-	if config.GetBool("legacy_config_Upnp", false) {
+	if tSettings.Legacy.Upnp {
 		cfg.Upnp = true
 	}
 
@@ -2746,7 +3041,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		retentionWindow = tSettings.GlobalBlockHeightRetention
 	}
 
-	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow)
+	prunerBlockTrigger := ""
+	if tSettings != nil {
+		prunerBlockTrigger = tSettings.Pruner.BlockTrigger
+	}
+
+	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
 	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
 		storage, blockPersisterHeight, bestHeight, retentionWindow)
 
@@ -2780,13 +3080,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		}
 
 		if len(listeners) == 0 {
-			return nil, errors.New("no valid listen address")
+			return nil, errors.NewProcessingError("no valid listen address")
 		}
 	}
 
 	banList, banChan, err := p2p.GetBanList(ctx, logger, tSettings)
 	if err != nil {
-		return nil, errors.New("can't get banList")
+		return nil, errors.NewProcessingError("can't get banList")
 	}
 
 	s := server{
@@ -2828,6 +3128,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		assetHTTPAddress:  assetHTTPAddress,
 		banList:           banList,
 		banChan:           banChan,
+		associationMgr:    peer.NewAssociationManager(),
 	}
 
 	s.syncManager, err = netsync.New(
@@ -2906,7 +3207,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 				return addrStringToNetAddr(addrString)
 			}
 
-			return nil, errors.New("no valid connect address")
+			return nil, errors.NewProcessingError("no valid connect address")
 		}
 	}
 

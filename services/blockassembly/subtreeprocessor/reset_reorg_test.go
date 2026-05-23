@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -235,6 +236,15 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		require.NoError(t, err)
 		stp.Start(ctx)
 
+		// Handle subtree requests - must be started before any GetChainedSubtrees() call
+		go func() {
+			for req := range newSubtreeChan {
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			}
+		}()
+
 		// Create transactions that will conflict during reset
 		conflictTx1Hash, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		require.NoError(t, err)
@@ -253,23 +263,23 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock2.Header)
 
 		// Add transactions that would be in the blocks being moved back
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *conflictTx1Hash,
 			Fee:         300,
 			SizeInBytes: 400,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *conflictTx2Hash,
 			Fee:         400,
 			SizeInBytes: 500,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *uniqueTxHash,
 			Fee:         500,
 			SizeInBytes: 600,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for transactions to be processed
 		time.Sleep(100 * time.Millisecond)
@@ -287,15 +297,6 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		t.Logf("  Transaction count: %d", initialTxCount)
 		t.Logf("  Current subtree nodes: %d", len(initialCurrentSubtree.Nodes))
 		t.Logf("  Chained subtrees: %d", len(initialChainedSubtrees))
-
-		// Handle subtree requests
-		go func() {
-			for req := range newSubtreeChan {
-				if req.ErrChan != nil {
-					req.ErrChan <- nil
-				}
-			}
-		}()
 
 		// Perform reset with moveBackBlocks containing conflicting transactions
 		// This should:
@@ -539,17 +540,17 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock.Header)
 
 		// Add initial transactions to simulate existing state
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for processing
 		time.Sleep(100 * time.Millisecond)
@@ -671,7 +672,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Set up mock expectations for SetBlockProcessedAt calls
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
@@ -715,7 +716,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		}
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Test reorg with only blocks to move forward - should fail
 		err = stp.Reorg(nil, []*model.Block{block2})
@@ -737,6 +738,9 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		mockBlockchainClient := &blockchain.Mock{}
 		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
@@ -1002,29 +1006,29 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Add transactions to simulate they were processed up to block3
 		// tx1 and tx2 would have been processed in block2
 		// tx3 and tx4 would have been processed in block3
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx1Hash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx2Hash,
 			Fee:         200,
 			SizeInBytes: 300,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx3Hash,
 			Fee:         300,
 			SizeInBytes: 400,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx4Hash,
 			Fee:         400,
 			SizeInBytes: 500,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for transactions to be processed
 		time.Sleep(100 * time.Millisecond)
@@ -1195,17 +1199,17 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		stp.InitCurrentBlockHeader(oldBlockHeader)
 
 		// Add transactions that would be in the old block
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *uniqueTxHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *duplicateTxHash,
 			Fee:         200,
 			SizeInBytes: 300,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for processing
 		time.Sleep(50 * time.Millisecond)
@@ -1232,11 +1236,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			// This simulates the duplicate transaction being processed in the new block
-			stp.Add(subtree.Node{
+			stp.AddBatch([]subtree.Node{{
 				Hash:        *duplicateTxHash, // Same transaction as before
 				Fee:         200,
 				SizeInBytes: 300,
-			}, subtree.TxInpoints{})
+			}}, []*subtree.TxInpoints{{}})
 		}()
 
 		// Perform reorg: move back old block, move forward new block
@@ -1267,4 +1271,98 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 			t.Logf("Reorg failed with error: %v", err)
 		}
 	})
+}
+
+// TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing verifies that SubtreeProcessor.reset()
+// marks all currently-in-assembly transactions as NOT on longest chain in the UTXO store BEFORE
+// clearing its internal state.
+//
+// The bug: when reset() clears chainedSubtrees and currentSubtree (lines 1071-1092), it loses
+// track of which transactions were in assembly. If any of those transactions had unmined_since=NULL
+// (mined) in the UTXO store — e.g., because a competing fork's BlockValidation processed them —
+// they won't appear in the unmined_since index scan used by loadUnminedTransactions(). As a result,
+// those transactions are silently dropped from block assembly after the reset.
+//
+// The fix: call markNotOnLongestChain() on all assembly transactions before clearing state, mirroring
+// what reorgBlocks() does at lines 2665-2710.
+func TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	settings := test.CreateBaseTestSettings(t)
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings, utxoStoreURL)
+	require.NoError(t, err)
+
+	blobStore := blob_memory.New()
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	t.Cleanup(func() { close(newSubtreeChan) })
+
+	mockBlockchainClient := &blockchain.Mock{}
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
+	require.NoError(t, err)
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(context.Background()) })
+
+	// Insert coinbaseTx into the UTXO store so markNotOnLongestChain can update it.
+	const blockHeight = uint32(100)
+	require.NoError(t, utxoStore.SetBlockHeight(blockHeight))
+	_, err = utxoStore.Create(ctx, coinbaseTx, blockHeight)
+	require.NoError(t, err)
+
+	txHash := coinbaseTx.TxIDChainHash()
+
+	// Mark it as ON longest chain (unmined_since = NULL).
+	// This simulates what BlockValidation does when a competing fork mines this tx —
+	// the tx is "mined" in the UTXO store but hasn't been removed from block assembly yet.
+	require.NoError(t, utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, true))
+
+	// Verify precondition: UnminedSince == 0 means unmined_since is NULL (mined state).
+	metaBefore, err := utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), metaBefore.UnminedSince,
+		"precondition: tx must be marked as mined (unmined_since=NULL) before reset")
+
+	// Add the tx to block assembly so reset() sees it in its state.
+	stp.AddBatch([]subtree.Node{{
+		Hash:        *txHash,
+		Fee:         100,
+		SizeInBytes: 200,
+	}}, []*subtree.TxInpoints{{}})
+
+	// Wait for the async queue to process the add.
+	time.Sleep(100 * time.Millisecond)
+	require.True(t, stp.GetCurrentTxMap().Exists(*txHash), "tx must be in block assembly before reset")
+
+	// Call Reset with no moveBack/moveForward — we are testing the assembly-clearing step only.
+	targetHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          9999,
+	}
+	response := stp.Reset(targetHeader, nil, nil, false, nil)
+	require.NoError(t, response.Err)
+
+	// After Reset, the tx must have unmined_since != 0 (i.e., NOT NULL).
+	// Only then will loadUnminedTransactions() find it via the unmined_since index
+	// and add it back to block assembly.
+	//
+	// WITHOUT THE FIX: unmined_since remains NULL → loadUnminedTransactions misses it → tx LOST.
+	// WITH THE FIX:    reset marks it NOT on longest chain → unmined_since is set → tx RECOVERED.
+	metaAfter, err := utxoStore.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotEqual(t, uint32(0), metaAfter.UnminedSince,
+		"after reset, an assembly tx that had unmined_since=NULL must be marked as NOT on longest chain "+
+			"so loadUnminedTransactions can recover it; without the fix this tx is silently lost from block assembly")
 }

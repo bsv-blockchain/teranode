@@ -23,12 +23,10 @@ import (
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/null"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -45,9 +43,18 @@ type SubtreeProcessorState struct {
 
 // captureSubtreeProcessorState captures the current state for comparison
 func captureSubtreeProcessorState(stp *SubtreeProcessor) SubtreeProcessorState {
+	// Use production-safe methods which handle running state internally
+	var currentSubtreeLength int
+	if stp.GetCurrentRunningState() == StateStarting {
+		// Processor not running - safe to access directly
+		currentSubtreeLength = stp.currentSubtree.Load().Length()
+	} else {
+		// Processor running - use channel-based sync to avoid race
+		currentSubtreeLength = stp.GetCurrentLength()
+	}
 	return SubtreeProcessorState{
-		ChainedSubtreesCount: len(stp.chainedSubtrees),
-		CurrentSubtreeLength: stp.currentSubtree.Load().Length(),
+		ChainedSubtreesCount: len(stp.GetChainedSubtrees()), // GetChainedSubtrees handles sync internally
+		CurrentSubtreeLength: currentSubtreeLength,
 		TxCount:              stp.TxCount(),
 		CurrentTxMapLength:   stp.currentTxMap.Length(),
 	}
@@ -166,11 +173,11 @@ func TestRotate(t *testing.T) {
 		require.NoError(t, err)
 
 		// Add transactions through the queue
-		stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 	}
 
 	// Wait for the subtree to be processed
-	time.Sleep(500 * time.Millisecond) // Give more time for processing
+	time.Sleep(2 * time.Second) // Give more time for processing on loaded CI
 
 	// Use thread-safe method to check current subtree length
 	// After adding 3 unique transactions to a subtree with size 4 (including coinbase),
@@ -211,6 +218,25 @@ func TestRotate(t *testing.T) {
 	assert.Equal(t, 1, chainedSubtreesLen)
 }
 
+// Test_subtreeProcessorClockOverride verifies the clock seam on
+// SubtreeProcessor. NewSubtreeProcessor must wire a real clock by default,
+// and tests must be able to substitute a fake. The validFromMillis
+// calculation in the Start loop and dequeueDuringBlockMovement reads through
+// stp.clock, so installing a fake here makes those paths deterministic.
+func Test_subtreeProcessorClockOverride(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newSubtreeChan := make(chan NewSubtreeRequest, 1)
+
+	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+	require.NoError(t, err)
+	require.NotNil(t, stp.clock, "default clock must be wired in NewSubtreeProcessor")
+
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = fixedClock{t: fixed}
+
+	require.Equal(t, fixed, stp.clock.Now())
+}
+
 func Test_RemoveTxFromSubtrees(t *testing.T) {
 	t.Run("remove transaction from subtrees", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
@@ -249,59 +275,73 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		// Create a common parent hash for all transactions
 		parentHash := chainhash.HashH([]byte("parent-tx"))
 
-		// add some random nodes to the subtrees
+		// add some random nodes to the subtrees using the proper public API
 		// Each transaction needs a unique hash and proper parent references
+		nodes := make([]subtreepkg.Node, 42)
+		txInpoints := make([]*subtreepkg.TxInpoints, 42)
 		for i := uint64(0); i < 42; i++ {
 			hash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			// Use the parent hash instead of self-reference to avoid duplicate skipping
-			_ = stp.addNode(subtreepkg.Node{Hash: hash, Fee: i}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}, true)
+			nodes[i] = subtreepkg.Node{Hash: hash, Fee: i}
+			txInpoints[i] = &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}
 		}
+		stp.AddBatch(nodes, txInpoints)
+
+		// Wait for transactions to be processed (includes CheckSubtreeProcessor for sync)
+		waitForSubtreeProcessorQueueToEmpty(t, stp)
+
+		// Get a snapshot of chained subtrees after synchronization
+		chainedSubtrees := stp.GetChainedSubtrees()
 
 		// check the length of the subtrees
 		// With 42 unique transactions and 4 items per subtree (including coinbase):
 		// First subtree: coinbase + 3 txs = 4 items
 		// Subtrees 2-10: 4 txs each = 36 txs
 		// Remaining in current: 42 - 39 = 3 txs
-		t.Logf("Number of chained subtrees: %d", len(stp.chainedSubtrees))
+		t.Logf("Number of chained subtrees: %d", len(chainedSubtrees))
 		t.Logf("Current subtree nodes: %d", len(stp.currentSubtree.Load().Nodes))
-		if len(stp.chainedSubtrees) > 5 {
-			t.Logf("Subtree 5 has %d nodes", len(stp.chainedSubtrees[5].Nodes))
+		if len(chainedSubtrees) > 5 {
+			t.Logf("Subtree 5 has %d nodes", len(chainedSubtrees[5].Nodes))
 		}
-		assert.Len(t, stp.chainedSubtrees, 10)
+		assert.Len(t, chainedSubtrees, 10)
 		assert.Len(t, stp.currentSubtree.Load().Nodes, 3)
 
 		// get the middle transaction from the middle subtree
-		txHash := stp.chainedSubtrees[5].Nodes[2].Hash
+		txHash := chainedSubtrees[5].Nodes[2].Hash
 
 		// check that is in the currentTxMap
 		_, ok := stp.currentTxMap.Get(txHash)
 		assert.True(t, ok)
 
-		require.NoError(t, stp.CheckSubtreeProcessor())
-
-		// Remove a transaction from the subtree
-		err = stp.removeTxFromSubtrees(context.Background(), txHash)
+		// Remove a transaction from the subtree using the proper public API
+		err = stp.Remove(context.Background(), txHash)
 		require.NoError(t, err)
 
+		// Wait for removal to be processed
+		// This waits for the remove channel to be drained and processing to complete
+		waitForRemoveToComplete(t, stp)
+
+		// Get updated snapshot after removal
+		chainedSubtrees = stp.GetChainedSubtrees()
+
 		// Check the state after removal
-		t.Logf("After removal - Number of chained subtrees: %d", len(stp.chainedSubtrees))
-		if len(stp.chainedSubtrees) > 5 {
-			t.Logf("After removal - Subtree 5 has %d nodes", len(stp.chainedSubtrees[5].Nodes))
-			if len(stp.chainedSubtrees[5].Nodes) > 2 {
+		t.Logf("After removal - Number of chained subtrees: %d", len(chainedSubtrees))
+		if len(chainedSubtrees) > 5 {
+			t.Logf("After removal - Subtree 5 has %d nodes", len(chainedSubtrees[5].Nodes))
+			if len(chainedSubtrees[5].Nodes) > 2 {
 				// check that the txHash node has been replaced
-				assert.NotEqual(t, stp.chainedSubtrees[5].Nodes[2].Hash, txHash)
+				assert.NotEqual(t, chainedSubtrees[5].Nodes[2].Hash, txHash)
 			}
 		} else {
-			t.Errorf("chainedSubtrees has only %d elements, expected at least 6", len(stp.chainedSubtrees))
+			t.Errorf("chainedSubtrees has only %d elements, expected at least 6", len(chainedSubtrees))
 		}
 
 		// check the length of the subtrees again
 		// After removing and rechaining, we may have fewer subtrees due to proper duplicate handling
 		// The rechaining process rebuilds from the removal point, properly detecting duplicates
-		t.Logf("After rechaining - Number of chained subtrees: %d", len(stp.chainedSubtrees))
+		t.Logf("After rechaining - Number of chained subtrees: %d", len(chainedSubtrees))
 		t.Logf("After rechaining - Current subtree nodes: %d", len(stp.currentSubtree.Load().Nodes))
 		// We should have at least the subtrees before the removal point
-		assert.GreaterOrEqual(t, len(stp.chainedSubtrees), 5)
+		assert.GreaterOrEqual(t, len(chainedSubtrees), 5)
 		// Current subtree should have some nodes but may vary due to rechaining
 		assert.GreaterOrEqual(t, len(stp.currentSubtree.Load().Nodes), 0)
 
@@ -345,7 +385,9 @@ func TestReChainSubtrees(t *testing.T) {
 	require.NoError(t, err)
 
 	stp, _ := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxoStore, newSubtreeChan)
-	stp.Start(t.Context())
+	// NOTE: Do NOT call stp.Start() here - this test directly manipulates internal state
+	// and calls internal methods (addNode, reChainSubtrees) which would cause data races
+	// if the background goroutine is running.
 
 	// Create a common parent hash for all transactions
 	parentHash := chainhash.HashH([]byte("parent-tx"))
@@ -368,7 +410,10 @@ func TestReChainSubtrees(t *testing.T) {
 	// Index 2 would be tx-21 with fee 21
 	assert.Equal(t, uint64(21), stp.chainedSubtrees[5].Nodes[2].Fee)
 
-	require.NoError(t, stp.CheckSubtreeProcessor())
+	// Check state using internal method (since Start() is not running)
+	errCh := make(chan error, 1)
+	stp.checkSubtreeProcessor(errCh)
+	require.NoError(t, <-errCh)
 
 	node := stp.chainedSubtrees[5].Nodes[2]
 
@@ -401,7 +446,10 @@ func TestReChainSubtrees(t *testing.T) {
 		assert.Len(t, stp.chainedSubtrees[i].Nodes, 4)
 	}
 
-	require.NoError(t, stp.CheckSubtreeProcessor())
+	// Check state using internal method (since Start() is not running)
+	errCh2 := make(chan error, 1)
+	stp.checkSubtreeProcessor(errCh2)
+	require.NoError(t, <-errCh2)
 }
 
 func TestGetMerkleProofForCoinbase(t *testing.T) {
@@ -459,7 +507,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+				stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 			}
 		}
 
@@ -501,7 +549,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+				stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 			}
 		}
 
@@ -594,25 +642,30 @@ func TestMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 		}
 	}
 
 	wg.Wait()
 
-	// this is to make sure the subtrees are added to the chain
-	for stp.txCount.Load() < n-1 {
+	// this is to make sure the subtrees are added to the chain.
+	// txCount starts at 1 (coinbase placeholder counted by setTxCountFromSubtrees)
+	// and reaches 1+(n-1) = n after all AddBatch items are processed. Polling for n-1
+	// races: the worker can transiently expose txCount = n-1 between iterations
+	// when only n-2 of n-1 items are committed, letting lengthCh fire before the
+	// last item is added to the current subtree.
+	for stp.txCount.Load() < n {
 		time.Sleep(10 * time.Millisecond)
 	}
 
 	// there should be 4 chained subtrees
 	assert.Equal(t, 4, len(stp.chainedSubtrees))
 	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
-	assert.Equal(t, 2, stp.currentSubtree.Load().Length())
+	assert.Equal(t, 2, stp.GetCurrentLength())
 
 	assert.Equal(t, int(n-1), stp.currentTxMap.Length()) //nolint:gosec
 
-	stp.currentItemsPerFile = 2
+	stp.currentItemsPerFile.Store(2)
 	_ = stp.utxoStore.SetBlockHeight(1)
 	//nolint:gosec
 	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
@@ -637,7 +690,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
-	assert.Equal(t, 1, stp.currentSubtree.Load().Length())
+	assert.Equal(t, 1, stp.GetCurrentLength())
 
 	// check the currentTxMap, it will have 1 less than the tx count, which has the coinbase placeholder
 	assert.Equal(t, int(stp.TxCount()), stp.currentTxMap.Length()+1) // nolint:gosec
@@ -678,14 +731,14 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	subtreeProcessor.Start(ctx)
 
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
-	subtreeProcessor.Add(subtreepkg.Node{Hash: *hash, Fee: 1, SizeInBytes: 294}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+	subtreeProcessor.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1, SizeInBytes: 294}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 
 	// we should not have the transaction in the subtrees yet, it should be stuck in the queue
 	assert.Equal(t, 1, subtreeProcessor.GetCurrentLength())
 	// assert.Equal(t, subtreeHash.String(), subtreeProcessor.currentSubtree.RootHash().String())
 
 	// we must set the current block header before calling moveForwardBlock
-	subtreeProcessor.currentBlockHeader = model.GenesisBlockHeader
+	subtreeProcessor.currentBlockHeader.Store(model.GenesisBlockHeader)
 
 	// Move up the block
 	blockBytes, err := hex.DecodeString("000000206a21d13c3d2656557493b4652f67a763f835b86bf90107a60f412c290000000083ba48026c405d5a4b4d5aa3f10cee9de605a012e9a25f72a19aa9fe123380c689505c67c874461cc6dda18002fde501016b104579e34c5c12fad8899035be27f7605f8ff95db814ba02fbc49397a761fd01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1903af32190000000000205f7c477c327c437c5f200001000000ffffffff01e50b5402000000001976a9147a112f6a373b80b4ebb2b02acef97f35aef7494488ac00000000feaf321900")
@@ -694,7 +747,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	block, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
-	block.Header.HashPrevBlock = subtreeProcessor.currentBlockHeader.Hash()
+	block.Header.HashPrevBlock = subtreeProcessor.currentBlockHeader.Load().Hash()
 
 	err = subtreeProcessor.MoveForwardBlock(block)
 	require.NoError(t, err)
@@ -761,7 +814,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 		}
 	}
 
@@ -778,7 +831,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	// and 1 tx in the current subtree
 	assert.Equal(t, 1, stp.currentSubtree.Load().Length())
 
-	stp.currentItemsPerFile = 2
+	stp.currentItemsPerFile.Store(2)
 	_ = stp.utxoStore.SetBlockHeight(1)
 	//nolint:gosec
 	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
@@ -864,7 +917,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 		}
 	}
 
@@ -879,7 +932,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	// and 0 tx in the current subtree
 	assert.Equal(t, 0, stp.currentSubtree.Load().Length())
 
-	stp.currentItemsPerFile = 2
+	stp.currentItemsPerFile.Store(2)
 	_ = stp.utxoStore.SetBlockHeight(1)
 	//nolint:gosec
 	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
@@ -943,18 +996,18 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	ctx := context.Background()
-	subtreeProcessor, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan, WithBatcherSize(1))
+	subtreeProcessor, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
 	subtreeProcessor.Start(ctx)
 
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.Load().ReplaceRootNode(hash, 0, 0)
 		} else {
-			subtreeProcessor.Add(subtreepkg.Node{Hash: *hash, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			subtreeProcessor.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 111}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hash}}})
 		}
 	}
 	// add 1 more hash to create the second subtree
-	subtreeProcessor.Add(subtreepkg.Node{Hash: *hashes[0], Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hashes[0]}})
+	subtreeProcessor.AddBatch([]subtreepkg.Node{{Hash: *hashes[0], Fee: 111}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*hashes[0]}}})
 
 	wg.Wait()
 
@@ -980,7 +1033,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	}, cmp)
 
 	merkleRootFromProofs := util.BuildMerkleRootFromCoinbase(coinbaseHash[:], cmpB)
-	assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeSlice(merkleRootFromProofs))
+	assert.Equal(t, expectedMerkleRoot, util.ReverseAndHexEncodeSlice(merkleRootFromProofs))
 
 	topTree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(subtrees))
 	require.NoError(t, err)
@@ -1038,7 +1091,8 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 
 		ctx := context.Background()
 		subtreeProcessor, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
-		subtreeProcessor.Start(ctx)
+		// NOTE: Do NOT call Start() - this test directly manipulates internal state
+		// (currentSubtree, chainedSubtrees) which would cause data races with the background goroutine
 
 		// Build subtrees manually to simulate an existing block's subtrees
 		parentHash := chainhash.HashH([]byte("parent-tx"))
@@ -1088,14 +1142,14 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		_ = subtreeProcessor.currentSubtree.Load().AddCoinbaseNode()
 
 		// Setup maps
-		transactionMap := txmap.NewSplitSwissMap(4)    // Transactions that are in the new block
+		transactionMap := NewSplitSwissMap(4, 16)      // Transactions that are in the new block
 		losingTxHashesMap := txmap.NewSplitSwissMap(4) // Conflicting transactions to remove
 		currentTxMap := subtreeProcessor.GetCurrentTxMap()
 
 		// Populate currentTxMap with transaction parents (simulating they exist in mempool)
 		for _, txID := range txIDs {
 			hash, _ := chainhash.NewHashFromStr(txID)
-			currentTxMap.Set(*hash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
+			currentTxMap.Set(*hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
 		}
 
 		// Process remainder - since all transactions are already in currentTxMap,
@@ -1123,10 +1177,10 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		}
 
 		// Test with some transactions marked as in the new block
-		_ = transactionMap.Put(*hashes[3], 0)  // index 3
-		_ = transactionMap.Put(*hashes[7], 0)  // index 7
-		_ = transactionMap.Put(*hashes[11], 0) // index 11
-		_ = transactionMap.Put(*hashes[15], 0) // index 15
+		_ = transactionMap.Put(*hashes[3])  // index 3
+		_ = transactionMap.Put(*hashes[7])  // index 7
+		_ = transactionMap.Put(*hashes[11]) // index 11
+		_ = transactionMap.Put(*hashes[15]) // index 15
 
 		expectedTxIDs := []string{
 			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
@@ -1165,7 +1219,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		for _, txID := range txIDs {
 			hash, _ := chainhash.NewHashFromStr(txID)
 			if _, exists := currentTxMap.Get(*hash); !exists {
-				currentTxMap.Set(*hash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
+				currentTxMap.Set(*hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
 			}
 		}
 
@@ -1197,6 +1251,212 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestProcessRemainderTxHashes_PreservesOrder(t *testing.T) {
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	defer close(newSubtreeChan)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 2048 // Large subtree to trigger parallel path
+
+	ctx := context.Background()
+	subtreeProcessor, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+
+	t.Run("small subtree preserves order (sequential path)", func(t *testing.T) {
+		// Test with <1024 nodes to exercise sequential path
+		numTx := 500
+		testOrderPreservation(t, subtreeProcessor, numTx)
+	})
+
+	t.Run("large subtree preserves order (parallel path)", func(t *testing.T) {
+		// Test with >1024 nodes to exercise parallel path
+		numTx := 2000
+		testOrderPreservation(t, subtreeProcessor, numTx)
+	})
+}
+
+func testOrderPreservation(t *testing.T, subtreeProcessor *SubtreeProcessor, numTx int) {
+	parentHash := chainhash.HashH([]byte("parent-tx-order-test"))
+
+	// Generate ordered transaction hashes
+	orderedHashes := make([]chainhash.Hash, numTx)
+	for i := 0; i < numTx; i++ {
+		hashBytes := make([]byte, 32)
+		_, err := rand.Read(hashBytes)
+		require.NoError(t, err)
+		orderedHashes[i] = chainhash.Hash(hashBytes)
+	}
+
+	// Calculate needed subtree capacity (power of 2)
+	subtreeCapacity := 1
+	for subtreeCapacity < numTx+10 {
+		subtreeCapacity *= 2
+	}
+
+	// Create a subtree with all transactions in order
+	subtree, err := subtreepkg.NewTreeByLeafCount(subtreeCapacity)
+	require.NoError(t, err)
+	_ = subtree.AddCoinbaseNode()
+
+	for _, hash := range orderedHashes {
+		err = subtree.AddSubtreeNode(subtreepkg.Node{Hash: hash, Fee: 1})
+		require.NoError(t, err)
+	}
+
+	chainedSubtrees := []*subtreepkg.Subtree{subtree}
+
+	// Setup fresh processor state
+	newSubtree, err := subtreepkg.NewTreeByLeafCount(subtreeCapacity)
+	require.NoError(t, err)
+	subtreeProcessor.currentSubtree.Store(newSubtree)
+	subtreeProcessor.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
+	_ = subtreeProcessor.currentSubtree.Load().AddCoinbaseNode()
+
+	// Maps:
+	// - transactionMap: empty (no tx already in block) - all should be remainders
+	// - losingTxHashesMap: empty (no conflicting tx)
+	// - sourceTxMap: populated with all tx (source for parent lookup)
+	// - stp.currentTxMap: cleared (so SetIfNotExists succeeds)
+	transactionMap := NewSplitSwissMap(uint16(numTx), 16)
+	losingTxHashesMap := txmap.NewSplitSwissMap(10, 4)
+
+	// Clear the processor's internal map so SetIfNotExists succeeds
+	subtreeProcessor.GetCurrentTxMap().Clear()
+
+	// Create a separate source map for parent lookups
+	sourceTxMap := NewSplitTxInpointsMap(16)
+	for _, hash := range orderedHashes {
+		sourceTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
+	}
+
+	// Process remainder - all tx should come back in order
+	err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, sourceTxMap, false)
+	require.NoError(t, err)
+
+	// Collect all remainder nodes from chainedSubtrees and currentSubtree
+	var remainder []subtreepkg.Node
+	for _, st := range subtreeProcessor.chainedSubtrees {
+		for _, node := range st.Nodes {
+			if !node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+				remainder = append(remainder, node)
+			}
+		}
+	}
+	currentSt := subtreeProcessor.currentSubtree.Load()
+	for _, node := range currentSt.Nodes {
+		if !node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+			remainder = append(remainder, node)
+		}
+	}
+
+	// Verify order is preserved
+	require.Equal(t, numTx, len(remainder), "Expected %d remainder nodes, got %d", numTx, len(remainder))
+
+	for i, node := range remainder {
+		assert.True(t, node.Hash.Equal(orderedHashes[i]),
+			"Order mismatch at index %d: expected %s, got %s",
+			i, orderedHashes[i].String(), node.Hash.String())
+	}
+
+	// Clean up for next test
+	subtreeProcessor.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
+	subtreeProcessor.GetCurrentTxMap().Clear()
+}
+
+// TestParallelBuildRemainderSubtrees_MultiChunk exercises the parallel
+// subtree-builder path where the kept-node count exceeds the first chunk's
+// free slots and forces creation of multiple new subtrees. Verifies leaf
+// order, chained-subtree count, partial-fill currentSubtree, and that every
+// completed subtree has its root hash eagerly materialised by the parallel
+// goroutines (the latter is what gives us the perf win on real workloads).
+func TestParallelBuildRemainderSubtrees_MultiChunk(t *testing.T) {
+	newSubtreeChan := make(chan NewSubtreeRequest, 100)
+
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	defer close(newSubtreeChan)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 256
+
+	ctx := context.Background()
+	stp, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+
+	const leafCount = 256
+	const numTx = 1000 // 1 coinbase + 255 fills chunk 0; 745 left → 2 full chunks + 233 partial
+
+	ordered := make([]subtreepkg.Node, numTx)
+	for i := 0; i < numTx; i++ {
+		b := make([]byte, 32)
+		_, err := rand.Read(b)
+		require.NoError(t, err)
+
+		ordered[i] = subtreepkg.Node{Hash: chainhash.Hash(b), Fee: 1, SizeInBytes: 250}
+	}
+
+	cs, err := subtreepkg.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+	require.NoError(t, cs.AddCoinbaseNode())
+	stp.currentSubtree.Store(cs)
+	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
+
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, true))
+
+	// Reassemble leaf order from chainedSubtrees followed by currentSubtree,
+	// stripping coinbase placeholders.
+	var result []subtreepkg.Node
+
+	for _, st := range stp.chainedSubtrees {
+		for _, n := range st.Nodes {
+			if !n.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+				result = append(result, n)
+			}
+		}
+	}
+
+	for _, n := range stp.currentSubtree.Load().Nodes {
+		if !n.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+			result = append(result, n)
+		}
+	}
+
+	require.Equal(t, numTx, len(result), "expected %d nodes total across chained + current", numTx)
+
+	for i := range ordered {
+		require.True(t, ordered[i].Hash.Equal(result[i].Hash),
+			"leaf order mismatch at index %d", i)
+	}
+
+	// firstChunkCap=255, then two full chunks of 256, then 233 left over → 3 chained.
+	require.Equal(t, 3, len(stp.chainedSubtrees), "expected 3 completed subtrees in chain")
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[0].Nodes))
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[1].Nodes))
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[2].Nodes))
+
+	// Partial chunk lands in the open currentSubtree (no coinbase placeholder
+	// on a non-first subtree).
+	currentSt := stp.currentSubtree.Load()
+	require.Equal(t, 233, len(currentSt.Nodes))
+
+	// Eager-merkle invariant: every chained (completed) subtree should already
+	// have its root hash materialised so the parallel work isn't redone
+	// serially by the first reader downstream.
+	for i, st := range stp.chainedSubtrees {
+		require.NotNil(t, st.RootHash(), "chained subtree %d missing root hash", i)
+	}
 }
 
 func BenchmarkBlockAssembler_AddTx(b *testing.B) {
@@ -1231,7 +1491,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(subtreepkg.Node{Hash: *txHashes[i], Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*txHashes[i]}})
+		stp.AddBatch([]subtreepkg.Node{{Hash: *txHashes[i], Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{*txHashes[i]}}})
 	}
 }
 
@@ -1323,26 +1583,12 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		stp, _ := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
-		stp.Start(t.Context())
+		// NOTE: Do NOT call Start() - this test calls internal methods (moveBackBlock)
+		// which would cause data races with the background goroutine
 
+		// Directly add nodes using internal method since Start() is not running
 		for _, txHash := range txHashes {
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
-		}
-
-		// Wait for 4 subtrees to be created
-		for {
-			subtreeCountMutex.Lock()
-			count := subtreeCount
-			subtreeCountMutex.Unlock()
-			if count >= 4 {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		// this is to make sure the subtrees are added to the chain
-		for stp.txCount.Load() < 17 {
-			time.Sleep(100 * time.Millisecond)
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
 
 		// there should be 4 chained subtrees
@@ -1375,6 +1621,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp.InitCurrentBlockHeader(blockHeader)
 
+		// Call internal moveBackBlock method (safe since Start() is not running)
 		_, _, err = stp.moveBackBlock(context.Background(), &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
@@ -1384,9 +1631,6 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 			CoinbaseTx: coinbaseTx,
 		}, true)
 		require.NoError(t, err)
-
-		// Wait for any background processing to complete
-		time.Sleep(100 * time.Millisecond)
 
 		assert.Equal(t, 6, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
@@ -1431,12 +1675,13 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
+		// stp.Start(ctx)
 
 		// Add some initial state to verify it remains unchanged
 		initialTxHash, err := generateTxHash()
 		require.NoError(t, err)
-		stp.Add(subtreepkg.Node{Hash: initialTxHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{initialTxHash}})
+		stp.AddBatch([]subtreepkg.Node{{Hash: initialTxHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{initialTxHash}}})
 		time.Sleep(50 * time.Millisecond) // Allow processing
 
 		// Capture original state
@@ -1472,7 +1717,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
 		// Create empty block
 		emptyBlock := &model.Block{
@@ -1499,6 +1744,13 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		defer close(newSubtreeChan)
 
+		// Consume subtree announcements to prevent blocking when GetChainedSubtrees() is called
+		go func() {
+			for req := range newSubtreeChan {
+				req.ErrChan <- nil
+			}
+		}()
+
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 		tSettings := test.CreateBaseTestSettings(t)
@@ -1523,7 +1775,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}})
 		}
 		time.Sleep(100 * time.Millisecond) // Allow processing
 
@@ -1568,7 +1820,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
 		// Create subtree with only coinbase placeholder
 		coinbaseSubtree, err := subtreepkg.NewTreeByLeafCount(1)
@@ -1622,7 +1874,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
 		// Create empty block
 		emptyBlock := &model.Block{
@@ -1676,20 +1928,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some existing transactions
+		// Add some existing transactions using internal method (Start() is not running)
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-
-		// Wait for processing to complete
-		for stp.txCount.Load() < 3 {
-			time.Sleep(10 * time.Millisecond)
-		}
-		time.Sleep(50 * time.Millisecond) // Additional buffer time
 
 		// Create single subtree
 		subtree1 := createSubtree(t, 4, true)
@@ -1744,21 +1990,21 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some initial transactions
+		// Add some initial transactions using AddDirectly (Start() is not running)
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			node := subtreepkg.Node{Hash: txHash, Fee: 1}
+			_ = stp.AddDirectly(&node, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-		time.Sleep(50 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
 
 		// Reset to invalid size to force failure during moveBackBlock
-		stp.currentItemsPerFile = 3 // Not a power of 2, will cause failure
+		stp.currentItemsPerFile.Store(3) // Not a power of 2, will cause failure
 
 		// Create empty block
 		emptyBlock := &model.Block{
@@ -1796,15 +2042,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some initial transactions to create state to verify
+		// Add some initial transactions using internal method (Start() is not running)
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-		time.Sleep(100 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
@@ -1849,15 +2094,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
 		// Add some initial transactions to create state to verify
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}})
 		}
-		time.Sleep(100 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
@@ -1907,15 +2151,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some initial transactions to create state to verify
+		// Add some initial transactions using internal method (Start() is not running)
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-		time.Sleep(100 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
@@ -1963,15 +2206,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some initial transactions to create state to verify
+		// Add some initial transactions using internal method (Start() is not running)
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-		time.Sleep(50 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
@@ -2048,15 +2290,14 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
+		// NOTE: Do NOT call Start() - this test calls internal moveBackBlock()
 
-		// Add some initial transactions to create initial state
+		// Add some initial transactions using internal method (Start() is not running)
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			_ = stp.addNode(subtreepkg.Node{Hash: txHash, Fee: 1}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 		}
-		time.Sleep(50 * time.Millisecond) // Allow processing
 
 		// Capture original state
 		originalState := captureSubtreeProcessorState(stp)
@@ -2065,7 +2306,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		duplicateHash, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 
 		// Add the tx to currentTxMap first
-		stp.currentTxMap.Set(*duplicateHash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*duplicateHash}})
+		stp.currentTxMap.Set(*duplicateHash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*duplicateHash}})
 
 		// Create a subtree that contains the same hash
 		subtree1, err := subtreepkg.NewTreeByLeafCount(4)
@@ -2157,7 +2398,7 @@ func Test_removeMap(t *testing.T) {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("orphaned-remove-tx-%d", i)))
 			orphanedRemoveHashes[i] = txHash
 			// Add directly to removeMap without ever queuing
-			err := stp.removeMap.Put(txHash)
+			err := stp.removeMap.Put(txHash, 1)
 			require.NoError(t, err)
 		}
 
@@ -2168,7 +2409,7 @@ func Test_removeMap(t *testing.T) {
 		// Also add some transactions to currentTxMap to verify it IS cleared
 		for i := 0; i < 10; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("current-tx-%d", i)))
-			stp.currentTxMap.Set(txHash, subtreepkg.TxInpoints{})
+			stp.currentTxMap.Set(txHash, &subtreepkg.TxInpoints{})
 		}
 		currentTxMapLengthBeforeReset := stp.currentTxMap.Length()
 		assert.Equal(t, 10, currentTxMapLengthBeforeReset, "currentTxMap should have 10 entries before reset")
@@ -2254,7 +2495,7 @@ func Test_removeMap(t *testing.T) {
 
 		for _, txHash := range txHashes {
 			// Use parent hash instead of self-reference to avoid duplicate skipping
-			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{parentHash}}})
 		}
 
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
@@ -2392,7 +2633,47 @@ func waitForSubtreeProcessorQueueToEmpty(t *testing.T, stp *SubtreeProcessor) {
 		t.Fatalf("Expected queue length to be 0, but got %d", stp.QueueLength())
 	}
 
-	time.Sleep(100 * time.Millisecond) // Give some time for the queue to process
+	// Synchronize with event loop to ensure processing is complete
+	// CheckSubtreeProcessor uses a channel that synchronizes with the event loop
+	require.NoError(t, stp.CheckSubtreeProcessor())
+}
+
+// waitForRemoveToComplete waits for a pending remove operation to complete.
+// Remove() spawns a goroutine that sends to removeTxCh, so we need to:
+// 1. Give the goroutine time to send to the channel
+// 2. Wait for the channel to be drained (message dequeued by event loop)
+// 3. Call CheckSubtreeProcessor to ensure the remove processing has finished
+func waitForRemoveToComplete(t *testing.T, stp *SubtreeProcessor) {
+	t.Helper()
+
+	// Give the goroutine spawned by Remove() time to send to the channel.
+	// We wait until we see the message in the channel OR it has been dequeued.
+	// Loop with a timeout to avoid infinite wait if something goes wrong.
+	deadline := time.Now().Add(5 * time.Second)
+	sawMessage := false
+	for time.Now().Before(deadline) {
+		if len(stp.removeTxCh) > 0 {
+			sawMessage = true
+			break
+		}
+		// Give goroutines a chance to run
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// If we never saw the message in the channel, it might have been processed already
+	// (fast path) or the goroutine hasn't run yet. Either way, proceed.
+	_ = sawMessage
+
+	// Wait for the remove channel to be empty (message has been dequeued)
+	for len(stp.removeTxCh) > 0 {
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Synchronize with event loop to ensure remove processing is complete.
+	// CheckSubtreeProcessor sends to the event loop's select and blocks until
+	// the event loop processes it. Since remove and check are in the same select,
+	// this guarantees the remove has completed.
+	require.NoError(t, stp.CheckSubtreeProcessor())
 }
 
 // createSubtree creates a test subtree with specified parameters.
@@ -2433,11 +2714,18 @@ func createSubtreeMeta(t *testing.T, subtree *subtreepkg.Subtree) *subtreepkg.Me
 
 	parent := chainhash.HashH([]byte("txInpoints"))
 
+	parentInput := &bt.Input{PreviousTxOutIndex: 1}
+	if err := parentInput.PreviousTxIDAdd(&parent); err != nil {
+		panic(err)
+	}
+
+	ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+	if err != nil {
+		panic(err)
+	}
+
 	for idx := range subtree.Nodes {
-		_ = subtreeMeta.SetTxInpoints(idx, subtreepkg.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parent},
-			Idxs:           [][]uint32{{1}},
-		})
+		_ = subtreeMeta.SetTxInpoints(idx, ti)
 	}
 
 	return subtreeMeta
@@ -2516,7 +2804,7 @@ func BenchmarkAddNode(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(subtreepkg.Node{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) // nolint:gosec
+		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) // nolint:gosec
 	}
 
 	err := g.Wait()
@@ -2545,7 +2833,7 @@ func BenchmarkAddNodeWithMap(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(subtreepkg.Node{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) //nolint:gosec
+		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) //nolint:gosec
 	}
 
 	err := g.Wait()
@@ -2658,7 +2946,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		// Set initial block header to start timing
 		t.Logf("DEBUG: Setting initial block header\n")
 		stp.InitCurrentBlockHeader(blockHeader)
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		t.Logf("DEBUG: Initial size: %d\n", initialSize)
 
 		// Create multiple blocks to establish a pattern of fast subtree creation
@@ -2715,11 +3003,11 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
 		// expect size to increase
-		newSize := stp.currentItemsPerFile
+		newSize := stp.currentItemsPerFile.Load()
 		t.Logf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
 		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
-		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
-		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
+		assert.Equal(t, int32(0), newSize&(newSize-1), "new size should be power of 2")
+		assert.GreaterOrEqual(t, newSize, int32(1024), "new size should not be smaller than 1024")
 	})
 }
 
@@ -2776,7 +3064,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		// Set initial block header to start timing
 		t.Logf("DEBUG: Setting initial block header\n")
 		stp.InitCurrentBlockHeader(blockHeader)
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		t.Logf("DEBUG: Initial size: %d\n", initialSize)
 
 		// Create multiple blocks to establish a pattern of fast subtree creation
@@ -2829,11 +3117,11 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 
 		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
 		// expect size to increase
-		newSize := stp.currentItemsPerFile
+		newSize := stp.currentItemsPerFile.Load()
 		t.Logf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
 		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
-		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
-		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
+		assert.Equal(t, int32(0), newSize&(newSize-1), "new size should be power of 2")
+		assert.GreaterOrEqual(t, newSize, int32(1024), "new size should not be smaller than 1024")
 	})
 }
 
@@ -2869,13 +3157,13 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 
 		// Add a transaction to the current subtree
 		txHash := chainhash.HashH([]byte("test_tx_current"))
-		node := subtreepkg.Node{
+		node := &subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         1000,
 			SizeInBytes: 250,
 		}
 
-		err := stp.AddDirectly(node, subtreepkg.TxInpoints{}, false)
+		err := stp.AddDirectly(node, &subtreepkg.TxInpoints{}, false)
 		require.NoError(t, err)
 
 		// Verify transaction was added
@@ -2912,12 +3200,12 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 		}
 
 		for i, hash := range txHashes {
-			node := subtreepkg.Node{
+			node := &subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*100),
 				SizeInBytes: 250,
 			}
-			err := stp.AddDirectly(node, subtreepkg.TxInpoints{}, false)
+			err := stp.AddDirectly(node, &subtreepkg.TxInpoints{}, false)
 			require.NoError(t, err)
 		}
 
@@ -2946,12 +3234,12 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 			hash := chainhash.HashH([]byte("chained_tx_" + string(rune('0'+i))))
 			allHashes = append(allHashes, hash)
 
-			node := subtreepkg.Node{
+			node := &subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*100),
 				SizeInBytes: 250,
 			}
-			err := stp.AddDirectly(node, subtreepkg.TxInpoints{}, false)
+			err := stp.AddDirectly(node, &subtreepkg.TxInpoints{}, false)
 			require.NoError(t, err)
 		}
 
@@ -2993,12 +3281,12 @@ func TestRemoveTxsFromSubtreesIntegration(t *testing.T) {
 			hash := chainhash.HashH([]byte("integration_tx_" + string(rune('A'+i))))
 			testHashes[i] = hash
 
-			node := subtreepkg.Node{
+			node := &subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*500),
 				SizeInBytes: 200 + uint64(i*50),
 			}
-			err := stp.AddDirectly(node, subtreepkg.TxInpoints{}, false)
+			err := stp.AddDirectly(node, &subtreepkg.TxInpoints{}, false)
 			require.NoError(t, err)
 		}
 
@@ -3100,8 +3388,11 @@ func TestRemoveCoinbaseUtxosChildrenRemoval(t *testing.T) {
 		// Add child transactions to subtree processor
 		childHash := *childTx.TxIDChainHash()
 		grandchildHash := *grandchildTx.TxIDChainHash()
-		stp.Add(subtreepkg.Node{Hash: childHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{childHash}})
-		stp.Add(subtreepkg.Node{Hash: grandchildHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{grandchildHash}})
+		stp.AddBatch([]subtreepkg.Node{{Hash: childHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{childHash}}})
+		stp.AddBatch([]subtreepkg.Node{{Hash: grandchildHash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{grandchildHash}}})
+
+		// wait until batches are processed
+		waitForSubtreeProcessorQueueToEmpty(t, stp)
 
 		// Verify child transactions are in subtree before removal
 		childrenBefore, err := utxo.GetAndLockChildren(ctx, utxoStore, *coinbase.TxIDChainHash())
@@ -3262,7 +3553,6 @@ func TestMoveBackBlockChildrenRemoval(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
-		stp.Start(ctx)
 
 		// Use existing coinbase transaction from test data
 		coinbase := coinbaseTx2
@@ -3303,7 +3593,7 @@ func TestInitCurrentBlockHeader_SubtreeCountingFix(t *testing.T) {
 
 		// Verify subtreesInBlock starts at 0, not 1
 		assert.Equal(t, 0, stp.subtreesInBlock, "subtreesInBlock should start at 0")
-		assert.Equal(t, prevBlockHeader, stp.currentBlockHeader, "currentBlockHeader should be set")
+		assert.Equal(t, prevBlockHeader, stp.currentBlockHeader.Load(), "currentBlockHeader should be set")
 		assert.False(t, stp.blockStartTime.IsZero(), "blockStartTime should be set")
 	})
 
@@ -3316,7 +3606,7 @@ func TestInitCurrentBlockHeader_SubtreeCountingFix(t *testing.T) {
 		// This should not panic
 		stp.InitCurrentBlockHeader(nil)
 
-		assert.Nil(t, stp.currentBlockHeader, "currentBlockHeader should be nil")
+		assert.Nil(t, stp.currentBlockHeader.Load(), "currentBlockHeader should be nil")
 		assert.Equal(t, 0, stp.subtreesInBlock, "subtreesInBlock should be 0")
 		assert.False(t, stp.blockStartTime.IsZero(), "blockStartTime should still be set")
 	})
@@ -3345,7 +3635,7 @@ func TestMoveForwardBlock_BlockHeaderValidation(t *testing.T) {
 		}
 
 		// moveForwardBlock should fail with parent mismatch
-		_, err := stp.moveForwardBlock(context.Background(), invalidBlock, false, map[chainhash.Hash]bool{}, false, true)
+		_, _, err := stp.moveForwardBlock(context.Background(), invalidBlock, false, map[chainhash.Hash]bool{}, false, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not match the current block header")
 	})
@@ -3537,8 +3827,8 @@ func TestSubtreeProcessor_ConcurrentOperations_StateConsistency(t *testing.T) {
 					}
 					parents := subtreepkg.TxInpoints{}
 
-					stp.Add(node, parents)
-					// Add method does not return error
+					stp.AddBatch([]subtreepkg.Node{node}, []*subtreepkg.TxInpoints{&parents})
+					// AddBatch method does not return error
 				}
 			}(i)
 		}
@@ -3694,7 +3984,7 @@ func TestSubtreeProcessor_ErrorRecovery_ChannelOperations(t *testing.T) {
 				SizeInBytes: 250,
 			}
 			parents := subtreepkg.TxInpoints{}
-			stp.Add(node, parents)
+			stp.AddBatch([]subtreepkg.Node{node}, []*subtreepkg.TxInpoints{&parents})
 		}()
 
 		// Cancel context immediately
@@ -3706,436 +3996,84 @@ func TestSubtreeProcessor_ErrorRecovery_ChannelOperations(t *testing.T) {
 	})
 }
 
-func TestSubtreeProcessor_checkMarkNotOnLongestChain(t *testing.T) {
-	ctx := context.Background()
+// TestCreateTransactionMapBenchmark benchmarks the CreateTransactionMap function with CPU and memory profiling.
+// Run with: go test -v -run TestCreateTransactionMapBenchmark ./services/blockassembly/subtreeprocessor/ -timeout=30m
+// Profiles saved to: createtransactionmap_cpu.prof, createtransactionmap_mem.prof
+// Can also be run from CLI: teranode-cli txmapbench --num-subtrees=100 --txs-per-subtree=1048576
+func TestCreateTransactionMapBenchmark(t *testing.T) {
+	t.Skip("Skipping benchmark test in normal test runs. Run with -run TestCreateTransactionMapBenchmark to execute, or use: teranode-cli txmapbench")
 
-	// Helper function to create transaction hashes
-	createTxHash := func(data string) chainhash.Hash {
-		return chainhash.HashH([]byte(data))
+	const (
+		numSubtrees   = 100
+		txsPerSubtree = 1024 * 1024 // 1 million transactions per subtree
+		cpuProfile    = "createtransactionmap_cpu.prof"
+		memProfile    = "createtransactionmap_mem.prof"
+	)
+
+	// Call the shared benchmark function
+	result, err := RunCreateTransactionMapBenchmark(numSubtrees, txsPerSubtree, cpuProfile, memProfile)
+	require.NoError(t, err)
+
+	// Print results
+	fmt.Printf("\nBenchmark Results\n")
+	fmt.Printf("=================\n")
+	fmt.Printf("Subtrees:            %d\n", result.NumSubtrees)
+	fmt.Printf("Total Transactions:  %d\n", result.TotalTxs)
+	fmt.Printf("Elapsed Time:        %.2fs\n", result.Elapsed.Seconds())
+	fmt.Printf("Throughput:          %.2f tx/sec\n", result.TxPerSec)
+	fmt.Printf("Map Length:          %d\n", result.MapLength)
+	fmt.Printf("Conflicting Nodes:   %d\n", result.ConflictingNodes)
+	fmt.Println()
+	fmt.Printf("Profiles written to:\n")
+	fmt.Printf("  CPU:    %s\n", cpuProfile)
+	fmt.Printf("  Memory: %s\n", memProfile)
+	fmt.Println()
+	fmt.Printf("Analyze with:\n")
+	fmt.Printf("  go tool pprof -http=:8080 %s\n", cpuProfile)
+	fmt.Printf("  go tool pprof -http=:8081 %s\n", memProfile)
+
+	if result.BenchErr != nil {
+		fmt.Printf("\nNote: CreateTransactionMap returned error: %v\n", result.BenchErr)
 	}
+}
 
-	// Create test block and transaction hashes
-	invalidBlockID := uint32(123)
-	invalidBlock := &model.Block{
-		ID: invalidBlockID,
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1234567890,
-			Bits:           model.NBit{},
-			Nonce:          1234,
-		},
+// TestProcessRemainderTransactionsAndDequeueBenchmark benchmarks the processRemainderTransactionsAndDequeue function
+// with CPU and memory profiling.
+// Run with: go test -v -run TestProcessRemainderTransactionsAndDequeueBenchmark ./services/blockassembly/subtreeprocessor/ -timeout=30m
+// Profiles saved to: processremaindertxanddequeue_cpu.prof, processremaindertxanddequeue_mem.prof
+// Can also be run from CLI: teranode-cli remainderbench --num-chained-subtrees=10 --txs-per-subtree=1048576
+func TestProcessRemainderTransactionsAndDequeueBenchmark(t *testing.T) {
+	t.Skip("Skipping benchmark test in normal test runs. Run with -run TestProcessRemainderTransactionsAndDequeueBenchmark to execute, or use: teranode-cli remainderbench")
+
+	const (
+		numChainedSubtrees = 100
+		txsPerSubtree      = 1024 * 1024 // 1 million transactions per subtree
+		cpuProfile         = "processremaindertxanddequeue_cpu.prof"
+		memProfile         = "processremaindertxanddequeue_mem.prof"
+	)
+
+	// Call the shared benchmark function
+	result, err := RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree, cpuProfile, memProfile)
+	require.NoError(t, err)
+
+	// Print results
+	fmt.Printf("\nBenchmark Results\n")
+	fmt.Printf("=================\n")
+	fmt.Printf("Chained Subtrees:    %d\n", result.NumChainedSubtrees)
+	fmt.Printf("Total Transactions:  %d\n", result.TotalTxs)
+	fmt.Printf("Elapsed Time:        %.2fs\n", result.Elapsed.Seconds())
+	fmt.Printf("Throughput:          %.2f tx/sec\n", result.TxPerSec)
+	fmt.Printf("Remainder Nodes:     %d\n", result.RemainderCount)
+	fmt.Println()
+	fmt.Printf("Profiles written to:\n")
+	fmt.Printf("  CPU:    %s\n", cpuProfile)
+	fmt.Printf("  Memory: %s\n", memProfile)
+	fmt.Println()
+	fmt.Printf("Analyze with:\n")
+	fmt.Printf("  go tool pprof -http=:8080 %s\n", cpuProfile)
+	fmt.Printf("  go tool pprof -http=:8081 %s\n", memProfile)
+
+	if result.BenchErr != nil {
+		fmt.Printf("\nNote: processRemainderTransactionsAndDequeue returned error: %v\n", result.BenchErr)
 	}
-
-	txHash1 := createTxHash("tx1")
-	txHash2 := createTxHash("tx2")
-	txHash3 := createTxHash("tx3")
-	txHash4 := createTxHash("tx4")
-	markNotOnLongestChain := []chainhash.Hash{txHash1, txHash2, txHash3, txHash4}
-
-	t.Run("GetBlockHeaders fails", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return an error
-		expectedErr := errors.NewError("blockchain client error")
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader(nil), []*model.BlockHeaderMeta(nil), expectedErr)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, markNotOnLongestChain)
-
-		require.Error(t, err)
-		require.Nil(t, result)
-		require.Contains(t, err.Error(), "error getting last block headers")
-		mockBlockchainClient.AssertExpectations(t)
-	})
-
-	t.Run("utxoStore.Get fails", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock utxoStore.Get to return an error for first transaction
-		expectedErr := errors.NewError("utxo store error")
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil, expectedErr)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, markNotOnLongestChain)
-
-		require.Error(t, err)
-		require.Nil(t, result)
-		require.Contains(t, err.Error(), "error getting transaction from utxo store")
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("transaction not found (nil txMeta)", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock utxoStore.Get to return nil (transaction not found)
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.Error(t, err)
-		require.Nil(t, result)
-		require.Contains(t, err.Error(), "error getting transaction")
-		require.Contains(t, err.Error(), "from longest chain")
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("transaction only in invalid block", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock transaction that only exists in the invalid block
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.NoError(t, err)
-		require.Len(t, result, 1)
-		require.Equal(t, txHash1, result[0])
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("transaction in recent blocks (last 1000)", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success with recent block IDs
-		recentBlockID := uint32(500)
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: recentBlockID},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock transaction that exists in invalid block AND recent block
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, recentBlockID},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		// Mock CheckBlockIsInCurrentChain - this will still be called due to the continue bug
-		// The transaction should be marked as on longest chain regardless
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.NoError(t, err)
-		require.Len(t, result, 0) // Should not mark as not on longest chain since it's still on longest chain
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("CheckBlockIsInCurrentChain fails", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock transaction that exists in other blocks (not in recent 1000)
-		otherBlockID := uint32(999)
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, otherBlockID},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		// Mock CheckBlockIsInCurrentChain to return error
-		expectedErr := errors.NewError("blockchain check error")
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, expectedErr)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.Error(t, err)
-		require.Nil(t, result)
-		require.Contains(t, err.Error(), "error checking if transaction is on longest chain")
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("transaction not on longest chain", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock transaction that exists in other blocks (not in recent 1000)
-		otherBlockID := uint32(999)
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, otherBlockID},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		// Mock CheckBlockIsInCurrentChain to return false (not on longest chain)
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.NoError(t, err)
-		require.Len(t, result, 1)
-		require.Equal(t, txHash1, result[0])
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("transaction still on longest chain", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Mock transaction that exists in other blocks (not in recent 1000)
-		otherBlockID := uint32(999)
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, otherBlockID},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		// Mock CheckBlockIsInCurrentChain to return true (still on longest chain)
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.NoError(t, err)
-		require.Len(t, result, 0) // Should not mark as not on longest chain since it's still on longest chain
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("mixed scenario - multiple transactions with different outcomes", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success with recent block IDs
-		recentBlockID := uint32(500)
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: recentBlockID}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// TX1: Only in invalid block - should be marked
-		txMeta1 := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID},
-		}
-
-		// TX2: In invalid block AND recent block - should NOT be marked
-		txMeta2 := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, recentBlockID},
-		}
-
-		// TX3: In invalid block and other block, not on longest chain - should be marked
-		otherBlockID1 := uint32(999)
-		txMeta3 := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, otherBlockID1},
-		}
-
-		// TX4: In invalid block and other block, still on longest chain - should NOT be marked
-		otherBlockID2 := uint32(888)
-		txMeta4 := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, otherBlockID2},
-		}
-
-		// Mock utxoStore.Get calls for each transaction
-		mockUtxoStore.On("Get", mock.Anything, &txHash1, mock.Anything).Return(txMeta1, nil)
-		mockUtxoStore.On("Get", mock.Anything, &txHash2, mock.Anything).Return(txMeta2, nil)
-		mockUtxoStore.On("Get", mock.Anything, &txHash3, mock.Anything).Return(txMeta3, nil)
-		mockUtxoStore.On("Get", mock.Anything, &txHash4, mock.Anything).Return(txMeta4, nil)
-
-		// Mock CheckBlockIsInCurrentChain calls
-		// TX2 will also call CheckBlockIsInCurrentChain due to the continue bug (even though it's in recent blocks)
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{invalidBlockID, recentBlockID}).Return(true, nil)  // TX2 still on longest chain
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{invalidBlockID, otherBlockID1}).Return(false, nil) // TX3 not on longest chain
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{invalidBlockID, otherBlockID2}).Return(true, nil)  // TX4 still on longest chain
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1, txHash2, txHash3, txHash4})
-
-		require.NoError(t, err)
-		require.Len(t, result, 2) // Only TX1 and TX3 should be marked
-		require.Contains(t, result, txHash1)
-		require.Contains(t, result, txHash3)
-		require.NotContains(t, result, txHash2) // Should not be marked (in recent blocks)
-		require.NotContains(t, result, txHash4) // Should not be marked (still on longest chain)
-
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
-
-	t.Run("empty input slice", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders to return success
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: 1}, {ID: 2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{})
-
-		require.NoError(t, err)
-		require.Len(t, result, 0)
-		mockBlockchainClient.AssertExpectations(t)
-	})
-
-	t.Run("transaction in multiple recent blocks", func(t *testing.T) {
-		mockBlockchainClient := &blockchain.Mock{}
-		mockUtxoStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
-
-		stp := &SubtreeProcessor{
-			blockchainClient: mockBlockchainClient,
-			utxoStore:        mockUtxoStore,
-			settings:         settings,
-			logger:           ulogger.TestLogger{},
-		}
-
-		// Mock GetBlockHeaders with multiple recent blocks
-		recentBlockID1 := uint32(500)
-		recentBlockID2 := uint32(600)
-		blockHeaders := []*model.BlockHeader{}
-		blockHeaderMetas := []*model.BlockHeaderMeta{
-			{ID: recentBlockID1}, {ID: recentBlockID2}, {ID: 3},
-		}
-		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockHeaderMetas, nil)
-
-		// Transaction exists in invalid block and multiple recent blocks
-		txMeta := &meta.Data{
-			BlockIDs: []uint32{invalidBlockID, recentBlockID1, recentBlockID2},
-		}
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(txMeta, nil)
-
-		// Mock CheckBlockIsInCurrentChain - this will still be called due to the continue bug
-		mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
-
-		result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, []chainhash.Hash{txHash1})
-
-		require.NoError(t, err)
-		require.Len(t, result, 0) // Should not mark since it's still on longest chain
-		mockBlockchainClient.AssertExpectations(t)
-		mockUtxoStore.AssertExpectations(t)
-	})
 }

@@ -22,6 +22,16 @@ This guide provides instructions for deploying Teranode in a Kubernetes environm
 
 ![kubernetesOperatorComponents.svg](img/mermaid/kubernetesOperatorComponents.svg)
 
+## Hardware Requirements
+
+For detailed hardware specifications including per-service resource requirements, see the [System Requirements](../systemRequirements.md) document.
+
+Kubernetes deployments require:
+
+- Sufficient cluster resources for Teranode pods
+- External dependencies (Aerospike, PostgreSQL, Kafka) deployed separately or as managed services
+- ReadWriteMany (RWX) storage for shared blob storage
+
 ## Prerequisites
 
 Before you begin, ensure you have the following tools installed and configured:
@@ -124,8 +134,8 @@ You can find the latest available version published on GitHub Container Registry
 
 ```bash
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.1.3
-export TERANODE_VERSION=v0.12.4
+export OPERATOR_VERSION=v0.2.8
+export TERANODE_VERSION=v0.14.4
 export GHCR_REGISTRY=ghcr.io/bsv-blockchain
 ```
 

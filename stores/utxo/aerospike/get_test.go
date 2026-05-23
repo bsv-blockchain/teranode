@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/txparse"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -403,12 +404,12 @@ func fetchTransaction(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoi
 	return tx, nil
 }
 
-func TestParseInputReferencesOnly(t *testing.T) {
+func TestParseInputReferencesFromExtendedTx(t *testing.T) {
 	t.Run("parses single input correctly", func(t *testing.T) {
 		tx := createTestTxWithInputs(t, 1, 100)
 		txBytes := tx.ExtendedBytes() // External transactions use Extended Format
 
-		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+		inputs, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(txBytes))
 
 		require.NoError(t, err)
 		require.Len(t, inputs, 1)
@@ -421,7 +422,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		tx := createTestTxWithInputs(t, 10, 50)
 		txBytes := tx.ExtendedBytes() // External transactions use Extended Format
 
-		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+		inputs, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(txBytes))
 
 		require.NoError(t, err)
 		require.Len(t, inputs, 10)
@@ -436,7 +437,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		tx := createTestTxWithInputs(t, 2, 1024*100)
 		txBytes := tx.ExtendedBytes() // External transactions use Extended Format
 
-		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+		inputs, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(txBytes))
 
 		require.NoError(t, err)
 		require.Len(t, inputs, 2)
@@ -450,7 +451,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		}
 		txBytes := tx.ExtendedBytes() // External transactions use Extended Format
 
-		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+		inputs, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(txBytes))
 
 		require.NoError(t, err)
 		require.Len(t, inputs, 0)
@@ -463,7 +464,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		// Truncate in middle of first input's prevTxID
 		truncated := txBytes[:20] // Adjusted for Extended Format marker
 
-		_, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(truncated))
+		_, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(truncated))
 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "input")
@@ -475,7 +476,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		err := binary.Write(buf, binary.LittleEndian, uint32(1))
 		require.NoError(t, err)
 
-		_, err = teranode_aerospike.ParseInputReferencesOnly(buf)
+		_, err = txparse.ParseInputReferencesFromExtendedTx(buf)
 		require.Error(t, err)
 	})
 
@@ -489,7 +490,7 @@ func TestParseInputReferencesOnly(t *testing.T) {
 		txBytes := tx.ExtendedBytes() // External transactions use Extended Format
 
 		// Should complete without reading the 5MB output
-		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+		inputs, err := txparse.ParseInputReferencesFromExtendedTx(bytes.NewReader(txBytes))
 
 		require.NoError(t, err)
 		require.Len(t, inputs, 1)
@@ -526,9 +527,9 @@ func createTestTxWithInputs(t *testing.T, numInputs int, scriptSize int) *bt.Tx 
 	return tx
 }
 
-// TestParseInputReferencesOnlyWithExtendedFormat tests that ParseInputReferencesOnly correctly
+// TestParseInputReferencesFromExtendedTxWithExtendedFormat tests that ParseInputReferencesFromExtendedTx correctly
 // parses external transactions using the ACTUAL production code path from create.go:869 and get.go:1432.
-func TestParseInputReferencesOnlyWithExtendedFormat(t *testing.T) {
+func TestParseInputReferencesFromExtendedTxWithExtendedFormat(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a transaction with multiple inputs and Extended Format metadata
@@ -614,9 +615,9 @@ func TestParseInputReferencesOnlyWithExtendedFormat(t *testing.T) {
 	}
 }
 
-// TestParseInputReferencesOnlyRejectsNonExtendedFormat verifies that ParseInputReferencesOnly
+// TestParseInputReferencesFromExtendedTxRejectsNonExtendedFormat verifies that ParseInputReferencesFromExtendedTx
 // returns an error when the transaction is not in extended format.
-func TestParseInputReferencesOnlyRejectsNonExtendedFormat(t *testing.T) {
+func TestParseInputReferencesFromExtendedTxRejectsNonExtendedFormat(t *testing.T) {
 	// Create a simple transaction
 	tx := bt.NewTx()
 
@@ -654,10 +655,10 @@ func TestParseInputReferencesOnlyRejectsNonExtendedFormat(t *testing.T) {
 
 	// Attempt to parse - should fail because it's not in extended format
 	reader := bytes.NewReader(txBytes)
-	inputs, err := teranode_aerospike.ParseInputReferencesOnly(reader)
+	inputs, err := txparse.ParseInputReferencesFromExtendedTx(reader)
 
 	// Verify that we get an error about not being extended format
-	require.Error(t, err, "ParseInputReferencesOnly should reject non-extended format transactions")
+	require.Error(t, err, "ParseInputReferencesFromExtendedTx should reject non-extended format transactions")
 	require.Nil(t, inputs, "Should return nil inputs on error")
 	require.Contains(t, err.Error(), "transaction is not in extended format", "Error message should indicate the transaction is not in extended format")
 }

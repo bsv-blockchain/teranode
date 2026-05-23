@@ -3,11 +3,14 @@ package aerospike
 import (
 	"context"
 	"testing"
+	"time"
 
 	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +85,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		bins := map[string]interface{}{}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not found")
+		assert.Contains(t, err.Error(), "createdAt not found")
 	})
 
 	t.Run("NilCreatedAt", func(t *testing.T) {
@@ -91,7 +94,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not found")
+		assert.Contains(t, err.Error(), "createdAt not found")
 	})
 
 	t.Run("InvalidCreatedAtType", func(t *testing.T) {
@@ -100,7 +103,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not int64")
+		assert.Contains(t, err.Error(), "createdAt not int64")
 	})
 }
 
@@ -190,10 +193,10 @@ func Test_unminedTxIterator_Close(t *testing.T) {
 			done:      false,
 		}
 
-		// This should panic because we're calling Close() on nil recordset
-		assert.Panics(t, func() {
-			_ = it.Close()
-		})
+		// Should not panic - nil recordset is handled gracefully
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
 	})
 
 	t.Run("CloseSetsDoneFlag", func(t *testing.T) {
@@ -201,10 +204,25 @@ func Test_unminedTxIterator_Close(t *testing.T) {
 			done: false,
 		}
 
-		// Test that done flag gets set (ignoring the panic from nil recordset)
-		assert.Panics(t, func() {
-			_ = it.Close()
-		})
+		// Test that done flag gets set
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
+	})
+
+	t.Run("CloseMultipleTimes", func(t *testing.T) {
+		it := &unminedTxIterator{
+			done: false,
+		}
+
+		// First close
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
+
+		// Second close should be safe
+		err = it.Close()
+		assert.NoError(t, err)
 		assert.True(t, it.done)
 	})
 }
@@ -241,7 +259,7 @@ func Test_GetUnminedTxIterator(t *testing.T) {
 			client: nil,
 		}
 
-		it, err := store.GetUnminedTxIterator(false)
+		it, err := store.GetUnminedTxIterator()
 		assert.Error(t, err)
 		assert.Nil(t, it)
 		assert.Contains(t, err.Error(), "aerospike client not initialized")
@@ -285,11 +303,15 @@ func Test_Next_EdgeCases(t *testing.T) {
 
 	t.Run("ChannelClosed", func(t *testing.T) {
 		// Create a closed channel to simulate end of iteration
-		resultChan := make(chan *as.Result)
+		resultChan := make(chan []*utxo.UnminedTransaction)
 		close(resultChan)
 
+		errorChan := make(chan error, 1)
+		close(errorChan)
+
 		it := &unminedTxIterator{
-			result: resultChan,
+			resultChan: resultChan,
+			errorChan:  errorChan,
 		}
 
 		// With nil recordset, should return early with nil/nil
@@ -304,7 +326,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 	t.Run("NilStore", func(t *testing.T) {
 		// This would panic in real usage, but test the behavior
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(nil, false)
+			_, _ = newUnminedTxIterator(nil)
 		})
 	})
 
@@ -317,7 +339,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 
 		// This will panic because client.Query is called on nil
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(store, false)
+			_, _ = newUnminedTxIterator(store)
 		})
 	})
 }
@@ -330,9 +352,199 @@ func Test_closeWithLogging(t *testing.T) {
 			store:     &Store{},
 		}
 
-		// This should panic when calling Close on nil recordset
-		assert.Panics(t, func() {
+		// Should not panic - nil recordset is handled gracefully
+		assert.NotPanics(t, func() {
 			it.closeWithLogging()
 		})
 	})
+}
+
+func Test_extractTxIDAndUnminedSince(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		bins := map[string]interface{}{
+			fields.TxID.String():         validHash[:],
+			fields.UnminedSince.String(): 42,
+		}
+		hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
+		require.NoError(t, err)
+		assert.Equal(t, validHash, *hash)
+		assert.Equal(t, 42, unminedSince)
+	})
+
+	t.Run("missing txid", func(t *testing.T) {
+		_, _, err := extractTxIDAndUnminedSince(map[string]interface{}{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not found")
+	})
+
+	t.Run("wrong txid type", func(t *testing.T) {
+		bins := map[string]interface{}{
+			fields.TxID.String(): 12345,
+		}
+		_, _, err := extractTxIDAndUnminedSince(bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not []byte")
+	})
+
+	t.Run("missing unmined_since defaults to zero", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		bins := map[string]interface{}{
+			fields.TxID.String(): validHash[:],
+		}
+		_, unminedSince, err := extractTxIDAndUnminedSince(bins)
+		require.NoError(t, err)
+		assert.Equal(t, 0, unminedSince)
+	})
+}
+
+func Test_processPrunerRecord(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("valid record", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         validHash[:],
+			fields.UnminedSince.String(): 5,
+			// No external flag and no inputs = empty inpoints (skipped gracefully)
+		}
+
+		result, err := it.processPrunerRecord(ctx, bins)
+		require.NoError(t, err)
+		// No inpoints available (no external, no inputs bin) so processTransactionInpoints
+		// returns error and processPrunerRecord returns nil
+		assert.Nil(t, result)
+	})
+
+	t.Run("missing txid", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not found")
+	})
+
+	t.Run("invalid txid type", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         "not-bytes",
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not []byte")
+	})
+
+	t.Run("invalid txid length", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         []byte{0x01, 0x02}, // too short
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+	})
+
+	t.Run("missing unmined since defaults to zero", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String(): validHash[:],
+			// No UnminedSince - should default to 0
+		}
+
+		result, err := it.processPrunerRecord(ctx, bins)
+		require.NoError(t, err)
+		// inpoint error → returns nil
+		assert.Nil(t, result)
+	})
+}
+
+// Test_processRecordset_IdleTimeout verifies that a stalled results channel triggers the idle
+// timeout and surfaces an error, preventing workers from hanging indefinitely on dead connections.
+func Test_processRecordset_IdleTimeout(t *testing.T) {
+	resultChan := make(chan []*utxo.UnminedTransaction, 4)
+	errorChan := make(chan error, 1)
+
+	it := &unminedTxIterator{
+		store: &Store{
+			logger: ulogger.TestLogger{},
+		},
+		resultChan:       resultChan,
+		errorChan:        errorChan,
+		queryIdleTimeout: 100 * time.Millisecond, // short timeout for test
+	}
+
+	// Create a results channel that never sends anything, simulating a stalled connection
+	stalledResults := make(chan *as.Result)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		it.processRecordset(ctx, stalledResults)
+		close(done)
+	}()
+
+	// Worker should abort within the idle timeout
+	select {
+	case <-done:
+		// Success: worker exited
+	case <-time.After(2 * time.Second):
+		t.Fatal("processRecordset did not exit after idle timeout")
+	}
+
+	// Verify an error was sent to the error channel
+	select {
+	case err := <-errorChan:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Aerospike partition query stalled")
+	default:
+		t.Fatal("expected error on errorChan but got none")
+	}
+}
+
+// Test_Next_SurfacesErrorOnChannelClose verifies that Next() checks errorChan
+// after resultChan closes, so worker errors are not silently swallowed.
+func Test_Next_SurfacesErrorOnChannelClose(t *testing.T) {
+	resultChan := make(chan []*utxo.UnminedTransaction, 1)
+	errorChan := make(chan error, 1)
+
+	// Simulate a worker that sent an error and then all channels closed
+	stalledErr := errors.NewProcessingError("Aerospike partition query stalled: no records received in 60s")
+	errorChan <- stalledErr
+	close(resultChan)
+
+	it := &unminedTxIterator{
+		resultChan: resultChan,
+		errorChan:  errorChan,
+	}
+
+	ctx := context.Background()
+	batch, err := it.Next(ctx)
+	assert.Nil(t, batch)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Aerospike partition query stalled")
 }

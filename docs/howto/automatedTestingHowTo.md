@@ -1,13 +1,13 @@
-## Setting Up Test Environment
+# Setting Up Test Environment
 
-### How to Set Up Your Local Test Environment
+## How to Set Up Your Local Test Environment
 
 1. Prerequisites:
 
     ```bash
     # Install required tools
     docker compose
-    go 1.21 or higher
+    go 1.26 or higher
     make
     ```
 
@@ -27,7 +27,7 @@
     make smoketest
     ```
 
-### How to Configure Test Settings
+## How to Configure Test Settings
 
 1. Create local settings:
 
@@ -41,9 +41,9 @@
     - `docker` - Docker-based testing
     - `docker.ci` - CI environment testing
 
-## Running Tests
+# Running Tests
 
-### How to Run Test Suites
+## How to Run Test Suites
 
 1. Run all tests in a suite:
 
@@ -57,9 +57,9 @@
     cd /teranode/test/tna
     go test -v -tags test_tna
 
-    # Run TNB tests
+    # Run TNB tests (no build tag required — see note at bottom of Available Test Tags section)
     cd /teranode/test/tnb
-    go test -v -tags test_tnb
+    go test -v
 
     # Run TEC tests
     cd /teranode/test/tec
@@ -89,7 +89,7 @@
     go test -v -tags "test_tna,testtxmetacache"
     ```
 
-### How to Debug Failed Tests
+## How to Debug Failed Tests
 
 1. Enable verbose logging:
 
@@ -117,9 +117,9 @@
     curl http://localhost:38090/api/v1/bestblockheader/json
     ```
 
-## Adding New Tests
+# Adding New Tests
 
-### How to Add a New Test Case
+## How to Add a New Test Case
 
 1. Create test file with proper structure:
 
@@ -221,7 +221,7 @@
     }
     ```
 
-### How to Add Custom Test Configuration
+## How to Add Custom Test Configuration
 
 1. Use TConfig system to customize settings:
 
@@ -256,9 +256,9 @@
           - CUSTOM_SETTING=value
     ```
 
-## Working with Multiple Nodes
+# Working with Multiple Nodes
 
-### How to Test Node Communication
+## How to Test Node Communication
 
 1. Setup multiple nodes:
 
@@ -294,7 +294,7 @@
     }
     ```
 
-### How to Test Node Failure Scenarios
+## How to Test Node Failure Scenarios
 
 1. Stop specific containers:
 
@@ -326,9 +326,9 @@
     }
     ```
 
-## Cleanup and Maintenance
+# Cleanup and Maintenance
 
-### How to Clean Test Environment
+## How to Clean Test Environment
 
 1. Remove test data:
 
@@ -355,7 +355,7 @@
     }
     ```
 
-### How to Handle Common Issues
+## How to Handle Common Issues
 
 1. Port conflicts:
 
@@ -386,24 +386,25 @@
     sudo rm -rf ./data/test
     ```
 
-## Available Test Tags
+# Available Test Tags
 
 Teranode uses build tags to control which tests run:
 
-- `test_tna` - TNA test suite
-- `test_tnb` - TNB test suite
-- `test_tec` - TEC test suite
-- `test_tnd` - TND test suite
-- `test_tnf` - TNF test suite
-- `test_tnj` - TNJ test suite
-- `test_smoke` - Smoke tests
-- `test_functional` - Functional tests
-- `testtxmetacache` - Use small transaction metadata cache
-- `largetxmetacache` - Use production-sized cache
+- `test_tna` - TNA test suite (`test/tna/`)
+- `test_tec` - TEC test suite (`test/tec/`)
+- `test_tnd` - TND test suite (`test/tnd/`)
+- `test_tnf` - TNF test suite (`test/tnf/`)
+- `test_smoke` - Smoke tests (docker-based e2e)
+- `test_functional` - Functional tests (subset of smoke)
+- `test_utxo` - UTXO tests (subset of smoke)
+- `test_peer` - Peer tests (subset of smoke)
+- `testtxmetacache` - Use small transaction metadata cache (for testing)
 - `aerospike` - Tests requiring Aerospike
 - `debug` - Enable debug mode for tests
 
-## Other Resources
+> **Note:** The `test/tnb/` and `test/tnj/` test directories do not use build tags; run them directly with `go test ./test/tnb/` and `go test ./test/tnj/`.
+
+# Other Resources
 
 - [QA Guide & Instructions for Functional Requirement Tests](../topics/functionalRequirementTests.md)
 - [Understanding The Testing Framework](../topics/understandingTheTestingFramework.md)

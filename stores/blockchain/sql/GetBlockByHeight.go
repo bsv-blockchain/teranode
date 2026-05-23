@@ -98,7 +98,28 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE invalid = false
+			AND hash = (
+				SELECT b.hash
+				FROM blocks b
+				WHERE b.invalid = false
+				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				LIMIT 1
+			)
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND bb.invalid = false
+			  AND bb.height >= $1
+		)
 		SELECT
 		 b.ID
 	    ,b.version
@@ -113,34 +134,35 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		,b.subtree_count
 		,b.subtrees
 		,b.height
+		,b.coinbase_bump
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE invalid = false
-					AND hash = (
-						SELECT b.hash
-						FROM blocks b
-						WHERE b.invalid = false
-						ORDER BY chain_work DESC, peer_id ASC, id ASC
-						LIMIT 1
-					)
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-					  AND bb.invalid = false
-				)
-				SELECT id FROM ChainBlocks
-				WHERE height = $1
-				LIMIT 1
-			)
-		)
+		JOIN ChainBlocks cb ON b.id = cb.id
+		WHERE cb.height = $1
+		LIMIT 1
 	`
+	} else {
+		q = `
+		SELECT
+		 b.ID
+	    ,b.version
+		,b.block_time
+		,b.n_bits
+	    ,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+	    ,b.tx_count
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.subtree_count
+		,b.subtrees
+		,b.height
+		,b.coinbase_bump
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height = $1
+		LIMIT 1
+	`
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, height)
 	if err != nil {

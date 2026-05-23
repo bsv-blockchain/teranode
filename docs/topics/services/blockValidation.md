@@ -65,7 +65,11 @@ The block validator is a service that validates blocks. After validating them, i
 
 ![block_validation_p2p_block_found.svg](img/plantuml/blockvalidation/block_validation_p2p_block_found.svg)
 
-- The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
+Block validation receives new blocks through two distinct paths:
+
+1. **P2P-discovered blocks (primary)**: The P2P service publishes block announcements to a Kafka topic. Block validation consumes this topic via `consumerMessageHandler`, which calls `blockHandler()` to queue blocks for processing via `blockFoundCh`.
+2. **Legacy-synced blocks**: The Legacy service's netsync manager calls `blockValidation.ProcessBlock()` directly when it downloads a complete block from a legacy Bitcoin peer.
+
 - The block validation service will then check if the block is already known. If not, it will start the validation process.
 - The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
 
@@ -84,7 +88,7 @@ The block validator is a service that validates blocks. After validating them, i
     - The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
     - The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
     - The validator adds the block to the Blockchain.
-    - For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
+    - Subtrees retain their finite DAH (Delete-At-Height) from assembly/validation. The Block Persister will promote them to permanent (DAH=0) when the block is confirmed on the main chain.
     - For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
     - Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
 
@@ -126,7 +130,7 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Setting**: `blockvalidation_optimisticMining` (default: `false`)
+- **Setting**: `blockvalidation_optimistic_mining` (default: `true`)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
 - **Automatic Disable**: Always disabled during catchup mode for better reliability
 
@@ -1041,6 +1045,47 @@ The `SetMinedMulti` operation is highly optimized for batch processing:
 - **Parallel Processing**: For blocks with many subtrees, subtree processing can be parallelized
 - **Lua Script Execution**: Aerospike UTXO store uses atomic Lua scripts for metadata updates
 - **Automatic Unlocking**: Locked flag automatically unset as part of mined metadata update
+
+#### Coverage Postcondition and `setMinedChan` Retry Loop
+
+`SetMinedMulti` enforces a coverage postcondition: when `UnsetMined=false` and a nil error is returned, every submitted hash MUST appear in the returned map and every returned slice MUST contain the current `blockID`. Implementations (Aerospike UDF + expression paths, SQL store, TxMetaCache wrapper) all enforce this; `model.UpdateTxMinedStatus` re-verifies it at the caller layer as defence-in-depth.
+
+When the postcondition cannot be satisfied — typically because of historical-corrupt `block_ids` state in the UTXO store from pre-coverage-enforcement bugs — `setTxMinedStatus` returns a `ProcessingError` and the `setMinedChan` worker retries.
+
+**Bounded exponential backoff.** The worker tracks consecutive failures per block hash and applies an exponential-with-cap backoff:
+
+| Retry attempt | Sleep before re-queue |
+| --- | --- |
+| 1 | 1s |
+| 2 | 2s |
+| 3 | 4s |
+| 4 | 8s |
+| 5–10 | 16s (capped) |
+
+After **10 consecutive failures** (total worst-case budget: 111s) the worker emits an `ERROR` log line containing the `manual_intervention_required` marker and drops the block hash from the channel. A fresh notification arriving later starts a new counter from zero.
+
+**Counter reset paths:**
+
+- `setTxMinedStatus` returns nil (successful mark): counter deleted.
+- `MinedSet` is already true when the worker dequeues (block was completed by another path): counter deleted.
+- Block returns `ErrBlockNotFound` (block is gone): counter deleted.
+- Drop after `setMinedMaxRetries`: counter deleted; future notifications restart fresh.
+
+**Observability.**
+
+- `teranode_blockvalidation_setmined_retry_total{blockhash}` (counter) — incremented on every retry. Alert when a single label series approaches the retry ceiling.
+- `teranode_blockvalidation_setmined_drops_total{blockhash}` (counter) — incremented when the worker drops a block after exceeding retries. Any non-zero value is page-worthy.
+- Log marker: grep `manual_intervention_required` in the blockvalidation service logs for dropped block hashes.
+
+**Operator runbook for `manual_intervention_required`.**
+
+1. Identify the block hash from the log line.
+2. Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's `blockID` in its `blockIDs` slice. Drift here is the signal.
+3. If the block is on the longest chain and has missing tags, repair via a targeted re-run of `SetMinedMulti` for the affected txs (use the maintenance CLI; do NOT bypass the coverage check).
+4. After repair, re-trigger marking by re-publishing `NotificationType_BlockSubtreesSet` for the block hash (blockchain service `SetBlockSubtreesSet`). The worker counter is already cleared from the drop, so the new attempt starts fresh.
+5. If `block_validation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
+
+The label cardinality cost of `{blockhash}` is intentional: a per-block alert is the only useful operator signal for "this specific block is unrecoverable". Once repaired and the counter stops incrementing, the series naturally falls out of recent windows.
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >

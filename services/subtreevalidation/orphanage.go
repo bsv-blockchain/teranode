@@ -8,7 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 // Orphanage manages orphaned transactions that are missing their parent transactions.
@@ -94,8 +94,14 @@ func (o *Orphanage) Delete(txHash chainhash.Hash) {
 	defer o.lock.Unlock()
 
 	o.txMap.Delete(txHash)
-	o.logger.Debugf("[Orphanage] Removed transaction %s (size: %d/%d)",
-		txHash.String(), o.txMap.Len(), o.maxSize)
+	// Guard arg evaluation: Go evaluates Debugf arguments at the call site
+	// regardless of log level, so txHash.String() (hex-encodes 32 bytes,
+	// allocates ~64 B) runs on every delete. Profiling showed this single
+	// log line accounted for >1 TB of allocations / 45 s on a 1M-tx subtree.
+	if o.logger.LogLevel() <= ulogger.LogLevelDebug {
+		o.logger.Debugf("[Orphanage] Removed transaction %s (size: %d/%d)",
+			txHash.String(), o.txMap.Len(), o.maxSize)
+	}
 }
 
 // Len returns the current number of entries in the orphanage.
@@ -127,6 +133,11 @@ func (o *Orphanage) Cleanup() {
 	defer o.lock.Unlock()
 
 	o.logger.Infof("[Orphanage] Cleanup: current size: %d/%d", o.txMap.Len(), o.maxSize)
+}
+
+// Stop stops the background cleanup goroutine of the expiring map.
+func (o *Orphanage) Stop() {
+	o.txMap.Stop()
 }
 
 // MaxSize returns the maximum size limit of the orphanage.

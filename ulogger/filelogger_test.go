@@ -323,7 +323,7 @@ func TestLogMessage(t *testing.T) {
 	defer file.Close()
 
 	t.Run("BasicLogMessage", func(t *testing.T) {
-		logMessage(file, "test-service", "INFO", "Test message: %s", "hello")
+		logMessage(file, "test-service", "INFO", "Test message: %s", "", "", "hello")
 
 		content := readLogFile(t, logFile)
 
@@ -338,7 +338,7 @@ func TestLogMessage(t *testing.T) {
 	})
 
 	t.Run("MessageWithMultipleArgs", func(t *testing.T) {
-		logMessage(file, "test-service", "ERROR", "Error: %s - Code: %d", "failed", 404)
+		logMessage(file, "test-service", "ERROR", "Error: %s - Code: %d", "", "", "failed", 404)
 
 		content := readLogFile(t, logFile)
 
@@ -362,7 +362,7 @@ func TestFileLogger_Fatalf(t *testing.T) {
 
 		// We can't actually call Fatalf because it will exit the test process
 		// Instead, we'll test the underlying logMessage function directly
-		logMessage(logger.logFile, logger.service, "FATAL", "Fatal error: %s", "critical")
+		logMessage(logger.logFile, logger.service, "FATAL", "Fatal error: %s", "", "", "critical")
 
 		content := readLogFile(t, logFile)
 		assert.Contains(t, content, "FATAL")

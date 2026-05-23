@@ -93,6 +93,23 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 	defer cancel()
 
 	const q = `
+		WITH RECURSIVE target_block AS (
+			SELECT id, height
+			FROM blocks
+			WHERE hash = $2
+		),
+		ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			CROSS JOIN target_block tb
+			WHERE bb.id != cb.id
+			  AND bb.height >= tb.height
+		)
 		SELECT
 			 b.version
 			,b.block_time
@@ -112,26 +129,13 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 			,b.subtrees_set
 			,b.invalid
 			,b.processed_at
+			,b.median_time_past
 			,b.coinbase_tx
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-			)
-		)				        
-		  AND id >= (SELECT id from blocks WHERE hash = $2)
-		ORDER BY height ASC
+		JOIN ChainBlocks cb ON b.id = cb.id
+		CROSS JOIN target_block tb
+		WHERE cb.height >= tb.height
+		ORDER BY b.height ASC
 		LIMIT $3
 	`
 

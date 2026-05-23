@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -62,17 +64,22 @@ func (m *MockValidatorForTxTest) WasValidateCalled() bool {
 	return m.validateCalled.Load()
 }
 
-// MockTxStore is a simple mock transaction store for testing
+// MockTxStore is a simple mock transaction store for testing.
+// Real blob stores are concurrency-safe; the mock must be too because the
+// batch HTTP/gRPC handlers fan out parallel writes.
 type MockTxStore struct {
 	storeCalled atomic.Bool
 	storeErr    error
+	mu          sync.Mutex
 	txIDs       [][]byte
 }
 
 // Store implements a mock Store method
 func (s *MockTxStore) Store(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	s.storeCalled.Store(true)
+	s.mu.Lock()
 	s.txIDs = append(s.txIDs, key)
+	s.mu.Unlock()
 
 	return s.storeErr
 }
@@ -84,6 +91,9 @@ func (s *MockTxStore) Get(ctx context.Context, key []byte, fileType fileformat.F
 
 // Exists implements a mock Exists method matching blob.Store interface
 func (s *MockTxStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for _, id := range s.txIDs {
 		if bytes.Equal(id, key) {
 			return true, nil
@@ -101,11 +111,6 @@ func (s *MockTxStore) Fetch(ctx context.Context, key []byte, fileType fileformat
 // GetIoReader implements a mock method for blob.Store interface
 func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader([]byte{})), nil
-}
-
-// GetDAH implements a mock method for blob.Store interface
-func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, nil
 }
 
 // Health implements a mock method for blob.Store interface
@@ -142,6 +147,9 @@ func (s *MockTxStore) Del(ctx context.Context, key []byte, fileType fileformat.F
 
 // Size implements a mock Size method
 func (s *MockTxStore) Size() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return uint64(len(s.txIDs))
 }
 
@@ -217,6 +225,7 @@ func setupPropagationServer(t *testing.T, mockValidator validator.Interface, sto
 			blockchainClient: mockBlockchainClient,
 			txStore:          mockStore,
 			stats:            stats,
+			settings:         &settings.Settings{Policy: &settings.PolicySettings{}},
 		},
 	}
 
@@ -256,9 +265,65 @@ func TestHandleSingleTx(t *testing.T) {
 		{
 			name:                "Transaction validation error",
 			requestBody:         txBytes,
-			expectedStatusCode:  http.StatusInternalServerError,
+			expectedStatusCode:  http.StatusBadRequest,
 			expectedResponse:    "Failed to process transaction",
 			mockValidationError: errors.NewTxInvalidError("test validation error"),
+		},
+		{
+			name:                "Tx policy rejection",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusBadRequest,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxPolicyError("test policy error"),
+		},
+		{
+			name:                "Double-spend conflict",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxInvalidDoubleSpendError("test double spend"),
+		},
+		{
+			name:                "Conflicting tx",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxConflictingError("test conflicting"),
+		},
+		{
+			name:                "Frozen utxo",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusForbidden,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewUtxoFrozenError("test frozen"),
+		},
+		{
+			name:                "Wrapped tx-invalid through processing error",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusBadRequest,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxInvalidError("inner reason")),
+		},
+		{
+			name:                "Missing parent tx",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxMissingParentError("parent not in utxo store"),
+		},
+		{
+			name:                "Wrapped missing parent through processing error",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxMissingParentError("inner missing parent")),
+		},
+		{
+			name:                "Tx already exists",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusOK,
+			expectedResponse:    "OK",
+			mockValidationError: errors.NewTxExistsError("duplicate submission"),
 		},
 		{
 			name:               "Store error",
@@ -424,11 +489,11 @@ func TestHTTPIntegration(t *testing.T) {
 	// Create a minimal PropagationServer with just the dependencies needed for the test
 	ps := &MockPropagationServer{
 		PropagationServer: PropagationServer{
-			logger:    ulogger.New("test-logger"),
-			validator: mockValidator,
-			txStore:   mockStore,
-			// blockchainClient: &CustomMockBlockchainClient{},
+			logger:           ulogger.New("test-logger"),
+			validator:        mockValidator,
+			txStore:          mockStore,
 			blockchainClient: &blockchain.Mock{},
+			settings:         &settings.Settings{Policy: &settings.PolicySettings{}},
 		},
 	}
 

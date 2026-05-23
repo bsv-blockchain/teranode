@@ -304,22 +304,24 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	util.RegisterPrometheusMetrics()
 
+	const defaultHealthTimeout = 5 * time.Second
+
 	mux := http.NewServeMux()
 	healthFunc := func(liveness bool) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
-			var status int
-
-			var details string
-
-			status, details, err = sm.HealthHandler(sm.Ctx, liveness)
-			if err != nil {
-				w.WriteHeader(status)
-				_, _ = w.Write([]byte(details))
-
-				return
+			timeout := defaultHealthTimeout
+			if v := r.URL.Query().Get("timeout"); v != "" {
+				if parsed, parseErr := time.ParseDuration(v); parseErr == nil && parsed > 0 {
+					timeout = parsed
+				}
 			}
 
-			w.WriteHeader(http.StatusOK)
+			ctx, cancel := context.WithTimeout(sm.Ctx, timeout)
+			defer cancel()
+
+			status, details, _ := sm.HealthHandler(ctx, liveness)
+
+			w.WriteHeader(status)
 			_, _ = w.Write([]byte(details))
 		}
 	}

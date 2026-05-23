@@ -1,61 +1,132 @@
+# RPC Service
 
-`go run . -all=0 -rpc=1 -blockchain=1`
+The RPC service provides a Bitcoin-compatible JSON-RPC interface for interacting with Teranode. It is the primary interface for wallets, miners, and tooling that communicate using the standard Bitcoin RPC protocol.
 
+## Default Port
 
+`9292` (configured via `rpc_listener_url` in settings, or `TERANODE_RPC_PORT` environment variable)
 
-##use postman
+## Authentication
 
-`{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1]}`
+The service uses HTTP Basic Authentication. The default credentials are `bitcoin:bitcoin`. Pass them with `--user bitcoin:bitcoin` in curl, or configure them via settings.
 
-`{"method": "getblockbyheight", "params": ["1", 1]}`
+## Running the Service
 
+```bash
+go run . -all=0 -rpc=1 -blockchain=1
+```
 
-`{"method": "getbestblockhash"}`
+## API Methods
 
-`{"method": "createrawtransaction", "params": [[{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":0}],{"148EznH7niCQRUcsrtDgBBKUfYDYESscUQ":12.5}]}`
+All requests use HTTP POST with a JSON body containing `method` and optional `params`.
 
-`{"method": "sendrawtransaction", "params": ["010000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff01807c814a000000001976a9142246f8f846d04b71fbec79815c7ab487b47737a388ac00000000"]}`
+### getbestblockhash
 
+Returns the hash of the best (tip) block.
 
-`{"method": "getrawtransaction", "params": ["txid":"0000000000000000000000000000000000000000000000000000000000000000",1]}`
-
-`{"method": "submitminingsolution", "params": ["{\"id\": \"aGVsbG9JZA==\",\"nonce\": 1804358173, \"coinbase\": \"aGVsbG9JZA==\",\"time\": 1528925410,\"version\": 536870912}"]}`
-
-`{"method": "generate", "params": [101]}`
-
-`{"method": "setban", "params": ["172.108.0.0/24", "add", 86400,false]}`
-
-curl --user bitcoin  -X POST http://localhost:9292 \
-     -H "Content-Type: application/json" \
-     -d '{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"]}'
-
-##use curl
-
-curl --user bitcoin  -X POST http://localhost:19292 \
-     -H "Content-Type: application/json" \
-     -d '{"method": "sendrawtransaction", "params": ["010000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff01807c814a000000001976a9142246f8f846d04b71fbec79815c7ab487b47737a388ac00000000"]}'
-
-curl --user bitcoin  -X POST http://localhost:19292 \
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
      -H "Content-Type: application/json" \
      -d '{"method": "getbestblockhash"}'
+```
 
-curl --user bitcoin  -X POST http://localhost:19292 \
+### getblock
+
+Returns block data for a given block hash.
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
      -H "Content-Type: application/json" \
-     -d '{"method": "getblock", "params": ["003e8c9abde82685fdacfd6594d9de14801c4964e1dbe79397afa6299360b521", 1]}'
+     -d '{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1]}'
+```
 
+### getblockbyheight
 
+Returns block data for a given block height.
 
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "getblockbyheight", "params": ["1", 1]}'
+```
 
-##test ban
+### getrawtransaction
 
-docker compose build
+Returns raw transaction data for a given transaction ID.
 
-cd test
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "getrawtransaction", "params": ["<txid>", 1]}'
+```
 
-docker compose -f docker-compose.e2etest.legacy.yml up -d
+### sendrawtransaction
 
-grpcurl -plaintext localhost:10087 blockchain_api.BlockchainAPI.LegacySync
+Broadcasts a raw transaction (hex-encoded) to the network.
 
-curl --user bitcoin:bitcoin -X POST http://localhost:\11292  -H "Content-Type: application/json"   -d '{"method": "getpeerinfo", "params": []}'
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "sendrawtransaction", "params": ["<hex-encoded-tx>"]}'
+```
 
-curl --user bitcoin:bitcoin -X POST http://localhost:\11292 -H "Content-Type: application/json"  -d '{"method": "setban", "params": ["172.19.0.8", "add", 1000000000000, false]}'
+### createrawtransaction
+
+Creates a raw transaction from inputs and outputs.
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "createrawtransaction", "params": [[{"txid":"<txid>","vout":0}],{"<address>":12.5}]}'
+```
+
+### generate
+
+Mines a given number of blocks (regtest/dev mode only).
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "generate", "params": [101]}'
+```
+
+### submitminingsolution
+
+Submits a mining solution.
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "submitminingsolution", "params": ["{\"id\": \"<id>\",\"nonce\": 1804358173, \"coinbase\": \"<coinbase>\",\"time\": 1528925410,\"version\": 536870912}"]}'
+```
+
+### setban
+
+Adds or removes a ban on an IP address or subnet.
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "setban", "params": ["172.108.0.0/24", "add", 86400, false]}'
+```
+
+### getpeerinfo
+
+Returns information about connected peers.
+
+```bash
+curl --user bitcoin:bitcoin -X POST http://localhost:9292 \
+     -H "Content-Type: application/json" \
+     -d '{"method": "getpeerinfo", "params": []}'
+```
+
+## Multi-Node Environments
+
+In multi-node test setups, each node's RPC port is prefixed with the node index (e.g., node 1 uses `19292`, node 2 uses `29292`). These are not the default port — they are environment-specific overrides used in docker-compose test configurations.
+
+## Related Configuration
+
+- `rpc_listener_url`: Full URL the RPC server listens on (e.g., `localhost:9292`)
+- `rpc_maxRequestSize`: Maximum request body size (default: 10MB)
+
+For full configuration options, see the [Settings Reference](../../docs/references/settings_reference.md).

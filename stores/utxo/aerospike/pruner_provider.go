@@ -53,6 +53,7 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		Namespace:     s.namespace,
 		Set:           s.setName,
 		IndexWaiter:   s,
+		LuaPackage:    LuaPackage,
 	}
 
 	// Create a new pruner service

@@ -1,6 +1,6 @@
-// Package alert implements the Bitcoin SV alert system server and related functionality.
+// Package alert implements the BSV Blockchain alert system server and related functionality.
 //
-// The alert package provides a comprehensive alert system for the Bitcoin SV network,
+// The alert package provides a comprehensive alert system for the BSV Blockchain network,
 // enabling notification and enforcement mechanisms for critical network events.
 // It includes functionality for sending and receiving network alerts, managing
 // blacklisted funds, handling confiscation transactions, and interacting with

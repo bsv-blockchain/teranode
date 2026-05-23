@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,14 +14,15 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -187,10 +187,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("successful creation with quorum path", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"
@@ -226,10 +222,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("with tx meta cache enabled", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"
@@ -255,10 +247,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("with invalid subtree kafka producer", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"
@@ -617,6 +605,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			// blockchainClient is nil, so FSM check is skipped and message is published
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
@@ -634,6 +623,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			// blockchainClient: nil, // Will cause FSM check to return false
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "test reason")
 		require.NotNil(t, publishedMsg)
@@ -661,6 +651,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			blockchainClient:             testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t),
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		// First publish
 		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")
@@ -747,4 +738,30 @@ func TestCheckSubtreeFromBlockInternal(t *testing.T) {
 		require.False(t, ok)
 		require.Contains(t, err.Error(), "Failed to parse previous block hash")
 	})
+}
+
+func TestResolveTxMetaCacheBucketType(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	tests := []struct {
+		input string
+		want  txmetacache.BucketType
+	}{
+		{"unallocated", txmetacache.Unallocated},
+		{"UNALLOCATED", txmetacache.Unallocated},
+		{"  unallocated  ", txmetacache.Unallocated},
+		{"", txmetacache.Unallocated}, // unset → default
+		{"preallocated", txmetacache.Preallocated},
+		{"trimmed", txmetacache.Trimmed},
+		{"native", txmetacache.Native},
+		{"Native", txmetacache.Native},
+		{"gibberish", txmetacache.Unallocated}, // unknown → fallback
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := resolveTxMetaCacheBucketType(logger, tc.input)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -202,7 +202,16 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StoreTransactionExternally(ctx, bItem, binsToStore)
+		// bItem.RecvDone() returns as soon as StoreTransactionExternally signals
+		// done, but the goroutine still has deferred cleanup to run (releaseLock
+		// issues an Aerospike Delete). Wait for the goroutine itself so that
+		// work finishes before the outer t.Cleanup closes the client — otherwise
+		// Client.Close races with the in-flight Delete on the partition map.
+		storeDone := make(chan struct{})
+		go func() {
+			defer close(storeDone)
+			s.StoreTransactionExternally(ctx, bItem, binsToStore)
+		}()
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)
@@ -221,10 +230,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file does not have a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah)
+		// DAH is now managed centrally by pruner service, not by blob stores
+
+		<-storeDone
 	})
 
 	t.Run("TestStore_StoreTransactionExternally - no utxos", func(t *testing.T) {
@@ -240,7 +248,11 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		_ = tx.AddOpReturnOutput([]byte("test"))
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StoreTransactionExternally(ctx, bItem, binsToStore)
+		storeDone := make(chan struct{})
+		go func() {
+			defer close(storeDone)
+			s.StoreTransactionExternally(ctx, bItem, binsToStore)
+		}()
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)
@@ -259,10 +271,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file does NOT have a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah) // DAH should be 0 as we did not set it when storing external txs
+		// DAH is now managed centrally by pruner service, not by blob stores
+
+		<-storeDone
 	})
 }
 
@@ -287,7 +298,11 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StorePartialTransactionExternally(ctx, bItem, binsToStore)
+		storeDone := make(chan struct{})
+		go func() {
+			defer close(storeDone)
+			s.StorePartialTransactionExternally(ctx, bItem, binsToStore)
+		}()
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)
@@ -305,6 +320,8 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeOutputs)
 		require.NoError(t, err)
 		assert.True(t, exists)
+
+		<-storeDone
 	})
 }
 

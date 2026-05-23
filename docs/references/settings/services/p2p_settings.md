@@ -8,14 +8,14 @@
 |---------|------|---------|---------------------|-------|
 | BootstrapPeers | []string | [] | p2p_bootstrap_peers | DHT bootstrapping entry points |
 | GRPCAddress | string | "" | p2p_grpcAddress | gRPC client connections |
-| GRPCListenAddress | string | ":9906" | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding |
+| GRPCListenAddress | string | ":9906" (Go default; overridden to `:9904` by `settings.conf` via `P2P_GRPC_PORT`) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding |
 | HTTPAddress | string | "localhost:9906" | p2p_httpAddress | HTTP client connections |
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
 | ListenAddresses | []string | [] | p2p_listen_addresses | P2P network interfaces |
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
 | ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
-| Port | int | 9906 | p2p_port | Default P2P communication port |
+| Port | int | 9906 (Code default; settings.conf ships with 9905 via `P2P_PORT`) | p2p_port | Default P2P communication port |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
 | BlockTopic | string | "" | p2p_block_topic | Block propagation topic |
 | NodeStatusTopic | string | "" | p2p_node_status_topic | Node status communication topic |
@@ -34,9 +34,10 @@
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
-| PeerMapMaxSize | int | 100000 | N/A | **INTERNAL** - Maximum entries in peer maps (hardcoded default) |
-| PeerMapTTL | time.Duration | 30m | N/A | **INTERNAL** - Peer map entry time-to-live (hardcoded default) |
-| PeerMapCleanupInterval | time.Duration | 5m | N/A | **INTERNAL** - Peer map cleanup frequency (hardcoded default) |
+| HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
+| PeerMapMaxSize | int | 100000 | p2p_peer_map_max_size | Maximum entries in peer maps |
+| PeerMapTTL | time.Duration | 30m | p2p_peer_map_ttl | Peer map entry time-to-live |
+| PeerMapCleanupInterval | time.Duration | 5m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 
 ## Configuration Dependencies
 
@@ -61,7 +62,7 @@
 - `PeerMapMaxSize` limits memory usage for block/subtree peer tracking
 - `PeerMapTTL` controls peer map entry expiration (30 minutes)
 - `PeerMapCleanupInterval` sets cleanup frequency (5 minutes)
-- These settings use hardcoded defaults and are not configurable via environment variables
+- These settings have sensible defaults but can be overridden via environment variables
 
 ### Network Scanning Prevention
 
@@ -74,11 +75,12 @@
 | Dependency | Interface | Usage |
 |------------|-----------|-------|
 | BlockchainClient | blockchain.ClientI | **CRITICAL** - Blockchain operations and block retrieval |
-| BlockValidationClient | blockvalidation.Interface | **CRITICAL** - Block validation operations |
 | BlockAssemblyClient | blockassembly.ClientI | **CRITICAL** - Block assembly operations |
-| RejectedTxKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Rejected transaction messaging |
-| BlocksKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Block messaging |
-| SubtreeKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Subtree messaging |
+| RejectedTxKafkaConsumer | kafka.KafkaConsumerGroupI | **CRITICAL** - Consuming rejected transaction notifications |
+| InvalidBlocksKafkaConsumer | kafka.KafkaConsumerGroupI | **CRITICAL** - Consuming invalid block notifications |
+| InvalidSubtreeKafkaConsumer | kafka.KafkaConsumerGroupI | **CRITICAL** - Consuming invalid subtree notifications |
+| BlocksKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Publishing block announcements |
+| SubtreeKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Publishing subtree announcements |
 
 ## Validation Rules
 
@@ -95,8 +97,9 @@
 ### Basic Configuration
 
 ```bash
-p2p_grpcListenAddress=:9906
-p2p_port=9906
+# Note: settings.conf sets P2P_GRPC_PORT=9904, overriding the Go default of :9906
+p2p_grpcListenAddress=:9904
+p2p_port=9905
 listen_mode=full
 ```
 

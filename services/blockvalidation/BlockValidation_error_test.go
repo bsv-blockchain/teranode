@@ -34,8 +34,8 @@ type testBlockValidation struct {
 	setMinedChan chan *chainhash.Hash
 }
 
-func (tbv *testBlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
-	return tbv.BlockValidation.ValidateBlock(ctx, block, baseURL, bloomStats, disableOptimisticMining...)
+func (tbv *testBlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
+	return tbv.BlockValidation.ValidateBlock(ctx, block, baseURL, disableOptimisticMining...)
 }
 
 func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.T) {
@@ -75,7 +75,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 		setMinedChan: make(chan *chainhash.Hash, 1),
 	}
 
-	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err := bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 
 	select {
@@ -90,7 +90,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 		return errors.NewError("not ready")
 	}
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 }
 
@@ -137,7 +137,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 		setMinedChan: setMinedChan,
 	}
 
-	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	err := bv.ValidateBlock(ctx, block, "test", false)
 	require.Error(t, err)
 
 	select {
@@ -152,7 +152,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 		return errors.NewError("not ready")
 	}
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.Error(t, err)
 }
 
@@ -379,6 +379,8 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -418,7 +420,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
 	// Wait for the goroutine to call InvalidateBlock
@@ -505,6 +507,8 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -545,6 +549,6 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 }

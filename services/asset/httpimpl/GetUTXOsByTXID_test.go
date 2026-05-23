@@ -9,7 +9,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -22,13 +21,13 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil).Once()
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil).Once()
 
 		// set echo context
 		echoContext.SetPath("/utxos/txid/:hash")
 		echoContext.SetParamNames("hash")
-		echoContext.SetParamValues(test.TX1Hash.String())
+		echoContext.SetParamValues(testTX1Hash.String())
 
 		// Call GetUTXOsByTxID handler
 		err := httpServer.GetUTXOsByTxID(JSON)(echoContext)
@@ -45,12 +44,12 @@ func TestGetUTXOsByTxID(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		tx1, err := bt.NewTxFromBytes(test.TX1RawBytes)
+		tx1, err := bt.NewTxFromBytes(testTX1RawBytes)
 		require.NoError(t, err)
 
 		// Check response fields
 		require.NotNil(t, response)
-		assert.Equal(t, test.TX1Hash.String(), response[0]["txid"])
+		assert.Equal(t, testTX1Hash.String(), response[0]["txid"])
 		assert.Equal(t, float64(0), response[0]["vout"])
 		assert.Equal(t, tx1.Outputs[0].LockingScript.String(), response[0]["lockingScript"])
 		assert.Equal(t, float64(tx1.Outputs[0].Satoshis), response[0]["satoshis"])

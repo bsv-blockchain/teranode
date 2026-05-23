@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,10 +40,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
+	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -76,6 +80,7 @@ type TestDaemon struct {
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
 	SubtreeStore          blob.Store
+	BlockchainStore       blockchainstore.Store
 	UtxoStore             utxo.Store
 	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
@@ -85,16 +90,21 @@ type TestDaemon struct {
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
 	skipContainerCleanup  bool
+	prunerObserver        *testPrunerObserver
+	blobDeletionObserver  *testBlobDeletionObserver
 	t                     *testing.T // Reference to testing.T for unified logging
 }
 
 // TestOptions defines the options for creating a test daemon instance.
 type TestOptions struct {
-	EnableFullLogging       bool
+	EnableDebugLogging      bool
+	EnableErrorLogging      bool
 	EnableLegacy            bool
 	EnableP2P               bool
 	EnableRPC               bool
 	EnableValidator         bool
+	EnableBlockPersister    bool
+	EnablePruner            bool
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
@@ -250,6 +260,19 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.P2P.GRPCAddress = clientAddr
 	}
 
+	if opts.EnableBlockPersister {
+		_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockpersister", "http://", ":0")
+		require.NoError(t, err)
+		appSettings.BlockPersister.HTTPListenAddress = listenAddr
+	}
+
+	if opts.EnablePruner {
+		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "pruner", "", ":0")
+		require.NoError(t, err)
+		appSettings.Pruner.GRPCListenAddress = listenAddr
+		appSettings.Pruner.GRPCAddress = clientAddr
+	}
+
 	// P2P HTTP
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "http://", ":0")
 	require.NoError(t, err)
@@ -336,9 +359,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
 	// Always set DataFolder and QuorumPath to test-specific directory
 	appSettings.DataFolder = path
+
 	// Override QuorumPath to ensure it uses the test-specific directory
 	// This prevents tests from sharing the same quorum directory
-	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
+	appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
 
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
@@ -378,6 +402,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
 		require.NoError(t, err, "Failed to create container manager")
 
+		// Set test-specific external storage path for Aerospike to avoid conflicts between parallel tests
+		// Use absolute path to ensure files are written to the correct location
+		externalStorePath := filepath.Join(appSettings.DataFolder, "externalStore")
+		absExternalStorePath, err := filepath.Abs(externalStorePath)
+		require.NoError(t, err, "Failed to get absolute path for external storage")
+		containerManager.SetExternalStorePath(absExternalStorePath)
+
 		utxoStoreURL, err := containerManager.Initialize(ctx)
 		require.NoError(t, err, "Failed to initialize container")
 
@@ -411,10 +442,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.NewUnifiedTestLogger(t, testName, serviceName, cancel)
 		})
-	} else if opts.EnableFullLogging {
+	} else if opts.EnableDebugLogging {
 		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
+		})
+	} else if opts.EnableErrorLogging {
+		logger = ulogger.New(appSettings.ClientName)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("ERROR"))
 		})
 	} else {
 		logger = ulogger.NewErrorTestLogger(t, cancel)
@@ -452,6 +488,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
+	if opts.EnableBlockPersister {
+		services = append(services, "-blockpersister=1")
+	}
+
+	if opts.EnablePruner {
+		services = append(services, "-pruner=1")
+	}
+
 	go d.Start(logger, services, appSettings, readyCh)
 
 	select {
@@ -464,6 +508,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+
+	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
+	// Aerospike may accept connections but still reject operations immediately after multiple
+	// services start connecting simultaneously. Combined with retry logic in tests, this ensures
+	// reliability across different environments (local development and resource-constrained CI).
+	if containerManager != nil && containerManager.GetStoreType() == containers.UTXOStoreAerospike {
+		time.Sleep(1 * time.Second)
+	}
 
 	var blockchainClient blockchain.ClientI
 
@@ -497,6 +549,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	blockchainStore, err := d.daemonStores.GetBlockchainStore(ctx, logger, appSettings)
+	require.NoError(t, err)
+
 	var utxoStore utxo.Store
 
 	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
@@ -507,7 +562,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
-	txStore, err := d.daemonStores.GetTxStore(logger, appSettings)
+	txStore, err := d.daemonStores.GetTxStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
 	if opts.FSMState.String() != "" {
@@ -556,7 +611,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		assetURL += appSettings.Asset.APIPrefix
 	}
 
-	return &TestDaemon{
+	td := &TestDaemon{
 		AssetURL:              assetURL,
 		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
@@ -568,6 +623,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
+		BlockchainStore:       blockchainStore,
 		UtxoStore:             utxoStore,
 		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
@@ -579,6 +635,44 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		skipContainerCleanup:  opts.SkipContainerCleanup,
 		t:                     t,
 	}
+
+	if opts.EnablePruner {
+		prunerObserver := newTestPrunerObserver(t)
+		td.prunerObserver = prunerObserver
+
+		// Register the observer with the pruner service
+		aerospikeStore, ok := utxoStore.(*aerospike.Store)
+		if !ok {
+			t.Logf("Warning: UtxoStore is not an Aerospike store, cannot register pruner observer")
+			t.Fail()
+		}
+
+		prunerService, err := aerospikeStore.GetPrunerService()
+		if err != nil {
+			t.Logf("Warning: Failed to get pruner service: %v", err)
+		} else if prunerService != nil {
+			prunerService.AddObserver(prunerObserver)
+			t.Logf("✓ Pruner observer registered with pruner service")
+		} else {
+			t.Logf("Warning: Pruner service is nil")
+		}
+
+		// Register blob deletion observer with pruner Server
+		blobDeletionObserver := newTestBlobDeletionObserver(t)
+		td.blobDeletionObserver = blobDeletionObserver
+
+		prunerServerInterface, err := d.ServiceManager.GetService("Pruner")
+		if err != nil {
+			t.Logf("Warning: Failed to get Pruner Server: %v", err)
+		} else if prunerServer, ok := prunerServerInterface.(*pruner.Server); ok {
+			prunerServer.SetBlobDeletionObserver(blobDeletionObserver)
+			t.Logf("✓ Blob deletion observer registered with Pruner Server")
+		} else {
+			t.Logf("Warning: Pruner service is not a *pruner.Server")
+		}
+	}
+
+	return td
 }
 
 // Stop stops the TestDaemon instance and cleans up resources.
@@ -587,8 +681,13 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
-	// Cancel context first to trigger HTTP server shutdowns
+	// Cancel context after daemon stop to trigger graceful shutdown of any remaining
+	// context-dependent components (HTTP servers, Kafka producers, etc.)
 	td.ctxCancel()
+
+	// Allow background goroutines (batchers, Kafka workers) to complete their cleanup.
+	// This prevents race conditions where goroutines try to access resources being closed.
+	runtime.Gosched()
 
 	// Shutdown the logger to prevent race conditions on testing.T access
 	// Background goroutines may still be running and trying to log errors
@@ -668,6 +767,7 @@ func GetPorts(appSettings *settings.Settings) []int {
 		getPortFromString(appSettings.Propagation.GRPCListenAddress),
 		getPortFromString(appSettings.Faucet.HTTPListenAddress),
 		getPortFromURL(appSettings.RPC.RPCListenerURL),
+		getPortFromString(appSettings.Pruner.GRPCListenAddress),
 	}
 
 	// remove all where port == 0
@@ -687,6 +787,11 @@ func removeZeros(ports []int) []int {
 	}
 
 	return result
+}
+
+// GetFreePort asks the kernel for a free open port that is ready to use.
+func GetFreePort() (int, error) {
+	return getFreePort()
 }
 
 // getFreePort asks the kernel for a free open port that is ready to use.
@@ -1003,6 +1108,64 @@ func (td *TestDaemon) WaitForTransactionInBlockAssembly(tx *bt.Tx, timeout time.
 		// Transaction not found yet, wait before checking again
 		time.Sleep(checkInterval)
 	}
+}
+
+func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
+	if td.prunerObserver == nil {
+		return
+	}
+
+	t.Log("Phase 4: Waiting for pruner to remove spent parent transactions...")
+	// The pruner runs periodically. We need to wait for it to prune the old transactions.
+	// With GlobalBlockHeightRetention=1, transactions older than 1 block should be pruned.
+	// Current height is 10, so we wait for the pruner to complete its cycle.
+	t.Logf("Waiting for pruner to complete pruning cycle...")
+	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
+	require.NoError(t, err, "Timeout waiting for pruner to complete")
+	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
+}
+
+// WaitForBlobDeletion waits for the blob deletion worker to complete processing.
+// Returns the height processed and counts of successful/failed deletions.
+func (td *TestDaemon) WaitForBlobDeletion(timeout time.Duration) (height uint32, successCount, failCount int64, err error) {
+	if td.blobDeletionObserver == nil {
+		return 0, 0, 0, errors.NewProcessingError("blob deletion observer not registered")
+	}
+
+	return td.blobDeletionObserver.waitForBlobDeletion(timeout)
+}
+
+// WaitForBlockPersisted waits for a block to be marked as persisted in the blockchain database.
+// It polls GetBlocksNotPersisted until the specified block is no longer in the unpersisted list.
+func (td *TestDaemon) WaitForBlockPersisted(blockHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	checkInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		// Check if this block is still in the unpersisted list
+		unpersistedBlocks, err := td.BlockchainClient.GetBlocksNotPersisted(td.Ctx, 100)
+		if err != nil {
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// If the block is not in the unpersisted list, it has been persisted
+		found := false
+		for _, b := range unpersistedBlocks {
+			if b.Hash().String() == blockHash.String() {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil // Block is no longer in unpersisted list, so it's persisted
+		}
+
+		time.Sleep(checkInterval)
+	}
+
+	return context.DeadlineExceeded
 }
 
 // CreateTransaction creates a new transaction with a single input from the parent transaction.
@@ -1395,6 +1558,14 @@ finished:
 }
 
 func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	// Check if block assembly is already at the expected block before waiting
+	// This prevents missing state changes that occurred before the channel was registered
+	currentHeader, currentHeight := td.BlockAssembler.CurrentBlock()
+	if currentHeader != nil && currentHeader.Hash().IsEqual(expectedBlock.Header.Hash()) {
+		t.Logf("Block assembly already at expected block: Height=%d, Hash=%s", currentHeight, currentHeader.Hash().String())
+		return
+	}
+
 	stateChangeCh := make(chan blockassembly.BestBlockInfo)
 	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
 
@@ -1593,6 +1764,18 @@ func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 // This is useful for restart tests where you want to pass the same container to a new daemon.
 func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
 	return td.containerManager
+}
+
+// GetBlockStore returns the block store used by this test daemon.
+// This is useful for tests that need to verify block persistence.
+func (td *TestDaemon) GetBlockStore() (blob.Store, error) {
+	return td.d.daemonStores.GetBlockStore(td.Ctx, td.Logger, td.Settings)
+}
+
+// GetTxStore returns the transaction store used by this test daemon.
+// This is useful for tests that need to verify transaction storage and deletion scheduling.
+func (td *TestDaemon) GetTxStore() (blob.Store, error) {
+	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
 }
 
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
@@ -2056,5 +2239,76 @@ func (td *TestDaemon) WaitForBlockAssemblyToProcessTx(t *testing.T, txHashStr st
 				return
 			}
 		}
+	}
+}
+
+type pruneEvent struct {
+	height           uint32
+	recordsProcessed int64
+}
+
+type testPrunerObserver struct {
+	t              *testing.T
+	pruneCompleted chan pruneEvent
+}
+
+func newTestPrunerObserver(t *testing.T) *testPrunerObserver {
+	return &testPrunerObserver{
+		t:              t,
+		pruneCompleted: make(chan pruneEvent, 10),
+	}
+}
+
+func (o *testPrunerObserver) OnPruneComplete(height uint32, recordsProcessed int64) {
+	o.t.Logf("✓ Pruner callback invoked for height %d with %d records processed", height, recordsProcessed)
+	select {
+	case o.pruneCompleted <- pruneEvent{height: height, recordsProcessed: recordsProcessed}:
+	default:
+		o.t.Logf("Warning: pruneCompleted channel is full, dropping event for height %d", height)
+	}
+}
+
+func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64, error) {
+	select {
+	case event := <-o.pruneCompleted:
+		return event.height, event.recordsProcessed, nil
+	case <-time.After(timeout):
+		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
+	}
+}
+
+type blobDeletionEvent struct {
+	height       uint32
+	successCount int64
+	failCount    int64
+}
+
+type testBlobDeletionObserver struct {
+	t                     *testing.T
+	blobDeletionCompleted chan blobDeletionEvent
+}
+
+func newTestBlobDeletionObserver(t *testing.T) *testBlobDeletionObserver {
+	return &testBlobDeletionObserver{
+		t:                     t,
+		blobDeletionCompleted: make(chan blobDeletionEvent, 10),
+	}
+}
+
+func (o *testBlobDeletionObserver) OnBlobDeletionComplete(height uint32, successCount, failCount int64) {
+	o.t.Logf("✓ Blob deletion callback invoked for height %d: %d succeeded, %d failed", height, successCount, failCount)
+	select {
+	case o.blobDeletionCompleted <- blobDeletionEvent{height: height, successCount: successCount, failCount: failCount}:
+	default:
+		o.t.Logf("Warning: blobDeletionCompleted channel is full, dropping event for height %d", height)
+	}
+}
+
+func (o *testBlobDeletionObserver) waitForBlobDeletion(timeout time.Duration) (uint32, int64, int64, error) {
+	select {
+	case event := <-o.blobDeletionCompleted:
+		return event.height, event.successCount, event.failCount, nil
+	case <-time.After(timeout):
+		return 0, 0, 0, errors.NewProcessingError("timeout waiting for blob deletion completion")
 	}
 }

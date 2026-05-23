@@ -1,4 +1,4 @@
-// Package alert_api defines the gRPC service interface for the Bitcoin SV Alert System.
+// Package alert_api defines the gRPC service interface for the BSV Blockchain Alert System.
 syntax = "proto3";
 
 option go_package = "./;alert_api";

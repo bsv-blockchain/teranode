@@ -74,6 +74,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -94,6 +95,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Submit and mine txOriginal
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(txOriginal, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
@@ -138,7 +140,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 	// Create block5a with tx1Conflicting (not tx1!)
 	// This tests the scenario where a miner includes the conflicting tx instead of the mempool tx
 	_, block5a := td.CreateTestBlock(t, block4, 50001, tx1)
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", nil, true),
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", true),
 		"Failed to process block5a")
 
 	td.WaitForBlock(t, block5a, blockWait)
@@ -147,7 +149,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Create block5b with the SAME tx1Conflicting (competing fork with identical tx)
 	_, block5b := td.CreateTestBlock(t, block4, 50002, tx1Conflicting)
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", nil, true),
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", true),
 		"Failed to process block5b")
 
 	//                                              / 5a [tx1Conflicting] (*)
@@ -176,7 +178,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Now make chain B longer to trigger reorg
 	_, block6b := td.CreateTestBlock(t, block5b, 60002) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0),
 		"Failed to process block6b")
 
 	//                                              / 5a [tx1Conflicting]
@@ -203,7 +205,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Verify that tx1 cannot be re-spent (it's already spent by tx1Conflicting)
 	_, block7b := td.CreateTestBlock(t, block6b, 70002, tx1)
-	require.Error(t, td.BlockValidation.ValidateBlock(td.Ctx, block7b, "legacy", nil, true),
+	require.Error(t, td.BlockValidation.ValidateBlock(td.Ctx, block7b, "legacy", true),
 		"Should reject block with already-spent tx1")
 
 	t.Log("Successfully verified same-tx-both-forks scenario")

@@ -73,12 +73,27 @@ type ConnectionOptions struct {
 	CertFile         string              // CA cert file if SecurityLevel > 0
 	CaCertFile       string              // CA cert file if SecurityLevel > 0
 	KeyFile          string              // Client key file if SecurityLevel > 1
-	MaxRetries       int                 // Max number of retries for transient errors
+	MaxRetries       int                 // Total number of attempts including the initial call (e.g. 3 = 1 initial + 2 retries)
 	RetryBackoff     time.Duration       // Backoff between retries
 	Credentials      PasswordCredentials // Credentials to pass to downstream middleware (optional)
 	MaxConnectionAge time.Duration       // The maximum amount of time a connection may exist before it will be closed by sending a GoAway
 	APIKey           string              // API key for authentication
+	CallerName       string              // Name of the calling service for retry metrics (e.g. "validator", "propagation")
 }
+
+// grpcClientRetriesTotal tracks gRPC client retry attempts by caller service and status code.
+// This counter increments each time a gRPC call is retried (not on the initial attempt),
+// providing visibility into retry pressure across service-to-service communication.
+// Constructed at package-level var initialization so the pointer is available before any
+// gRPC client goroutine runs. Registered with Prometheus in RegisterPrometheusMetrics().
+var grpcClientRetriesTotal = prometheusgolang.NewCounterVec(
+	prometheusgolang.CounterOpts{
+		Namespace: "teranode",
+		Name:      "grpc_client_retries_total",
+		Help:      "Total number of gRPC client retry attempts by caller service and status code",
+	},
+	[]string{"grpc_caller", "grpc_code"},
+)
 
 // ---------------------------------------------------------------------
 
@@ -99,6 +114,9 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
+	// Get GRPC tuning parameters from settings (respects HighThroughputMode)
+	grpcSettings := &tSettings.GRPC
+
 	opts := []grpc.DialOption{
 		// grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
@@ -107,6 +125,15 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 			grpc.MaxCallRecvMsgSize(connectionOptions.MaxMessageSize),
 		),
 		grpc.WithDisableServiceConfig(),
+
+		// HTTP/2 flow control windows - larger values allow more data in-flight
+		// Values are determined by grpc_high_throughput_mode setting
+		grpc.WithInitialWindowSize(grpcSettings.GetInitialWindowSize()),
+		grpc.WithInitialConnWindowSize(grpcSettings.GetInitialConnWindowSize()),
+
+		// Read/write buffer sizes - larger values reduce syscall overhead
+		grpc.WithReadBufferSize(grpcSettings.GetReadBufferSize()),
+		grpc.WithWriteBufferSize(grpcSettings.GetWriteBufferSize()),
 	}
 
 	if connectionOptions.SecurityLevel == 0 {
@@ -120,6 +147,15 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 	}
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
+
+	// Add client-side keepalive for faster detection of dead connections
+	// This complements application-level heartbeat by detecting transport-level issues
+	// Note: Time must be >= server's MinTime enforcement policy
+	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                time.Duration(grpcSettings.KeepaliveTime) * time.Second,
+		Timeout:             time.Duration(grpcSettings.KeepaliveTimeout) * time.Second,
+		PermitWithoutStream: grpcSettings.PermitWithoutStream,
+	}))
 
 	// Preallocate interceptor slices with reasonable capacity
 	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0, 3)
@@ -180,7 +216,7 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 			connectionOptions.RetryBackoff = defaultRetryBackoff
 		}
 
-		opts = append(opts, grpc.WithChainUnaryInterceptor(retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff)))
+		opts = append(opts, grpc.WithChainUnaryInterceptor(retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff, connectionOptions.CallerName)))
 	}
 
 	conn, err := grpc.NewClient(address, opts...)
@@ -215,16 +251,39 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
+	// Get GRPC tuning parameters from settings (respects HighThroughputMode)
+	grpcSettings := &tSettings.GRPC
+
 	opts = append(opts,
 		grpc.MaxSendMsgSize(connectionOptions.MaxMessageSize),
 		grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize),
+
+		// HTTP/2 flow control and buffer settings - values determined by grpc_high_throughput_mode
+		grpc.InitialWindowSize(grpcSettings.GetInitialWindowSize()),
+		grpc.InitialConnWindowSize(grpcSettings.GetInitialConnWindowSize()),
+		grpc.ReadBufferSize(grpcSettings.GetReadBufferSize()),
+		grpc.WriteBufferSize(grpcSettings.GetWriteBufferSize()),
+		grpc.MaxConcurrentStreams(grpcSettings.GetMaxConcurrentStreams()),
 	)
 
-	if connectionOptions.MaxConnectionAge > 0 {
-		opts = append(opts, grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionAge: connectionOptions.MaxConnectionAge,
-		}))
+	// Server keepalive parameters for connection management
+	serverParams := keepalive.ServerParameters{
+		MaxConnectionIdle:     time.Duration(grpcSettings.MaxConnectionIdleSeconds) * time.Second,
+		MaxConnectionAgeGrace: 30 * time.Second, // Allow 30 seconds for pending RPCs to complete after MaxConnectionAge
+		Time:                  60 * time.Second, // Server pings client every 60 seconds if no activity
+		Timeout:               time.Duration(grpcSettings.KeepaliveTimeout) * time.Second,
 	}
+	if connectionOptions.MaxConnectionAge > 0 {
+		serverParams.MaxConnectionAge = connectionOptions.MaxConnectionAge
+	}
+	opts = append(opts, grpc.KeepaliveParams(serverParams))
+
+	// Enforcement policy allows clients to send pings at the configured rate
+	// This prevents ENHANCE_YOUR_CALM / "too_many_pings" errors from client keepalives
+	opts = append(opts, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+		MinTime:             time.Duration(grpcSettings.ServerMinPingTime) * time.Second,
+		PermitWithoutStream: grpcSettings.PermitWithoutStream,
+	}))
 
 	// Interceptors.  The order may be important here.
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0, 2)
@@ -264,26 +323,30 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 	return server, nil
 }
 
-// RegisterPrometheusMetrics registers the gRPC server metrics with the global Prometheus registry.
+// RegisterPrometheusMetrics registers gRPC metrics with the global Prometheus registry.
 // This should be called once during application startup to enable gRPC metrics collection.
+// Server interceptor metrics and the client retry counter are registered here;
+// client interceptor metrics are registered separately in GetGRPCClient via prometheusRegisterClientOnce.
 func RegisterPrometheusMetrics() {
 	prometheusRegisterServerOnce.Do(func() {
 		prometheusgolang.MustRegister(prometheusMetrics)
+		prometheusgolang.MustRegister(grpcClientRetriesTotal)
 	})
 }
 
 // retryInterceptor creates a gRPC unary client interceptor that implements retry logic
 // for transient errors. It retries requests that fail with codes.Unavailable or
-// codes.DeadlineExceeded up to the specified maximum number of times, with a fixed
-// backoff delay between attempts.
+// codes.DeadlineExceeded, with a fixed backoff delay between attempts.
 //
 // Parameters:
-//   - maxRetries: Maximum number of retry attempts
+//   - maxAttempts: Total number of attempts including the initial call (e.g. 3 means 1 initial + 2 retries).
+//     The grpc_client_retries_total metric increments only for actual retries (up to maxAttempts-1 per call).
 //   - retryBackoff: Time to wait between retry attempts
+//   - callerName: Service name label for the grpc_client_retries_total Prometheus counter
 //
 // Returns:
 //   - grpc.UnaryClientInterceptor: Interceptor function that wraps requests with retry logic
-func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
+func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName string) grpc.UnaryClientInterceptor {
 	return func(
 		ctx context.Context,
 		method string,
@@ -294,7 +357,7 @@ func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClie
 	) error {
 		var err error
 
-		for i := 0; i < maxRetries; i++ {
+		for i := 0; i < maxAttempts; i++ {
 			err = invoker(ctx, method, req, reply, cc, opts...)
 			if err == nil {
 				return nil
@@ -305,8 +368,11 @@ func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClie
 				break
 			}
 
-			// log.Printf("Retry attempt %d for request: %s\n", i+1, method)
-			time.Sleep(retryBackoff)
+			// Only count and sleep if there is a subsequent attempt
+			if i < maxAttempts-1 {
+				grpcClientRetriesTotal.WithLabelValues(callerName, status.Code(err).String()).Inc()
+				time.Sleep(retryBackoff)
+			}
 		}
 
 		return err
@@ -365,9 +431,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				ClientAuth:         tls.RequireAnyClientCert,
+				ClientAuth:   tls.RequireAnyClientCert,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
 			// Load the server's CA certificate from disk
@@ -386,9 +451,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				RootCAs:            caCertPool,
+				RootCAs:      caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		}
 	case 3:
@@ -410,10 +474,9 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				ClientAuth:         tls.RequireAndVerifyClientCert,
-				ClientCAs:          caCertPool,
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				ClientCAs:    caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
 			// Load the server's CA certificate from disk
@@ -432,9 +495,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				RootCAs:            caCertPool,
+				RootCAs:      caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		}
 	}

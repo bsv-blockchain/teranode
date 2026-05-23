@@ -34,6 +34,12 @@
   let invalidBlocksLoading = false
   let invalidBlocksError: string | null = null
   let lastInvalidBlocksRefresh: Date | null = null
+  let invalidBlocksOffset = 0
+  const INVALID_BLOCKS_PAGE_SIZE = 5
+  let invalidBlocksHasMore = false
+
+  $: invalidBlocksShowingFrom = invalidBlocks.length > 0 ? invalidBlocksOffset + 1 : 0
+  $: invalidBlocksShowingTo = invalidBlocksOffset + invalidBlocks.length
 
   // Re-validate block state
   let revalidatingBlock = false
@@ -53,6 +59,61 @@
 
   function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+  }
+
+  // duplicates the FSM transition logic from the backend (fsm_handler.go 
+  // If the backend state machine changes, the UI will become out of sync. 
+  function isEventAllowedForState(state: string | undefined, eventName: string): boolean {
+    if (!state || !eventName) return false
+
+    switch (state) {
+      case 'IDLE':
+        return eventName === 'RUN' || eventName === 'LEGACYSYNC'
+      case 'RUNNING':
+        return eventName === 'STOP' || eventName === 'CATCHUPBLOCKS'
+      case 'LEGACYSYNCING':
+        return eventName === 'RUN' || eventName === 'STOP'
+      case 'CATCHINGBLOCKS':
+        return eventName === 'RUN'
+      default:
+        return false
+    }
+  }
+
+  async function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  async function refreshFSMStateAfterEvent(previousStateValue: number | undefined) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await fetchFSMState(true)
+
+      if (previousStateValue === undefined || fsmState?.state_value !== previousStateValue) {
+        return
+      }
+
+      await delay(250 * (attempt + 1))
+    }
+  }
+
+  function goToPrevInvalidBlocksPage(): void {
+    if (invalidBlocksLoading) return
+    const nextOffset = Math.max(0, invalidBlocksOffset - INVALID_BLOCKS_PAGE_SIZE)
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function goToNextInvalidBlocksPage(): void {
+    if (invalidBlocksLoading || !invalidBlocksHasMore) return
+    const nextOffset = invalidBlocksOffset + INVALID_BLOCKS_PAGE_SIZE
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function getEventDisabledReason(state: string | undefined, eventName: string): string {
+    if (!state) return 'FSM state not available'
+    if (state === 'CATCHINGBLOCKS' && eventName !== 'RUN') {
+      return 'Catchup must complete first'
+    }
+    return `Not allowed from ${state}`
   }
 
   function formatTimeAgo(timestamp: number): string {
@@ -79,6 +140,8 @@
       fsmLoading = true
     }
 
+    const previousStateValue = fsmState?.state_value
+
     try {
       // Log the baseUrl for debugging
       console.log('FSM API baseUrl:', apiBaseUrl)
@@ -91,6 +154,10 @@
       }
 
       fsmState = result.data
+
+      if (previousStateValue !== undefined && previousStateValue !== fsmState.state_value) {
+        await fetchFSMEvents()
+      }
     } catch (error: unknown) {
       console.error('Error fetching FSM state:', error)
       fsmError = getErrorMessage(error)
@@ -123,7 +190,7 @@
     }
 
     fsmLoading = true
-    const previousState = fsmState
+    const previousStateValue = fsmState?.state_value
 
     try {
       console.log(`Sending FSM event: ${eventName}`)
@@ -135,30 +202,14 @@
         throw new Error(result.error?.message || `Failed to send ${eventName} event`)
       }
 
-      // Store the new state
-      fsmState = result.data
+      await refreshFSMStateAfterEvent(previousStateValue)
 
-      // Check if state actually changed
-      if (previousState && previousState.state_value === fsmState.state_value) {
-        console.warn(
-          `FSM state did not change after ${eventName} event. Still in ${fsmState.state} state.`,
-        )
-      }
-
-      success(`Successfully sent ${eventName} event. State: ${fsmState.state}`)
-
-      // Refresh the state after a short delay to ensure we get the latest state
-      setTimeout(() => {
-        fetchFSMState()
-      }, 1000)
+      success(`Successfully sent ${eventName} event. State: ${fsmState?.state}`)
     } catch (error) {
       console.error(`Error sending ${eventName} event:`, error)
       failure(`Failed to send ${eventName} event: ${getErrorMessage(error)}`)
 
-      // Refresh the state to ensure we're showing the correct information
-      setTimeout(() => {
-        fetchFSMState()
-      }, 1000)
+      await fetchFSMState(true)
     } finally {
       fsmLoading = false
     }
@@ -300,7 +351,7 @@
       blockActionResult = { success: true, message: 'Block invalidated successfully' }
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       blockActionResult = {
         success: false,
@@ -355,7 +406,7 @@
       }
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -400,7 +451,7 @@
       )
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -455,7 +506,12 @@
       blockHash = ''
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      if (actionName === 'invalidate') {
+        invalidBlocksOffset = 0
+        await refreshInvalidBlocksWithPageFallback(0)
+      } else {
+        await refreshInvalidBlocksWithPageFallback()
+      }
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -463,7 +519,7 @@
     }
   }
 
-  async function fetchInvalidBlocks() {
+  async function fetchInvalidBlocks(offset: number = invalidBlocksOffset) {
     // Save current scroll position before updating
     const scrollPosition = window.scrollY
 
@@ -471,7 +527,7 @@
     invalidBlocksError = null
 
     try {
-      const result = await api.getLastInvalidBlocks(5)
+      const result = await api.getLastInvalidBlocks(INVALID_BLOCKS_PAGE_SIZE, offset)
 
       if (!result.ok) {
         throw new Error(
@@ -479,7 +535,9 @@
         )
       }
 
+      invalidBlocksOffset = typeof result.data.offset === 'number' ? result.data.offset : offset
       invalidBlocks = result.data.blocks || []
+      invalidBlocksHasMore = !!result.data.hasMore
       lastInvalidBlocksRefresh = new Date()
       console.log('Invalid blocks:', invalidBlocks)
     } catch (error: unknown) {
@@ -495,6 +553,17 @@
           behavior: 'instant',
         })
       }, 0)
+    }
+  }
+
+  async function refreshInvalidBlocksWithPageFallback(startOffset: number = invalidBlocksOffset) {
+    await fetchInvalidBlocks(startOffset)
+
+    if (invalidBlocks.length === 0 && invalidBlocksOffset > 0) {
+      const prevOffset = Math.max(0, invalidBlocksOffset - INVALID_BLOCKS_PAGE_SIZE)
+      if (prevOffset !== invalidBlocksOffset) {
+        await fetchInvalidBlocks(prevOffset)
+      }
     }
   }
 
@@ -609,12 +678,14 @@
                   <div class="action-buttons">
                     {#each fsmEvents.sort((a, b) => a.value - b.value) as event}
                       {#if event && event.name}
+                        {@const allowed = isEventAllowedForState(fsmState?.state, event.name)}
                         <button
                           on:click={() => sendFSMEvent(event.name)}
-                          disabled={fsmLoading}
+                          disabled={fsmLoading || !allowed}
                           class="action-button"
                           data-event={event.name.toLowerCase()}
                           data-event-id={event.value}
+                          title={!allowed ? getEventDisabledReason(fsmState?.state, event.name) : ''}
                         >
                           {#if fsmLoading}
                             <div class="spinner"></div>
@@ -709,6 +780,25 @@
       <div class="section-header">
         <h2>Recently Invalidated Blocks</h2>
         <div class="refresh-container">
+          <button
+            class="icon-button with-text"
+            on:click={goToPrevInvalidBlocksPage}
+            disabled={invalidBlocksLoading || invalidBlocksOffset === 0}
+            title="Previous page"
+          >
+            <span>Prev</span>
+          </button>
+          <span class="last-refresh">
+            Showing {invalidBlocksShowingFrom}-{invalidBlocksShowingTo}
+          </span>
+          <button
+            class="icon-button with-text"
+            on:click={goToNextInvalidBlocksPage}
+            disabled={invalidBlocksLoading || !invalidBlocksHasMore}
+            title="Next page"
+          >
+            <span>Next</span>
+          </button>
           {#if lastInvalidBlocksRefresh}
             <span class="last-refresh">
               Last refreshed: {lastInvalidBlocksRefresh.toLocaleTimeString()}
@@ -716,7 +806,7 @@
           {/if}
           <button
             class="icon-button"
-            on:click={fetchInvalidBlocks}
+            on:click={() => fetchInvalidBlocks()}
             disabled={invalidBlocksLoading}
             title="Refresh invalidated blocks list"
           >
@@ -742,7 +832,7 @@
               <i class="fas fa-exclamation-circle"></i>
               <p>Error loading invalidated blocks</p>
               <p class="error-message">{invalidBlocksError}</p>
-              <button class="icon-button with-text" on:click={fetchInvalidBlocks}>
+              <button class="icon-button with-text" on:click={() => fetchInvalidBlocks()}>
                 <Icon name="icon-refresh-line" size={16} />
                 <span>Try again</span>
               </button>
@@ -840,12 +930,12 @@
     padding: 2rem;
     max-width: 1200px;
     margin: 0 auto;
-    color: #e9ecef;
+    color: var(--app-color);
   }
 
   .admin-section {
     margin-bottom: 3rem;
-    background-color: rgba(33, 37, 41, 0.6);
+    background-color: var(--comp-bg-color);
     border-radius: 0.75rem;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     overflow: hidden;
@@ -857,20 +947,20 @@
     justify-content: space-between;
     margin-bottom: 0;
     padding: 1.25rem 1.5rem;
-    background-color: rgba(33, 37, 41, 0.8);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background-color: var(--comp-bg-color);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .section-header h2 {
     font-size: 1.5rem;
     font-weight: 600;
-    color: #f8f9fa;
+    color: var(--app-color);
     margin: 0;
     letter-spacing: 0.01em;
   }
 
   .admin-card {
-    background-color: #111827;
+    background-color: var(--comp-bg-color);
     border-radius: 0.5rem;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
@@ -898,7 +988,7 @@
     justify-content: space-between;
     align-items: stretch;
     min-height: 200px;
-    background-color: rgba(30, 30, 30, 0.5);
+    background-color: var(--comp-bg-color);
     border-radius: 0.75rem;
     padding: 1rem;
   }
@@ -912,7 +1002,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    background-color: rgba(20, 20, 20, 0.2);
+    background-color: var(--comp-bg-color);
     border-radius: 0.75rem;
     min-height: 200px;
   }
@@ -920,7 +1010,7 @@
   .fsm-state-info {
     padding: 1.5rem 2rem;
     flex: 1;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border-right: 1px solid var(--app-border-color);
     display: flex;
     flex-direction: column;
   }
@@ -929,7 +1019,7 @@
     font-size: 1.25rem;
     font-weight: 500;
     margin-bottom: 1.25rem;
-    color: #ced4da;
+    color: var(--comp-label-color);
   }
 
   .state-indicator {
@@ -954,14 +1044,14 @@
     left: 0;
     right: 0;
     height: 4px;
-    background: rgba(255, 255, 255, 0.3);
+    background: var(--app-subtle-bg-color);
   }
 
   .state-name {
     font-size: 2.25rem;
     font-weight: 700;
     margin: 0;
-    color: #fff;
+    color: #ffffff;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     letter-spacing: 0.02em;
   }
@@ -977,7 +1067,7 @@
     font-size: 1.25rem;
     font-weight: 500;
     margin-bottom: 1.25rem;
-    color: #ced4da;
+    color: var(--comp-label-color);
   }
 
   .action-buttons {
@@ -1086,7 +1176,7 @@
   .error-message {
     color: #ef4444;
     font-size: 1.125rem;
-    background-color: rgba(239, 68, 68, 0.1);
+    background-color: var(--comp-bg-color);
     border: 1px solid rgba(239, 68, 68, 0.2);
     padding: 1rem 1.5rem;
     border-radius: 0.5rem;
@@ -1100,11 +1190,11 @@
   }
 
   .no-events {
-    color: #9ca3af;
+    color: var(--comp-label-color);
     font-style: italic;
     padding: 1rem;
     text-align: center;
-    background-color: rgba(156, 163, 175, 0.1);
+    background-color: var(--comp-bg-color);
     border-radius: 0.5rem;
   }
 
@@ -1115,7 +1205,7 @@
     gap: 1.5rem;
     padding: 3rem 2rem;
     text-align: center;
-    color: #9ca3af;
+    color: var(--comp-label-color);
   }
 
   .btn {
@@ -1185,13 +1275,13 @@
   }
 
   .block-operation-result.success {
-    background-color: rgba(46, 204, 113, 0.1);
+    background-color: var(--comp-bg-color);
     color: #2ecc71;
     border: 1px solid rgba(46, 204, 113, 0.3);
   }
 
   .block-operation-result.error {
-    background-color: rgba(231, 76, 60, 0.1);
+    background-color: var(--comp-bg-color);
     color: #e74c3c;
     border: 1px solid rgba(231, 76, 60, 0.3);
   }
@@ -1202,13 +1292,13 @@
     align-items: center;
     margin-bottom: 2.5rem;
     padding-bottom: 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .admin-header h1 {
     font-size: 2rem;
     font-weight: 700;
-    color: #f8f9fa;
+    color: var(--app-color);
     margin: 0;
     letter-spacing: 0.01em;
   }
@@ -1224,8 +1314,8 @@
   }
 
   .logout-button {
-    background-color: rgba(107, 114, 128, 0.1);
-    color: #e5e7eb;
+    background-color: var(--comp-bg-color);
+    color: var(--app-color);
     border: 1px solid rgba(209, 213, 219, 0.2);
     border-radius: 0.5rem;
     padding: 0.625rem 1.25rem;
@@ -1239,8 +1329,8 @@
   }
 
   .logout-button:hover {
-    background-color: rgba(107, 114, 128, 0.2);
-    color: #f3f4f6;
+    background-color: var(--comp-bg-color);
+    color: var(--app-color);
     border-color: rgba(209, 213, 219, 0.3);
   }
 
@@ -1250,7 +1340,7 @@
 
   .block-operations-description {
     margin-bottom: 1.5rem;
-    color: #ced4da;
+    color: var(--comp-label-color);
     line-height: 1.6;
     font-size: 1rem;
   }
@@ -1263,16 +1353,16 @@
     display: block;
     margin-bottom: 0.5rem;
     font-weight: 500;
-    color: #e9ecef;
+    color: var(--app-color);
   }
 
   .block-hash-input {
     padding: 0.75rem 1rem;
     border-radius: 0.5rem;
     font-size: 1rem;
-    border: 1px solid #4b5563;
-    background-color: rgba(30, 30, 30, 0.6);
-    color: #e9ecef;
+    border: 1px solid var(--app-border-color);
+    background-color: var(--comp-bg-color);
+    color: var(--app-color);
     width: 100%;
     transition: all 0.2s ease;
   }
@@ -1293,7 +1383,7 @@
     justify-content: flex-end;
     margin-top: 1rem;
     padding-top: 0.75rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--app-border-color);
   }
 
   .text-button {
@@ -1319,7 +1409,7 @@
     overflow-y: auto;
     padding: 0;
     width: 100%;
-    background-color: #111827;
+    background-color: var(--comp-bg-color);
     border-radius: 0.5rem;
   }
 
@@ -1328,23 +1418,23 @@
   }
 
   .invalid-blocks-list::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--app-subtle-bg-color);
     border-radius: 4px;
   }
 
   .invalid-blocks-list::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.2);
+    background-color: var(--app-overlay-strong-color);
     border-radius: 4px;
   }
 
   .invalid-blocks-list::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(255, 255, 255, 0.3);
+    background-color: var(--comp-label-color);
   }
 
   .invalid-blocks-list table {
     width: 100%;
     border-collapse: collapse;
-    color: #e5e7eb;
+    color: var(--app-color);
     font-size: 0.9rem;
     table-layout: fixed;
     border-spacing: 0;
@@ -1355,7 +1445,7 @@
     padding: 0.75rem 1rem;
     font-weight: 600;
     color: var(--table-th-color, #232d7c);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--app-border-color);
     white-space: nowrap;
     font-size: 0.85rem;
     /* Removed text-transform: uppercase; */
@@ -1417,7 +1507,7 @@
 
   .error-message {
     font-weight: normal !important;
-    color: #6b7280 !important;
+    color: var(--comp-label-color) !important;
     font-size: 0.9rem;
     max-width: 80%;
     word-break: break-word;
@@ -1442,12 +1532,12 @@
   .invalid-blocks-empty p {
     margin: 0.25rem 0;
     font-weight: 600;
-    color: #4b5563;
+    color: var(--comp-label-color);
   }
 
   .empty-description {
     font-weight: normal !important;
-    color: #6b7280 !important;
+    color: var(--comp-label-color) !important;
     font-size: 0.9rem;
   }
 
@@ -1476,14 +1566,14 @@
   }
 
   .revalidate-button:disabled {
-    background-color: #6b7280;
+    background-color: var(--comp-label-color);
     cursor: not-allowed;
   }
 
   .button-spinner {
     width: 1rem;
     height: 1rem;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    border: 2px solid var(--app-border-color);
     border-top-color: white;
     border-radius: 50%;
     animation: spin 1s linear infinite;
@@ -1491,20 +1581,20 @@
 
   .detail-label {
     font-weight: 600;
-    color: #1f2937;
+    color: var(--app-color);
     margin-right: 0.25rem;
   }
 
   .timestamp {
-    color: #6b7280;
+    color: var(--comp-label-color);
   }
 
   .reason {
-    color: #6b7280;
+    color: var(--comp-label-color);
   }
 
   .reason-text {
-    color: #4b5563;
+    color: var(--comp-label-color);
   }
 
   /* Add responsive behavior for smaller screens */
@@ -1515,14 +1605,14 @@
 
     .fsm-state-info {
       border-right: none;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      border-bottom: 1px solid var(--app-border-color);
     }
   }
 
   .refresh-button {
-    background-color: #f3f4f6;
-    border: 1px solid #e5e7eb;
-    color: #4b5563;
+    background-color: var(--comp-bg-color);
+    border: 1px solid var(--app-border-color);
+    color: var(--comp-label-color);
     cursor: pointer;
     padding: 0.5rem 0.75rem;
     border-radius: 0.375rem;
@@ -1536,7 +1626,7 @@
 
   .refresh-button:hover {
     color: #3b82f6;
-    background-color: rgba(59, 130, 246, 0.1);
+    background-color: var(--comp-bg-color);
     border-color: #3b82f6;
   }
 
@@ -1600,7 +1690,7 @@
   }
 
   .spinner {
-    border: 4px solid rgba(0, 0, 0, 0.1);
+    border: 4px solid var(--app-overlay-color);
     width: 36px;
     height: 36px;
     border-radius: 50%;
@@ -1617,7 +1707,7 @@
 
   .spinner-container p {
     margin-top: 1rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
     font-size: 0.9rem;
   }
 
@@ -1629,14 +1719,14 @@
 
   .last-refresh {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
     white-space: nowrap;
   }
 
   .icon-button {
     background-color: transparent;
     border: none;
-    color: #6b7280;
+    color: var(--comp-label-color);
     cursor: pointer;
     padding: 0.5rem;
     border-radius: 0.25rem;
@@ -1653,7 +1743,7 @@
 
   .icon-button:hover {
     color: #3b82f6;
-    background-color: rgba(59, 130, 246, 0.1);
+    background-color: var(--comp-bg-color);
   }
 
   .icon-button:disabled {

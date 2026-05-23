@@ -30,6 +30,11 @@ var (
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
 	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
 	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
+	prometheusBlockAssemblySubtreeCompleteHist             prometheus.Histogram
+	prometheusSubtreeProcessorDequeuedTxs                  prometheus.Counter
+	prometheusSubtreeProcessorDiskMapEntries               prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapFilterRAM             prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapDiskWritten           prometheus.Gauge
 )
 
 var (
@@ -190,4 +195,64 @@ func _initPrometheusMetrics() {
 			Help:      "Current state of the block assembly process",
 		},
 	)
+
+	prometheusBlockAssemblySubtreeCompleteHist = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "subtree_complete",
+			Help:      "Histogram of subtree completion duration in block assembly",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorDequeuedTxs = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "dequeued_txs",
+			Help:      "Number of transactions dequeued from subtree processor",
+		},
+	)
+
+	prometheusSubtreeProcessorDiskMapEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "diskmap_entries",
+			Help:      "Number of entries in disk-backed transaction map",
+		},
+	)
+
+	prometheusSubtreeProcessorDiskMapFilterRAM = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "diskmap_filter_ram_bytes",
+			Help:      "Cuckoo filter memory in bytes for disk-backed transaction map",
+		},
+	)
+
+	prometheusSubtreeProcessorDiskMapDiskWritten = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "diskmap_disk_written_bytes",
+			Help:      "Data bytes written to disk for disk-backed transaction map",
+		},
+	)
+}
+
+// reportDiskMapStats sets Prometheus gauges for the disk-backed transaction map.
+func reportDiskMapStats(stats DiskMapStats) {
+	prometheusSubtreeProcessorDiskMapEntries.Set(float64(stats.Entries))
+	prometheusSubtreeProcessorDiskMapFilterRAM.Set(float64(stats.FilterMemBytes))
+	prometheusSubtreeProcessorDiskMapDiskWritten.Set(float64(stats.DiskBytesWritten))
+}
+
+// clearDiskMapStats zeroes Prometheus gauges for the disk-backed transaction map.
+func clearDiskMapStats() {
+	prometheusSubtreeProcessorDiskMapEntries.Set(0)
+	prometheusSubtreeProcessorDiskMapFilterRAM.Set(0)
+	prometheusSubtreeProcessorDiskMapDiskWritten.Set(0)
 }

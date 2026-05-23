@@ -30,12 +30,21 @@ service BlockAssemblyAPI {
   // Provides better performance than multiple individual AddTx calls.
   rpc AddTxBatch (AddTxBatchRequest) returns (AddTxBatchResponse) {}
 
+  // AddTxBatchColumnar efficiently adds multiple transactions using columnar data format.
+  // This format reduces CPU usage by 15-20% and GC pressure by 50% compared to AddTxBatch.
+  // Uses column-oriented storage for better cache locality and fewer allocations.
+  rpc AddTxBatchColumnar (AddTxBatchColumnarRequest) returns (AddTxBatchResponse) {}
+
   // GetMiningCandidate retrieves a block template ready for mining.
   // Includes all necessary components for miners to begin work.
   rpc GetMiningCandidate (GetMiningCandidateRequest) returns (model.MiningCandidate) {}
 
-  // GetCurrentDifficulty retrieves the current network mining difficulty.
-  // Used by miners to understand the current mining requirements.
+  // GetCurrentDifficulty retrieves the difficulty required for the NEXT block,
+  // not the current tip's difficulty. Computed against the current chain tip
+  // and the current wall-clock time, so the value reflects any retargeting that
+  // would apply to a block produced now. The returned BlockHash is the current
+  // tip's hash, provided as context. Despite the name, this is effectively
+  // "GetNextRequiredDifficulty"; the original name is retained for compatibility.
   rpc GetCurrentDifficulty (EmptyMessage) returns (GetCurrentDifficultyResponse) {}
 
   // SubmitMiningSolution submits a solved block to the network.
@@ -50,6 +59,16 @@ service BlockAssemblyAPI {
   // This includes clearing all transactions and resetting internal structures.
   // This will traverse the whole UTXO set and is more intensive than a standard reset.
   rpc ResetBlockAssemblyFully (EmptyMessage) returns (EmptyMessage) {}
+
+  // ResetBlockAssemblyValidateInputs performs a full reset with input validation.
+  // For each unmined transaction, verifies that its inputs are still spent by this
+  // transaction. If an input is spent by a different tx, marks the tx as conflicting.
+  // Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
+  rpc ResetBlockAssemblyValidateInputs (EmptyMessage) returns (EmptyMessage) {}
+
+  // CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+  // Returns an error if any unmined transactions have inputs spent by different transactions.
+  rpc CheckBlockAssemblyValidateInputs (EmptyMessage) returns (EmptyMessage) {}
 
   // GetBlockAssemblyState retrieves the current state of block assembly.
   // Provides detailed information about the assembly process status.
@@ -71,6 +90,13 @@ service BlockAssemblyAPI {
   // This provides visibility into the transactions that are candidates for inclusion in the next block.
   // NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
   rpc GetBlockAssemblyTxs (EmptyMessage) returns (GetBlockAssemblyTxsResponse) {}
+
+  // GetCandidateBlock retrieves the block metadata for an existing mining candidate.
+  // Given a candidate ID (from a prior GetMiningCandidate call), this constructs a default
+  // coinbase transaction, computes the merkle root, and builds the 80-byte block header.
+  // The response contains everything needed to assemble a standard Bitcoin wire format block.
+  // Returns NotFound if the candidate ID has expired or is invalid.
+  rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -102,6 +128,81 @@ message AddTxRequest {
 // Request for adding a batch of transactions to the mining candidate block.
 message AddTxBatchRequest {
   repeated AddTxRequest txRequests = 1; // a batch of transaction requests
+}
+
+// Request for adding a batch of transactions using columnar format.
+// This format stores transaction data in column-oriented arrays for better performance.
+//
+// Column-oriented storage benefits:
+// - Single allocation per array instead of N allocations per transaction
+// - Better cache locality from sequential memory access
+// - Fewer pointer dereferences during processing
+// - Reduced GC pressure from fewer heap objects
+//
+// OPTIMIZATION: TxInpoints are pre-deserialized by the Client (which runs on multiple machines)
+// and sent in columnar format. This shifts deserialization work away from the single-machine Server.
+// The Server reconstructs TxInpoints directly from columnar data WITHOUT deserialization overhead.
+message AddTxBatchColumnarRequest {
+  // Fields 8 and 9 previously held parent_vout_indices + vout_idx_offsets
+  // (per-parent) with different semantics from the current packed layout.
+  // They are reserved to prevent silent misinterpretation under version skew:
+  // an old client sending field 8/9 to a new server would otherwise decode
+  // as the new fields with corrupt content. The new fields are 10/11 below.
+  reserved 8, 9;
+  reserved "parent_vout_indices", "vout_idx_offsets";
+
+  // All transaction IDs concatenated (each exactly 32 bytes).
+  // Total length must be divisible by 32.
+  // Transaction count = len(txids_packed) / 32
+  bytes txids_packed = 1;
+
+  // Transaction fees in satoshis (one per transaction).
+  // Length must equal transaction count.
+  repeated uint64 fees = 2;
+
+  // Transaction sizes in bytes (one per transaction).
+  // Length must equal transaction count.
+  repeated uint64 sizes = 3;
+
+  // All parent transaction hashes concatenated (each exactly 32 bytes).
+  // Deserialized from TxInpoints on the Client side.
+  // Use parent_tx_offsets to identify boundaries for each transaction.
+  bytes parent_tx_hashes_packed = 6;
+
+  // Offsets into parent_tx_hashes_packed for each transaction.
+  // Length must be exactly transaction_count + 1.
+  // Each offset is in units of hashes (multiply by 32 for byte offset).
+  // Example: [0, 3, 7, 10] represents 3 transactions:
+  //   - Transaction 0: 3 parent hashes (hashes 0-2)
+  //   - Transaction 1: 4 parent hashes (hashes 3-6)
+  //   - Transaction 2: 3 parent hashes (hashes 7-9)
+  repeated uint32 parent_tx_offsets = 7;
+
+  // All parent vout indices for all transactions in the count-prefixed packed
+  // layout consumed directly by go-subtree.TxInpoints. For each parent (in
+  // parent_tx_hashes_packed order) one uint32 count word is followed by that
+  // many uint32 vout-value words, concatenated end-to-end across all txs.
+  //
+  // This is the exact shape TxInpoints.voutIdxs stores internally, so the
+  // Server aliases a per-tx slice of this buffer straight into a TxInpoints
+  // with zero copy (NewTxInpointsFromPacked). The buffer's lifetime is bound
+  // to the request; gRPC keeps it alive until every TxInpoints derived from
+  // it is no longer referenced.
+  //
+  // Assigned a fresh field number (10) rather than reusing the old field 8
+  // because the old field carried different semantics and the wire types
+  // match — silent misinterpretation under version skew would otherwise be
+  // possible.
+  repeated uint32 vout_idxs_packed = 10;
+
+  // Offsets into vout_idxs_packed for each transaction.
+  // Length must be exactly transaction_count + 1.
+  // Each offset is an index into vout_idxs_packed (in uint32 units).
+  // Example: [0, 5, 8] represents 2 transactions, the first occupying
+  // vout_idxs_packed[0:5] and the second occupying vout_idxs_packed[5:8].
+  //
+  // Assigned a fresh field number (11) — see note on field 10.
+  repeated uint32 vout_idxs_tx_offsets = 11;
 }
 
 // Request for retrieving a mining candidate block template.
@@ -152,9 +253,11 @@ message StateMessage {
   repeated string subtrees = 10; // the hashes of the current subtrees
 }
 
-// Response containing the current difficulty of the blockchain.
+// Response containing the difficulty required for the next block (not the
+// current tip's difficulty).
 message GetCurrentDifficultyResponse {
-  double difficulty = 1; // the current difficulty of the blockchain
+  double difficulty = 1; // the difficulty the NEXT block must satisfy
+  bytes blockHash = 2;   // the hash of the current chain tip, provided as context
 }
 
 // Request for generating a block.
@@ -173,4 +276,17 @@ message GetBlockAssemblyBlockCandidateResponse {
 message GetBlockAssemblyTxsResponse {
   uint64 txCount = 1; // the number of transactions in the block assembly
   repeated string txs = 2; // the transactions currently being assembled in the block assembly
+}
+
+// Request for retrieving block data for an existing mining candidate.
+message GetCandidateBlockRequest {
+  bytes id = 1; // the mining candidate ID (from a prior GetMiningCandidate call)
+}
+
+// Response containing all data needed to assemble a standard Bitcoin wire format block.
+message GetCandidateBlockResponse {
+  bytes header = 1;                    // 80-byte block header (version + prevhash + merkle root + time + bits + nonce=0)
+  bytes coinbase_tx = 2;               // serialized coinbase transaction
+  repeated bytes subtree_hashes = 3;   // subtree hashes for streaming transactions from the subtree store
+  uint64 transaction_count = 4;        // total number of transactions including coinbase
 }

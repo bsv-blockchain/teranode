@@ -1,5 +1,7 @@
 # Syncing the Blockchain (Kubernetes)
 
+<!-- markdownlint-disable MD046 -->
+
 Last modified: 29-October-2025
 
 ## Table of Contents
@@ -15,7 +17,7 @@ Last modified: 29-October-2025
 
 ## Overview
 
-This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Kubernetes. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.
+This guide covers the different methods available for synchronizing a Teranode instance with the BSV Blockchain using Kubernetes. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.
 
 ---
 
@@ -24,7 +26,7 @@ This guide covers the different methods available for synchronizing a Teranode i
 Choose the synchronization method that best fits your situation:
 
 | Method | Use Case | Advantages | Disadvantages | Time Required |
-|--------|----------|------------|---------------|---------------|
+| -------- | ---------- | ------------ | --------------- | --------------- |
 | **Default Network Sync** | Fresh install, no existing data | • Simple setup<br>• No additional requirements<br>• Complete validation | • Slowest method<br>• High bandwidth usage | 5-8 days |
 | **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 1 Hour<br>(assumes SV node<br>already in sync) |
 | **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 1 Hour |
@@ -96,7 +98,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 ### Expected Timeline
 
 | Phase | Duration | Description |
-|-------|----------|-------------|
+| ------- | ---------- | ------------- |
 | **Initial Setup** | 5-10 minutes | Peer discovery and connection establishment |
 | **Early Blocks** | 1-2 days | Genesis to block ~500,000 (smaller blocks, faster processing) |
 | **Recent Blocks** | 3-6 days | Block ~500,000 to current tip (larger blocks, slower processing) |
@@ -108,11 +110,11 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 ## Method 2: Seeding from Legacy SV Node
 
-This method allows you to bootstrap a Teranode instance using data exported from an existing Bitcoin SV node (bitcoind). This significantly reduces synchronization time compared to P2P sync.
+This method allows you to bootstrap a Teranode instance using data exported from an existing SV Node (bitcoind). This significantly reduces synchronization time compared to P2P sync.
 
 ### Prerequisites
 
-- ✅ Access to a fully synchronized Bitcoin SV node (bitcoind)
+- ✅ Access to a fully synchronized SV Node (bitcoind)
 - ✅ SV Node gracefully shut down (using `bitcoin-cli stop`)
 - ✅ Fresh Teranode instance with no existing blockchain data (see [reset guide](minersHowToResetTeranode.md) to clear existing data if needed)
 - ✅ Sufficient disk space for export files (~1TB recommended, temporary during process)
@@ -136,7 +138,7 @@ This process involves two main phases:
 
 #### Step 1: Verify SV Node Requirements
 
-Before proceeding with the export, ensure your Bitcoin SV node meets these critical requirements:
+Before proceeding with the export, ensure your SV Node meets these critical requirements:
 
 !!! info "Data Location Requirements"
     - For this guide, we assume SV node data is located at `/mnt/bitcoin-sv-data`
@@ -177,9 +179,9 @@ sudo chown $USER:$(id -gn $USER) /mnt/teranode/seed/export
 #### Step 3: Export UTXO Data
 
 ```bash
-# Export UTXO set from Bitcoin SV node
+# Export UTXO set from SV Node
 # Replace /mnt/bitcoin-sv-data with your actual SV node data directory
-# Instead of latest, you could use a specific version of teranode. 
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
@@ -294,18 +296,45 @@ ls -la /mnt/teranode/seed/export/
 #### Step 3: Run Seeder
 
 ```bash
-# Create a temporary seeder pod
-# Instead of latest, you could use a specific version of teranode. 
+# Create a temporary seeder pod with proper configmap and volume mounts
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
     --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never \
     --rm -i --tty \
     -n teranode-operator \
-    -- /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
+    --overrides='
+{
+  "spec": {
+    "containers": [
+      {
+        "name": "teranode-seeder",
+        "image": "ghcr.io/bsv-blockchain/teranode:latest",
+        "command": ["/app/teranode-cli"],
+        "args": ["seeder", "-inputDir", "/mnt/teranode/seed/export", "-hash", "0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af"],
+        "envFrom": [{
+          "configMapRef": {
+            "name": "teranode-operator-config"
+          }
+        }],
+        "volumeMounts": [{
+          "name": "shared-storage",
+          "mountPath": "/mnt/teranode"
+        }]
+      }
+    ],
+    "volumes": [{
+      "name": "shared-storage",
+      "persistentVolumeClaim": {
+        "claimName": "shared-pvc"
+      }
+    }]
+  }
+}'
 ```
+
+> **Important:** The seeder pod must have the same configmap (teranode-operator-config) and volume mounts as the regular Teranode pods to access the correct database and storage configuration.
 
 #### Step 4: Monitor Seeding Progress
 
@@ -332,7 +361,7 @@ kubectl get pods -n teranode-operator
 ### Expected Timeline
 
 | Phase | Duration | Description |
-|-------|----------|-------------|
+| ------- | ---------- | ------------- |
 | **Export** | 2-4 hours | Extracting UTXO set from SV Node |
 | **Seeding** | 4-8 hours | Importing data into Teranode |
 | **Verification** | 30 minutes | Starting services and verifying sync |
@@ -393,22 +422,47 @@ Use the same seeder process as described in Method 2:
 # Scale down services
 kubectl patch cluster teranode-cluster -n teranode-operator --type=merge -p '{"spec":{"enabled":false}}'
 
-# Run seeder
-# Instead of latest, you could use a specific version of teranode. 
+# Run seeder with proper configmap and volume mounts
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
     --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never --rm -i --tty \
     -n teranode-operator \
-    -- /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash <blockhash-from-filename>
+    --overrides='
+{
+  "spec": {
+    "containers": [
+      {
+        "name": "teranode-seeder",
+        "image": "ghcr.io/bsv-blockchain/teranode:latest",
+        "command": ["/app/teranode-cli"],
+        "args": ["seeder", "-inputDir", "/mnt/teranode/seed/export", "-hash", "<blockhash-from-filename>"],
+        "envFrom": [{
+          "configMapRef": {
+            "name": "teranode-operator-config"
+          }
+        }],
+        "volumeMounts": [{
+          "name": "shared-storage",
+          "mountPath": "/mnt/teranode"
+        }]
+      }
+    ],
+    "volumes": [{
+      "name": "shared-storage",
+      "persistentVolumeClaim": {
+        "claimName": "shared-pvc"
+      }
+    }]
+  }
+}'
 ```
 
 ### Expected Timeline
 
 | Phase | Duration | Description |
-|-------|----------|-------------|
+| ------- | ---------- | ------------- |
 | **Data Transfer** | 1-3 hours | Copying files between systems |
 | **Seeding** | 2-4 hours | Importing data into target Teranode |
 | **Verification** | 15 minutes | Starting services and verification |
@@ -487,7 +541,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 #### Recovery Options
 
 | Blocks Behind | Recommended Action | Expected Time |
-|---------------|-------------------|---------------|
+| --------------- | ------------------- | --------------- |
 | **< 1,000** | Normal catch-up | 1-4 hours |
 | **1,000 - 10,000** | Monitor catch-up progress | 4-24 hours |
 | **> 10,000** | Consider reseeding (Method 2 or 3) | 6-12 hours |
@@ -513,6 +567,7 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 #### Issue: Sync Stalled
 
 **Symptoms:**
+
 - Block height not increasing
 - No new blocks being processed
 - Peer connections established but inactive
@@ -533,6 +588,7 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmsta
 #### Issue: Database Connection Errors
 
 **Symptoms:**
+
 - Connection timeouts to PostgreSQL/Aerospike
 - "Database unavailable" errors in logs
 
@@ -552,6 +608,7 @@ kubectl delete pod -n teranode-operator -l app=postgres
 #### Issue: Storage Space Exhausted
 
 **Symptoms:**
+
 - "No space left on device" errors
 - Pods in CrashLoopBackOff state
 
@@ -649,7 +706,7 @@ kubectl exec -it <aerospike-pod> -n teranode-operator -- asinfo -v "statistics" 
 # Verify FSM is in correct state
 kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getfsmstate
 
-# Should show "running" or "synced" for a fully synchronized node
+# Should show "RUNNING" for a fully synchronized node
 ```
 
 ### Ongoing Monitoring

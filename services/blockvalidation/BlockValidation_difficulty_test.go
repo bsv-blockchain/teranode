@@ -124,7 +124,7 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 		Return(expectedNBits, nil).Once()
 
 	// Mock AddBlock to store invalid block when difficulty check fails
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -137,6 +137,9 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 
 	// Mock GetBestBlockHeader for bloom filter pruning
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
+
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -153,7 +156,7 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should fail due to incorrect difficulty bits
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incorrect difficulty bits")
 
@@ -255,7 +258,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 		Return(expectedNBits, nil).Once()
 
 	// Mock AddBlock to store invalid block when difficulty target is not met
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -268,6 +271,9 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 
 	// Mock GetBestBlockHeader for bloom filter pruning
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
+
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -284,7 +290,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should fail due to not meeting target difficulty
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not meet target difficulty")
 
@@ -409,6 +415,9 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	// Mock GetBestBlockHeader for bloom filter pruning
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
 
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
+
 	// Mock GetBlockHeaderIDs for the Valid function (called with coinbase hash for merkle root verification)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{0}, nil).Maybe()
@@ -417,7 +426,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Mock AddBlock for successful validation
-	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -434,7 +443,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should succeed
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.NoError(t, err)
 
 	// Verify all mocks were called

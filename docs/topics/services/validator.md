@@ -39,20 +39,20 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 
 The Validator can be deployed in two distinct ways:
 
-1. **Local Validator (Recommended)**:
+1. **Local Validator**:
 
     - The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)
-    - This is the recommended approach for production deployments due to better performance
     - No additional network calls are needed between services and validator
-    - Configuration: Set `validator.useLocalValidator=true` in your settings
+    - Recommended for single-machine deployments, development, or testing
+    - Configuration: Set `useLocalValidator=true` in your settings
 
 2. **Remote Validator Service**:
 
     - The Validator runs as an independent service with a gRPC interface
     - Other services connect to it remotely via gRPC
+    - Recommended for production distributed deployments — allows independent scaling
     - This approach has higher latency due to additional network calls
-    - Useful for development, testing, or specialized deployment scenarios
-    - Configuration: Set `validator.useLocalValidator=false` and configure validator gRPC endpoint
+    - Configuration: Set `useLocalValidator=false` and configure validator gRPC endpoint
 
 The performance difference between these approaches can be significant, as the local validator approach eliminates network overhead between services.
 
@@ -136,11 +136,9 @@ Should the node require to start the validator as an independent service, the `s
 
 - **`NewServer` Function**:
 
-    1. Initialize a new `Server` instance.
-    2. Create channels for new and dead subscriptions.
-    3. Initialize a map for subscribers.
-    4. Create a context for subscriptions and a corresponding cancellation function.
-    5. Return the newly created `Server` instance.
+    1. Initialize a new `Server` instance with all required dependencies (logger, settings, UTXO store, blockchain client, Kafka producers/consumers, block assembly client).
+    2. Initialize Prometheus metrics.
+    3. Return the newly created `Server` instance (no background processes started yet).
 
 - **`Init` Function**:
     1. Create a new validator instance within the server.
@@ -148,8 +146,11 @@ Should the node require to start the validator as an independent service, the `s
     3. Return the outcome (success or error).
 
 - **`Start` Function**:
-    1. Start a goroutine to manage new and dead subscriptions.
-    2. Start the gRPC server and handle any errors.
+    1. Wait for the blockchain FSM to reach RUNNING state.
+    2. Set up Kafka consumer for incoming validation requests (if configured).
+    3. Start the HTTP server for REST endpoints.
+    4. Start the gRPC server and handle any errors.
+    5. Signal readiness by closing the readyCh channel.
 
 ### 2.2. Receiving Transaction Validation Requests
 
@@ -201,65 +202,13 @@ The validation process includes several stages:
     - Ensure inputs are unspent (prevent double-spending)
     - Validate input script format
 
-Transactions are validated by the `ValidateTransaction()` function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (`github.com/bsv-blockchain/go-bt`). The implementation uses pluggable script interpreters (GoBT, GoSDK, or GoBDK) for script verification.
+Transactions are validated through one `TxValidator.ValidateTransaction()` call plus the special BIP68 block-context check. `ValidateTransaction()` keeps Teranode-owned checks that need local node context, such as coinbase routing, the stricter all-zero previous-txid guard, `MaxCoinsViewCacheSize`, minimum-fee policy, and the local consolidation-fee exemption, then calls BDK `ValidateTransaction` for BDK-side transaction structure, value, standardness, sigops, and script validation.
 
-We can see the exact steps being executed as part of the validation process below:
+The current shape is:
 
 ```go
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
- //
- // Each node will verify every transaction against a long checklist of criteria:
- //
- txSize := tx.Size()
-
- // 1) Neither lists of inputs nor outputs are empty
- if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-  return errors.NewTxInvalidError("transaction has no inputs or outputs")
- }
-
- // 2) The transaction size in bytes is less than maxtxsizepolicy.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkTxSize(txSize); err != nil {
-   return err
-  }
- }
-
- // 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
- // 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
- if err := tv.checkInputs(tx, blockHeight); err != nil {
-  return err
- }
-
- // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
- //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
- if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
-  return err
- }
-
- // The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
-
- // The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
- // Note: This may be disabled for unlimited operation counts
-
- // The unlocking script (scriptSig) can only push numbers on the stack
- if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-  if err := tv.pushDataCheck(tx); err != nil {
-   return err
-  }
- }
-
- // 10) Reject if the sum of input values is less than sum of output values
- // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
- if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
-   return err
-  }
- }
-
- // 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
- // (Script verification is handled separately with multiple interpreter options)
-
- return nil
+ // Teranode-owned checks, then BDK ValidateTransaction.
 }
 ```
 
@@ -345,7 +294,7 @@ This feature is particularly important when validating transactions that:
 ```go
 // Example of policy checks being conditionally applied:
 if !validationOptions.SkipPolicyChecks {
-    if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+    if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
         return err
     }
 }
@@ -383,9 +332,8 @@ When a transaction arrives in standard Bitcoin format (non-extended), the valida
 
 This extension process occurs transparently at multiple checkpoints in the validation pipeline:
 
-- `Validator.Validate()` in `services/validator/Validator.go` - Initial format check before validation
-- `Validator.validateConsensusRules()` in `services/validator/Validator.go` - Before consensus rule checks
-- `Validator.validateScripts()` in `services/validator/Validator.go` - Before script validation
+- `Validator.Validate()` in `services/validator/Validator.go` - Initial format check before validation begins
+- `Validator.validateInternal()` in `services/validator/Validator.go` - Core validation flow that calls extension if needed
 
 #### Implementation Details
 
@@ -443,35 +391,17 @@ This automatic extension mechanism provides several advantages:
 
 For more details on transaction format handling across the system, see the [Transaction Data Model documentation](../datamodel/transaction_data_model.md).
 
-### 2.4. Script Verification
+### 2.4. BDK Transaction Validation
 
-The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters are supported:
+The Validator uses GoBDK directly through a private adapter in the validator package. GoBT and GoSDK script-verifier variants are no longer part of this package's validation design.
 
-1. **GoBT Interpreter** (`TxInterpreterGoBT`):
-
-    - Based on the Go-BT library
-    - Default interpreter for basic script validation
-
-2. **GoSDK Interpreter** (`TxInterpreterGoSDK`):
-
-    - Based on the Go-SDK library
-    - Provides advanced script validation capabilities
-
-3. **GoBDK Interpreter** (`TxInterpreterGoBDK`):
-
-    - Based on the Go-BDK library
-    - Optimized for performance in high-throughput scenarios
-    - Includes specialized Bitcoin script validation features
-
-The script verification process:
+The BDK validation process:
 
 1. Each transaction input's unlocking script is validated against its corresponding output's locking script
 
-2. The interpreter evaluates if the combined script executes successfully and leaves 'true' on the stack
+2. BDK validates transaction structure, values, standardness, sigops, and scripts
 
-3. The script verification is context-aware, considering current block height and network parameters
-
-Script verification can be configured using the `validator_scriptVerificationLibrary` setting, which defaults to "VerificatorGoBT".
+3. Validation is context-aware, considering current block height, network parameters, and policy/consensus mode
 
 ### 2.5. Error Handling and Transaction Rejection
 
@@ -501,23 +431,18 @@ The Validator implements a structured error handling system to categorize and re
 
 The Validator leverages concurrency to optimize transaction processing performance:
 
-1. **Parallel UTXO Saving**:
-
-    - The `saveInParallel` flag enables concurrent UTXO updates
-    - Improves throughput by processing multiple transactions simultaneously
-
-2. **Batching**:
+1. **Batching**:
 
     - Transactions can be validated in batches for higher throughput
     - Batch processing is configurable and used by both Propagation and Subtree Validation services
     - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
 
-3. **Error Group Pattern**:
+2. **Error Group Pattern**:
 
     - Uses Go's `errgroup` package for coordinated concurrent execution
     - Maintains proper error propagation in concurrent processing flows
 
-4. **Two-Phase Commit Process**:
+3. **Two-Phase Commit Process**:
 
     - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
     - Prevents partial updates in case of failures during concurrent processing
@@ -556,11 +481,12 @@ The Validator notifies the Block Assembly service of new transactions through gR
 
 The Validator service behavior is controlled by several key configuration parameters:
 
-- **`KafkaMaxMessageBytes`** (default: 1MB): Controls size-based routing - large transactions that exceed this threshold are routed via HTTP instead of Kafka to avoid message size limitations.
-- **`UseLocalValidator`** (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.
-- **`KafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
-- **`HTTPRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
-- **`VerboseDebug`** (default: false): Enables detailed validation logging for troubleshooting.
+- **`validator_kafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
+- **`validator_httpRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
+- **`validator_verbose_debug`** (default: false): Enables detailed validation logging for troubleshooting.
+- **`useLocalValidator`** (code default: false; `settings.conf` ships with `true`): Determines whether to use a local validator instance or connect to a remote validator service via gRPC. Standard deployments using the provided `settings.conf` will use local validator mode.
+
+**Note:** While these settings are available in the codebase, they are advanced options and may not be listed in the default `settings.conf` file. For a complete list of all available settings, see the [Validator Settings Reference](../../references/settings/services/validator_settings.md).
 
 ### Rejected Transaction Handling
 
@@ -600,7 +526,7 @@ The Validator implements a two-phase commit process for transaction creation and
 
 1. **Phase 1 - Transaction Creation with Locked Flag**:
 
-    - When a transaction is created, it is initially stored in the UTXO store with an "locked" flag set to `true`.
+    - When a transaction is created, it is initially stored in the UTXO store with a "locked" flag set to `true`.
     - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
 
 2. **Phase 2 - Unsetting the Locked Flag**:
@@ -643,7 +569,7 @@ The Validation Service processes transactions in multiple formats:
 
 ## 5. Technology
 
-The code snippet you've provided utilizes a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:
+The code snippets you have been provided utilize a variety of technologies and libraries, each serving a specific purpose within the context of a BSV Blockchain-related application. Here's a breakdown of these technologies:
 
 1. **Go (Golang)**: The programming language used for the entire codebase.
 
@@ -657,13 +583,13 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 
 5. **Go-Bitcoin**: A Go library that provides utilities and tools for working with Bitcoin, including transaction parsing and manipulation.
 
-6. **BSV Libraries**: Go libraries from the bsv-blockchain organization for Bitcoin SV, used for transaction-related operations.
+6. **BSV Libraries**: Go libraries from the bsv-blockchain organization for BSV Blockchain, used for transaction-related operations.
 
 7. **Other Utilities and Libraries**:
 
     - `sync/atomic`, `strings`, `strconv`, `time`, `io`, `net/url`, `os`, `bytes`, and other standard Go packages for various utility functions.
     - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
-    - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
+    - `go.opentelemetry.io/otel`: Used for distributed tracing.
 
 ## 6. Directory Structure and Main Files
 
@@ -671,16 +597,13 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 ./services/validator
 ├── Client.go                    # Contains client-side logic for interacting with the Validator
 ├── Interface.go                 # Defines interfaces for the Validator
-├── ScriptVerificatorGoBDK.go    # Implements script verification using a Go Bitcoin Development Kit
-├── ScriptVerificatorGoBT.go     # Implements script verification using Go Bitcoin Tools
-├── ScriptVerificatorGoSDK.go    # Implements script verification using a Go Software Development Kit
+├── ScriptVerifierGoBDK.go       # Adapts Teranode validation data to GoBDK
 ├── Server.go                    # Implements the server-side logic of the Validator
 ├── TxValidator.go               # Contains specific logic for validating transactions
 ├── Validator.go                 # Contains the main logic for validator functionalities
-├── data.go                      # Contains data structures or constants used in the validator service
 ├── metrics.go                   # Contains code for metrics collection within the Validator
+├── Mock.go                      # Mock implementation of the Validator interface for use in tests
 ├── options.go                   # Defines configuration options or settings for the validator service
-├── policy.go                    # Defines validation policies or rules
 └── validator_api
     ├── validator_api.pb.go          # Auto-generated Go code from validator_api.proto
     ├── validator_api.proto          # Protocol Buffers definition file for the validator API

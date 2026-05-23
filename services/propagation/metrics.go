@@ -1,4 +1,4 @@
-// Package propagation implements Bitcoin SV transaction propagation and validation services.
+// Package propagation implements BSV Blockchain transaction propagation and validation services.
 // This file contains the Prometheus metrics definitions and initialization for comprehensive
 // monitoring of the propagation service's performance, throughput, and operational health.
 //
@@ -43,6 +43,7 @@ var (
 	prometheusProcessedHandleMultipleTx prometheus.Histogram
 	prometheusTransactionSize           prometheus.Histogram
 	prometheusInvalidTransactions       prometheus.Counter
+	prometheusBatchHandlerRejections    prometheus.Counter
 )
 
 // Synchronization primitive for ensuring metrics are initialized exactly once.
@@ -128,6 +129,14 @@ func _initPrometheusMetrics() {
 			Subsystem: "propagation",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the propagation service",
+		},
+	)
+	prometheusBatchHandlerRejections = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "propagation",
+			Name:      "batch_handler_rejections_total",
+			Help:      "Number of batch/tx requests rejected due to server at capacity (BatchHandlerLimit reached)",
 		},
 	)
 }

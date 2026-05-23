@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
@@ -580,8 +579,10 @@ func TestHandleBlockTopic(t *testing.T) {
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
 		// Create a mock banManager that returns false for any peer
+		// and expects AddScore to be called for peer ID spoofing
 		mockBanManager := new(MockPeerBanManager)
 		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+		mockBanManager.On("AddScore", mock.Anything, ReasonProtocolViolation).Return(100, false)
 
 		// Create mock kafka producer
 		mockKafkaProducer := new(MockKafkaProducer)
@@ -691,8 +692,10 @@ func TestHandleSubtreeTopic(t *testing.T) {
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
 		// Create a mock banManager that returns false for any peer
+		// and expects AddScore to be called for peer ID spoofing
 		mockBanManager := new(MockPeerBanManager)
 		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+		mockBanManager.On("AddScore", mock.Anything, ReasonProtocolViolation).Return(100, false)
 
 		// Create mock kafka producer
 		mockKafkaProducer := new(MockKafkaProducer)
@@ -1487,8 +1490,9 @@ func TestSelfMessageFiltering(t *testing.T) {
 		msgBytes, err := json.Marshal(blockMsg)
 		require.NoError(t, err)
 
-		// Handle the message (from parameter doesn't matter, we check PeerID)
-		server.handleBlockTopic(context.Background(), msgBytes, "someOtherPeer")
+		// Handle the message with matching fromID to avoid spoofing detection
+		// Self-message filtering checks isOwnMessage which uses both fromID and message.PeerID
+		server.handleBlockTopic(context.Background(), msgBytes, GetID.String())
 
 		// Should NOT publish to Kafka
 		select {
@@ -1530,8 +1534,9 @@ func TestSelfMessageFiltering(t *testing.T) {
 		msgBytes, err := json.Marshal(subtreeMsg)
 		require.NoError(t, err)
 
-		// Handle the message
-		server.handleSubtreeTopic(context.Background(), msgBytes, "someOtherPeer")
+		// Handle the message with matching fromID to avoid spoofing detection
+		// Self-message filtering checks isOwnMessage which uses both fromID and message.PeerID
+		server.handleSubtreeTopic(context.Background(), msgBytes, GetID.String())
 
 		// Should NOT publish to Kafka
 		select {
@@ -1683,7 +1688,7 @@ func TestNewServer_ConfigValidation(t *testing.T) {
 			modify: func(s *settings.Settings) {
 				s.P2P.ListenMode = "invalid_mode"
 			},
-			wantErrMsg: "listen_mode must be either",
+			wantErrMsg: "listen_mode must be one of",
 		},
 	}
 
@@ -1938,6 +1943,52 @@ func TestServerInitHTTPPublicAddressEmpty(t *testing.T) {
 	require.Equal(t, "http://fallback.example.com", server.AssetHTTPAddressURL)
 }
 
+func TestServerInitPropagationURLSet(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = "http://public.example.com"
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.Asset.PropagationPublicURL = "http://propagation.example.com"
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
+	require.Equal(t, "http://propagation.example.com", server.PropagationURL)
+}
+
+func TestServerInitPropagationURLEmpty(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = "http://public.example.com"
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.Asset.PropagationPublicURL = "" // Empty - should fall back to AssetHTTPAddressURL
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
+	require.Equal(t, "http://public.example.com", server.PropagationURL) // Falls back to AssetHTTPAddressURL
+}
+
 func TestServerSetupHTTPServer(t *testing.T) {
 
 	ctx := context.Background()
@@ -2108,19 +2159,20 @@ func TestServerStartFull(t *testing.T) {
 }
 
 func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
-	t.Skip("skip until we fix subtree handler")
-	banHandler := &testBanHandler{}
-	banManager := &PeerBanManager{
-		peerBanScores: make(map[string]*BanScore),
-		reasonPoints: map[BanReason]int{
-			ReasonInvalidSubtree: 10,
-		},
-		banThreshold:  100,
-		banDuration:   time.Hour,
-		decayInterval: time.Minute,
-		decayAmount:   1,
-		handler:       banHandler,
-	}
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Create peer registry and add the test peer
+	registry := NewPeerRegistry()
+	registry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Get initial failure count
+	peerInfo, exists := registry.Get(testPeerID)
+	require.True(t, exists)
+	initialFailures := peerInfo.InteractionFailures
 
 	mockBC := new(blockchain.Mock)
 	st := blockchain_api.FSMStateType_RUNNING
@@ -2128,47 +2180,43 @@ func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 
 	s := &Server{
 		logger:           ulogger.New("test"),
-		banManager:       banManager,
+		peerRegistry:     registry,
 		blockchainClient: mockBC,
 	}
 
 	hash := "subtree-hash-456"
-	peerID := "peer-xyz"
 	entry := peerMapEntry{
-		peerID:    peerID,
+		peerID:    testPeerID.String(),
 		timestamp: time.Now(),
 	}
 	s.subtreePeerMap.Store(hash, entry)
 
 	m := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: hash,
-		Reason:      "invalid_subtree",
+		PeerUrl:     "",
+		Reason:      "peer_cannot_provide_transactions",
 	}
 	payload, err := proto.Marshal(m)
 	require.NoError(t, err)
 
 	msg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-subtrees",
-			Value: payload,
-		},
+		Topic: "invalid-subtrees",
+		Value: payload,
 	}
 
 	h := s.invalidSubtreeHandler(context.Background())
 	err = h(msg)
 	require.NoError(t, err)
 
+	// Verify subtree was removed from map after processing
 	_, ok := s.subtreePeerMap.Load(hash)
-	require.True(t, ok, "entry should exist")
+	require.False(t, ok, "entry should be removed after processing")
 
-	// TODO: Fix this test to use the interface properly
-	// s.banManager.mu.RLock()
-	// score := s.banManager.peerBanScores[peerID]
-	// s.banManager.mu.RUnlock()
-	// if assert.NotNil(t, score, "peer should have a score entry") {
-	// 	assert.Equal(t, int(10), score.Score)
-	// }
-
+	// Verify interaction failure was recorded
+	peerInfo, exists = registry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, initialFailures+1, peerInfo.InteractionFailures,
+		"interaction failure should be incremented for invalid subtree")
 }
 
 func TestInvalidBlockHandler(t *testing.T) {
@@ -2187,10 +2235,8 @@ func TestInvalidBlockHandler(t *testing.T) {
 
 	mkKafkaMsg := func(payload []byte) *kafka.KafkaMessage {
 		return &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Topic: "invalid-subtrees",
-				Value: payload,
-			},
+			Topic: "invalid-subtrees",
+			Value: payload,
 		}
 	}
 
@@ -2310,10 +2356,8 @@ func TestServerRejectedHandler(t *testing.T) {
 	// helper: incapsulate in kafka.KafkaMessage
 	mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
 		return &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Topic: "rejected-tx",
-				Value: b,
-			},
+			Topic: "rejected-tx",
+			Value: b,
 		}
 	}
 
@@ -2430,10 +2474,8 @@ func TestServerRejectedHandler(t *testing.T) {
 
 		mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
 			return &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Topic: "rejected-tx",
-					Value: b,
-				},
+				Topic: "rejected-tx",
+				Value: b,
 			}
 		}
 
@@ -2784,10 +2826,8 @@ func TestProcessInvalidBlockMessageSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	// Create a real ban manager for testing
@@ -2825,10 +2865,8 @@ func TestProcessInvalidBlockMessageUnmarshalError(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: invalidBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: invalidBytes,
 	}
 	server := &Server{
 		logger: logger,
@@ -2848,10 +2886,8 @@ func TestProcessInvalidBlockMessageNoPeerInMap(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	server := &Server{
@@ -2873,10 +2909,8 @@ func TestProcessInvalidBlockMessageWrongTypeInMap(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	server := &Server{
@@ -2901,10 +2935,8 @@ func TestProcessInvalidBlockMessageAddBanScoreFails(t *testing.T) {
 	mockPeerID := peer.ID("peer-fail")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	// Create a real ban manager for testing
@@ -3228,6 +3260,67 @@ func TestIsBannedCoverage(t *testing.T) {
 	assert.False(t, resp.IsBanned)
 }
 
+func TestIsBannedChecksBothBanSystems(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("banned by banList only", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "192.168.1.100").Return(true)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "192.168.1.100").Return(false)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "192.168.1.100"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsBanned)
+	})
+
+	t.Run("banned by banManager only", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "test-peer-id").Return(false)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "test-peer-id").Return(true)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "test-peer-id"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsBanned)
+	})
+
+	t.Run("not banned by either", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "192.168.1.200").Return(false)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "192.168.1.200").Return(false)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "192.168.1.200"})
+		require.NoError(t, err)
+		assert.False(t, resp.IsBanned)
+	})
+}
+
 func TestListBannedCoverage(t *testing.T) {
 	ctx := context.Background()
 	server := createTestServer(t)
@@ -3364,20 +3457,122 @@ func TestReportInvalidSubtreeCoverage(t *testing.T) {
 	ctx := context.Background()
 	server := createTestServer(t)
 
-	// Test with empty hash and required parameters
-	err := server.ReportInvalidSubtree(ctx, "", "http://test-peer:8080", "test reason")
-	if err != nil {
-		t.Logf("ReportInvalidSubtree with empty hash failed as expected: %v", err)
-	}
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
 
-	// Test with valid hash format and all required parameters
+	// Register the peer in the registry
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Get initial failure count
+	peerInfo, exists := server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	initialFailures := peerInfo.InteractionFailures
+
+	// Store the subtree-peer mapping
 	testHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err = server.ReportInvalidSubtree(ctx, testHash, "http://peer:8080", "invalid subtree")
-	if err != nil {
-		t.Logf("ReportInvalidSubtree may fail in test environment: %v", err)
+	server.subtreePeerMap.Store(testHash, peerMapEntry{
+		peerID:    testPeerID.String(),
+		timestamp: time.Now(),
+	})
+
+	// Call ReportInvalidSubtree
+	err = server.ReportInvalidSubtree(ctx, testHash, "", "peer_cannot_provide_transactions")
+	require.NoError(t, err)
+
+	// Verify interaction failure was recorded
+	peerInfo, exists = server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, initialFailures+1, peerInfo.InteractionFailures,
+		"interaction failure should be incremented")
+
+	// Verify subtree was removed from the map
+	_, ok := server.subtreePeerMap.Load(testHash)
+	assert.False(t, ok, "subtree should be removed from map after processing")
+}
+
+func TestReportInvalidSubtree_AllReasons(t *testing.T) {
+	ctx := context.Background()
+	server := createTestServer(t)
+
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Register the peer in the registry
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Test each reason type - these are typically transient network failures
+	reasons := []string{
+		"peer_cannot_provide_transactions",
+		"malformed_transaction_data",
+		"transaction_count_mismatch",
+		"peer_cannot_provide_subtree",
+		"contains_invalid_transaction",
+		"peer_cannot_provide_subtree_data",
 	}
 
-	// The function should execute the main logic path regardless of result
+	for i, reason := range reasons {
+		// Re-add to map (gets deleted after each call)
+		testHash := fmt.Sprintf("hash%d", i)
+		server.subtreePeerMap.Store(testHash, peerMapEntry{
+			peerID:    testPeerID.String(),
+			timestamp: time.Now(),
+		})
+
+		err := server.ReportInvalidSubtree(ctx, testHash, "", reason)
+		require.NoError(t, err, "should not error for reason: %s", reason)
+
+		peerInfo, exists := server.peerRegistry.Get(testPeerID)
+		require.True(t, exists)
+		assert.Equal(t, int64(i+1), peerInfo.InteractionFailures,
+			"failure count should increment for reason: %s", reason)
+	}
+}
+
+func TestReportInvalidSubtree_RepeatedFailuresReduceReputation(t *testing.T) {
+	ctx := context.Background()
+	server := createTestServer(t)
+
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Register the peer in the registry with initial reputation
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Record a success first to establish LastInteractionSuccess time
+	server.peerRegistry.RecordInteractionSuccess(testPeerID, time.Millisecond*100)
+
+	peerInfo, _ := server.peerRegistry.Get(testPeerID)
+	initialReputation := peerInfo.ReputationScore
+
+	// Report multiple invalid subtrees in quick succession (within 5 minute window)
+	// After 3+ failures since last success, reputation should drop to 15.0
+	for i := 0; i < 4; i++ {
+		testHash := fmt.Sprintf("hash%d", i)
+		server.subtreePeerMap.Store(testHash, peerMapEntry{
+			peerID:    testPeerID.String(),
+			timestamp: time.Now(),
+		})
+
+		err := server.ReportInvalidSubtree(ctx, testHash, "", "peer_cannot_provide_transactions")
+		require.NoError(t, err)
+	}
+
+	// Verify reputation has decreased significantly
+	peerInfo, exists := server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Less(t, peerInfo.ReputationScore, initialReputation,
+		"reputation should decrease after multiple failures")
+	assert.Equal(t, int64(4), peerInfo.InteractionFailures,
+		"should have 4 interaction failures")
 }
 
 // createEnhancedTestServer creates a test server with properly initialized mocks
@@ -3555,6 +3750,226 @@ func TestP2PNodeConnectedEnhanced(t *testing.T) {
 */
 
 // NOTE: TestOnPeerBannedEnhanced was removed because onPeerBanned is deprecated in the new architecture.
+
+// TestSilentModeConfigValidation verifies that "silent" is accepted as a valid listen_mode
+// and that an invalid mode still produces the updated error message.
+func TestSilentModeConfigValidation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+
+	baseSettings := func() *settings.Settings {
+		return &settings.Settings{
+			Version: "1.0.0",
+			P2P: settings.P2PSettings{
+				ListenAddresses: []string{"/ip4/127.0.0.1/tcp/1234"},
+				Port:            1234,
+				BlockTopic:      "block",
+				SubtreeTopic:    "subtree",
+				RejectedTxTopic: "rejected",
+				ListenMode:      settings.ListenModeFull,
+				PrivateKey:      "privkey",
+				EnableNAT:       false,
+			},
+			ChainCfgParams: &chaincfg.Params{
+				TopicPrefix: "prefix",
+			},
+			Kafka: settings.KafkaSettings{
+				InvalidBlocks:   "invalidBlocks",
+				InvalidSubtrees: "invalidSubtrees",
+			},
+		}
+	}
+
+	t.Run("silent mode is accepted", func(t *testing.T) {
+		s := baseSettings()
+		s.P2P.ListenMode = settings.ListenModeSilent
+
+		// NewServer proceeds past validation; failure happens later at p2p client creation
+		// (invalid "privkey" hex). We only care that validation itself does not reject silent.
+		_, err := NewServer(ctx, logger, s,
+			nil, nil, nil, nil, nil, nil, nil,
+		)
+		// The error must NOT be a configuration error about listen_mode
+		if err != nil {
+			require.NotContains(t, err.Error(), "listen_mode must be one of",
+				"'silent' should pass listen_mode validation")
+		}
+	})
+
+	t.Run("invalid mode still produces updated error message", func(t *testing.T) {
+		s := baseSettings()
+		s.P2P.ListenMode = "stealth" // unknown value
+
+		_, err := NewServer(ctx, logger, s,
+			nil, nil, nil, nil, nil, nil, nil,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "listen_mode must be one of")
+		require.Contains(t, err.Error(), settings.ListenModeSilent)
+	})
+}
+
+// TestSilentModeRejectedTxHandler verifies that rejectedTxHandler returns immediately
+// in silent mode without publishing anything to the P2P network.
+func TestSilentModeRejectedTxHandler(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	s := &Server{
+		settings:            testSettings,
+		logger:              logger,
+		P2PClient:           mockP2P,
+		rejectedTxTopicName: "rejected-topic",
+	}
+
+	h := s.rejectedTxHandler(ctx)
+	err := h(&kafka.KafkaMessage{
+		Value: []byte("anything"),
+	})
+	require.NoError(t, err)
+
+	// P2P publish must never be called in silent mode
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeBlockNotification verifies that handleBlockNotification returns immediately
+// in silent mode without publishing a block announcement.
+func TestSilentModeBlockNotification(t *testing.T) {
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x1}
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:       testSettings,
+		P2PClient:      mockP2P,
+		blockTopicName: "block-topic",
+		logger:         ulogger.New("test"),
+	}
+
+	err := server.handleBlockNotification(ctx, hash)
+	require.NoError(t, err)
+
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeSubtreeNotification verifies that handleSubtreeNotification returns
+// immediately in silent mode without publishing a subtree announcement.
+func TestSilentModeSubtreeNotification(t *testing.T) {
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x2}
+
+	mockP2P := new(MockServerP2PClient)
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:         testSettings,
+		P2PClient:        mockP2P,
+		subtreeTopicName: "subtree-topic",
+		logger:           ulogger.New("test"),
+	}
+
+	err := server.handleSubtreeNotification(ctx, hash)
+	require.NoError(t, err)
+
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestSilentModeNodeStatusNotification verifies that handleNodeStatusNotification skips
+// the P2P publish in silent mode but still delivers the message to local WebSocket clients.
+func TestSilentModeNodeStatusNotification(t *testing.T) {
+	ctx := context.Background()
+	fsmState := blockchain.FSMStateRUNNING
+
+	mockBC := new(blockchain.Mock)
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, model.GenesisBlockHeaderMeta, nil).Maybe()
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	blockPersisterData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockPersisterData, 0)
+	mockBC.On("GetState", mock.Anything, "BlockPersisterHeight").Return(blockPersisterData, nil).Maybe()
+	mockBC.On("GetBlockAssemblyState", mock.Anything).Return(nil, nil).Maybe()
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.On("GetID").Return(peer.ID("silent-peer")).Maybe()
+	// Publish must NOT be called in silent mode
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	notificationCh := make(chan *notificationMsg, 1)
+	server := &Server{
+		settings:            testSettings,
+		P2PClient:           mockP2P,
+		blockchainClient:    mockBC,
+		logger:              ulogger.New("test"),
+		nodeStatusTopicName: "node-status-topic",
+		notificationCh:      notificationCh,
+		peerRegistry:        NewPeerRegistry(),
+		startTime:           time.Now(),
+	}
+
+	err := server.handleNodeStatusNotification(ctx)
+	require.NoError(t, err)
+
+	// P2P publish must not be called
+	mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+
+	// But the notification should still be forwarded to local WebSocket clients
+	select {
+	case msg := <-notificationCh:
+		require.NotNil(t, msg, "node_status should be forwarded to WebSocket channel in silent mode")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected node_status to be forwarded to WebSocket channel but channel was empty")
+	}
+}
+
+// TestSilentModeGetNodeStatusMessageURLsSuppressed verifies that getNodeStatusMessage
+// returns empty BaseURL and PropagationURL in silent mode so the node cannot be
+// selected as a sync source by remote peers.
+func TestSilentModeGetNodeStatusMessageURLsSuppressed(t *testing.T) {
+	ctx := context.Background()
+	fsmState := blockchain.FSMStateRUNNING
+
+	mockBC := new(blockchain.Mock)
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, model.GenesisBlockHeaderMeta, nil)
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+	blockPersisterData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockPersisterData, 0)
+	mockBC.On("GetState", mock.Anything, "BlockPersisterHeight").Return(blockPersisterData, nil)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.On("GetID").Return(peer.ID("silent-peer")).Maybe()
+	mockP2P.On("GetPeers").Return([]p2pMessageBus.PeerInfo{}).Maybe()
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.ListenMode = settings.ListenModeSilent
+
+	server := &Server{
+		settings:            testSettings,
+		P2PClient:           mockP2P,
+		blockchainClient:    mockBC,
+		logger:              ulogger.New("test"),
+		AssetHTTPAddressURL: "https://datahub.example.com",
+		PropagationURL:      "https://propagation.example.com",
+		peerRegistry:        NewPeerRegistry(),
+		startTime:           time.Now(),
+		syncConnectionTimes: sync.Map{},
+	}
+
+	msg := server.getNodeStatusMessage(ctx)
+	require.NotNil(t, msg)
+
+	assert.Empty(t, msg.BaseURL, "BaseURL must be suppressed in silent mode")
+	assert.Empty(t, msg.PropagationURL, "PropagationURL must be suppressed in silent mode")
+	assert.Equal(t, settings.ListenModeSilent, msg.ListenMode)
+}
 
 func TestDisconnectPreExistingBannedPeersEnhanced(t *testing.T) {
 	ctx := context.Background()

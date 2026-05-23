@@ -82,7 +82,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 		pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 1)
+		recordsProcessed, err := service.Prune(pruneCtx, 1, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -98,13 +98,13 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 
 		pruneCtx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel1()
-		recordsProcessed, err := service.Prune(pruneCtx1, 1)
+		recordsProcessed, err := service.Prune(pruneCtx1, 1, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 		pruneCtx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
-		recordsProcessed, err = service.Prune(pruneCtx2, 2)
+		recordsProcessed, err = service.Prune(pruneCtx2, 2, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -121,7 +121,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 		// Prune at multiple heights sequentially
 		for height := uint32(1); height <= 4; height++ {
 			pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			recordsProcessed, err := service.Prune(pruneCtx, height)
+			recordsProcessed, err := service.Prune(pruneCtx, height, "<test-hash>")
 			cancel()
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -385,7 +385,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel1()
 
-	recordsProcessed, err := service.Prune(ctx1, 1)
+	recordsProcessed, err := service.Prune(ctx1, 1, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -420,7 +420,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel2()
 
-	recordsProcessed, err = service.Prune(ctx2, 2)
+	recordsProcessed, err = service.Prune(ctx2, 2, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -433,7 +433,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel3()
 
-	recordsProcessed, err = service.Prune(ctx3, 3)
+	recordsProcessed, err = service.Prune(ctx3, 3, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -460,7 +460,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx4, cancel4 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel4()
 
-	recordsProcessed, err = service.Prune(ctx4, 4)
+	recordsProcessed, err = service.Prune(ctx4, 4, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -546,315 +546,4 @@ func TestServiceSimple(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, service)
 	})
-}
-
-// TestCleanupWithBlockPersisterCoordination tests cleanup coordination with block persister
-func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
-	t.Run("BlockPersisterBehind_LimitsCleanup", func(t *testing.T) {
-		logger := ulogger.NewErrorTestLogger(t, func() {})
-		ctx := context.Background()
-
-		container, err := aeroTest.RunContainer(ctx)
-		require.NoError(t, err)
-		defer func() {
-			_ = container.Terminate(ctx)
-		}()
-
-		host, err := container.Host(ctx)
-		require.NoError(t, err)
-
-		port, err := container.ServicePort(ctx)
-		require.NoError(t, err)
-
-		client, err := uaerospike.NewClient(host, port)
-		require.NoError(t, err)
-		defer client.Close()
-
-		tSettings := createTestSettings()
-		tSettings.GlobalBlockHeightRetention = 100
-
-		// Simulate block persister at height 50
-		persistedHeight := uint32(50)
-		getPersistedHeight := func() uint32 {
-			return persistedHeight
-		}
-
-		indexWaiter := &MockIndexWaiter{
-			Client:    client,
-			Namespace: "test",
-			Set:       "transactions",
-		}
-		external := memory.New()
-
-		service, err := NewService(tSettings, Options{
-			Logger:             logger,
-			Ctx:                ctx,
-			IndexWaiter:        indexWaiter,
-			Client:             client,
-			ExternalStore:      external,
-			Namespace:          "test",
-			Set:                "transactions",
-			GetPersistedHeight: getPersistedHeight,
-		})
-		require.NoError(t, err)
-
-		// Trigger cleanup at height 200
-		// Expected: Limited to 50 + 100 = 150 (not 200)
-		service.Start(ctx)
-
-		// Wait for index to be ready
-		time.Sleep(2 * time.Second)
-
-		// Add logging to verify safe height calculation
-		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer pruneCancel()
-
-		recordsProcessed, err := service.Prune(pruneCtx, 200)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
-
-		// Note: Actual verification would require checking logs for "Limiting cleanup" message
-		// or querying which records were actually deleted
-	})
-
-	t.Run("BlockPersisterCaughtUp_NoLimitation", func(t *testing.T) {
-		logger := ulogger.NewErrorTestLogger(t, func() {})
-		ctx := context.Background()
-
-		container, err := aeroTest.RunContainer(ctx)
-		require.NoError(t, err)
-		defer func() {
-			_ = container.Terminate(ctx)
-		}()
-
-		host, err := container.Host(ctx)
-		require.NoError(t, err)
-
-		port, err := container.ServicePort(ctx)
-		require.NoError(t, err)
-
-		client, err := uaerospike.NewClient(host, port)
-		require.NoError(t, err)
-		defer client.Close()
-
-		tSettings := createTestSettings()
-		tSettings.GlobalBlockHeightRetention = 100
-
-		// Block persister caught up at height 150
-		getPersistedHeight := func() uint32 {
-			return uint32(150)
-		}
-
-		indexWaiter := &MockIndexWaiter{
-			Client:    client,
-			Namespace: "test",
-			Set:       "transactions",
-		}
-		external := memory.New()
-
-		service, err := NewService(tSettings, Options{
-			Logger:             logger,
-			Ctx:                ctx,
-			IndexWaiter:        indexWaiter,
-			Client:             client,
-			ExternalStore:      external,
-			Namespace:          "test",
-			Set:                "transactions",
-			GetPersistedHeight: getPersistedHeight,
-		})
-		require.NoError(t, err)
-
-		// Trigger cleanup at height 200
-		// Expected: No limitation (150 + 100 = 250 > 200)
-		service.Start(ctx)
-
-		// Wait for index to be ready
-		time.Sleep(2 * time.Second)
-
-		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer pruneCancel()
-
-		recordsProcessed, err := service.Prune(pruneCtx, 200)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
-	})
-
-	t.Run("BlockPersisterNotRunning_HeightZero", func(t *testing.T) {
-		logger := ulogger.NewErrorTestLogger(t, func() {})
-		ctx := context.Background()
-
-		container, err := aeroTest.RunContainer(ctx)
-		require.NoError(t, err)
-		defer func() {
-			_ = container.Terminate(ctx)
-		}()
-
-		host, err := container.Host(ctx)
-		require.NoError(t, err)
-
-		port, err := container.ServicePort(ctx)
-		require.NoError(t, err)
-
-		client, err := uaerospike.NewClient(host, port)
-		require.NoError(t, err)
-		defer client.Close()
-
-		tSettings := createTestSettings()
-
-		// Block persister not running - returns 0
-		getPersistedHeight := func() uint32 {
-			return uint32(0)
-		}
-
-		indexWaiter := &MockIndexWaiter{
-			Client:    client,
-			Namespace: "test",
-			Set:       "transactions",
-		}
-		external := memory.New()
-
-		service, err := NewService(tSettings, Options{
-			Logger:             logger,
-			Ctx:                ctx,
-			IndexWaiter:        indexWaiter,
-			Client:             client,
-			ExternalStore:      external,
-			Namespace:          "test",
-			Set:                "transactions",
-			GetPersistedHeight: getPersistedHeight,
-		})
-		require.NoError(t, err)
-
-		// Cleanup should proceed normally (no limitation when height = 0)
-		service.Start(ctx)
-
-		// Wait for index to be ready
-		time.Sleep(2 * time.Second)
-
-		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer pruneCancel()
-
-		recordsProcessed, err := service.Prune(pruneCtx, 100)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
-	})
-
-	t.Run("NoGetPersistedHeightFunction_NormalCleanup", func(t *testing.T) {
-		logger := ulogger.NewErrorTestLogger(t, func() {})
-		ctx := context.Background()
-
-		container, err := aeroTest.RunContainer(ctx)
-		require.NoError(t, err)
-		defer func() {
-			_ = container.Terminate(ctx)
-		}()
-
-		host, err := container.Host(ctx)
-		require.NoError(t, err)
-
-		port, err := container.ServicePort(ctx)
-		require.NoError(t, err)
-
-		client, err := uaerospike.NewClient(host, port)
-		require.NoError(t, err)
-		defer client.Close()
-
-		tSettings := createTestSettings()
-
-		indexWaiter := &MockIndexWaiter{
-			Client:    client,
-			Namespace: "test",
-			Set:       "transactions",
-		}
-		external := memory.New()
-
-		// Create service WITHOUT getPersistedHeight
-		service, err := NewService(tSettings, Options{
-			Logger:             logger,
-			Ctx:                ctx,
-			IndexWaiter:        indexWaiter,
-			Client:             client,
-			ExternalStore:      external,
-			Namespace:          "test",
-			Set:                "transactions",
-			GetPersistedHeight: nil, // Not set
-		})
-		require.NoError(t, err)
-
-		// Cleanup should proceed normally
-		service.Start(ctx)
-
-		// Wait for index to be ready
-		time.Sleep(2 * time.Second)
-
-		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer pruneCancel()
-
-		recordsProcessed, err := service.Prune(pruneCtx, 100)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
-	})
-}
-
-// TestSetPersistedHeightGetter tests the setter method
-func TestSetPersistedHeightGetter(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, func() {})
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-	defer func() {
-		_ = container.Terminate(ctx)
-	}()
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
-	defer client.Close()
-
-	tSettings := createTestSettings()
-	tSettings.GlobalBlockHeightRetention = 50
-
-	indexWaiter := &MockIndexWaiter{
-		Client:    client,
-		Namespace: "test",
-		Set:       "transactions",
-	}
-	external := memory.New()
-
-	// Create service without getter initially
-	service, err := NewService(tSettings, Options{
-		Logger:        logger,
-		Ctx:           ctx,
-		IndexWaiter:   indexWaiter,
-		Client:        client,
-		ExternalStore: external,
-		Namespace:     "test",
-		Set:           "transactions",
-	})
-	require.NoError(t, err)
-
-	// Set the getter after creation
-	persistedHeight := uint32(100)
-	service.SetPersistedHeightGetter(func() uint32 {
-		return persistedHeight
-	})
-
-	// Verify it's used (cleanup at 200 should be limited to 100+50=150)
-	service.Start(ctx)
-
-	// Wait for index to be ready
-	time.Sleep(2 * time.Second)
-
-	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer pruneCancel()
-
-	recordsProcessed, err := service.Prune(pruneCtx, 200)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 }

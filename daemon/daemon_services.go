@@ -4,11 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
+	"github.com/bsv-blockchain/teranode/internal/profiling"
 	"github.com/bsv-blockchain/teranode/services/alert"
 	"github.com/bsv-blockchain/teranode/services/asset"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -26,7 +29,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -158,6 +160,20 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 	if profilerAddr != "" && !pprofRegistered.Load() {
 		pprofRegistered.Store(true)
 
+		// Enable block / mutex profiling when configured. Both are disabled by
+		// default (rate/fraction == 0) and incur negligible overhead at the
+		// recommended on-cluster sampling values. Required to capture
+		// wait-time data that CPU profiles cannot expose.
+		if rate := appSettings.BlockProfileRate; rate > 0 {
+			runtime.SetBlockProfileRate(rate)
+			logger.Infof("runtime.SetBlockProfileRate(%d) enabled — /debug/pprof/block now collecting", rate)
+		}
+
+		if frac := appSettings.MutexProfileFraction; frac > 0 {
+			runtime.SetMutexProfileFraction(frac)
+			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
+		}
+
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
@@ -181,8 +197,11 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 			// fgprof support
-
 			mux.Handle("/debug/fgprof", fgprof.Handler())
+
+			// memory analyzer support (includes mmap, non-heap memory)
+			logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 			if appSettings.StatsPrefix != "" {
 				gocore.RegisterStatsHandlers(mux)
@@ -218,16 +237,8 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 // startBlockchainService initializes and starts the Blockchain service.
 func (d *Daemon) startBlockchainService(ctx context.Context, appSettings *settings.Settings,
 	args []string, createLogger func(string) ulogger.Logger) error {
-	// Create the blockchain store url from the app settings
-	blockchainStoreURL := appSettings.BlockChain.StoreURL
-	if blockchainStoreURL == nil {
-		return errors.NewStorageError("blockchain store url not found")
-	}
 
-	// Create the blockchain store
-	blockchainStore, err := blockchainstore.NewStore(
-		createLogger(loggerBlockchainSQL), blockchainStoreURL, appSettings,
-	)
+	blockchainStore, err := d.daemonStores.GetBlockchainStore(ctx, createLogger(loggerBlockchainSQL), appSettings)
 	if err != nil {
 		return err
 	}
@@ -360,7 +371,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 	// Get the transaction store for the Asset service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -414,6 +425,18 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
+	// Create ban list for the Asset service
+	banList := createBanList(ctx, createLogger("asset_banlist"), appSettings)
+
+	// Create block assembly client for the Asset service (for mining candidate legacy block endpoint)
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(
+		ctx, createLogger(loggerBlockAssembly), appSettings,
+	)
+	if err != nil {
+		// Non-fatal: the mining candidate legacy block endpoint will return 501 if unavailable
+		blockAssemblyClient = nil
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -425,6 +448,8 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockchainClient,
 		blockvalidationClient,
 		p2pClient,
+		banList,
+		blockAssemblyClient,
 	))
 }
 
@@ -473,7 +498,7 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create blob store for the RPC service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -640,7 +665,7 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 	}
 
 	// Create the transaction store for the BlockAssembly service
-	txStore, err := d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err := d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -716,7 +741,7 @@ func (d *Daemon) startValidationService(
 	// Get the tx store for the validation service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -963,7 +988,7 @@ func (d *Daemon) startPropagationService(
 	// Get the transaction store for the Propagation service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -996,6 +1021,9 @@ func (d *Daemon) startPropagationService(
 		return err
 	}
 
+	// Create ban list for the Propagation service
+	propBanList := createBanList(ctx, createLogger("propagation_banlist"), appSettings)
+
 	// Add the Propagation service to the ServiceManager
 	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
 		createLogger(loggerPropagation),
@@ -1004,6 +1032,7 @@ func (d *Daemon) startPropagationService(
 		validatorClient,
 		blockchainClient,
 		validatorKafkaProducerClient,
+		propBanList,
 	))
 }
 
@@ -1101,6 +1130,8 @@ func (d *Daemon) startLegacyService(
 // startPrunerService initializes and adds the Pruner service to the ServiceManager.
 func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger) error {
+	logger := createLogger(loggerPruner)
+
 	// Create the UTXO store for the Pruner service
 	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
 	if err != nil {
@@ -1124,10 +1155,28 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 	// Add the Pruner service to the ServiceManager
 	return d.ServiceManager.AddService(servicePrunerFormal, pruner.New(
 		ctx,
-		createLogger(loggerPruner),
+		logger,
 		appSettings,
 		utxoStore,
 		blockchainClient,
 		blockAssemblyClient,
 	))
+}
+
+// createBanList creates, initializes, and starts periodic reload for a ban list.
+// Returns nil if creation or initialization fails (service continues without bans).
+func createBanList(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) banlist.Interface {
+	bl, err := banlist.NewFromSettings(logger, appSettings)
+	if err != nil {
+		logger.Warnf("failed to create ban list: %v", err)
+		return nil
+	}
+
+	if err := bl.Init(ctx); err != nil {
+		logger.Warnf("failed to init ban list: %v", err)
+		return nil
+	}
+
+	bl.StartPeriodicReload(ctx, 30*time.Second)
+	return bl
 }

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -18,17 +19,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	teranodeblockchain "github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -43,10 +42,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils/expiringmap"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -352,10 +352,12 @@ type SyncManager struct {
 	legacyKafkaInvCh  chan *kafka.Message
 	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
 
-	// These fields should only be accessed from the blockHandler thread.
+	// These fields should only be accessed from the blockHandler thread
+	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	syncPeerMu      sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer        *peerpkg.Peer
 	syncPeerState   *syncPeerState
 	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
@@ -374,6 +376,28 @@ type SyncManager struct {
 	// minSyncPeerNetworkSpeed is the minimum speed allowed for
 	// a sync peer.
 	minSyncPeerNetworkSpeed uint64
+}
+
+// loadSyncPeer returns the current sync peer, safe for concurrent access.
+func (sm *SyncManager) loadSyncPeer() *peerpkg.Peer {
+	sm.syncPeerMu.RLock()
+	defer sm.syncPeerMu.RUnlock()
+	return sm.syncPeer
+}
+
+// loadSyncPeerAndState returns the current sync peer and its state, safe for concurrent access.
+func (sm *SyncManager) loadSyncPeerAndState() (*peerpkg.Peer, *syncPeerState) {
+	sm.syncPeerMu.RLock()
+	defer sm.syncPeerMu.RUnlock()
+	return sm.syncPeer, sm.syncPeerState
+}
+
+// storeSyncPeer sets the sync peer and its state, safe for concurrent access.
+func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
+	sm.syncPeerMu.Lock()
+	defer sm.syncPeerMu.Unlock()
+	sm.syncPeer = peer
+	sm.syncPeerState = state
 }
 
 // resetHeaderState sets the headers-first mode state to values appropriate for
@@ -429,11 +453,11 @@ func (sm *SyncManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoi
 // candidates and removes them as needed.
 func (sm *SyncManager) startSync() {
 	// Return now if we're already syncing.
-	if sm.syncPeer != nil {
+	if sm.loadSyncPeer() != nil {
 		return
 	}
 
-	sm.logger.Debugf("startSync - Syncing from %v", sm.syncPeer)
+	sm.logger.Debugf("startSync - Syncing from %v", sm.loadSyncPeer())
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
@@ -588,12 +612,11 @@ func (sm *SyncManager) startSync() {
 	}
 
 	bestPeer.SetSyncPeer(true)
-	sm.syncPeer = bestPeer
-	sm.syncPeerState = &syncPeerState{
+	sm.storeSyncPeer(bestPeer, &syncPeerState{
 		lastBlockTime:     time.Now(),
 		recvBytes:         bestPeer.BytesReceived(),
 		recvBytesLastTick: uint64(0),
-	}
+	})
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
@@ -618,7 +641,7 @@ func (sm *SyncManager) resetFeeFilterToDefault() {
 
 // SyncHeight returns latest known block being synced to.
 func (sm *SyncManager) SyncHeight() uint64 {
-	if sm.syncPeer == nil {
+	if sm.loadSyncPeer() == nil {
 		return 0
 	}
 
@@ -687,10 +710,10 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 
 	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		sm.logger.Debugf("Error getting FSM current state: %v", err)
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", err)
 	}
 
-	if *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
+	if state != nil && *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
 		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
 
@@ -707,7 +730,7 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	})
 
 	// Start syncing by choosing the best candidate if needed.
-	if isSyncCandidate && sm.syncPeer == nil {
+	if isSyncCandidate && sm.loadSyncPeer() == nil {
 		sm.startSync()
 	}
 }
@@ -718,46 +741,53 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
+	sp, sps := sm.loadSyncPeerAndState()
+
 	// If we don't have a sync peer, select a new one and return.
-	if sm.syncPeer == nil {
+	if sp == nil {
 		sm.startSync()
 
 		return
 	}
 
 	// Update network stats at the end of this tick.
-	defer sm.syncPeerState.updateNetwork(sm.syncPeer)
+	defer sps.updateNetwork(sp)
 
-	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
-	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
+	headersFirst := sm.headersFirstMode.Load()
+	lastBlockSince := time.Since(sps.getLastBlockTime())
 
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode.Load())
+	// During headers-first mode, only suppress network speed checks since
+	// downloading 80-byte headers makes the peer appear slow. Still check
+	// last-block-time so stalled peers get rotated even during headers-first.
+	var isNetworkSpeedViolation bool
+	if !headersFirst {
+		validNetworkSpeed := sps.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
+		isNetworkSpeedViolation = validNetworkSpeed >= maxNetworkViolations
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v)", sp.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime)
+	} else {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check (headers-first mode, speed check skipped), time since last block: %v (limit %v)", sp.String(), lastBlockSince, maxLastBlockTime)
+	}
+	isLastBlockTimeViolation := lastBlockSince > maxLastBlockTime
 
-	// Don't check network speed during headers-first mode, as we're intentionally
-	// downloading small headers (80 bytes each) rather than full blocks. The peer
-	// may appear slow because we're not requesting much data, not because it's actually slow.
-	isNetworkSpeedViolation := !sm.headersFirstMode.Load() && (validNetworkSpeed >= maxNetworkViolations)
-
-	// Check network speed of the sync peer and its last block time. If we're currently
-	// flushing the cache skip this round.
-	if !isNetworkSpeedViolation && (lastBlockSince <= maxLastBlockTime) {
+	// If no violations detected, the sync peer is healthy — nothing to do.
+	if !isNetworkSpeedViolation && !isLastBlockTimeViolation {
 		return
 	}
 
 	var reason string
 	if isNetworkSpeedViolation {
 		reason = "network speed violation"
-	} else if lastBlockSince > maxLastBlockTime {
+	} else if isLastBlockTimeViolation {
 		reason = "last block time out of range"
 	}
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s is stalled due to %s, updating sync peer", sm.syncPeer.String(), reason)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s is stalled due to %s, updating sync peer", sp.String(), reason)
 
-	state, exists := sm.peerStates.Get(sm.syncPeer)
+	state, exists := sm.peerStates.Get(sp)
 	if !exists {
 		return
 	}
 
-	sm.logger.Debugf("[CheckSyncPeer] removing sync peer %s", sm.syncPeer.String())
+	sm.logger.Debugf("[CheckSyncPeer] removing sync peer %s", sp.String())
 
 	sm.clearRequestedState(state)
 	sm.updateSyncPeer(state)
@@ -765,15 +795,16 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 // topBlock returns the best chains top block height
 func (sm *SyncManager) topBlock() int32 {
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		return 0
 	}
 
-	if sm.syncPeer.LastBlock() > sm.syncPeer.StartingHeight() {
-		return sm.syncPeer.LastBlock()
+	if sp.LastBlock() > sp.StartingHeight() {
+		return sp.LastBlock()
 	}
 
-	return sm.syncPeer.StartingHeight()
+	return sp.StartingHeight()
 }
 
 // handleDonePeerMsg deals with peers that have signalled they are done.  It
@@ -798,7 +829,7 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 	sm.clearRequestedState(state)
 
 	// Fetch a new sync peer if this is the sync peer.
-	if peer == sm.syncPeer {
+	if peer == sm.loadSyncPeer() {
 		sm.updateSyncPeer(state)
 	}
 }
@@ -808,35 +839,35 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 	// Remove requested transactions from the global map so that they will
 	// be fetched from elsewhere next time we get an inv.
-	state.requestedTxns.Clear()
+	state.requestedTxns.Stop()
 
 	// Remove requested blocks from the global map so that they will be
 	// fetched from elsewhere next time we get an inv.
-	state.requestedBlocks.Clear()
+	state.requestedBlocks.Stop()
 }
 
 // updateSyncPeer picks a new peer to sync from.
 func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
+	sp, sps := sm.loadSyncPeerAndState()
 	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v, headers-first mode: %v",
-		sm.syncPeerState.getLastBlockTime(),
-		sm.syncPeerState.getViolations(),
+		sps.getLastBlockTime(),
+		sps.getViolations(),
 		sm.headersFirstMode.Load())
 
 	// Only disconnect if we have a valid sync peer
-	if sm.syncPeer != nil {
+	if sp != nil {
 		// Log current sync state before disconnecting
 		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
 
-		sm.syncPeer.SetSyncPeer(false)
-		sm.syncPeer.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
+		sp.SetSyncPeer(false)
+		sp.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
 	}
 
 	// Reset sync peer state
-	sm.syncPeer = nil
-	sm.syncPeerState = nil
+	sm.storeSyncPeer(nil, nil)
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
@@ -898,6 +929,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 
+	// Single inbound tx per call, passed downstream to the validator. Stays
+	// on the standard heap path — no arena amortisation possible for a
+	// one-shot decode where the tx must outlive this function frame.
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
 	if err != nil {
 		sm.logger.Errorf("Failed to create transaction from bytes: %v", err)
@@ -1073,7 +1107,8 @@ func (sm *SyncManager) current() bool {
 	}
 
 	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		return true
 	}
 
@@ -1083,7 +1118,7 @@ func (sm *SyncManager) current() bool {
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	if bestBlockHeightInt32 < sm.syncPeer.LastBlock() {
+	if bestBlockHeightInt32 < sp.LastBlock() {
 		return false
 	}
 
@@ -1097,8 +1132,22 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
-		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		// Stream peers (e.g. BlockPriority) are not registered in peerStates
+		// directly - look up via their association's primary peer instead.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+			return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		}
 	}
 
 	legacySyncMode := false
@@ -1189,6 +1238,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
+			return nil
 		} else if errors.Is(err, errors.ErrBlockNotFound) {
 			// We don't have the parent of this block/header, so we'll request it.
 			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
@@ -1216,9 +1266,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			return nil
-		} else if errors.Is(err, context.Canceled) {
-			return nil
 		} else {
+			if errors.Is(err, context.Canceled) || errors.IsContextError(err) {
+				return nil
+			}
+
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
@@ -1226,8 +1278,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
 
-			// TODO TEMPORARY: we should not panic here, but return the error
-			panic(err)
+			// Never panic in sync processing goroutines; bubble error to caller.
+			return err
 		}
 	}
 
@@ -1245,8 +1297,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		blkHashUpdate *chainhash.Hash
 	)
 
-	if peer == sm.syncPeer {
-		sm.syncPeerState.updateLastBlockTime()
+	if sp, sps := sm.loadSyncPeerAndState(); peer == sp && sps != nil {
+		sps.updateLastBlockTime()
 	}
 
 	// When the block is not an orphan, log information about it and update the chain state.
@@ -1341,12 +1393,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			return errors.NewServiceError("failed to send getheaders message to peer %s", peer.String(), err)
 		}
 
-		if sm.syncPeer != nil {
+		if sp := sm.loadSyncPeer(); sp != nil {
 			sm.logger.Infof(
 				"handleBlockMsg - Downloading headers for blocks %d to %d from peer %s",
 				prevHeight+1,
 				sm.nextCheckpoint.Height,
-				sm.syncPeer.String(),
+				sp.String(),
 			)
 		}
 
@@ -1372,7 +1424,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 // list of blocks to be downloaded based on the current list of headers.
 func (sm *SyncManager) fetchHeaderBlocks() {
 	// Nothing to do if there is no sync peer.
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		sm.logger.Warnf("fetchHeaderBlocks called with no sync peer")
 		return
 	}
@@ -1385,7 +1438,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 
 	// Calculate how many blocks to request to reach the dynamic max limit.
 	// The limit adjusts based on observed block sizes (20 for small, down to 1 for >2GB).
-	peerState, exists := sm.peerStates.Get(sm.syncPeer)
+	peerState, exists := sm.peerStates.Get(sp)
 	if !exists {
 		sm.logger.Warnf("[fetchHeaderBlocks] sync peer state not found")
 		return
@@ -1405,9 +1458,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
-	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
-	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
+	// describe. Size the InvList to maxBlocks rather than headerList.Len()
+	// because the loop below breaks at maxBlocks — sizing to headerList.Len()
+	// (often 2000) caused large repeated allocations (~16 KB) when only a
+	// handful of slots ever get used (maxBlocks shrinks to 1 for >2 GB blocks).
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(maxBlocks)) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {
@@ -1433,7 +1488,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 			}
 
 			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sm.syncPeer)
+			peerState, _ := sm.peerStates.Get(sp)
 			peerState.requestedBlocks.Set(*node.hash, struct{}{})
 
 			numRequested++
@@ -1442,13 +1497,13 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		sm.startHeader = e.Next()
 
 		if numRequested >= maxBlocks {
-			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sm.syncPeer)
+			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sp)
 			break
 		}
 	}
 
 	if len(getDataMessage.InvList) > 0 {
-		sm.syncPeer.QueueMessage(getDataMessage, nil)
+		sp.QueueMessage(getDataMessage, nil)
 	}
 }
 
@@ -1460,8 +1515,22 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	_, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				_, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("Received headers message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// The remote peer is misbehaving if we didn't request headers.
@@ -1596,8 +1665,15 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 	switch invVect.Type {
 	case wire.InvTypeBlock:
-		// check whether this block exists in the blockchain service
-		return sm.blockchainClient.GetBlockExists(sm.ctx, &invVect.Hash)
+		// single round-trip: GetBlockHeader tells us both existence and validity
+		_, meta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVect.Hash)
+		if err != nil {
+			// block not found (or transient error) — trigger re-request
+			return false, nil
+		}
+
+		// block exists but was marked invalid — re-request so it can be reprocessed
+		return !meta.Invalid, nil
 
 	case wire.InvTypeTx:
 		// check whether this transaction exists in the utxo store
@@ -1627,8 +1703,22 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// Attempt to find the final block in the inventory list.  There may
@@ -1648,13 +1738,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// announced block for this peer. We'll use this information later to
 	// update the heights of peers based on blocks we've accepted that they
 	// previously announced.
-	if lastBlock != -1 && peer != sm.syncPeer {
+	sp := sm.loadSyncPeer()
+	if lastBlock != -1 && peer != sp {
 		peer.UpdateLastAnnouncedBlock(&invVects[lastBlock].Hash)
 	}
 
 	// Ignore invs from peers that aren't the sync if we are not current.
 	// Helps prevent fetching a mass of orphans.
-	if peer != sm.syncPeer && !sm.current() {
+	if peer != sp && !sm.current() {
 		return
 	}
 
@@ -1844,8 +1935,17 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable
-	maxBlockQueue := 10_000
+	// TODO make this configurable.
+	//
+	// This buffer pins one *wire.MsgBlock per slot. Each MsgBlock carries
+	// its go-wire decode arena (≥4 MiB per block today), so the previous
+	// 10_000-deep queue could pin ~40 GiB of arena memory ahead of the
+	// sequential processor. On a memory-constrained box that turns into
+	// the dominant live-heap source and starves the GC. Cap at a small
+	// value: enough to absorb processor-stall jitter, far below anything
+	// that would meaningfully pin memory. The downloader naturally
+	// back-pressures via TCP when the queue is full.
+	maxBlockQueue := 100
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
@@ -1934,8 +2034,8 @@ out:
 			case getSyncPeerMsg:
 				var peerID int32
 
-				if sm.syncPeer != nil {
-					peerID = sm.syncPeer.ID()
+				if sp := sm.loadSyncPeer(); sp != nil {
+					peerID = sp.ID()
 				}
 				msg.reply <- peerID
 
@@ -2100,6 +2200,10 @@ func (sm *SyncManager) Stop() error {
 	close(sm.quit)
 	<-sm.handlerDone
 
+	sm.orphanTxs.Stop()
+	sm.requestedTxns.Stop()
+	sm.requestedBlocks.Stop()
+
 	return nil
 }
 
@@ -2167,12 +2271,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplication[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
+	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
 
 		// process the batch
 		sm.peerNotifier.AnnounceNewTransactions(batch)
-	}, true)
+	}, true,
+		batcher.WithName("netsync_tx_announce"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
+	)
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
@@ -2317,55 +2426,9 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "txmeta.legacy"+"."+sm.settings.ClientName, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
-	// Listen to blockchain notifications for subtree announcements
-	go func() {
-		// will never return an error
-		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, "legacy/manager")
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-blockchainSubscription:
-				if notification == nil {
-					continue
-				}
-
-				// check if the notification is a new subtree
-				if notification.Type == model.NotificationType_Subtree {
-					// we just got notified of a new subtree internally, announce all the transactions to our peers
-					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
-
-					subtreeReader, err := sm.subtreeStore.GetIoReader(ctx, notification.Hash, fileformat.FileTypeSubtree)
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
-						continue
-					}
-
-					subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
-					_ = subtreeReader.Close()
-					if err != nil {
-						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
-						continue
-					}
-
-					// announce all the transactions in the subtree
-					// the batcher should de-duplicate the transactions that have already been sent in the last minute
-					for _, subtreeNode := range subtree.Nodes {
-						if subtreeNode.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-							continue
-						}
-
-						sm.txAnnounceBatcher.Put(&TxHashAndFee{
-							TxHash: subtreeNode.Hash,
-							Fee:    subtreeNode.Fee,
-							Size:   subtreeNode.SizeInBytes,
-						})
-					}
-				}
-			}
-		}
-	}()
+	// Tx announcements to legacy peers are handled entirely by the txmeta Kafka path.
+	// Subtree notifications are NOT used for tx announcements — they caused all txs in
+	// reorganized subtrees to be re-announced to peers after every new block.
 
 	// Control block listeners based on blockControlChan
 	go func() {
@@ -2460,37 +2523,94 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 	}, &sm.settings.Kafka)
 }
 
+// kafkaTXmetaListener processes TxMeta Kafka messages in binary batch format.
+// Messages use a binary batch format:
+// [4 bytes]  - entry count (uint32, little-endian)
+// For each entry:
+//
+//	[32 bytes] - tx hash (raw bytes)
+//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
+//	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		var kafkaMsg kafkamessage.KafkaTxMetaTopicMessage
-		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
-			sm.logger.Errorf("Failed to unmarshal kafka message: %v", err)
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to unmarshal kafka message", err)
+		return sm.processTXmetaBatchMessage(msg.Value)
+	}, &sm.settings.Kafka)
+}
+
+const (
+	txmetaActionADD    = byte(0)
+	txmetaActionDELETE = byte(1)
+)
+
+// processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
+// It parses the batch format, deserializes metadata for ADD entries, and announces
+// non-coinbase transactions to peers via the txAnnounceBatcher.
+// Coinbase transactions are intentionally skipped to avoid peer bans.
+func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
+	if len(data) < 4 {
+		return nil
+	}
+
+	offset := 0
+
+	// Read entry count
+	entryCount := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+
+	// Process each entry
+	for i := uint32(0); i < entryCount; i++ {
+		// Check minimum bytes for hash + action + length
+		if offset+32+1+4 > len(data) {
+			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
+			return nil
 		}
 
-		hash, err := chainhash.NewHashFromStr(kafkaMsg.TxHash)
-		if err != nil {
-			sm.logger.Errorf("Failed to parse tx hash from message: %v", err)
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx hash from message", err)
-		}
+		// Read hash (32 bytes)
+		var hash chainhash.Hash
+		copy(hash[:], data[offset:offset+32])
+		offset += 32
 
-		if kafkaMsg.Action == kafkamessage.KafkaTxMetaActionType_ADD {
+		// Read action (1 byte)
+		action := data[offset]
+		offset++
+
+		// Read content length (4 bytes)
+		contentLen := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+
+		if action == txmetaActionADD {
+			// Handle ADD
+			if offset+int(contentLen) > len(data) {
+				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
+				return nil
+			}
+
+			content := data[offset : offset+int(contentLen)]
+			offset += int(contentLen)
+
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 
 			var txMeta meta.Data
-
-			if err = meta.NewMetaDataFromBytes(kafkaMsg.Content, &txMeta); err != nil {
+			if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
 				sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
-				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to create tx meta data from bytes", err)
+				continue
+			}
+
+			if txMeta.IsCoinbase {
+				continue
 			}
 
 			sm.txAnnounceBatcher.Put(&TxHashAndFee{
-				TxHash: *hash,
+				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,
 			})
+		} else {
+			offset += int(contentLen)
+			continue
 		}
+	}
 
-		return nil
-	}, &sm.settings.Kafka)
+	return nil
 }

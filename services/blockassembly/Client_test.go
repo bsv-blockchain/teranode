@@ -3,10 +3,11 @@ package blockassembly
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
@@ -42,7 +43,7 @@ func createTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int) *Cl
 			client.sendBatchToBlockAssembly(context.Background(), batch)
 		}
 		duration := time.Duration(100) * time.Millisecond
-		client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+		client.batcher = batcher.New(batchSize, duration, sendBatch, true)
 	}
 
 	return client
@@ -727,6 +728,92 @@ func TestClient_sendBatchToBlockAssembly(t *testing.T) {
 
 		mockClient.AssertExpectations(t)
 	})
+}
+
+func TestClient_Store_BatchMode_MaxConcurrent(t *testing.T) {
+	ctx := context.Background()
+	mockClient := &mockBlockAssemblyAPIClient{}
+
+	// Create client with maxConcurrent=2
+	logger := ulogger.TestLogger{}
+	tSettings := &settings.Settings{
+		BlockAssembly: settings.BlockAssemblySettings{
+			SendBatchSize:          2,
+			SendBatchTimeout:       100,
+			SendBatchMaxConcurrent: 2,
+		},
+	}
+
+	client := &Client{
+		client:    mockClient,
+		logger:    logger,
+		settings:  tSettings,
+		batchSize: 2,
+		batchCh:   make(chan []*batchItem),
+	}
+
+	// Track concurrent calls
+	var concurrentCalls atomic.Int32
+	var maxConcurrentSeen atomic.Int32
+	var callCount atomic.Int32
+
+	// Block gRPC calls with a gate so we can control timing
+	gate := make(chan struct{})
+
+	mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			current := concurrentCalls.Add(1)
+			// Track the maximum concurrent calls observed
+			for {
+				old := maxConcurrentSeen.Load()
+				if current <= old || maxConcurrentSeen.CompareAndSwap(old, current) {
+					break
+				}
+			}
+			callCount.Add(1)
+			<-gate // Block until test releases
+			concurrentCalls.Add(-1)
+		}).
+		Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+	sendBatch := func(b []*batchItem) {
+		client.sendBatchToBlockAssembly(ctx, b)
+	}
+	duration := time.Duration(100) * time.Millisecond
+	b := batcher.New(2, duration, sendBatch, true)
+	b.SetMaxConcurrent(2)
+	client.batcher = b
+
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	txInpoints := subtree.TxInpoints{}
+
+	// Submit enough items to fill multiple batches (6 items = 3 batches of 2)
+	for i := 0; i < 6; i++ {
+		go func() {
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+		}()
+	}
+
+	// Wait for exactly 2 concurrent calls to be blocked at the gate
+	require.Eventually(t, func() bool {
+		return concurrentCalls.Load() == 2
+	}, 2*time.Second, 10*time.Millisecond, "should reach max concurrent of 2")
+
+	// With 2 calls blocked at the gate, exactly 2 should have started (3rd is queued by the limiter)
+	require.Equal(t, int32(2), callCount.Load(),
+		"only 2 batches should have started while at max concurrency")
+
+	// Release all blocked calls
+	close(gate)
+
+	// Wait for all 3 batches to complete (the queued 3rd batch should now proceed)
+	require.Eventually(t, func() bool {
+		return callCount.Load() >= 3
+	}, 2*time.Second, 10*time.Millisecond, "all batches should complete after gate opens")
+
+	// Verify concurrency never exceeded the limit
+	require.LessOrEqual(t, maxConcurrentSeen.Load(), int32(2),
+		"concurrent calls should never exceed maxConcurrent=2")
 }
 
 func TestNewClientWithAddress_ConfigErrors(t *testing.T) {

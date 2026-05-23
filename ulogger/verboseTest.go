@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
@@ -75,4 +76,10 @@ func (l *VerboseTestLogger) Fatalf(format string, args ...interface{}) {
 	if l.t != nil {
 		l.t.Fatalf("FATAL_LEVEL "+format, args...)
 	}
+}
+
+// WithTraceContext returns the same logger since VerboseTestLogger is a test logger
+// that doesn't support structured fields.
+func (l *VerboseTestLogger) WithTraceContext(_ context.Context) Logger {
+	return l
 }

@@ -9,7 +9,7 @@
     - [2.3. Grouping Transactions into Subtrees](#23-grouping-transactions-into-subtrees)
     - [2.3.1 Dynamic Subtree Size Adjustment](#231-dynamic-subtree-size-adjustment)
     - [2.4. Creating Mining Candidates](#24-creating-mining-candidates)
-    - [2.4.1. Mining Candidate Caching](#241-mining-candidate-caching)
+    - [2.4.1. Pre-computed Mining Data](#241-pre-computed-mining-data)
     - [2.5. Submit Mining Solution](#25-submit-mining-solution)
     - [2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
     - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
@@ -185,15 +185,21 @@ This periodic announcement complements the size-based announcements, ensuring:
 
 ### 2.3.1 Dynamic Subtree Size Adjustment
 
-The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
+When enabled via `UseDynamicSubtreeSize`, the Block Assembly service re-evaluates the subtree size **once per processed block**. The algorithm is utilization-driven (based on the average fill of recent subtrees in a small ring buffer), with a velocity check applied only on the increase path.
 
-- The system targets a rate of approximately one subtree per second under high throughput conditions
-- If subtrees are being created too quickly, the size is automatically increased
-- If subtrees are being created too slowly, the size is decreased
-- Adjustments are always made to a power of 2 and constrained by minimum and maximum bounds
-- Size increases are capped at 2x per block to prevent wild oscillations
+**Three-zone decision based on average subtree utilization:**
 
-Importantly, the system maintains a minimum subtree size threshold, configured via `minimum_merkle_items_per_subtree`. In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement. This means that during periods of low network usage, the target rate of one subtree per second may not be achieved, as the system prioritizes reaching the minimum subtree size before sending.
+- **Under 10%:** size halves. The new size is `currentSize × 0.5`, rounded up to a power of two, then floored at `MinimumMerkleItemsPerSubtree`. This is the only path that decreases size; the per-evaluation decrease cap is 0.5×.
+- **10–80%:** no change. The size is left as-is.
+- **Over 80%:** size may grow. Growth is gated:
+    - If recent average fill is below an anti-creep threshold (derived from `MinimumMerkleItemsPerSubtree`), no increase is applied — this prevents size creep when subtrees are tiny in absolute terms even though they appear "full" relative to current size.
+    - Otherwise the new size is computed from the ratio of target subtree interval (1 second) to the observed average interval, rounded up to a power of two, then capped in order: at 2× the current size, at `MaximumMerkleItemsPerSubtree`, and finally at a usage-based ceiling that limits growth to roughly twice the largest recent fill (this last cap is implementation tuning and is not a stable contract).
+
+**Goal.** Under sustained high throughput, hold the rate of completed subtrees near one per second. Under low traffic, shrink toward the minimum and stay there.
+
+**Floor behavior.** `MinimumMerkleItemsPerSubtree` is enforced after every adjustment. In low-volume periods the system prioritizes reaching the minimum fill over hitting the one-subtree-per-second target — subtrees are held back until they reach the floor or the periodic-announcement timer fires.
+
+**Power-of-two invariant.** All sizes are powers of two. The shrink path's `ceil(log2)` rounding is intentional (biases shrinks slightly conservative) and is benign in normal operation where the input is already a power of two.
 
 ![block_assembly_dynamic_subtree.svg](img/plantuml/blockassembly/block_assembly_dynamic_subtree.svg)
 
@@ -210,35 +216,22 @@ This self-tuning mechanism helps maintain consistent processing rates and optima
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
 
-#### 2.4.1. Mining Candidate Caching
+#### 2.4.1. Pre-computed Mining Data
 
-The Block Assembly service implements an intelligent caching mechanism for mining candidates to optimize performance and reduce redundant computations:
+The Block Assembly service uses a pre-computed data pattern for efficient mining candidate generation:
 
-**Cache Behavior:**
+**How It Works:**
 
-- Mining candidates are cached when the block height remains unchanged
-- The cache has a configurable timeout (via `MiningCandidateCacheTimeout` setting)
-- Cache is automatically invalidated when:
-
-    - A new block is added to the blockchain (height changes)
-    - New subtrees become available
-    - The cache timeout expires
+- The Subtree Processor atomically publishes pre-computed mining data (subtree snapshots) whenever a subtree completes or a block is processed
+- `GetMiningCandidate` reads this pre-computed data via a lock-free atomic pointer, requiring no locks or channel synchronization
+- When no complete subtrees exist, an on-demand snapshot of the incomplete subtree is requested from the processing goroutine
+- Derived values (fees, tx count, merkle proof, etc.) are computed per-request from the subtree snapshot
 
 **Performance Benefits:**
 
-- Reduces CPU overhead for miners requesting frequent updates
-- Eliminates redundant subtree processing and merkle tree calculations
-- Improves response times for mining candidate requests
-- Particularly beneficial for mining pools making high-frequency requests
-
-**Implementation Details:**
-
-- Uses thread-safe locking to prevent race conditions during cache updates
-- Implements a generation flag to serialize concurrent candidate creation requests
-- Cache hit/miss metrics are exposed via Prometheus for monitoring
-- Disabled for difficulty adjustment scenarios (when `ReduceMinDifficulty` is enabled) to ensure accurate difficulty calculations
-
-This caching mechanism is transparent to miners and significantly improves the efficiency of the mining candidate generation process during normal operations.
+- Lock-free reads eliminate contention under concurrent mining requests
+- No channel round-trips for the common case (completed subtrees available)
+- Supports high-frequency mining pool requests without serialization
 
 ### 2.5. Submit Mining Solution
 
@@ -253,7 +246,7 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
 
-- Subtree TTLs are removed, effectively setting the subtrees for removal from the Subtree Store.
+- Subtrees retain their finite DAH (Delete-At-Height) from assembly. The block persister will promote them to permanent (DAH=0) when it processes the block.
 - All jobs in the Job Store are deleted.
 - In case of an error at any point in the process, the block is invalidated through the Blockchain Client.
 

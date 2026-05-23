@@ -2,7 +2,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// Package legacy implements a BSV Blockchain legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
@@ -134,7 +134,7 @@ func maxUint64(a, b uint64) uint64 {
 	return b
 }
 
-// config defines the configuration options for the legacy Bitcoin SV protocol server.
+// config defines the configuration options for the legacy BSV Blockchain protocol server.
 // Configuration values can be set via command-line flags, configuration files, or environment variables.
 type config struct {
 	ShowVersion             bool          `short:"V" long:"version" description:"Display version information and exit"`

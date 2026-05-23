@@ -19,12 +19,15 @@ import (
 
 // TestCleanupDuringStartup tests that cleanup runs before loading unmined transactions
 func TestCleanupDuringStartup(t *testing.T) {
+	initPrometheusMetrics()
+
 	t.Run("cleanup runs before loading unmined transactions", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Setup expectations in order
 		var iteratorCalled bool
@@ -57,14 +60,13 @@ func TestCleanupDuringStartup(t *testing.T) {
 			bestBlock:        atomic.Pointer[BestBlockInfo]{},
 			subtreeProcessor: subtreeProcessor,
 			blockchainClient: blockchainClient,
-			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 
 		require.NoError(t, err)
 		assert.True(t, iteratorCalled)
@@ -79,13 +81,13 @@ type MockUnminedTxIterator struct {
 	mock.Mock
 }
 
-func (m *MockUnminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction, error) {
+func (m *MockUnminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 
-	return args.Get(0).(*utxo.UnminedTransaction), args.Error(1)
+	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
 }
 
 func (m *MockUnminedTxIterator) Err() error {
@@ -100,23 +102,28 @@ func (m *MockUnminedTxIterator) Close() error {
 
 // TestLoadUnminedTransactionsExcludesConflicting tests that loadUnminedTransactions excludes conflicting transactions
 func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
+	initPrometheusMetrics()
+
 	t.Run("conflicting transactions are excluded during loading", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
 		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
+		settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Create mock transactions - only normal transaction should be returned by iterator
-		normalTxHash := chainhash.DoubleHashB([]byte("normal-tx"))
+		normalTxHash := chainhash.DoubleHashH([]byte("normal-tx"))
 
-		normalTx := &utxo.UnminedTransaction{
-			Hash:       (*chainhash.Hash)(normalTxHash),
-			Fee:        1000,
-			Size:       250,
-			TxInpoints: subtree.TxInpoints{},
+		normalTxs := []*utxo.UnminedTransaction{{
+			Node: &subtree.Node{
+				Hash:        normalTxHash,
+				Fee:         1000,
+				SizeInBytes: 250,
+			},
+			TxInpoints: &subtree.TxInpoints{},
 			CreatedAt:  1000,
-		}
+		}}
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
 		mockIterator := new(MockUnminedTxIterator)
@@ -126,7 +133,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 
 		// Iterator should only return normal transactions (conflicting ones are filtered out by the iterator)
 		mockIterator.On("Next", mock.Anything).
-			Return(normalTx, nil).
+			Return(normalTxs, nil).
 			Once()
 
 		// Second call returns nil (end of iteration)
@@ -137,10 +144,10 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		// Setup mock subtree processor
 		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 
-		// Should only be called once for the normal transaction
-		mockSubtreeProcessor.On("AddDirectly", mock.MatchedBy(func(node subtree.Node) bool {
-			return node.Hash.String() == normalTx.Hash.String()
-		}), mock.Anything, true).Return(nil).Once()
+		// Should only be called once for the normal transaction batch
+		mockSubtreeProcessor.On("AddNodesDirectly", mock.MatchedBy(func(txs []*utxo.UnminedTransaction) bool {
+			return len(txs) == 1 && txs[0].Hash.String() == normalTxs[0].Hash.String()
+		}), true).Return(nil).Once()
 		// GetCurrentBlockHeader may be called multiple times during loading
 		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil).Maybe()
 
@@ -154,14 +161,13 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 			settings:         settings,
 			subtreeProcessor: mockSubtreeProcessor,
 			blockchainClient: blockchainClient,
-			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
-		err := ba.loadUnminedTransactions(ctx, false)
+		err := ba.loadUnminedTransactions(ctx)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)

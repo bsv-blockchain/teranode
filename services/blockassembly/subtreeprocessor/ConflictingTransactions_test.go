@@ -93,7 +93,7 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	// This is a complex method that would require extensive mocking, so we'll test it separately
 
 	// Call the method under test
-	result, err := stp.processConflictingTransactions(context.Background(), block, conflictingNodes, map[chainhash.Hash]bool{})
+	result, _, err := stp.processConflictingTransactions(context.Background(), block, conflictingNodes, map[chainhash.Hash]bool{})
 
 	// Verify results
 	require.NoError(t, err)
@@ -335,6 +335,7 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 	// Setup
 	mockBlockchainClient := new(blockchain.Mock)
 	mockUtxoStore := new(utxo.MockUtxostore)
+	mockUtxoStore.On("GetBlockHeight").Return(uint32(100))
 
 	blobStore := blob_memory.New()
 	settings := test.CreateBaseTestSettings(t)

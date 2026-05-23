@@ -1,6 +1,6 @@
 # Chain Integrity Testing
 
-This document explains how to run chain integrity tests locally using the Make jobs that replicate the GitHub workflow workflow.
+This document explains how to run chain integrity tests locally using the Make jobs that replicate the GitHub workflow.
 
 ## Overview
 
@@ -53,7 +53,7 @@ This allows you to customize the test parameters:
 make chain-integrity-test-quick
 ```
 
-This runs a faster version of the test with shorter 20 minutes:
+This runs a faster version of the test with a shorter maximum wait time of 3 minutes:
 
 - Required block height: 50
 - Maximum wait time: 3 minutes (60 attempts × 3 seconds)
@@ -74,16 +74,13 @@ This displays the hash analysis results from a previous chain integrity test:
 
 ### 5. AWS ECR Login
 
+To pull Docker images from AWS ECR, authenticate manually using the AWS CLI:
+
 ```bash
-make ecr-login
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin <your-ecr-registry>
 ```
 
-This logs into AWS ECR to enable pulling required Docker images:
-
-- Authenticates with AWS ECR in eu-north-1 region
-- Enables pulling teranode-commands and teranode-coinbase images
-- Required before running tests if ECR images are needed
-- Automatically handled during chain integrity tests
+> **Note:** There is no `make ecr-login` target in the Makefile. ECR login must be performed manually using the AWS CLI before running tests that require ECR images.
 
 ### 6. Clean Up
 
@@ -103,7 +100,7 @@ The chain integrity test follows these steps:
 
 1. **Build chainintegrity binary** - Compiles the chain integrity tool
 2. **Clean up old data** - Removes previous test data
-3. **Build teranRM teranode image** - Creates a local Docker image
+3. **Build teranode image** - Creates a local Docker image
 4. **Start Teranode nodes** - Launches 3 nodes with block generators using Docker Compose
 5. **Wait for mining completion** - Monitors all nodes until they reach the required block height
 6. **Stop Teranode nodes** - Gracefully stops the nodes
@@ -144,7 +141,7 @@ make show-hashes
 ```
 
 This will display output similar to:
-```
+```text
 📊 Hash Analysis Results:
 ==========================
   - Extracting hash information...
@@ -173,7 +170,7 @@ The hash comparison helps verify that nodes are maintaining consistent blockchai
     - Ensure AWS CLI is installed and configured
     - Check AWS credentials: `aws sts get-caller-identity`
     - Verify ECR access permissions
-    - Run `make ecr-login` manually if needed
+    - Run `aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin <your-ecr-registry>` manually if needed
 
 3. **Nodes not responding**
 
@@ -221,7 +218,7 @@ rm -rf data
 - SSD storage is recommended for faster I/O
 - Consider using the quick test for development iterations
 
-## Integration with Awkward CI/CD
+## Integration with CI/CD
 
 The local invokes the same process as the GitHub workflow:
 

@@ -9,22 +9,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,6 +76,7 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// mock the HTTP response with malformed transaction data
 	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
@@ -127,6 +131,7 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// create a valid extended transaction using a known valid tx
 	tx, err := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
@@ -189,6 +194,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// test case 1: peer cannot provide transactions
 	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
@@ -260,6 +266,7 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 		invalidSubtreeKafkaProducer:  nil, // nil producer
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// call publishInvalidSubtree directly
 	// should not panic even with nil producer
@@ -286,6 +293,7 @@ func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// mock HTTP 500 error response
 	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
@@ -333,6 +341,154 @@ func TestInvalidSubtreeReporting_ReadTxFromReaderPanic(t *testing.T) {
 	assert.Nil(t, tx)
 }
 
+// TestGetSubtreeTxHashes_OversizedBody verifies that getSubtreeTxHashes refuses to allocate
+// a peer-supplied response body larger than SubtreeValidation.MaxIncomingSubtreeBytes.
+// Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
+func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Lower the cap so the test response is cheap to produce.
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Register a peer that returns a body larger than the cap.
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	stat := gocore.NewStat("test")
+	_, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
+// TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// The receive-side cap must be governed by SubtreeValidation.MaxIncomingSubtreeBytes only,
+// not by local BlockAssembly.MaximumMerkleItemsPerSubtree. Otherwise nodes with a smaller
+// local assembly cap than the network norm (docker quickstart on teratestnet) reject every
+// legitimate peer response and stall catchup.
+func TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Docker quickstart profile: small local assembly cap, generous receive cap.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768 // 1 MiB worth of node hashes
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024
+
+	subtreeHash := chainhash.HashH([]byte("test-large-subtree-from-peer"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Build a valid node-hash payload larger than the local assembly cap but well under the
+	// receive cap: 65,536 32-byte hashes = 2 MiB.
+	const leafCount = 65536
+	payload := make([]byte, leafCount*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, payload))
+
+	stat := gocore.NewStat("test")
+	hashes, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+
+	require.NoError(t, err)
+	require.Len(t, hashes, leafCount)
+}
+
+// TestGetSubtreeTxHashes_LocalFile is a regression guard for the dual file-type
+// lookup. If the subtree is already on disk under FileTypeSubtree (the
+// "already validated" marker — written by quickValidationMode, block assembly,
+// or block persister), getSubtreeTxHashes must use it instead of falling back
+// to an HTTP fetch. This is important for legacy catch-up where baseURL has
+// no scheme and the HTTP request would fail outright.
+func TestGetSubtreeTxHashes_LocalFile(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	cases := []struct {
+		name     string
+		fileType fileformat.FileType
+	}{
+		{"FileTypeSubtreeToCheck", fileformat.FileTypeSubtreeToCheck},
+		{"FileTypeSubtree", fileformat.FileTypeSubtree},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+			require.NoError(t, err)
+
+			h1 := chainhash.HashH([]byte("local-tx-1"))
+			h2 := chainhash.HashH([]byte("local-tx-2"))
+			h3 := chainhash.HashH([]byte("local-tx-3"))
+			h4 := chainhash.HashH([]byte("local-tx-4"))
+			require.NoError(t, subtree.AddNode(h1, 1, 100))
+			require.NoError(t, subtree.AddNode(h2, 1, 100))
+			require.NoError(t, subtree.AddNode(h3, 1, 100))
+			require.NoError(t, subtree.AddNode(h4, 1, 100))
+
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+
+			server := &Server{
+				logger:                       ulogger.TestLogger{},
+				settings:                     tSettings,
+				subtreeStore:                 memory.New(),
+				invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+				invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+			}
+			defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+			require.NoError(t, server.subtreeStore.Set(context.Background(), subtreeHash[:], tc.fileType, subtreeBytes))
+
+			// Activate httpmock with no responders so any unintended HTTP fallback
+			// fails fast and deterministically instead of attempting a real network
+			// call (which would hang for up to the default 60s client timeout).
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// Bound the test with a short context timeout as a second line of
+			// defence — if the implementation regresses past httpmock somehow,
+			// this fails fast rather than blocking the suite.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			stat := gocore.NewStat("test")
+			hashes, err := server.getSubtreeTxHashes(ctx, stat, &subtreeHash, testPeerURL)
+
+			require.NoError(t, err)
+			require.Equal(t, []chainhash.Hash{h1, h2, h3, h4}, hashes)
+		})
+	}
+}
+
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly
 func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	// setup
@@ -351,6 +507,7 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 		invalidSubtreeKafkaProducer:  kafkaProducer,
 		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// call publishInvalidSubtree directly
 	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, reason)
@@ -369,4 +526,61 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 
 	// verify the Kafka message key is the subtree hash
 	assert.Equal(t, []byte(subtreeHash), kafkaProducer.messages[0].Key)
+}
+
+func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Kafka.InvalidSubtrees = "invalid-subtrees-topic"
+
+	invalidSubtreeURL, err := url.Parse("memory://localhost:9092/invalid-subtrees-topic")
+	require.NoError(t, err)
+	tSettings.Kafka.InvalidSubtreesConfig = invalidSubtreeURL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	producer, err := initialiseInvalidSubtreeKafkaProducer(ctx, ulogger.TestLogger{}, tSettings)
+	require.NoError(t, err)
+	require.NotNil(t, producer)
+
+	producerCh := make(chan *kafka.Message, 100)
+	producer.Start(ctx, producerCh)
+	defer func() { require.NoError(t, producer.Stop()) }()
+
+	consumer := setupMemoryKafkaConsumer(t, "invalid-subtrees-topic")
+	defer consumer.Close()
+
+	delivered := make(chan *kafkamessage.KafkaInvalidSubtreeTopicMessage, 1)
+	consumer.Start(ctx, func(message *kafka.KafkaMessage) error {
+		var received kafkamessage.KafkaInvalidSubtreeTopicMessage
+		if err := proto.Unmarshal(message.Value, &received); err != nil {
+			return err
+		}
+		select {
+		case delivered <- &received:
+		default:
+		}
+		return nil
+	}, kafka.WithLogErrorAndMoveOn())
+	// In-memory consumer registration is async; wait briefly so the first publish is not missed.
+	time.Sleep(50 * time.Millisecond)
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		invalidSubtreeKafkaProducer:  producer,
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	server.publishInvalidSubtree(ctx, "subtree-hash-e2e", testPeerURL, "e2e_reason")
+
+	select {
+	case msg := <-delivered:
+		require.Equal(t, "subtree-hash-e2e", msg.SubtreeHash)
+		require.Equal(t, testPeerURL, msg.PeerUrl)
+		require.Equal(t, "e2e_reason", msg.Reason)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for invalid subtree kafka message")
+	}
 }

@@ -43,6 +43,7 @@ const (
 	ERR_BLOCK_PARENT_NOT_MINED        ERR = 14
 	ERR_BLOCK_COINBASE_MISSING_HEIGHT ERR = 15
 	ERR_BLOCK_ASSEMBLY_RESET          ERR = 16
+	ERR_BLOCK_INCOMPLETE              ERR = 17
 	ERR_BLOCK_ERROR                   ERR = 19
 	// Subtree errors 20-29
 	ERR_SUBTREE_NOT_FOUND         ERR = 20
@@ -81,6 +82,7 @@ const (
 	ERR_UTXO_NOT_FOUND    ERR = 73
 	ERR_UTXO_MISMATCH     ERR = 74
 	ERR_UTXO_INVALID_SIZE ERR = 75
+	ERR_UTXO_UNSPENT      ERR = 76
 	ERR_UTXO_ERROR        ERR = 79
 	// Kafka errors 80-89
 	ERR_KAFKA_DECODE_ERROR ERR = 80
@@ -124,6 +126,7 @@ var (
 		14:  "BLOCK_PARENT_NOT_MINED",
 		15:  "BLOCK_COINBASE_MISSING_HEIGHT",
 		16:  "BLOCK_ASSEMBLY_RESET",
+		17:  "BLOCK_INCOMPLETE",
 		19:  "BLOCK_ERROR",
 		20:  "SUBTREE_NOT_FOUND",
 		21:  "SUBTREE_INVALID",
@@ -157,6 +160,7 @@ var (
 		73:  "UTXO_NOT_FOUND",
 		74:  "UTXO_MISMATCH",
 		75:  "UTXO_INVALID_SIZE",
+		76:  "UTXO_UNSPENT",
 		79:  "UTXO_ERROR",
 		80:  "KAFKA_DECODE_ERROR",
 		89:  "KAFKA_ERROR",
@@ -193,6 +197,7 @@ var (
 		"BLOCK_PARENT_NOT_MINED":        14,
 		"BLOCK_COINBASE_MISSING_HEIGHT": 15,
 		"BLOCK_ASSEMBLY_RESET":          16,
+		"BLOCK_INCOMPLETE":              17,
 		"BLOCK_ERROR":                   19,
 		"SUBTREE_NOT_FOUND":             20,
 		"SUBTREE_INVALID":               21,
@@ -226,6 +231,7 @@ var (
 		"UTXO_NOT_FOUND":                73,
 		"UTXO_MISMATCH":                 74,
 		"UTXO_INVALID_SIZE":             75,
+		"UTXO_UNSPENT":                  76,
 		"UTXO_ERROR":                    79,
 		"KAFKA_DECODE_ERROR":            80,
 		"KAFKA_ERROR":                   89,
@@ -377,8 +383,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xff\n" +
-	"\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xa7\v\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -398,7 +403,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\x14BLOCK_INVALID_FORMAT\x10\r\x12\x1a\n" +
 	"\x16BLOCK_PARENT_NOT_MINED\x10\x0e\x12!\n" +
 	"\x1dBLOCK_COINBASE_MISSING_HEIGHT\x10\x0f\x12\x18\n" +
-	"\x14BLOCK_ASSEMBLY_RESET\x10\x10\x12\x0f\n" +
+	"\x14BLOCK_ASSEMBLY_RESET\x10\x10\x12\x14\n" +
+	"\x10BLOCK_INCOMPLETE\x10\x11\x12\x0f\n" +
 	"\vBLOCK_ERROR\x10\x13\x12\x15\n" +
 	"\x11SUBTREE_NOT_FOUND\x10\x14\x12\x13\n" +
 	"\x0fSUBTREE_INVALID\x10\x15\x12\x1b\n" +
@@ -433,7 +439,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\vUTXO_FROZEN\x10H\x12\x12\n" +
 	"\x0eUTXO_NOT_FOUND\x10I\x12\x11\n" +
 	"\rUTXO_MISMATCH\x10J\x12\x15\n" +
-	"\x11UTXO_INVALID_SIZE\x10K\x12\x0e\n" +
+	"\x11UTXO_INVALID_SIZE\x10K\x12\x10\n" +
+	"\fUTXO_UNSPENT\x10L\x12\x0e\n" +
 	"\n" +
 	"UTXO_ERROR\x10O\x12\x16\n" +
 	"\x12KAFKA_DECODE_ERROR\x10P\x12\x0f\n" +

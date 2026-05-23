@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -67,6 +68,10 @@ func getKafkaSubtreesAsyncProducer(ctx context.Context, logger ulogger.Logger,
 }
 
 // getKafkaTxmetaAsyncProducer creates a new Kafka async producer for txmeta using the configuration from settings.
+//
+// When settings.Validator.TxMetaWireFormat == "v2" the producer is built with
+// ManualPartitioning: the validator computes each record's partition number
+// from xxhash(tx hash) so receivers see partition-aligned bucket batches.
 func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	settings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
 	kafkaTxmetaConfig := settings.Kafka.TxMetaConfig
@@ -74,7 +79,12 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta producer - txmetaConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
+	var opts []kafka.ProducerOption
+	if settings.Validator.TxMetaWireFormat == "v2" {
+		opts = append(opts, kafka.WithManualPartitioning())
+	}
+
+	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
 // getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from gocore.
@@ -84,7 +94,7 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, setting
 		return nil, nil
 	}
 
-	kafkaURL, err := url.ParseRequestURI(value)
+	kafkaURL, err := urlutil.ParseMultiHostURL(value)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs producer - kafka_validatortxsConfig", err)
 	}

@@ -1171,11 +1171,11 @@ func TestIPOrSubnetValidationExtended(t *testing.T) {
 		{"127.0.0.1", true, "valid IPv4"},
 		{"192.168.1.0/24", true, "valid IPv4 subnet"},
 		{"::1", true, "valid IPv6 localhost"},
-		{"2001:db8::/32", false, "IPv6 subnet - function has bug with port removal"},
+		{"2001:db8::/32", true, "valid IPv6 subnet"},
 		{"256.256.256.256", false, "invalid IPv4 - out of range"},
 		{"192.168.1.0/33", false, "invalid IPv4 subnet - mask too large"},
 		{"not.an.ip", false, "completely invalid"},
-		{"", true, "empty string - function behavior"},
+		{"", false, "empty string"},
 		{"192.168.1.1:8080", false, "IPv4 with port"},
 		{"[::1]:8080", false, "IPv6 with port"},
 	}
@@ -1497,6 +1497,33 @@ func TestHandleGetBlockHashComprehensive(t *testing.T) {
 		_, err := handleGetBlockHash(context.Background(), s, cmd, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block not found")
+	})
+
+	t.Run("missing height returns RPC block not found", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockByHeight", mock.Anything, uint32(101)).Return(
+			(*model.Block)(nil), errors.NewBlockNotFoundError("block not found at height"),
+		)
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetBlockHashCmd{
+			Index: 101,
+		}
+
+		_, err := handleGetBlockHash(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block not found")
 	})
 }
 
@@ -3073,7 +3100,7 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		assert.Contains(t, rpcErr.Message, "IPOrSubnet is required")
 	})
 
-	t.Run("invalid IP format", func(t *testing.T) {
+	t.Run("invalid IP format accepted as potential PeerID", func(t *testing.T) {
 		s := &RPCServer{
 			logger: logger,
 			settings: &settings.Settings{
@@ -3082,18 +3109,52 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.IsBannedCmd{
-			IPOrSubnet: "not-an-ip", // Invalid IP
+			IPOrSubnet: "not-an-ip", // Not a valid IP, treated as PeerID
 		}
 
 		result, err := handleIsBanned(context.Background(), s, cmd, nil)
 
-		require.Error(t, err)
-		assert.Nil(t, result)
-
-		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.NoError(t, err)
+		banned, ok := result.(bool)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Invalid IP or subnet")
+		assert.False(t, banned) // No clients configured, so not banned
+	})
+
+	t.Run("PeerID skips legacy client", func(t *testing.T) {
+		legacyCalled := false
+		mockP2P := &mockP2PClient{
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				assert.Equal(t, "test-peer-id", ipOrSubnet)
+				return true, nil
+			},
+		}
+		mockPeer := &mockLegacyPeerClient{
+			isBannedFunc: func(ctx context.Context, req *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
+				legacyCalled = true
+				return &peer_api.IsBannedResponse{IsBanned: false}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.IsBannedCmd{
+			IPOrSubnet: "test-peer-id", // Not a valid IP, so legacy should be skipped
+		}
+
+		result, err := handleIsBanned(context.Background(), s, cmd, nil)
+
+		require.NoError(t, err)
+		banned, ok := result.(bool)
+		require.True(t, ok)
+		assert.True(t, banned)
+		assert.False(t, legacyCalled, "legacy client should not be called for PeerID input")
 	})
 
 	t.Run("p2p client returns banned", func(t *testing.T) {
@@ -4048,6 +4109,10 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			},
 			nil,
 		)
+		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
+			[]string{blockchain.SubscriberLegacy, blockchain.SubscriberP2P},
+			nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4314,6 +4379,10 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				Height: 90000,
 			}, nil,
 		)
+		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
+			[]string{blockchain.SubscriberLegacy},
+			nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4464,6 +4533,160 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		assert.Equal(t, false, infoMap["testnet"]) // STN is not testnet
 		assert.Equal(t, true, infoMap["stn"])      // STN network
 	})
+
+	t.Run("legacy skipped when not subscribed", func(t *testing.T) {
+		clearRPCCallCache()
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{Bits: *nBits},
+			&model.BlockHeaderMeta{Height: 100000},
+			nil,
+		)
+		// No legacy subscriber in the list
+		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
+			[]string{blockchain.SubscriberP2P},
+			nil,
+		)
+
+		legacyCalled := false
+		mockLegacyPeerClient := &mockLegacyPeerClient{
+			getPeersFunc: func(ctx context.Context) (*peer_api.GetPeersResponse, error) {
+				legacyCalled = true
+				return &peer_api.GetPeersResponse{
+					Peers: []*peer_api.Peer{{Id: 1, Addr: "127.0.0.1:8335"}},
+				}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockBlockchainClient,
+			legacyP2PClient:  mockLegacyPeerClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC: settings.RPCSettings{
+					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
+			},
+		}
+
+		result, err := handleGetInfo(context.Background(), s, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, legacyCalled, "legacy GetPeers should not be called when legacy is not subscribed")
+		infoMap := result.(map[string]interface{})
+		assert.Equal(t, 0, infoMap["connections"])
+	})
+
+	t.Run("legacy called when subscribed", func(t *testing.T) {
+		clearRPCCallCache()
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{Bits: *nBits},
+			&model.BlockHeaderMeta{Height: 100000},
+			nil,
+		)
+		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
+			[]string{blockchain.SubscriberLegacy},
+			nil,
+		)
+
+		legacyCalled := false
+		mockLegacyPeerClient := &mockLegacyPeerClient{
+			getPeersFunc: func(ctx context.Context) (*peer_api.GetPeersResponse, error) {
+				legacyCalled = true
+				return &peer_api.GetPeersResponse{
+					Peers: []*peer_api.Peer{{Id: 1, Addr: "127.0.0.1:8335"}},
+				}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockBlockchainClient,
+			legacyP2PClient:  mockLegacyPeerClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC: settings.RPCSettings{
+					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
+			},
+		}
+
+		result, err := handleGetInfo(context.Background(), s, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.True(t, legacyCalled, "legacy GetPeers should be called when legacy is subscribed")
+		infoMap := result.(map[string]interface{})
+		assert.Equal(t, 1, infoMap["connections"])
+	})
+
+	t.Run("legacy skipped when GetSubscribers fails", func(t *testing.T) {
+		clearRPCCallCache()
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{Bits: *nBits},
+			&model.BlockHeaderMeta{Height: 100000},
+			nil,
+		)
+		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
+			([]string)(nil),
+			errors.New(errors.ERR_ERROR, "blockchain unavailable"),
+		)
+
+		legacyCalled := false
+		mockLegacyPeerClient := &mockLegacyPeerClient{
+			getPeersFunc: func(ctx context.Context) (*peer_api.GetPeersResponse, error) {
+				legacyCalled = true
+				return &peer_api.GetPeersResponse{
+					Peers: []*peer_api.Peer{{Id: 1, Addr: "127.0.0.1:8335"}},
+				}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockBlockchainClient,
+			legacyP2PClient:  mockLegacyPeerClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC: settings.RPCSettings{
+					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
+			},
+		}
+
+		result, err := handleGetInfo(context.Background(), s, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, legacyCalled, "legacy GetPeers should not be called when GetSubscribers fails")
+		infoMap := result.(map[string]interface{})
+		assert.Equal(t, 0, infoMap["connections"])
+	})
 }
 
 // TestHandleGetchaintipsComprehensive tests the handleGetchaintips handler
@@ -4535,7 +4758,7 @@ func (m *mockBlockValidationClient) BlockFound(ctx context.Context, blockHash *c
 	return nil
 }
 
-func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
 	if m.processBlockFunc != nil {
 		return m.processBlockFunc(ctx, block, blockHeight)
 	}
@@ -5611,6 +5834,14 @@ func (m *mockBlockAssemblyClient) ResetBlockAssemblyFully(ctx context.Context) e
 	return nil
 }
 
+func (m *mockBlockAssemblyClient) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockBlockAssemblyClient) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	return nil
+}
+
 func (m *mockBlockAssemblyClient) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return nil, nil
 }
@@ -5621,6 +5852,9 @@ func (m *mockBlockAssemblyClient) GetTransactionHashes(ctx context.Context) ([]s
 	if m.getTransactionHashesFunc != nil {
 		return m.getTransactionHashesFunc(ctx)
 	}
+	return nil, nil
+}
+func (m *mockBlockAssemblyClient) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
 	return nil, nil
 }
 

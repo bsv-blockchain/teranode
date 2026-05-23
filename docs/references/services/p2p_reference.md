@@ -2,7 +2,7 @@
 
 ## Overview
 
-The P2P Server facilitates peer-to-peer communication within the Bitcoin SV network, managing the distribution of blocks, transactions, and network-related data. The server integrates with blockchain services, validation systems, and Kafka messaging to ensure efficient data propagation across the network. It implements both WebSocket and HTTP interfaces for peer communication while maintaining secure, scalable connections.
+The P2P Server facilitates peer-to-peer communication within the BSV Blockchain network, managing the distribution of blocks, transactions, and network-related data. The server integrates with blockchain services, validation systems, and Kafka messaging to ensure efficient data propagation across the network. It implements both WebSocket and HTTP interfaces for peer communication while maintaining secure, scalable connections.
 
 ## Core Components
 
@@ -20,6 +20,7 @@ type Server struct {
     blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
+    PropagationURL                    string                    // URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)
     e                                 *echo.Echo                // Echo server instance
     notificationCh                    chan *notificationMsg     // Channel for notifications
     rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
@@ -113,7 +114,6 @@ For readiness checks, it verifies:
 - Kafka broker connectivity
 - Blockchain client functionality
 - FSM state verification
-- Block validation client status
 
 ### Server Lifecycle Management
 
@@ -204,6 +204,7 @@ type PeerBanManager struct {
     decayInterval time.Duration
     decayAmount   int
     handler       BanEventHandler
+    peerRegistry  *PeerRegistry        // Peer registry to sync ban status with
 }
 ```
 
@@ -212,6 +213,10 @@ The `PeerBanManager` implements the `PeerBanManagerI` interface and maintains sc
 - `AddScore`: Increments a peer's score for specific violations
 - `GetBanScore`: Retrieves the current ban score and status
 - `IsBanned`: Checks if a peer is currently banned
+
+Additionally, the concrete `PeerBanManager` struct (not part of the `PeerBanManagerI` interface) exposes:
+
+- `GetBanReasons(peerID string) []string`: Returns the list of ban reasons recorded for a peer
 
 The system defines standard ban reasons with associated scoring:
 
@@ -222,8 +227,9 @@ const (
     ReasonUnknown BanReason = iota
     ReasonInvalidSubtree     // 10 points
     ReasonProtocolViolation  // 20 points
-    ReasonSpam              // 50 points
-    ReasonInvalidBlock      // 10 points
+    ReasonSpam               // 50 points
+    ReasonInvalidBlock       // 10 points
+    ReasonCatchupFailure     // 30 points
 )
 ```
 
@@ -274,16 +280,16 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.
 
 ```go
-func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error)
+func (c *Client) ConnectPeer(ctx context.Context, peerAddr string) error
 ```
 
-Initiates a connection to a peer using multiaddr format.
+Initiates a connection to a peer using multiaddr format. **Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.**
 
 ```go
-func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error)
+func (c *Client) DisconnectPeer(ctx context.Context, peerID string) error
 ```
 
-Disconnects from a currently connected peer.
+Disconnects from a currently connected peer. **Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.**
 
 #### Catchup Metrics and Reputation Endpoints
 
@@ -611,14 +617,8 @@ The following settings can be configured for the p2p service:
 - `p2p_port`: **REQUIRED** - Defines the port number on which the P2P service listens.
 - `p2p_block_topic`: **REQUIRED** - The topic name used for block-related messages in the P2P network.
 - `p2p_subtree_topic`: **REQUIRED** - Specifies the topic for subtree-related messages within the P2P network.
-- `p2p_handshake_topic`: **REQUIRED** - Defines the topic for peer handshake messages, used for version and verack exchanges.
-- `p2p_mining_on_topic`: **REQUIRED** - The topic used for messages related to the start of mining a new block.
 - `p2p_rejected_tx_topic`: **REQUIRED** - Specifies the topic for broadcasting information about rejected transactions.
 - `p2p_node_status_topic`: Topic for node status update messages.
-- `p2p_shared_key`: A shared key for securing P2P communications, required for private network configurations.
-- `p2p_dht_protocol_id`: Identifier for the DHT protocol used by the P2P network.
-- `p2p_dht_use_private`: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
-- `p2p_optimise_retries`: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
 - `p2p_static_peers`: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
 - `p2p_private_key`: The private key for the P2P node, used for secure communications within the network. If not provided, a new Ed25519 key is automatically generated and persistently stored in the blockchain database.
 - `p2p_http_address`: Specifies the HTTP address for external clients to connect to the P2P service.
@@ -629,16 +629,12 @@ The following settings can be configured for the p2p service:
 - `p2p_ban_duration`: Duration of time a peer remains banned after exceeding the ban threshold.
 - `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
 - `server_certFile` and `server_keyFile`: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
-- `p2p_ban_default_duration`: Specifies the default duration for peer bans (defaults to 24 hours if not set).
-- `p2p_ban_persist_path`: Defines the path where ban list information is stored persistently.
-- `p2p_ban_max_entries`: Sets the maximum number of entries allowed in the ban list to prevent memory exhaustion.
 
 ## Dependencies
 
 The P2P Server depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
-- `blockvalidation.Interface`: Interface for block validation operations
 - `blockassembly.ClientI`: Interface for block assembly operations
 - `p2pMessageBus.P2PClient`: P2P client interface from the `github.com/bsv-blockchain/go-p2p-message-bus` package
 - Kafka producers and consumers for message distribution
@@ -662,3 +658,10 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
+
+## Related Documents
+
+- [P2P Topic Guide](../../topics/services/p2p.md)
+- [P2P Settings](../settings/services/p2p_settings.md)
+- [P2P Protobuf Reference](../protobuf_docs/p2pProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

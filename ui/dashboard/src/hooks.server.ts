@@ -42,6 +42,13 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Prevent MIME type sniffing
     response.headers.set('X-Content-Type-Options', 'nosniff')
 
+    // Build dynamic connect-src based on the request host so that the CSP works
+    // regardless of whether the dashboard is accessed via localhost or a remote hostname.
+    const host = event.request.headers.get('host') ?? 'localhost:8090'
+    const httpOrigin = `http://${host}`
+    const wsOrigin = `ws://${host}`
+    const wssOrigin = `wss://${host}`
+
     // Content Security Policy with allowances for the asset service, centrifuge websocket, and external teranode instances
     // Allow connections to any https:// URL for teranode instances, but restrict other resource types
     response.headers.set(
@@ -50,7 +57,7 @@ export const handle: Handle = async ({ event, resolve }) => {
         "script-src 'self' 'unsafe-inline'; " +
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; " +
-        "connect-src 'self' http://localhost:8090 ws://localhost:8090 wss://localhost:8090 https: wss:;",
+        `connect-src 'self' ${httpOrigin} ${wsOrigin} ${wssOrigin} https: wss:;`,
     )
 
     // Referrer policy

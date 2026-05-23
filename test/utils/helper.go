@@ -18,12 +18,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	blockmodel "github.com/bsv-blockchain/teranode/model"
@@ -37,7 +37,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/ordishs/go-utils"
 )
 
 // Transaction represents a simple transaction structure
@@ -398,7 +397,7 @@ func MineBlockWithCandidateRPC(ctx context.Context, rpcUrl string, tSettings *se
 	blockHash := util.Sha256d(blockHeader)
 
 	submitMiningSolutionCmd := bsvjson.MiningSolution{
-		ID:       utils.ReverseAndHexEncodeSlice(solution.Id),
+		ID:       util.ReverseAndHexEncodeSlice(solution.Id),
 		Coinbase: hex.EncodeToString(solution.Coinbase),
 		Time:     solution.Time,
 		Nonce:    solution.Nonce,

@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -67,6 +68,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -109,11 +111,14 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 
 	currentBlockHeight := s.blockHeight.Load()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(txids))
+	batchRecordsPtr := getBatchRecordsSlice(len(txids))
+	batchRecords := (*batchRecordsPtr)[:0]
 
 	for _, txid := range txids {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
 		if err != nil {
+			*batchRecordsPtr = batchRecords
+			putBatchRecordsSlice(batchRecordsPtr)
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
@@ -125,6 +130,8 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 	}
 
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+		*batchRecordsPtr = batchRecords
+		putBatchRecordsSlice(batchRecordsPtr)
 		return errors.NewStorageError("[IncrementSpentRecordsMulti] error in aerospike batch", err)
 	}
 
@@ -149,6 +156,9 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 		}
 	}
 
+	*batchRecordsPtr = batchRecords
+	putBatchRecordsSlice(batchRecordsPtr)
+
 	return aggErr
 }
 
@@ -171,6 +181,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	}
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	dahBinName := fields.DeleteAtHeight.String()
+	// Pre-create the "unset" operation since it's identical for all unset cases
+	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
 	for _, it := range items {
 		for i := uint32(1); i <= uint32(it.ChildCount); i++ { // nolint: gosec
@@ -180,11 +194,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 				return errors.NewProcessingError("[SetDAHForChildRecordsMulti][%s] failed to create key for pagination record %d: %v", it.TxID.String(), i, err)
 			}
 
-			batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 			if it.DeleteAtHeight > 0 {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), it.DeleteAtHeight))))
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, it.DeleteAtHeight))))
 			} else {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil))))
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp))
 			}
 		}
 	}
@@ -221,6 +234,28 @@ type batchDAH struct {
 	errCh          chan error      // Error Result channel
 }
 
+// handleSpendPanic processes a recovered value from Spend's deferred recover
+// and propagates it as an error. Without this, a panic during Spend would be
+// logged but the caller would observe (nil, nil) — a silent failure that can
+// mask UTXO state corruption.
+//
+// Uses ERR_UNKNOWN rather than ERR_PROCESSING so the block-validation retry
+// classifier (services/blockvalidation/BlockValidation.go) does not treat a
+// recovered panic as a transient infrastructure error and retry indefinitely
+// against a broken path.
+func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
+	if recovered == nil {
+		return
+	}
+
+	prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
+	logger.Errorf("ERROR panic in aerospike Spend: %v\n%s", recovered, debug.Stack())
+
+	if *err == nil {
+		*err = errors.NewUnknownError("panic in Spend: %v", recovered)
+	}
+}
+
 // Spend marks UTXOs as spent in a batch operation.
 // The function:
 //  1. Validates inputs
@@ -253,12 +288,9 @@ type batchDAH struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
 	defer func() {
-		if recoverErr := recover(); recoverErr != nil {
-			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
-		}
+		handleSpendPanic(recover(), &err, s.logger)
 	}()
 
 	if blockHeight == 0 {
@@ -268,7 +300,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
-	spends, err := utxo.GetSpends(tx)
+	spends, err = utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +322,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
+			// Per-worker panic recovery. The parent's defer only catches panics in the
+			// parent goroutine — errgroup propagates errors but does not recover panics
+			// inside g.Go bodies, so without this a worker panic would crash the process.
+			defer func() {
+				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
+			}()
+
 			// Fast-fail check: if circuit breaker is already open, reject immediately
 			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
 				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
@@ -297,7 +336,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			errCh := make(chan error, 1)
-			s.spendBatcher.Put(&batchSpend{
+			s.spendBatcher.PutCtx(ctx, &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
@@ -379,9 +418,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	if len(spends) != len(spentSpends) { // there must have been failures
-		unspendErr := s.Unspend(ctx, spentSpends)
-		if unspendErr != nil {
-			s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
+		// Only rollback successful spends when the transaction is genuinely invalid
+		// (double-spend, frozen, conflicting, hash mismatch). For transient infrastructure
+		// errors (DEVICE_OVERLOAD, timeout, etc.), skip the rollback — the Lua spend
+		// script is idempotent for the same spender, so successful spends can safely
+		// remain and will be silently skipped on retry.
+		if needsSpendRollback(spends) {
+			unspendErr := s.Unspend(context.Background(), spentSpends)
+			if unspendErr != nil {
+				s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
+			}
 		}
 
 		var spendErrors error
@@ -405,22 +451,75 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	return spends, nil
 }
 
+// needsSpendRollback returns true if any spend failed due to a validation error
+// that indicates the transaction is genuinely invalid. Only explicit Lua-level
+// validation failures trigger rollback — infrastructure errors (DEVICE_OVERLOAD,
+// timeout, etc.) do not, because the Lua spend script is idempotent for the
+// same spender and successful spends will be silently skipped on retry.
+func needsSpendRollback(spends []*utxo.Spend) bool {
+	for _, spend := range spends {
+		if spend.Err == nil {
+			continue
+		}
+		if errors.Is(spend.Err, errors.ErrSpent) ||
+			errors.Is(spend.Err, errors.ErrTxConflicting) ||
+			errors.Is(spend.Err, errors.ErrFrozen) ||
+			errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
+			return true
+		}
+	}
+	return false
+}
+
 type keyIgnoreLocked struct {
 	key               *aerospike.Key
+	hash              *chainhash.Hash
 	blockHeight       uint32
 	ignoreConflicting bool
 	ignoreLocked      bool
 }
 
-// sendSpendBatchLua processes a batch of spend requests via Lua scripts.
+// useExpressionSpend returns true when the expression-based spend path is safe for
+// the configured store. Multi-UTXO records (utxoBatchSize > 1) require Lua because
+// Aerospike expressions cannot byte-compare list elements, so the offset alone cannot
+// uniquely identify the target UTXO and ListSetOp would mutate the wrong slot.
+func (s *Store) useExpressionSpend() bool {
+	return s.settings.Aerospike.EnableSpendFilterExpressions && s.utxoBatchSize == 1
+}
+
+// sendSpendBatchLua processes a batch of spend requests via Lua scripts or expressions.
 // The function:
 //  1. Groups spends by transaction
-//  2. Creates batch UDF operations
-//  3. Executes Lua scripts
+//  2. Creates batch UDF operations or expression-based operations
+//  3. Executes Lua scripts or expressions
 //  4. Handles responses and errors
 //  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
+	// Use expression-based implementation only when each Aerospike record holds a single
+	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
+	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
+	// performs the strict precondition check inside the UDF.
+	if s.useExpressionSpend() {
+		s.SpendMultiWithExpressions(s.ctx, batch)
+		return
+	}
+
 	start := time.Now()
 	stat := gocore.NewStat("sendSpendBatchLua")
 
@@ -481,6 +580,7 @@ func (s *Store) prepareSpendBatches(batch []*batchSpend, batchID uint64) (map[ke
 		mapValue := s.createSpendMapValue(idx, bItem)
 		useKey := keyIgnoreLocked{
 			key:               key,
+			hash:              bItem.spend.TxID,
 			blockHeight:       bItem.blockHeight,
 			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreLocked:      bItem.ignoreLocked,
@@ -536,7 +636,13 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
 	for batchKey, batchItems := range batchesByKey {
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
+		useLuaPackage := LuaPackage
+		if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+			// determine which lua package to use for spends, based on the first byte of the tx id, there will be N packages (0 to N-1)
+			useLuaPackage = s.spendLuaPackages[batchKey.hash[0]%uint8(s.settings.Aerospike.SeparateSpendUDFModuleCount)]
+		}
+
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, useLuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreLocked),
@@ -844,6 +950,33 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 				// Only set DAH if BlockHeightRetention is configured (> 0)
 				// When retention is 0, it means "don't use automatic retention"
 				if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+					// Sanity check: verify all children are actually spent before
+					// setting DAH. The spentExtraRecs counter can drift due to
+					// interrupted rollbacks, so we don't trust it blindly.
+					if ret.ChildCount > 0 {
+						allSpent, verifyErr := s.verifyAllChildrenSpent(ctx, txID, ret.ChildCount)
+						if verifyErr != nil {
+							s.logger.Errorf("[handleExtraRecords][%s] failed to verify children: %v", txID.String(), verifyErr)
+							return verifyErr
+						}
+						if !allSpent {
+							s.logger.Warnf("[handleExtraRecords][%s] spentExtraRecs triggered DAH but not all children are spent — counter drift detected, clearing master DAH", txID.String())
+							// Lua already set DAH on the master record inline.
+							// Clear it since children aren't actually all-spent.
+							errCh := make(chan error, 1)
+							s.setDAHBatcher.PutCtx(ctx, &batchDAH{
+								txID:           txID,
+								childIdx:       0, // master record
+								deleteAtHeight: 0, // clear DAH
+								errCh:          errCh,
+							})
+							if dahErr := <-errCh; dahErr != nil {
+								s.logger.Errorf("[handleExtraRecords][%s] failed to clear drifted master DAH: %v", txID.String(), dahErr)
+							}
+							return nil
+						}
+					}
+
 					thisBlockHeight := s.blockHeight.Load()
 					dah := thisBlockHeight + retention
 
@@ -867,6 +1000,68 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 	return nil
 }
 
+// verifyAllChildrenSpent batch-reads all child records and checks if every
+// child has spentUtxos == recordUtxos. Used as a sanity check before setting
+// DAH — the spentExtraRecs counter can drift during interrupted rollbacks,
+// so we verify the actual child state before trusting it.
+func (s *Store) verifyAllChildrenSpent(ctx context.Context, txID *chainhash.Hash, childCount int) (bool, error) {
+	if childCount == 0 {
+		return true, nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+	readPolicy := aerospike.NewBatchReadPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, childCount)
+
+	for i := uint32(1); i <= uint32(childCount); i++ { // nolint: gosec
+		keySource := uaerospike.CalculateKeySourceInternal(txID, i)
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			return false, errors.NewProcessingError("[verifyAllChildrenSpent][%s] failed to create key for child %d", txID.String(), i, err)
+		}
+
+		batchRecords = append(batchRecords, aerospike.NewBatchRead(
+			readPolicy,
+			key,
+			[]string{fields.SpentUtxos.String(), fields.RecordUtxos.String()},
+		))
+	}
+
+	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+		return false, errors.NewStorageError("[verifyAllChildrenSpent][%s] batch read failed", txID.String(), err)
+	}
+
+	for i, br := range batchRecords {
+		rec := br.BatchRec()
+		if rec.Err != nil {
+			return false, errors.NewStorageError("[verifyAllChildrenSpent][%s] child %d read failed", txID.String(), i+1, rec.Err)
+		}
+		if rec.Record == nil || rec.Record.Bins == nil {
+			return false, nil
+		}
+
+		spentUtxos, ok := rec.Record.Bins[fields.SpentUtxos.String()].(int)
+		if !ok {
+			return false, errors.NewStorageError("[verifyAllChildrenSpent][%s] invalid type for spentUtxos in child %d", txID.String(), i+1)
+		}
+		recordUtxos, ok := rec.Record.Bins[fields.RecordUtxos.String()].(int)
+		if !ok {
+			return false, errors.NewStorageError("[verifyAllChildrenSpent][%s] invalid type for recordUtxos in child %d", txID.String(), i+1)
+		}
+
+		if spentUtxos != recordUtxos {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 type incrementSpentRecordsRes struct {
 	res interface{}
 	err error
@@ -875,7 +1070,7 @@ type incrementSpentRecordsRes struct {
 // IncrementSpentRecords updates the record count for paginated transactions.
 // Used for cleanup management of large transactions.
 func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
-	res := make(chan incrementSpentRecordsRes)
+	res := make(chan incrementSpentRecordsRes, 1)
 
 	go func() {
 		s.incrementBatcher.Put(&batchIncrement{
@@ -885,9 +1080,23 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (inte
 		})
 	}()
 
-	response := <-res
+	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+	if spendTimeout <= 0 {
+		spendTimeout = 30 * time.Second
+	}
 
-	return response.res, response.err
+	timer := time.NewTimer(spendTimeout)
+	defer timer.Stop()
+
+	select {
+	case response := <-res:
+		return response.res, response.err
+	case <-timer.C:
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("IncrementSpentRecords", "BatchTimeout").Inc()
+		}
+		return nil, errors.NewServiceUnavailableError("[IncrementSpentRecords][%s] batch operation timed out after %s", txid.String(), spendTimeout)
+	}
 }
 
 func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
@@ -968,6 +1177,9 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 
 	// Create batch records with individual TTLs
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	dahBinName := fields.DeleteAtHeight.String()
+	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
 	for i, b := range batch {
 		keySource := uaerospike.CalculateKeySourceInternal(b.txID, b.childIdx)
@@ -978,12 +1190,10 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 			continue
 		}
 
-		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
-
 		if b.deleteAtHeight > 0 {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), b.deleteAtHeight)))
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, b.deleteAtHeight)))
 		} else {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp)
 		}
 	}
 

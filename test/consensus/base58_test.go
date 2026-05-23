@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	base58 "github.com/bitcoin-sv/go-sdk/compat/base58"
+	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )

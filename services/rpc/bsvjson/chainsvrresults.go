@@ -4,7 +4,10 @@
 
 package bsvjson
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // GetBlockHeaderVerboseResult models the data from the getblockheader command when
 // the verbose flag is set.  When the verbose flag is not set, getblockheader
@@ -258,32 +261,40 @@ type GetNetworkInfoResult struct {
 	Warnings        string                 `json:"warnings"`
 }
 
+// StreamInfoResult models per-stream byte counts for multistream peers.
+type StreamInfoResult struct {
+	StreamType uint32 `json:"stream_type"`
+	BytesSent  uint64 `json:"bytessent"`
+	BytesRecv  uint64 `json:"bytesrecv"`
+}
+
 // GetPeerInfoResult models the data returned from the getpeerinfo command.
 type GetPeerInfoResult struct {
-	ID             int32   `json:"id,omitempty"`
-	PeerID         string  `json:"peerid,omitempty"`
-	Addr           string  `json:"addr"`
-	AddrLocal      string  `json:"addrlocal,omitempty"`
-	Services       string  `json:"services,omitempty"`
-	ServicesStr    string  `json:"servicesStr,omitempty"`
-	RelayTxes      bool    `json:"relaytxes,omitempty"`
-	LastSend       int64   `json:"lastsend,omitempty"`
-	LastRecv       int64   `json:"lastrecv,omitempty"`
-	BytesSent      uint64  `json:"bytessent,omitempty"`
-	BytesRecv      uint64  `json:"bytesrecv,omitempty"`
-	ConnTime       int64   `json:"conntime,omitempty"`
-	TimeOffset     int64   `json:"timeoffset,omitempty"`
-	PingTime       float64 `json:"pingtime,omitempty"`
-	PingWait       float64 `json:"pingwait,omitempty"`
-	Version        uint32  `json:"version,omitempty"`
-	SubVer         string  `json:"subver,omitempty"`
-	Inbound        bool    `json:"inbound,omitempty"`
-	StartingHeight int32   `json:"startingheight"`
-	CurrentHeight  int32   `json:"currentheight,omitempty"`
-	BanScore       int32   `json:"banscore,omitempty"`
-	Whitelisted    bool    `json:"whitelisted,omitempty"`
-	FeeFilter      int64   `json:"feefilter,omitempty"`
-	SyncNode       bool    `json:"syncnode,omitempty"`
+	ID             int32              `json:"id,omitempty"`
+	PeerID         string             `json:"peerid,omitempty"`
+	Addr           string             `json:"addr"`
+	AddrLocal      string             `json:"addrlocal,omitempty"`
+	Services       string             `json:"services,omitempty"`
+	ServicesStr    string             `json:"servicesStr,omitempty"`
+	RelayTxes      bool               `json:"relaytxes,omitempty"`
+	LastSend       int64              `json:"lastsend,omitempty"`
+	LastRecv       int64              `json:"lastrecv,omitempty"`
+	BytesSent      uint64             `json:"bytessent,omitempty"`
+	BytesRecv      uint64             `json:"bytesrecv,omitempty"`
+	ConnTime       int64              `json:"conntime,omitempty"`
+	TimeOffset     int64              `json:"timeoffset,omitempty"`
+	PingTime       float64            `json:"pingtime,omitempty"`
+	PingWait       float64            `json:"pingwait,omitempty"`
+	Version        uint32             `json:"version,omitempty"`
+	SubVer         string             `json:"subver,omitempty"`
+	Inbound        bool               `json:"inbound,omitempty"`
+	StartingHeight int32              `json:"startingheight"`
+	CurrentHeight  int32              `json:"currentheight,omitempty"`
+	BanScore       int32              `json:"banscore,omitempty"`
+	Whitelisted    bool               `json:"whitelisted,omitempty"`
+	FeeFilter      int64              `json:"feefilter,omitempty"`
+	SyncNode       bool               `json:"syncnode,omitempty"`
+	Streams        []StreamInfoResult `json:"streams,omitempty"`
 }
 
 // GetRawMempoolVerboseResult models the data returned from the getrawmempool
@@ -430,10 +441,18 @@ func (v *VinPrevOut) MarshalJSON() ([]byte, error) {
 	return json.Marshal(txStruct)
 }
 
+// BTCValue represents a bitcoin value that always marshals to JSON with exactly
+// 8 decimal places, matching bitcoin-sv's ValueFromAmount output.
+type BTCValue float64
+
+func (v BTCValue) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%.8f", float64(v))), nil
+}
+
 // Vout models parts of the tx data.  It is defined separately since both
 // getrawtransaction and decoderawtransaction use the same structure.
 type Vout struct {
-	Value        float64            `json:"value"`
+	Value        BTCValue           `json:"value"`
 	N            uint32             `json:"n"`
 	ScriptPubKey ScriptPubKeyResult `json:"scriptPubKey"`
 }

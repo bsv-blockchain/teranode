@@ -22,16 +22,17 @@ import (
 // All fields are optional (omitempty) except Type, which identifies the notification category.
 // Common notification types include block announcements, mining status updates, and peer events.
 type notificationMsg struct {
-	Timestamp    string `json:"timestamp,omitempty"`         // ISO 8601 timestamp when the event occurred
-	Type         string `json:"type"`                        // Required: notification type (e.g., "block", "mining", "peer")
-	Hash         string `json:"hash,omitempty"`              // Block hash or transaction hash for blockchain events
-	BaseURL      string `json:"base_url,omitempty"`          // Base URL for additional resource access
-	PeerID       string `json:"peer_id,omitempty"`           // Peer identifier for peer-related notifications
-	PreviousHash string `json:"previousblockhash,omitempty"` // Previous block hash for block chain continuity
-	TxCount      uint64 `json:"tx_count,omitempty"`          // Number of transactions in a block
-	Height       uint32 `json:"height,omitempty"`            // Block height in the blockchain
-	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`     // Size of the block or data in bytes
-	Miner        string `json:"miner,omitempty"`             // Miner identifier for mining-related notifications
+	Timestamp      string `json:"timestamp,omitempty"`         // ISO 8601 timestamp when the event occurred
+	Type           string `json:"type"`                        // Required: notification type (e.g., "block", "mining", "peer")
+	Hash           string `json:"hash,omitempty"`              // Block hash or transaction hash for blockchain events
+	BaseURL        string `json:"base_url,omitempty"`          // Base URL for additional resource access
+	PropagationURL string `json:"propagation_url,omitempty"`   // URL for peers to use for propagating txs (defaults to BaseURL if empty)
+	PeerID         string `json:"peer_id,omitempty"`           // Peer identifier for peer-related notifications
+	PreviousHash   string `json:"previousblockhash,omitempty"` // Previous block hash for block chain continuity
+	TxCount        uint64 `json:"tx_count,omitempty"`          // Number of transactions in a block
+	Height         uint32 `json:"height,omitempty"`            // Block height in the blockchain
+	SizeInBytes    uint64 `json:"size_in_bytes,omitempty"`     // Size of the block or data in bytes
+	Miner          string `json:"miner,omitempty"`             // Miner identifier for mining-related notifications
 	// Node status fields
 	Version       string  `json:"version,omitempty"`         // Node version
 	CommitHash    string  `json:"commit_hash,omitempty"`     // Git commit hash
@@ -96,6 +97,12 @@ func (cm *clientChannelMap) remove(ch chan []byte) {
 	delete(cm.channels, ch)
 }
 
+// maxConcurrentBroadcasts caps the number of in-flight broadcast goroutines so a
+// notification burst with many connected clients can't exhaust goroutines/timers.
+// Declared as a var (not const) so tests can override it; not exposed to settings
+// because the cap is an internal resource ceiling, not a behavioural knob.
+var maxConcurrentBroadcasts = 256
+
 func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	// Get a snapshot of channels under the lock
 	cm.RLock()
@@ -111,12 +118,20 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 	}
 
 	// Send to all channels in parallel without holding the lock
-	// This prevents O(N) delay accumulation from blocking clients
+	// This prevents O(N) delay accumulation from blocking clients.
+	// Clamp poolSize to at least 1 so a misconfigured/test-overridden cap can't
+	// deadlock the loop: with capacity 0, sem <- struct{}{} would block forever
+	// because the receiving goroutine is launched only after the send returns.
+	poolSize := max(maxConcurrentBroadcasts, 1)
+	sem := make(chan struct{}, poolSize)
+
 	var wg sync.WaitGroup
 	for _, ch := range channels {
 		wg.Add(1)
+		sem <- struct{}{} // blocks if pool is full — caps in-flight goroutines
 		go func(ch chan []byte) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			timer := time.NewTimer(time.Second)
 			defer func() {
 				// Ensure timer resources are released promptly when the send succeeds.
@@ -271,35 +286,33 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c ec
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	serverCtx := s.gCtx
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, serverCtx)
 
 	return func(c echo.Context) error {
-		ch := make(chan []byte, 100) // Add buffer to help prevent blocking
+		connCtx, connCancel := context.WithCancel(serverCtx)
+		defer connCancel()
+
+		ch := make(chan []byte, 100)
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {
-			cancel() // Cancel context if upgrade fails
 			return err
 		}
 
-		// Start message handling goroutine FIRST
-		// This needs to be ready to process messages from the channel
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			s.handleClientMessages(ws, ch, deadClientCh)
 		}()
 
-		// Add client channel to the notification processor
 		newClientCh <- ch
 
-		// Wait for either context cancellation or message handling to complete
 		select {
-		case <-ctx.Done():
+		case <-connCtx.Done():
 			ws.Close()
-		case <-done: // Message handling completed normally
+		case <-done:
 		}
 
 		return nil

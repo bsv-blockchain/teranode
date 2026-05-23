@@ -23,7 +23,7 @@ The traditional Bitcoin transaction format used by most Bitcoin implementations:
 package main
 
 import (
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
 )
 
 func main() {
@@ -78,7 +78,7 @@ Enhanced transaction format that includes additional metadata in each input:
 package main
 
 import (
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
 )
 
 func main() {
@@ -117,6 +117,8 @@ Teranode provides a gRPC API for transaction submission, offering high performan
 
 ### gRPC API
 
+The Propagation service accepts transactions via gRPC. Successful submissions return without error, while rejected transactions return an error with details.
+
 **Go Example:**
 
 ```go
@@ -127,7 +129,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/libsv/go-bt/v2"
+    "github.com/bsv-blockchain/go-bt/v2"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
 
@@ -135,8 +137,8 @@ import (
 )
 
 func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
-    // Connect to Teranode
-    conn, err := grpc.Dial(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+    // Connect to Teranode Propagation service (default port: 8084)
+    conn, err := grpc.NewClient(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
         return fmt.Errorf("failed to connect: %w", err)
     }
@@ -149,17 +151,14 @@ func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    response, err := client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    _, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
         Tx: tx.Bytes(),
     })
     if err != nil {
         return fmt.Errorf("failed to process transaction: %w", err)
     }
 
-    if response.Status != propagation_api.Status_SUCCESS {
-        return fmt.Errorf("transaction rejected: %s", response.RejectReason)
-    }
-
+    // Success - transaction accepted
     return nil
 }
 ```
@@ -219,12 +218,16 @@ In Teranode's architecture, the performance difference between formats is **negl
 
 ### Error Response Example
 
-```json
-{
-  "status": "REJECTED",
-  "reject_reason": "transaction validation failed: parent transaction 5f3a... not found",
-  "tx_id": "abc123...",
-  "error_code": "MISSING_PARENT"
+When a transaction is rejected, the gRPC call returns an error. Extract the error message from the gRPC error:
+
+```go
+_, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    Tx: tx.Bytes(),
+})
+if err != nil {
+    // Error contains rejection reason
+    fmt.Printf("Transaction rejected: %v\n", err)
+    // Example error: "rpc error: code = InvalidArgument desc = transaction validation failed: parent transaction 5f3a... not found"
 }
 ```
 
@@ -322,15 +325,18 @@ import (
 )
 
 func TestTransactionSubmission(t *testing.T) {
-    // Setup test client (see test/utils/testenv.go)
-    node := utils.NewTeranodeTestClient()
+    // Setup test environment (see test/utils/testenv.go)
+    env := utils.NewTeraNodeTestEnv(tconfig.TConfig{})
+    err := env.InitializeTeranodeTestClients()
+    require.NoError(t, err)
+    node := &env.Nodes[0]
 
     // Generate a valid transaction using test helpers
     tx, err := utils.GenerateNewValidSingleInputTransaction(node)
     require.NoError(t, err)
 
-    // Submit via distributor client
-    _, err = node.DistributorClient.SendTransaction(context.Background(), tx)
+    // Submit via propagation client
+    err = node.PropagationClient.ProcessTransaction(context.Background(), tx)
     require.NoError(t, err)
 }
 ```
@@ -349,7 +355,7 @@ For more detailed testing patterns, examine the existing tests in `test/e2e/`, `
 - **Teranode accepts both standard and extended transaction formats**
 - **Standard format is recommended for most use cases**
 - **Automatic extension happens transparently during validation**
-- **HTTP and gRPC APIs are available for submission**
+- **gRPC API (Propagation service) is used for transaction submission**
 - **Performance difference between formats is negligible**
 - **Proper error handling and retries are essential**
 

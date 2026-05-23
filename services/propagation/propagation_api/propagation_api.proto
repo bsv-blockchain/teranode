@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 
-// Package propagation_api provides gRPC services for Bitcoin SV transaction propagation.
+// Package propagation_api provides gRPC services for BSV Blockchain transaction propagation.
 // It handles individual and batch transaction processing, health checks, and debugging
 // capabilities for the BSV network.
 option go_package = "./;propagation_api";
@@ -11,7 +11,7 @@ package propagation_api;
 import "google/protobuf/timestamp.proto";
 import "errors/error.proto";
 
-// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// PropagationAPI provides services for processing and propagating BSV Blockchain transactions
 // across the network. It supports various transaction processing methods including
 // individual, batch, and streaming operations.
 service PropagationAPI {
@@ -92,4 +92,3 @@ message ProcessTransactionBatchResponse {
   // empty string indicates success for that transaction
   repeated errors.TError errors = 1;
 }
-

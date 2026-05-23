@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -185,9 +184,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		kafkaMessage := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		// Get consumer handler
@@ -219,9 +216,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		kafkaMessage := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)
@@ -259,9 +254,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		kafkaMessage := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)

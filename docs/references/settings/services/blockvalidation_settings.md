@@ -51,14 +51,22 @@
 | CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
 | MaxBlocksBehindBlockAssembly | int | 20 | blockvalidation_maxBlocksBehindBlockAssembly | **CRITICAL** - Max blocks behind block assembly |
 | PeriodicProcessingInterval | time.Duration | 1m | blockvalidation_periodic_processing_interval | Periodic processing interval |
+| RecentBlockIDsLimit | uint64 | 50000 | blockvalidation_recentBlockIDsLimit | **CRITICAL** - Fast-path double-spend checking window |
 | MaxParallelForks | int | 4 | blockvalidation_max_parallel_forks | Maximum parallel fork processing |
 | MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
 | NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |
 | FetchLargeBatchSize | int | 100 | blockvalidation_fetch_large_batch_size | Block fetch batch size |
-| FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
+| FetchNumWorkers | int | 1 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
 | FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
 | SubtreeFetchConcurrency | int | 8 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
+| SubtreeBatchSize | int | 16 | blockvalidation_subtree_batch_size | Subtrees processed per batch in quick validation |
+| SubtreeBatchPrefetchDepth | int | 2 | blockvalidation_subtree_batch_prefetch_depth | Batches to prefetch ahead in pipeline (0=sequential) |
 | GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
+| ExtendTransactionTimeout | time.Duration | 120s | blockvalidation_extend_transaction_timeout | Timeout for extending transaction inputs |
+| SubtreeBatchWriteConcurrency | int | 64 | blockvalidation_subtree_batch_write_concurrency | Concurrent subtree file writes per batch |
+| CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
+| CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
+| CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
 
 ## Configuration Dependencies
 
@@ -81,6 +89,17 @@
 - Can be overridden per-validation via DisableOptimisticMining option
 - Disabled during catchup mode for better performance
 
+### Quick Validation Pipeline
+
+For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
+
+- `SubtreeBatchPrefetchDepth` controls how many batches to prefetch ahead (default: 2)
+- Setting to 0 disables the pipeline and uses sequential processing
+- Three pipeline stages:
+  1. **Reader**: Prefetches subtree batches from disk
+  2. **Extender**: Extends transactions with UTXO data (sequential for map dependency)
+  3. **Processor**: Creates/spends UTXOs and writes files in parallel per batch
+
 ### Transaction Metadata Processing
 - Cache and store processing work together with threshold-based fallback
 - Batch sizes and concurrency settings control performance
@@ -88,6 +107,13 @@
 ### Secret Mining Detection
 - `SecretMiningThreshold` uses `PreviousBlockHeaderCount` for analysis
 - Detection triggers when block difference exceeds threshold
+
+### Two-Phase Double-Spend Detection
+- `RecentBlockIDsLimit` controls the size of the fast-path in-memory block ID window
+- Transactions mined in blocks within this window are detected immediately (fast path)
+- Transactions mined in older blocks trigger a blockchain service query (slow path)
+- Larger values use more memory but reduce slow-path queries
+- Default of 50,000 covers approximately 347 days of blocks at 10-minute intervals
 
 ### Channel Buffer Management
 - `BlockFoundChBufferSize` and `CatchupChBufferSize` must accommodate processing loads
@@ -128,6 +154,7 @@ blockvalidation_validateBlockSubtreesConcurrency=16
 blockvalidation_processTxMetaUsingStoreBatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
+blockvalidation_subtree_batch_size=32
 ```
 
 ### Catchup Mode Configuration
@@ -137,4 +164,15 @@ blockvalidation_useCatchupWhenBehind=true
 blockvalidation_catchup_max_retries=5
 blockvalidation_catchup_iteration_timeout=60
 blockvalidation_max_accumulated_headers=50000
+```
+
+### Pipeline Processing Configuration
+
+```bash
+# Enable pipeline with larger prefetch depth for high-latency storage
+blockvalidation_subtree_batch_prefetch_depth=4
+blockvalidation_subtree_batch_size=32
+
+# Disable pipeline (sequential processing)
+blockvalidation_subtree_batch_prefetch_depth=0
 ```

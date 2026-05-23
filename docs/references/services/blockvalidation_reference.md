@@ -45,7 +45,7 @@ type Server struct {
 }
 ```
 
-The `Server` type implements a high-performance block validation service for Bitcoin SV. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.
+The `Server` type implements a high-performance block validation service for BSV Blockchain. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.
 
 ### processBlockFound
 
@@ -162,7 +162,7 @@ The `BlockValidation` type handles the core validation logic for blocks in Teran
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI, blockAssemblyClient blockassembly.ClientI) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI, blockAssemblyClient blockassembly.ClientI, p2pClient P2PClientI) *Server
 ```
 
 Creates a new instance of the `Server` with:
@@ -269,15 +269,24 @@ Processes complete blocks:
 func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
 ```
 
-Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
+Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
 
-#### ValidateBlock
+#### GetCatchupStatus
 
 ```go
-func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
+func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error)
 ```
 
-Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
+Returns the current status of any in-progress chain catchup operation. The response includes:
+
+- `is_catching_up` - whether a catchup is currently active
+- `peer_id`, `peer_url` - the peer being caught up from
+- `target_block_hash`, `target_block_height` - the target block
+- `current_height` - the local chain height when catchup started
+- `total_blocks`, `blocks_fetched`, `blocks_validated` - progress counters
+- `start_time`, `duration_ms` - timing information
+- `fork_depth`, `common_ancestor_hash`, `common_ancestor_height` - fork details
+- `previous_attempt` - details of the last failed catchup attempt (if any)
 
 ### Internal Methods
 
@@ -433,3 +442,10 @@ The service provides comprehensive performance monitoring through Prometheus met
 - Memory cache utilization
 - Store operation latencies
 - Background worker statistics
+
+## Related Documents
+
+- [Block Validation Topic Guide](../../topics/services/blockValidation.md)
+- [Block Validation Settings](../settings/services/blockvalidation_settings.md)
+- [Block Validation Protobuf Reference](../protobuf_docs/blockvalidationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

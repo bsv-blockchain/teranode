@@ -91,7 +91,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	if len(block.Subtrees) == 0 {
 		// No subtrees to process, just write the coinbase UTXO to the diff and continue
-		if utxoDiff != nil {
+		// If starting from a seed, blocks may not contain a CoinbaseTx; if so skip
+		if utxoDiff != nil && block.CoinbaseTx != nil {
 			if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
 				return errors.NewProcessingError("[persistBlock][%s] error processing coinbase tx", block.String(), err)
 			}
@@ -123,7 +124,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			u.logger.Infof("[persistBlock][%s] Phase 2: Processing UTXO diff for %d subtrees", block.String(), len(block.Subtrees))
 
 			for i, subtreeHash := range block.Subtrees {
-				u.logger.Debugf("[persistBlock][%s] processing UTXO for subtree %d / %d [%s]", i+1, block.String(), len(block.Subtrees), subtreeHash.String())
+				u.logger.Debugf("[persistBlock][%s] processing UTXO for subtree %d / %d [%s]", block.String(), i+1, len(block.Subtrees), subtreeHash.String())
 
 				if err := u.ProcessSubtreeUTXOStreaming(ctx, *subtreeHash, utxoDiff); err != nil {
 					return err

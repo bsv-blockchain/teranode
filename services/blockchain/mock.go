@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/stretchr/testify/mock"
@@ -340,6 +341,17 @@ func (m *Mock) Subscribe(ctx context.Context, source string) (chan *blockchain_a
 	return args.Get(0).(chan *blockchain_api.Notification), args.Error(1)
 }
 
+// GetSubscribers mocks the GetSubscribers method
+func (m *Mock) GetSubscribers(ctx context.Context) ([]string, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // GetState mocks the GetState method
 func (m *Mock) GetState(ctx context.Context, key string) ([]byte, error) {
 	args := m.Called(ctx, key)
@@ -408,7 +420,6 @@ func (m *Mock) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	return args.Get(0).([]*model.Block), args.Error(1)
 }
 
-// SetBlockSubtreesSet mocks the SetBlockSubtreesSet method
 func (m *Mock) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	args := m.Called(ctx, blockHash)
 	return args.Error(0)
@@ -440,6 +451,12 @@ func (m *Mock) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
 // CheckBlockIsInCurrentChain mocks the CheckBlockIsInCurrentChain method
 func (m *Mock) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+// CheckBlockIsAncestorOfBlock mocks the CheckBlockIsAncestorOfBlock method
+func (m *Mock) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -667,6 +684,11 @@ func (m *mockStoreCheckBlockChain) CheckBlockIsInCurrentChain(ctx context.Contex
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *mockStoreCheckBlockChain) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *mockStoreCheckBlockChain) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]*model.ChainTip), args.Error(1)
@@ -802,7 +824,8 @@ func (m *mockStoreLocateBlockHeaders) LocateBlockHeaders(
 
 type fakeServer struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	subCh chan *blockchain_api.Notification
+	subCh    chan *blockchain_api.Notification
+	fsmState blockchain_api.FSMStateType
 }
 
 func (f *fakeServer) HealthGRPC(ctx context.Context, req *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
@@ -820,6 +843,12 @@ func (f *fakeServer) Subscribe(req *blockchain_api.SubscribeRequest, stream bloc
 		}
 	}
 	return nil
+}
+
+func (f *fakeServer) GetFSMCurrentState(ctx context.Context, req *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	return &blockchain_api.GetFSMStateResponse{
+		State: f.fsmState,
+	}, nil
 }
 
 type mockHealthClient struct {
@@ -1277,4 +1306,85 @@ func (m *mockBlockClient) LocateBlockHeaders(ctx context.Context, req *blockchai
 }
 func (m *mockBlockClient) GetBestHeightAndTime(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.GetBestHeightAndTimeResponse, error) {
 	return m.responseGetBestHeightAndTime, m.err
+}
+
+// ScheduleBlobDeletion mocks the ScheduleBlobDeletion method
+func (m *Mock) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	args := m.Called(ctx, blobKey, fileType, storeType, deleteAtHeight)
+	return args.Get(0).(int64), args.Bool(1), args.Error(2)
+}
+
+// CancelBlobDeletion mocks the CancelBlobDeletion method
+func (m *Mock) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	args := m.Called(ctx, blobKey, fileType, storeType)
+	return args.Bool(0), args.Error(1)
+}
+
+// ListScheduledDeletions mocks the ListScheduledDeletions method
+func (m *Mock) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	args := m.Called(ctx, minHeight, maxHeight, storeType, filterByStore, limit, offset)
+	if args.Error(2) != nil {
+		return nil, 0, args.Error(2)
+	}
+	return args.Get(0).([]*blockchain_api.ScheduledDeletion), args.Int(1), args.Error(2)
+}
+
+// GetPendingBlobDeletions mocks the GetPendingBlobDeletions method
+func (m *Mock) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	args := m.Called(ctx, height, limit)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*blockchain_api.ScheduledDeletion), args.Error(1)
+}
+
+// RemoveBlobDeletion mocks the RemoveBlobDeletion method
+func (m *Mock) RemoveBlobDeletion(ctx context.Context, id int64) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+// IncrementBlobDeletionRetry mocks the IncrementBlobDeletionRetry method
+func (m *Mock) IncrementBlobDeletionRetry(ctx context.Context, id int64, maxRetries int) (bool, int, error) {
+	args := m.Called(ctx, id, maxRetries)
+	return args.Bool(0), args.Int(1), args.Error(2)
+}
+
+// CompleteBlobDeletions mocks the CompleteBlobDeletions method
+func (m *Mock) CompleteBlobDeletions(ctx context.Context, completedIDs, failedIDs []int64, maxRetries int) (int, int, error) {
+	args := m.Called(ctx, completedIDs, failedIDs, maxRetries)
+	return args.Int(0), args.Int(1), args.Error(2)
+}
+
+// AcquireBlobDeletionBatch mocks the AcquireBlobDeletionBatch method
+func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	args := m.Called(ctx, height, limit, timeoutSeconds)
+	if args.Error(2) != nil {
+		return "", nil, args.Error(2)
+	}
+	return args.String(0), args.Get(1).([]*blockchain_api.ScheduledDeletion), args.Error(2)
+}
+
+// CompleteBlobDeletionBatch mocks the CompleteBlobDeletionBatch method
+func (m *Mock) CompleteBlobDeletionBatch(ctx context.Context, token string, completedIDs, failedIDs []int64, maxRetries int) error {
+	args := m.Called(ctx, token, completedIDs, failedIDs, maxRetries)
+	return args.Error(0)
+}
+
+// GetMedianTimePastForHeights mocks the GetMedianTimePastForHeights method
+func (m *Mock) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	args := m.Called(ctx, heights)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]uint32), args.Error(1)
+}
+
+// GetMedianTimePastRange mocks the GetMedianTimePastRange method
+func (m *Mock) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	args := m.Called(ctx, fromHeight, toHeight)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]uint32), args.Error(1)
 }

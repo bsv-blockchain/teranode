@@ -20,11 +20,11 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/google/uuid"
-	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -50,6 +50,9 @@ type Client struct {
 	subscribers           []clientSubscriber                 // List of subscribers
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
+	lastHeartbeat         atomic.Int64                       // Unix nano timestamp of last heartbeat
+	subscriptionReady     chan struct{}                      // Closed when first subscription + FSM state fetch completes
+	subscriptionReadyOnce sync.Once                          // Ensures subscriptionReady is closed exactly once
 }
 
 // BestBlockHeader represents the best block header in the blockchain.
@@ -69,6 +72,11 @@ type FSMStateType = blockchain_api.FSMStateType
 
 // FSMEventType is an alias for blockchain_api.FSMEventType
 type FSMEventType = blockchain_api.FSMEventType
+
+// notificationSendTimeout bounds how long a fan-out goroutine will wait for
+// a subscriber's channel to accept a block notification. See the two
+// SafeSend call sites in this file for the rationale.
+const notificationSendTimeout = 30 * time.Second
 
 const (
 	FSMStateIDLE           = blockchain_api.FSMStateType_IDLE
@@ -96,6 +104,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 // NewClientWithAddress creates a new blockchain client with a specified address.
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string, source string) (ClientI, error) {
+	initPrometheusMetrics()
 	var err error
 
 	var baConn *grpc.ClientConn
@@ -112,6 +121,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		baConn, err = util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 			MaxRetries:   tSettings.GRPCMaxRetries,
 			RetryBackoff: tSettings.GRPCRetryBackoff,
+			CallerName:   "blockchain",
 		}, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("failed to init blockchain service connection for '%s'", source, err)
@@ -142,12 +152,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	running.Store(true)
 
 	c := &Client{
-		client:      blockchain_api.NewBlockchainAPIClient(baConn),
-		logger:      logger,
-		settings:    tSettings,
-		running:     &running,
-		conn:        baConn,
-		subscribers: make([]clientSubscriber, 0),
+		client:            blockchain_api.NewBlockchainAPIClient(baConn),
+		logger:            logger,
+		settings:          tSettings,
+		running:           &running,
+		conn:              baConn,
+		subscribers:       make([]clientSubscriber, 0),
+		subscriptionReady: make(chan struct{}),
 	}
 
 	// start a subscription to the blockchain service
@@ -162,7 +173,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 			select {
 			case <-ctx.Done():
 				return
-			case notification := <-subscriptionCh:
+			case notification, ok := <-subscriptionCh:
+				if !ok {
+					// Channel closed, exit the listener
+					return
+				}
 				if notification == nil {
 					continue
 				}
@@ -170,13 +185,16 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 				// c.logger.Debugf("[Blockchain] Received notification for %s: %s", source, notification.Stringify())
 
 				switch notification.Type {
+				case model.NotificationType_PING:
+					// Heartbeat already updated in SubscribeToServer before sending to channel
+					c.logger.Debugf("[Blockchain] Received heartbeat for %s", source)
 				case model.NotificationType_FSMState:
-					c.logger.Infof("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
+					c.logger.Debugf("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
 					// update the local FSM state variable
 					metadata := notification.Metadata.Metadata
 					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
-					c.logger.Infof("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
+					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
@@ -186,9 +204,25 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 					}
 
 					for _, s := range c.subscribers {
-						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
-							utils.SafeSend(ch, notification)
-						}(s.ch, notification)
+						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification, subscriberSource string) {
+							// Bounded timeout so a slow / unresponsive subscriber
+							// cannot park this fan-out goroutine indefinitely.
+							// Each notification spawns one goroutine per subscriber;
+							// without a timeout, a subscriber whose channel never
+							// drains accumulates one parked goroutine per
+							// notification for the lifetime of the process.
+							// 30s is long relative to block cadence (~10 min) but
+							// short relative to "forever" — slow subscribers lose
+							// the notification, which is preferable to a leak.
+							//
+							// SafeSend returns false on timeout. We surface that
+							// at Warn so a wedged subscriber is visible in logs
+							// during diagnosis without flooding the log on every
+							// notification (notifications are infrequent).
+							if !util.SafeSend(ch, notification, notificationSendTimeout) {
+								c.logger.Warnf("[Blockchain] dropping notification for subscriber %s: channel full for %s", subscriberSource, notificationSendTimeout)
+							}
+						}(s.ch, notification, s.source)
 					}
 					c.subscribersMu.Unlock()
 				}
@@ -208,13 +242,23 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
-	// Add readiness checks here. Include dependency checks.
-	// If any dependency is not ready, return http.StatusServiceUnavailable
-	// If all dependencies are ready, return http.StatusOK
-	// A failed dependency check does not imply the service needs restarting
+	// Check subscription readiness — prevents serving stale state before
+	// the first subscription + FSM state fetch completes.
+	if c.subscriptionReady != nil {
+		select {
+		case <-c.subscriptionReady:
+			// ready
+		default:
+			return http.StatusServiceUnavailable, "subscription not yet established", nil
+		}
+	}
+
 	resp, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
-	if err != nil || !resp.GetOk() {
-		return http.StatusFailedDependency, resp.GetDetails(), errors.UnwrapGRPC(err)
+	if err != nil {
+		return http.StatusFailedDependency, err.Error(), errors.UnwrapGRPC(err)
+	}
+	if !resp.GetOk() {
+		return http.StatusFailedDependency, resp.GetDetails(), nil
 	}
 
 	return http.StatusOK, resp.GetDetails(), nil
@@ -237,6 +281,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionSubtreesSet: storeBlockOptions.SubtreesSet,
 		OptionInvalid:     storeBlockOptions.Invalid,
 		OptionID:          storeBlockOptions.ID,
+		CoinbaseBump:      block.CoinbaseBUMP,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -286,7 +331,14 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	block.CoinbaseBUMP = resp.CoinbaseBump
+
+	return block, nil
 }
 
 // GetBlocks retrieves multiple blocks starting from a specific hash.
@@ -313,7 +365,7 @@ func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numbe
 	return blocks, nil
 }
 
-// GetBlockByHeight retrieves a block at a specific height in the blockchain.
+// GetBlockByHeight retrieves a block at a specific height.
 func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	resp, err := c.client.GetBlockByHeight(ctx, &blockchain_api.GetBlockByHeightRequest{
 		Height: height,
@@ -389,7 +441,14 @@ func (c *Client) blockFromResponse(resp *blockchain_api.GetBlockResponse) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	block.CoinbaseBUMP = resp.CoinbaseBump
+
+	return block, nil
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.
@@ -603,13 +662,14 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	}
 
 	meta := &model.BlockHeaderMeta{
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	return header, meta, nil
@@ -627,6 +687,25 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	}
 
 	return resp.GetIsPartOfCurrentChain(), nil
+}
+
+// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+// This is used for double-spend detection on fork blocks where we need to check against
+// the fork's ancestor chain rather than the main chain.
+func (c *Client) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	resp, err := c.client.CheckBlockIsAncestorOfBlock(ctx, &blockchain_api.CheckBlockIsAncestorOfBlockRequest{
+		BlockIDs:  blockIDs,
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetIsAncestor(), nil
 }
 
 // GetChainTips retrieves information about all known tips in the block tree.
@@ -668,18 +747,19 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	}
 
 	meta := &model.BlockHeaderMeta{
-		ID:          resp.Id,
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		PeerID:      resp.PeerId,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
-		MinedSet:    resp.MinedSet,
-		SubtreesSet: resp.SubtreesSet,
-		Invalid:     resp.Invalid,
+		ID:             resp.Id,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		PeerID:         resp.PeerId,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MinedSet:       resp.MinedSet,
+		SubtreesSet:    resp.SubtreesSet,
+		Invalid:        resp.Invalid,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	if resp.ProcessedAt != nil {
@@ -1100,8 +1180,20 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	if c.lastBlockNotification != nil {
 		lastNotification := c.lastBlockNotification
 		go func() {
-			utils.SafeSend(ch, lastNotification)
-			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			// Same bounded-timeout rationale as the fan-out send in
+			// NewClientWithAddress's notification consumer goroutine: if the
+			// new subscriber's channel is never drained, this goroutine
+			// would otherwise park forever holding a reference to the
+			// notification.
+			//
+			// Only log success when the send actually completed — on
+			// timeout the notification was dropped, which is unexpected
+			// for a brand-new subscriber (its channel should be empty).
+			if util.SafeSend(ch, lastNotification, notificationSendTimeout) {
+				c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+			} else {
+				c.logger.Warnf("[Blockchain] dropping initial block notification for new subscriber %s: channel full for %s", source, notificationSendTimeout)
+			}
 		}()
 	}
 	c.subscribersMu.Unlock()
@@ -1129,6 +1221,15 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	}()
 
 	return ch, nil
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (c *Client) GetSubscribers(ctx context.Context) ([]string, error) {
+	resp, err := c.client.GetSubscribers(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+	return resp.Sources, nil
 }
 
 // SubscribeToServer establishes a subscription to the blockchain server.
@@ -1168,6 +1269,9 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	// Use a buffered channel to prevent blocking on sends
 	ch := make(chan *blockchain_api.Notification, 100)
 
+	// Heartbeat timeout: 3x the server's broadcast interval (allows 3 missed heartbeats)
+	heartbeatTimeout := 3 * c.settings.BlockChain.HeartbeatInterval
+
 	// Use sync.Once to ensure channel is closed exactly once
 	var closeOnce sync.Once
 
@@ -1199,13 +1303,26 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			close(done)
 		}()
 
+		// zombieTimeout is 2× the heartbeat interval. If no Recv returns within
+		// this window the watchdog cancels the stream context, forcing Recv to
+		// error and the reconnect path to fire. The watchdog ticks at a quarter
+		// of the timeout so worst-case detection latency is ~1.25× zombieTimeout
+		// (zombieTimeout + one tick at zombieTimeout/4).
+		zombieTimeout := 2 * c.settings.BlockChain.HeartbeatInterval
+
 		for c.running.Load() {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
-			stream, err := c.client.Subscribe(ctx, &blockchain_api.SubscribeRequest{
+			// Per-stream cancellable context. The zombie watchdog cancels it when
+			// no Recv returns for zombieTimeout. Recv then returns context.Canceled
+			// and the outer reconnect loop handles it.
+			streamCtx, cancelStream := context.WithCancel(ctx)
+
+			stream, err := c.client.Subscribe(streamCtx, &blockchain_api.SubscribeRequest{
 				Source: source,
 			})
 			if err != nil {
+				cancelStream()
 				if !c.running.Load() {
 					return
 				}
@@ -1215,12 +1332,87 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				continue
 			}
 
+			// Subscription established successfully - fetch current FSM state
+			c.logger.Infof("[Blockchain] Subscription established, fetching current FSM state for %s", source)
+			if c.fetchAndRestoreFSMState(ctx, source) {
+				c.logger.Infof("[Blockchain] Initial FSM state restored for %s", source)
+			} else {
+				c.logger.Warnf("[Blockchain] Initial FSM state fetch failed for %s; continuing with subscription and fallback state", source)
+			}
+
+			// Signal readiness once the subscription is established and the initial FSM fetch attempt has completed.
+			c.subscriptionReadyOnce.Do(func() {
+				if c.subscriptionReady != nil {
+					close(c.subscriptionReady)
+				}
+				c.logger.Infof("[Blockchain] Subscription ready for %s", source)
+			})
+
+			// Don't initialize heartbeat here - let it remain 0 until first PING is received.
+			// This ensures staleness detection works correctly: if connection breaks before
+			// first PING, lastHB will be 0 and we'll properly set FSM to IDLE.
+
+			// lastRecvAt tracks when Recv last returned. Initialised to now so a
+			// stream that never delivers anything is given the full zombieTimeout
+			// grace period before the watchdog fires.
+			var lastRecvAt atomic.Int64
+			lastRecvAt.Store(time.Now().UnixNano())
+
+			// Zombie watchdog: fires cancelStream if no Recv returns within
+			// zombieTimeout. Exits when the stream context is done (normal error
+			// path, normal shutdown, or the watchdog itself cancelling).
+			watchdogDone := make(chan struct{})
+			go func() {
+				defer close(watchdogDone)
+				ticker := time.NewTicker(zombieTimeout / 4)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-streamCtx.Done():
+						return
+					case <-ticker.C:
+						age := time.Since(time.Unix(0, lastRecvAt.Load()))
+						if age > zombieTimeout {
+							c.logger.Warnf("[Blockchain][SubscribeToServer] watchdog: no Recv for %s on source %s — forcing stream close", age, source)
+							prometheusBlockchainWatchdogFires.WithLabelValues(source).Inc()
+							cancelStream()
+							return
+						}
+					}
+				}
+			}()
+
+			// shutdown tears down the per-stream watchdog before returning.
+			// Must be called on every exit from the inner recv loop.
+			shutdown := func() {
+				cancelStream()
+				<-watchdogDone
+			}
+
+			reconnect := false
 			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
+					shutdown()
 					if !c.running.Load() || ctx.Err() != nil {
 						// Context cancelled or client stopped, exit gracefully
 						return
+					}
+
+					// Check if heartbeat was stale when error occurred
+					lastHB := c.lastHeartbeat.Load()
+					if lastHB == 0 {
+						// Never received a heartbeat - connection broke before first PING
+						c.logger.Warnf("[Blockchain] No heartbeat received, setting FSM to IDLE: %s", source)
+						idleState := FSMStateIDLE
+						c.fmsState.Store(&idleState)
+					} else {
+						lastHeartbeatAge := time.Since(time.Unix(0, lastHB))
+						if lastHeartbeatAge > heartbeatTimeout {
+							c.logger.Warnf("[Blockchain] Heartbeat stale (%v), setting FSM to IDLE: %s", lastHeartbeatAge, source)
+							idleState := FSMStateIDLE
+							c.fmsState.Store(&idleState)
+						}
 					}
 
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
@@ -1229,7 +1421,35 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
 					time.Sleep(1 * time.Second)
+					reconnect = true
 					break
+				}
+
+				lastRecvAt.Store(time.Now().UnixNano())
+
+				if resp.Type == model.NotificationType_PING {
+					// Update heartbeat immediately on receipt to avoid staleness races.
+					c.lastHeartbeat.Store(time.Now().UnixNano())
+
+					notification := &blockchain_api.Notification{
+						Type:     resp.Type,
+						Hash:     nil,
+						Base_URL: resp.Base_URL,
+						Metadata: resp.Metadata,
+					}
+
+					// Use a timeout for sending to prevent blocking
+					select {
+					case ch <- notification:
+						// Successfully sent
+					case <-time.After(5 * time.Second):
+						c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
+					case <-ctx.Done():
+						shutdown()
+						return
+					}
+
+					continue
 				}
 
 				hash, err := chainhash.NewHash(resp.Hash)
@@ -1252,13 +1472,41 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				case <-time.After(5 * time.Second):
 					c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
 				case <-ctx.Done():
+					shutdown()
 					return
 				}
+			}
+			if !reconnect {
+				// Inner loop exited because c.running became false. Tear down the
+				// watchdog before the outer loop re-evaluates c.running.Load().
+				shutdown()
 			}
 		}
 	}()
 
 	return ch, nil
+}
+
+// fetchAndRestoreFSMState queries the blockchain service for the current FSM state
+// and updates the local cached state. This is called after successful reconnection
+// to ensure the client has the correct FSM state. Returns true if the state was
+// successfully fetched, false if it fell back to IDLE due to an error.
+func (c *Client) fetchAndRestoreFSMState(ctx context.Context, source string) bool {
+	stateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	state, err := c.client.GetFSMCurrentState(stateCtx, &emptypb.Empty{})
+	if err != nil {
+		c.logger.Warnf("[Blockchain] Failed to fetch FSM state, setting to IDLE for safety: %v", err)
+		idleState := FSMStateIDLE
+		c.fmsState.Store(&idleState)
+		return false
+	}
+
+	newState := state.State
+	c.fmsState.Store(&newState)
+	c.logger.Infof("[Blockchain] FSM state restored to %s for %s", newState.String(), source)
+	return true
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.
@@ -1608,6 +1856,10 @@ func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error 
 	cancelWait()
 
 	if err != nil {
+		if errors.IsContextError(err) {
+			c.logger.Infof("[Blockchain Client] Shutting down during FSM wait")
+			return err
+		}
 		c.logger.Errorf("[Blockchain Client] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
@@ -1703,7 +1955,7 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Recovering from network disconnections or service downtime
 // - Ensuring the local blockchain is synchronized with the network
 // - Handling blockchain reorganizations and chain updates
-// - Maintaining consensus with the Bitcoin SV network
+// - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
 // The method first checks if the FSM is already in the CATCHING_BLOCKS state
@@ -1763,11 +2015,11 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // LegacySync sends a legacy sync FSM event to the blockchain service.
 // This method initiates a legacy synchronization process by transitioning the
 // blockchain service's finite state machine to the LEGACY_SYNCING state, which
-// triggers compatibility mode synchronization with older Bitcoin SV network
+// triggers compatibility mode synchronization with older BSV Blockchain network
 // protocols and legacy blockchain implementations.
 //
 // The legacy sync mode is essential for:
-// - Maintaining compatibility with older Bitcoin SV network nodes
+// - Maintaining compatibility with older BSV Blockchain network nodes
 // - Synchronizing with legacy blockchain implementations
 // - Supporting migration scenarios from older Teranode versions
 // - Ensuring interoperability across diverse network topologies
@@ -1786,7 +2038,7 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 //
 // This operation is typically used during:
 // - Network upgrades and migration periods
-// - Integration with legacy Bitcoin SV infrastructure
+// - Integration with legacy BSV Blockchain infrastructure
 // - Debugging synchronization issues with older nodes
 // - Ensuring network-wide compatibility during protocol transitions
 //
@@ -1888,7 +2140,7 @@ func (c *Client) Idle(ctx context.Context) error {
 // which blocks they need to synchronize.
 //
 // This implementation follows the standard Bitcoin protocol for block locators,
-// ensuring compatibility with the broader Bitcoin SV network.
+// ensuring compatibility with the broader BSV Blockchain network.
 //
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support
@@ -2121,4 +2373,168 @@ func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model
 	}
 
 	return blocks, nil
+}
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (c *Client) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	resp, err := c.client.ScheduleBlobDeletion(ctx, &blockchain_api.ScheduleBlobDeletionRequest{
+		BlobKey:        blobKey,
+		FileType:       fileType,
+		StoreType:      int32(storeType),
+		DeleteAtHeight: deleteAtHeight,
+	})
+	if err != nil {
+		return 0, false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.DeletionId, resp.Scheduled, nil
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (c *Client) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	resp, err := c.client.CancelBlobDeletion(ctx, &blockchain_api.CancelBlobDeletionRequest{
+		BlobKey:   blobKey,
+		FileType:  fileType,
+		StoreType: int32(storeType),
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Cancelled, nil
+}
+
+// ListScheduledDeletions lists scheduled blob deletions with optional filtering.
+func (c *Client) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	resp, err := c.client.ListScheduledDeletions(ctx, &blockchain_api.ListScheduledDeletionsRequest{
+		MinHeight:     minHeight,
+		MaxHeight:     maxHeight,
+		StoreType:     int32(storeType),
+		FilterByStore: filterByStore,
+		Limit:         int32(limit),
+		Offset:        int32(offset),
+	})
+	if err != nil {
+		return nil, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Deletions, int(resp.TotalCount), nil
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (c *Client) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	resp, err := c.client.GetPendingBlobDeletions(ctx, &blockchain_api.GetPendingBlobDeletionsRequest{
+		Height: height,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Deletions, nil
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule.
+func (c *Client) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	_, err := c.client.RemoveBlobDeletion(ctx, &blockchain_api.RemoveBlobDeletionRequest{
+		DeletionId: deletionID,
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (c *Client) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	resp, err := c.client.IncrementBlobDeletionRetry(ctx, &blockchain_api.IncrementBlobDeletionRetryRequest{
+		DeletionId: deletionID,
+		MaxRetries: int32(maxRetries),
+	})
+	if err != nil {
+		return false, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.ShouldRemove, int(resp.NewRetryCount), nil
+}
+
+// CompleteBlobDeletions completes multiple blob deletions in a single batch call.
+func (c *Client) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	resp, err := c.client.CompleteBlobDeletions(ctx, &blockchain_api.CompleteBlobDeletionsRequest{
+		CompletedIds: completedIDs,
+		FailedIds:    failedIDs,
+		MaxRetries:   int32(maxRetries),
+	})
+	if err != nil {
+		return 0, 0, errors.UnwrapGRPC(err)
+	}
+
+	return int(resp.RemovedCount), int(resp.RetryIncrementedCount), nil
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	resp, err := c.client.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
+		Height:             height,
+		Limit:              int32(limit),
+		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+	})
+	if err != nil {
+		return "", nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.BatchToken, resp.Deletions, nil
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (c *Client) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	_, err := c.client.CompleteBlobDeletionBatch(ctx, &blockchain_api.CompleteBlobDeletionBatchRequest{
+		BatchToken:   batchToken,
+		CompletedIds: completedIDs,
+		FailedIds:    failedIDs,
+		MaxRetries:   int32(maxRetries),
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
+}
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Internally builds a full heights array to reuse the existing GetMedianTimePastByHeights RPC,
+// avoiding the need for a new proto endpoint.
+func (c *Client) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	count := toHeight - fromHeight + 1
+	heights := make([]uint32, count)
+	for i := range heights {
+		heights[i] = fromHeight + uint32(i)
+	}
+
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
 }

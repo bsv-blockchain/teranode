@@ -20,7 +20,10 @@
 | HTTPAddress | *url.URL | "" | validator_httpAddress | HTTP client connections |
 | HTTPRateLimit | int | 1024 | validator_httpRateLimit | **CRITICAL** - HTTP request rate limiting |
 | KafkaMaxMessageBytes | int | 1048576 | validator_kafka_maxMessageBytes | Kafka message size limits |
-| UseLocalValidator | bool | false | useLocalValidator | **CRITICAL** - Local vs remote validator deployment mode |
+| UseLocalValidator | bool | false (true in settings.conf) | useLocalValidator | **CRITICAL** - Local vs remote validator deployment mode |
+| HTTPBodyLimit | string | 100MB | validator_httpBodyLimit | Maximum HTTP request body size (prevents OOM on oversized requests) |
+| TxMetaKafkaBatchSize | int | 1024 | validator_txmeta_kafka_batchSize | Transaction metadata Kafka batch size |
+| TxMetaKafkaBatchTimeoutMs | int | 5 | validator_txmeta_kafka_batchTimeoutMs | Transaction metadata Kafka batch timeout (ms) |
 
 ## Configuration Dependencies
 
@@ -69,7 +72,7 @@
 
 ```text
 validator_grpcListenAddress = ":8081"
-validator_httpListenAddress = ":8080"
+validator_httpListenAddress = ":8834"
 ```
 
 ### Performance Tuning

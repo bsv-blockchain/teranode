@@ -4,6 +4,7 @@ package blockassembly
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -16,39 +17,40 @@ func createTestTx(txID string, parentIDs ...string) *utxo.UnminedTransaction {
 	var txInpoints subtree.TxInpoints
 
 	if len(parentIDs) > 0 {
-		// Create parent transaction hashes and indices
-		parentHashes := make([]chainhash.Hash, 0, len(parentIDs))
-		idxs := make([][]uint32, 0, len(parentIDs))
+		// For simplicity, always use output index 0. Build one bt.Input per
+		// parentID and let NewTxInpointsFromInputs handle the dedup of
+		// repeated parent hashes — this matches the prior parentMap step.
+		inputs := make([]*bt.Input, 0, len(parentIDs))
 
-		// Group parents by hash
-		parentMap := make(map[string][]uint32)
 		for _, parentID := range parentIDs {
-			if _, exists := parentMap[parentID]; !exists {
-				parentMap[parentID] = []uint32{}
-			}
-			// For simplicity, always use output index 0
-			parentMap[parentID] = append(parentMap[parentID], 0)
-		}
-
-		// Build the arrays
-		for parentID, indices := range parentMap {
 			parentHash, _ := chainhash.NewHashFromStr(parentID)
-			parentHashes = append(parentHashes, *parentHash)
-			idxs = append(idxs, indices)
+			in := &bt.Input{PreviousTxOutIndex: 0}
+
+			if err := in.PreviousTxIDAdd(parentHash); err != nil {
+				panic(err)
+			}
+
+			inputs = append(inputs, in)
 		}
 
-		txInpoints.ParentTxHashes = parentHashes
-		txInpoints.Idxs = idxs
+		var err error
+
+		txInpoints, err = subtree.NewTxInpointsFromInputs(inputs)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// Create hash from the txID string
 	hash, _ := chainhash.NewHashFromStr(txID)
 
 	return &utxo.UnminedTransaction{
-		Hash:       hash,
-		TxInpoints: txInpoints,
-		Fee:        1000,
-		Size:       250,
+		Node: &subtree.Node{
+			Hash:        *hash,
+			Fee:         1000,
+			SizeInBytes: 250,
+		},
+		TxInpoints: &txInpoints,
 	}
 }
 
@@ -247,11 +249,10 @@ func TestParentChildOrderingLogic(t *testing.T) {
 			// Create maps for validation logic (simulating the actual implementation)
 			unminedTxMap := make(map[chainhash.Hash]bool, len(unminedTxs))
 			unminedTxIndexMap := make(map[chainhash.Hash]int, len(unminedTxs))
+
 			for idx, tx := range unminedTxs {
-				if tx.Hash != nil {
-					unminedTxMap[*tx.Hash] = true
-					unminedTxIndexMap[*tx.Hash] = idx
-				}
+				unminedTxMap[tx.Hash] = true
+				unminedTxIndexMap[tx.Hash] = idx
 			}
 
 			// Perform validation logic - matching production code behavior
@@ -276,7 +277,7 @@ func TestParentChildOrderingLogic(t *testing.T) {
 					// STEP 2: Parent exists - check if it's unmined and in our list
 					if unminedTxMap[parentTxID] {
 						// Parent is unmined and in our list - check ordering
-						currentIdx := unminedTxIndexMap[*tx.Hash]
+						currentIdx := unminedTxIndexMap[tx.Hash]
 						parentIdx, exists := unminedTxIndexMap[parentTxID]
 						if !exists || parentIdx >= currentIdx {
 							// Parent comes after or at same position as child - invalid ordering

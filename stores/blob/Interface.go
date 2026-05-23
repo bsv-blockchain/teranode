@@ -38,14 +38,12 @@ import (
 //
 // The Store interface can be extended with additional capabilities through wrappers:
 // - batcher: Efficient batch processing of multiple operations
-// - localdah: Delete-At-Height functionality for blockchain-based expiration
-// - concurrent: Thread-safe access to the underlying store
+// - logger: Debug logging for blob operations
 //
 // The Store interface is designed to be composable, allowing implementations to be
 // stacked to provide combined functionality. For example, a file-based store can be
-// wrapped with a batcher for improved write performance, then wrapped with a localdah
-// implementation for automatic expiration, and finally wrapped with a concurrent
-// implementation for thread safety.
+// wrapped with a batcher for improved write performance, then wrapped with a logger
+// for debugging blob operations.
 //
 // All methods accept a context.Context parameter to support cancellation and timeouts,
 // which is particularly important for operations that may involve network or disk I/O.
@@ -126,17 +124,6 @@ type Store interface {
 	// Returns:
 	//   - error: Any error that occurred during DAH setting
 	SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error
-
-	// GetDAH retrieves the remaining time-to-live for a blob.
-	// Parameters:
-	//   - ctx: The context for the operation
-	//   - key: The key identifying the blob
-	//   - fileType: The type of the file
-	//   - opts: Optional file options
-	// Returns:
-	//   - uint32: The delete at height value
-	//   - error: Any error that occurred during retrieval
-	GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
 
 	// Del deletes a blob from the store.
 	// Parameters:

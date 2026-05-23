@@ -167,6 +167,10 @@ func (l *testLogger) Duplicate(options ...ulogger.Option) ulogger.Logger {
 	return l
 }
 
+func (l *testLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
+}
+
 func createTestTransaction(t *testing.T) *bt.Tx {
 	rawTx := "0100000001abad53d72f342dd3f338e5e3346b492110d261a66ead1e2478051a30cda38890000000006a4730440220570b3cb3585f04b1bbad82532911441b6189e037d42628cd1391b12912682cb802206d20166f8207be1372c990a2bd8ad7c58908b66f19b706ef2b549c89adebe1de4121020d0fb6753e03f956a9ad3aaf68e0c4abe0f6825883e9768e3f77b73782fc14d5ffffffff010065cd1d000000001976a9144d196d35d2d908914a0395268ac105794510410088ac00000000"
 	tx, err := bt.NewTxFromString(rawTx)

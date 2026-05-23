@@ -10,7 +10,9 @@
         "vendor",
         "third_party$",
         "builtin$",
-        "examples$"
+        "examples$",
+        "data",
+        "logs"
       ]
     }
   },
@@ -37,7 +39,8 @@
       "staticcheck",
       "gocognit",
       "goconst",
-      "gocritic"
+      "gocritic",
+      "gosec"
     ],
     "exclusions": {
       "generated": "lax",
@@ -45,7 +48,9 @@
         "vendor",
         "third_party$",
         "builtin$",
-        "examples$"
+        "examples$",
+        "data",
+        "logs"
       ],
       "presets": [
         "comments",

@@ -59,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"sync"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
@@ -69,6 +70,81 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
+
+// batchRecordsPool pools slices of aerospike.BatchRecordIfc to reduce allocations
+// during SetMinedMulti batch processing.
+var batchRecordsPool = sync.Pool{}
+
+// getBatchRecordsSlice returns a slice from the pool or allocates a new one with the given capacity.
+func getBatchRecordsSlice(capacity int) *[]aerospike.BatchRecordIfc {
+	if v := batchRecordsPool.Get(); v != nil {
+		s := v.(*[]aerospike.BatchRecordIfc)
+		if cap(*s) >= capacity {
+			*s = (*s)[:capacity] // set length to capacity, we'll overwrite all elements
+			return s
+		}
+		// Capacity too small, discard and allocate new
+	}
+	s := make([]aerospike.BatchRecordIfc, capacity)
+	return &s
+}
+
+// putBatchRecordsSlice returns a slice to the pool for reuse.
+func putBatchRecordsSlice(s *[]aerospike.BatchRecordIfc) {
+	if s == nil {
+		return
+	}
+	// Clear the slice to allow GC of the BatchRecordIfc objects
+	for i := range *s {
+		(*s)[i] = nil
+	}
+	*s = (*s)[:0]
+	batchRecordsPool.Put(s)
+}
+
+// getBatchKeysSlice returns a key slice from the Store's per-instance key pool,
+// preserving the underlying *aerospike.Key entries so their namespace, setName,
+// and digest backing array can be reused across batches. The pool is scoped to
+// the Store so that a Key allocated for (ns, set) is never reused with a
+// different (ns, set) — Key only exposes SetValue, which recomputes digest from
+// the existing setName.
+//
+// Workload assumption: SetMinedMulti batch sizes are relatively uniform within
+// a single Store's lifetime (Store lifetime == application lifetime, ~one Store
+// per deployment). Under that assumption the pool's per-Store scoping is the
+// right trade-off: a large batch seeds the pool with a large backing array
+// that subsequent batches reuse, amortizing allocation. sync.Pool's per-GC
+// drainage ages out the slice if the workload permanently shifts to small
+// batches. If multi-tenant or highly variable batch sizes become common,
+// switch to size-class bucketing analogous to model.GetTxMap.
+//
+// On return, the slice length equals `capacity`. Entries from a freshly allocated
+// slice are nil; the caller must initialize each via aerospike.NewKey before use.
+// Entries retained from a prior batch are non-nil and must be reset via SetValue.
+func (s *Store) getBatchKeysSlice(capacity int) *[]*aerospike.Key {
+	if v := s.batchKeysPool.Get(); v != nil {
+		ks := v.(*[]*aerospike.Key)
+		if cap(*ks) >= capacity {
+			*ks = (*ks)[:capacity]
+			return ks
+		}
+		// Capacity too small; let the old slice GC and allocate fresh.
+	}
+	ks := make([]*aerospike.Key, capacity)
+	return &ks
+}
+
+// putBatchKeysSlice returns a key slice to the Store's per-instance pool.
+// The Aerospike client has finished using the keys by the time the batch call
+// returns, so it is safe to mutate them on the next get.
+func (s *Store) putBatchKeysSlice(ks *[]*aerospike.Key) {
+	if ks == nil {
+		return
+	}
+	// Retain *Key entries so SetValue can mutate digest in place next time.
+	*ks = (*ks)[:cap(*ks)]
+	s.batchKeysPool.Put(ks)
+}
 
 // SetMinedMulti updates the block references for multiple transactions in batch.
 // This operation marks transactions as mined in a specific block using Lua scripts
@@ -129,14 +205,28 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	thisBlockHeight := s.blockHeight.Load() + 1
 
+	if !minedBlockInfo.UnsetMined && s.settings.Aerospike.EnableSetMinedFilterExpressions {
+		return s.SetMinedMultiWithExpressions(ctx, hashes, minedBlockInfo)
+	}
+
+	// Get batch records slice from pool
+	batchRecordsPtr := getBatchRecordsSlice(len(hashes))
+	defer putBatchRecordsSlice(batchRecordsPtr)
+	batchRecords := *batchRecordsPtr
+
+	// Get the key slice from the per-Store pool. Entries may be nil (fresh slice)
+	// or pre-initialized *Key from a previous batch (digest backing reused).
+	batchKeysPtr := s.getBatchKeysSlice(len(hashes))
+	defer s.putBatchKeysSlice(batchKeysPtr)
+	batchKeys := *batchKeysPtr
+
 	// Prepare batch records
-	batchRecords, err := s.prepareBatchRecordsForSetMined(hashes, minedBlockInfo, thisBlockHeight)
-	if err != nil {
+	if err := s.prepareBatchRecordsForSetMined(batchRecords, batchKeys, hashes, minedBlockInfo, thisBlockHeight); err != nil {
 		return nil, err
 	}
 
 	// Execute batch operation
-	if err = s.executeBatchOperation(batchRecords); err != nil {
+	if err := s.executeBatchOperation(batchRecords); err != nil {
 		return nil, err
 	}
 
@@ -144,21 +234,41 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
 }
 
-// prepareBatchRecordsForSetMined creates batch records for the setMined operation
-func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) ([]aerospike.BatchRecordIfc, error) {
-	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+// prepareBatchRecordsForSetMined populates batch records for the setMined operation.
+// Both batchRecords and batchKeys must have len(hashes) capacity. batchKeys may
+// contain *Key entries from a previous batch (which are mutated in place via
+// SetValue) or nil entries (which are initialized via aerospike.NewKey).
+func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRecordIfc, batchKeys []*aerospike.Key,
+	hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
+	usePackage := LuaPackage
+	if s.settings.Aerospike.UseSeparateUDFMinedModule {
+		usePackage = LuaPackageMined
+	}
+
 	for idx, hash := range hashes {
-		key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
-		if err != nil {
-			return nil, errors.NewProcessingError("aerospike NewKey error", err)
+		key := batchKeys[idx]
+		if key == nil {
+			newKey, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
+			if err != nil {
+				return errors.NewProcessingError("aerospike NewKey error", err)
+			}
+			batchKeys[idx] = newKey
+			key = newKey
+		} else {
+			// Reuse the previously allocated Key by re-setting its user value.
+			// SetValue recomputes the digest in place using the stored setName,
+			// avoiding allocation of a new Key struct + digest backing.
+			if err := key.SetValue(aerospike.NewValue(hash[:])); err != nil {
+				return errors.NewProcessingError("aerospike Key.SetValue error", err)
+			}
 		}
 
 		batchRecords[idx] = aerospike.NewBatchUDF(
 			batchUDFPolicy,
 			key,
-			LuaPackage,
+			usePackage,
 			"setMined",
 			aerospike.NewValue(minedBlockInfo.BlockID),
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
@@ -170,7 +280,7 @@ func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBl
 		)
 	}
 
-	return batchRecords, nil
+	return nil
 }
 
 // executeBatchOperation performs the batch operation and increments metrics
@@ -221,8 +331,15 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		dahHeight = thisBlockHeight + retention
 	}
 
+	// Reuse a single LuaMapResponse across all per-record parses in this batch.
+	// The struct's fields (status, signal, BlockIDs cap, Errors map buckets) are
+	// preserved across iterations via Reset, eliminating per-record allocation.
+	pooledRes := getLuaMapResponse()
+	defer putLuaMapResponse(pooledRes)
+
 	for idx, batchRecord := range batchRecords {
-		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo)
+		pooledRes.Reset()
+		result, res, err := s.processSingleBatchRecordPooled(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo, pooledRes)
 		if err != nil {
 			if errs == nil {
 				errs = err
@@ -236,6 +353,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 
 		if res != nil && res.BlockIDs != nil {
+			// The caller-owned map retains ownership of this slice across calls,
+			// so a fresh allocation is required here.
 			blockIDsUint32 := make([]uint32, len(res.BlockIDs))
 			for i, bID := range res.BlockIDs {
 				bID32, err := safeconversion.IntToUint32(bID)
@@ -315,12 +434,29 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	return blockIDs, nil
 }
 
-// processSingleBatchRecord processes a single batch record result
+// processSingleBatchRecord processes a single batch record result, allocating a
+// fresh LuaMapResponse. Retained for callers outside the hot path; SetMinedMulti
+// uses processSingleBatchRecordPooled to share a pooled response.
 func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash,
 	thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (bool, *LuaMapResponse, error) {
+	res := &LuaMapResponse{}
+	ok, returnedRes, err := s.processSingleBatchRecordPooled(ctx, batchRecord, hash, thisBlockHeight, minedBlockInfo, res)
+	if returnedRes == nil {
+		return ok, nil, err
+	}
+	return ok, returnedRes, err
+}
+
+// processSingleBatchRecordPooled is the pool-friendly variant of
+// processSingleBatchRecord. The caller supplies a freshly-reset *LuaMapResponse
+// in `res`. The function returns either nil (parse not performed, e.g. on batch
+// error) or `res` itself. Callers must not retain the returned *LuaMapResponse
+// past the next Reset/Put of `res`.
+func (s *Store) processSingleBatchRecordPooled(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash,
+	thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo, res *LuaMapResponse) (bool, *LuaMapResponse, error) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
-		return false, nil, s.handleBatchRecordError(batchErr, hash)
+		return false, nil, s.handleBatchRecordError(batchErr, hash, minedBlockInfo.UnsetMined)
 	}
 
 	response := batchRecord.BatchRec().Record
@@ -328,8 +464,7 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 		return false, nil, errors.NewError("missing SUCCESS bin in aerospike response for transaction %s", hash.String())
 	}
 
-	res, parseErr := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
-	if parseErr != nil {
+	if parseErr := s.parseLuaMapResponseInto(response.Bins[LuaSuccess.String()], res); parseErr != nil {
 		return false, nil, errors.NewError("aerospike batchRecord %s ParseLuaMapResponse error", hash.String(), parseErr)
 	}
 
@@ -349,12 +484,17 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	return true, res, nil
 }
 
-// handleBatchRecordError handles errors from batch records
-func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash) error {
+// handleBatchRecordError handles errors from batch records.
+// For unset-mined operations a missing record is a no-op (the tx is already gone).
+// For normal set-mined a missing record is a hard error: the txmeta must exist and
+// be tagged with the block ID, otherwise the mined-invariant is violated.
+func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash, unsetMined bool) error {
 	var aErr *aerospike.AerospikeError
 	if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-		// the tx Meta does not exist anymore, so we do not have to set the mined status
-		return nil
+		if unsetMined {
+			return nil
+		}
+		return errors.NewTxNotFoundError("transaction not found: %s", hash.String())
 	}
 	return errors.NewStorageError("aerospike batchRecord error", hash.String(), err)
 }

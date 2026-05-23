@@ -10,22 +10,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
@@ -140,146 +137,7 @@ func TestFileNewWithInvalidDirectory(t *testing.T) {
 	})
 }
 
-func TestFileLoadDAHs(t *testing.T) {
-	t.Run("load DAHs", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		key := []byte("key")
-		value := []byte("value")
-
-		ctx := context.Background()
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := newStore(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		err = f.Set(ctx, key, fileformat.FileTypeTesting, value)
-		require.NoError(t, err)
-
-		err = f.SetDAH(ctx, key, fileformat.FileTypeTesting, 11)
-		require.NoError(t, err)
-
-		var fileDAHs map[string]uint32
-
-		f.fileDAHsMu.Lock()
-		fileDAHs = f.fileDAHs
-		require.Contains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key))+"."+fileformat.FileTypeTesting.String())
-		f.fileDAHsMu.Unlock()
-
-		f.SetCurrentBlockHeight(11)
-		f.cleanupExpiredFiles()
-
-		f.fileDAHsMu.Lock()
-		require.NotContains(t, f.fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
-		f.fileDAHsMu.Unlock()
-
-		err = f.Del(ctx, key, fileformat.FileTypeTesting)
-		require.NoError(t, err) // deleting non-existing file should not return error
-	})
-}
-
-func BenchmarkFileLoadDAHs(b *testing.B) {
-	// Get a temporary directory
-	tempDir, err := os.MkdirTemp("", "test")
-	require.NoError(b, err)
-	defer os.RemoveAll(tempDir)
-
-	ctx := context.Background()
-
-	u, err := url.Parse("file://" + tempDir)
-	require.NoError(b, err)
-
-	f, err := newStore(ulogger.TestLogger{}, u)
-	require.NoError(b, err)
-
-	keys := make([][]byte, b.N)
-
-	for i := 0; i < b.N; i++ {
-		key := chainhash.HashH([]byte(fmt.Sprintf("key-%d", i)))
-		value := []byte("value")
-
-		err = f.Set(ctx, key[:], fileformat.FileTypeTesting, value, options.WithDeleteAt(10))
-		require.NoError(b, err)
-
-		err = f.SetDAH(ctx, key[:], fileformat.FileTypeTesting, 11)
-		require.NoError(b, err)
-
-		keys[i] = key[:]
-	}
-
-	g := errgroup.Group{}
-
-	for _, key := range keys {
-		// unset all the DAH
-		g.Go(func() error {
-			return f.SetDAH(ctx, key, fileformat.FileTypeTesting, 0)
-		})
-	}
-
-	require.NoError(b, g.Wait())
-
-	var fileDAHs map[string]uint32
-
-	f.fileDAHsMu.Lock()
-
-	fileDAHs = f.fileDAHs
-
-	for _, key := range keys {
-		require.NotContains(b, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
-	}
-
-	f.fileDAHsMu.Unlock()
-}
-
-func TestFileLoadDAHsCleanupTmpFiles(t *testing.T) {
-	t.Run("cleanup only old dah.tmp files", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-dah-tmp-cleanup")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		// Create an old .dah.tmp file (>10 minutes old)
-		oldTmpFile := filepath.Join(tempDir, "old.tx.dah.tmp")
-		err = os.WriteFile(oldTmpFile, []byte("12345"), 0o600)
-		require.NoError(t, err)
-
-		// Modify the file's mod time to be 15 minutes ago
-		oldTime := time.Now().Add(-15 * time.Minute)
-		err = os.Chtimes(oldTmpFile, oldTime, oldTime)
-		require.NoError(t, err)
-
-		// Create a new .dah.tmp file (recent)
-		newTmpFile := filepath.Join(tempDir, "new.tx.dah.tmp")
-		err = os.WriteFile(newTmpFile, []byte("67890"), 0o600)
-		require.NoError(t, err)
-
-		// Create file store
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		_, err = New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Wait a moment for the background loadDAHs to complete
-		time.Sleep(100 * time.Millisecond)
-
-		// Check that old tmp file was removed
-		_, err = os.Stat(oldTmpFile)
-		require.True(t, os.IsNotExist(err), "Old tmp file should have been removed")
-
-		// Check that new tmp file still exists
-		_, err = os.Stat(newTmpFile)
-		require.NoError(t, err, "New tmp file should still exist")
-
-		// Clean up the new tmp file
-		os.Remove(newTmpFile)
-	})
-}
+// TestFileLoadDAHsCleanupTmpFiles removed - loadDAHs() functionality moved to pruner service
 
 func TestFileConcurrentAccess(t *testing.T) {
 	t.Run("concurrent set and get", func(t *testing.T) {
@@ -343,7 +201,7 @@ func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 
 		// Construct the expected file path in the subdirectory
 		expectedDir := filepath.Join(tempDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, utils.ReverseAndHexEncodeSlice(key)+"."+fileformat.FileTypeTesting.String())
+		expectedFilePath := filepath.Join(expectedDir, util.ReverseAndHexEncodeSlice(key)+"."+fileformat.FileTypeTesting.String())
 
 		_, err = os.Stat(expectedFilePath)
 		require.NoError(t, err)
@@ -666,6 +524,293 @@ func TestSetFromReader_CleansUpTempFileOnPipeClose(t *testing.T) {
 	})
 }
 
+func TestSetFromReader_DoesNotExposeFinalFileUntilReaderCompletes(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("streaming-atomic-publication")
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+
+	go func() {
+		done <- f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, reader)
+	}()
+
+	_, err = writer.Write([]byte("partial payload"))
+	require.NoError(t, err)
+
+	_, err = os.Stat(filename)
+	require.True(t, os.IsNotExist(err), "final filename must not be visible while the reader is still open")
+
+	require.NoError(t, writer.Close())
+	require.NoError(t, <-done)
+
+	_, err = os.Stat(filename)
+	require.NoError(t, err, "final filename should be visible after the reader completes")
+}
+
+func TestSetFromReader_RemovesBlobWhenChecksumPublicationFails(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("checksum-publication-fails")
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filename+checksumExtension, 0755))
+
+	err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("value"))
+	require.Error(t, err)
+
+	_, statErr := os.Stat(filename)
+	require.True(t, os.IsNotExist(statErr), "blob final filename should not remain after checksum publication fails")
+
+	entries, err := os.ReadDir(tempDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.False(t, strings.HasSuffix(entry.Name(), ".tmp"), "temporary file should be cleaned up: %s", entry.Name())
+	}
+}
+
+func TestSetFromReader_ConcurrentWritersNeverExposePartialFinal(t *testing.T) {
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("concurrent-atomic-publication")
+
+	// Build the expected complete file payload (header + body) once so the reader can
+	// match against it. Every successful read of the final file must be byte-identical
+	// to this payload — never a truncated prefix.
+	body := bytes.Repeat([]byte("XYZ"), 4096)
+	header := fileformat.NewHeader(fileformat.FileTypeTesting)
+
+	var expected bytes.Buffer
+	require.NoError(t, header.Write(&expected))
+	expected.Write(body)
+	expectedBytes := expected.Bytes()
+
+	filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	const writers = 8
+	stop := make(chan struct{})
+	writerErrs := make(chan error, writers)
+	writerWG := sync.WaitGroup{}
+
+	for i := 0; i < writers; i++ {
+		writerWG.Add(1)
+		go func() {
+			defer writerWG.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				if err := f.Set(context.Background(), key, fileformat.FileTypeTesting, body, options.WithAllowOverwrite(true)); err != nil {
+					writerErrs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	// Reader loop: every successful read must be byte-identical to expectedBytes. A
+	// partial read here would mean the atomic-publication invariant was violated.
+	readerDone := make(chan struct{})
+	var readerErr error
+
+	go func() {
+		defer close(readerDone)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			data, err := os.ReadFile(filename)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				readerErr = err
+				return
+			}
+
+			if !bytes.Equal(data, expectedBytes) {
+				readerErr = errors.NewStorageError("observed partial final file: got %d bytes, expected %d", len(data), len(expectedBytes))
+				return
+			}
+		}
+	}()
+
+	<-readerDone
+	close(stop)
+	writerWG.Wait()
+	close(writerErrs)
+
+	for err := range writerErrs {
+		require.NoError(t, err)
+	}
+	require.NoError(t, readerErr)
+}
+
+func TestRenameTempFile_OverwriteAndRejectSemantics(t *testing.T) {
+	// renameTempFile's cross-platform contract: on POSIX, rename atomically replaces an
+	// existing destination regardless of allowOverwrite; on non-POSIX, allowOverwrite
+	// controls whether an existing destination is replaced or whether ErrBlobAlreadyExists
+	// is returned. This test documents the observable POSIX behaviour and exercises both
+	// allowOverwrite values so a regression on either branch shows up.
+	tempDir := t.TempDir()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	key := []byte("rename-temp-file-semantics")
+
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("first")))
+
+	// allowOverwrite=true: the second publication should replace the first cleanly.
+	require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("second"), options.WithAllowOverwrite(true)))
+
+	got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+
+	// allowOverwrite=false: errorOnOverwrite stops the call before renameTempFile is
+	// reached, so the existing value must remain intact.
+	err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("third"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlobAlreadyExists), "expected ErrBlobAlreadyExists, got %v", err)
+
+	got, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+}
+
+func TestParseFsyncMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want fsyncMode
+		ok   bool
+	}{
+		{"", fsyncModeFull, true},
+		{"full", fsyncModeFull, true},
+		{"FULL", fsyncModeFull, true},
+		{"data", fsyncModeData, true},
+		{"none", fsyncModeNone, true},
+		{"bogus", fsyncModeFull, false},
+	} {
+		got, err := parseFsyncMode(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "input=%q", tc.in)
+			require.Equal(t, tc.want, got, "input=%q", tc.in)
+		} else {
+			require.Error(t, err, "input=%q", tc.in)
+		}
+	}
+}
+
+func TestNewWithFsyncMode(t *testing.T) {
+	tempDir := t.TempDir()
+
+	for _, mode := range []string{"full", "data", "none"} {
+		t.Run(mode, func(t *testing.T) {
+			u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+			require.NoError(t, err)
+
+			f, err := New(ulogger.TestLogger{}, u)
+			require.NoError(t, err)
+
+			key := []byte("fsync-mode-" + mode)
+			require.NoError(t, f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("value")))
+
+			got, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
+			require.NoError(t, err)
+			require.Equal(t, []byte("value"), got)
+		})
+	}
+
+	t.Run("invalid", func(t *testing.T) {
+		u, err := url.Parse("file://" + tempDir + "?fsyncMode=bogus")
+		require.NoError(t, err)
+
+		_, err = New(ulogger.TestLogger{}, u)
+		require.Error(t, err)
+	})
+}
+
+// BenchmarkSetFromReader_FsyncModes measures the cost of the atomic-publication path
+// across the three fsyncMode levels. fsync overhead dominates the small-payload case
+// on local filesystems and is intended to make any regression in the fsync schedule
+// visible in CI. Operators sizing for NFS-backed deployments can compare the gap
+// between fsyncModeFull and fsyncModeNone here against measurements on their target
+// filesystem to decide whether to opt out of the directory fsync.
+func BenchmarkSetFromReader_FsyncModes(b *testing.B) {
+	for _, payloadSize := range []int{256, 4 * 1024, 64 * 1024} {
+		for _, mode := range []string{"full", "data", "none"} {
+			b.Run(fmt.Sprintf("payload=%dB/mode=%s", payloadSize, mode), func(b *testing.B) {
+				tempDir := b.TempDir()
+
+				u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
+				require.NoError(b, err)
+
+				f, err := New(ulogger.TestLogger{}, u)
+				require.NoError(b, err)
+
+				payload := bytes.Repeat([]byte("x"), payloadSize)
+				ctx := context.Background()
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					key := []byte(fmt.Sprintf("bench-%d", i))
+					if err := f.Set(ctx, key, fileformat.FileTypeTesting, payload); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestFileStoreRelPath(t *testing.T) {
+	tempDir := t.TempDir()
+	f := &File{path: tempDir}
+
+	rel, err := f.storeRelPath(filepath.Join(tempDir, "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
+
+	_, err = f.storeRelPath(filepath.Join(tempDir, "..", "outside.testing"))
+	require.Error(t, err)
+
+	_, err = f.storeRelPath(tempDir + "-sibling/blob.testing")
+	require.Error(t, err)
+
+	f = &File{path: filepath.Join("relative", "store")}
+	rel, err = f.storeRelPath(filepath.Join("relative", "store", "subdir", "blob.testing"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("subdir", "blob.testing"), rel)
+}
+
 func TestFileGetHead(t *testing.T) {
 	t.Run("get head of content", func(t *testing.T) {
 		// Get a temporary directory
@@ -777,95 +922,7 @@ func TestFileExists(t *testing.T) {
 }
 
 func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
-	t.Run("check if DAH remains unchanged when file overwriting disabled using setFromReader", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("key-exists")
-		content := "This is test content for setFromReader"
-		reader := strings.NewReader(content)
-
-		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-
-		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := io.NopCloser(reader)
-
-		// Set the content
-		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
-		require.NoError(t, err)
-
-		// Now content should exist
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Set the content again with overwrite disabled
-		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser, options.WithAllowOverwrite(false))
-		require.Error(t, err)
-
-		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("check if DAH remains unchanged when file overwriting disabled using Set", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("key-exists")
-		content := "This is test content for set"
-
-		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-
-		// Set the content
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
-		require.NoError(t, err)
-
-		// Now content should exist
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Set the content again with overwrite disabled
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content), options.WithAllowOverwrite(false))
-		require.Error(t, err)
-
-		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), dah)
-	})
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 }
 
 func TestFileSetWithHashPrefix(t *testing.T) {
@@ -915,7 +972,7 @@ func TestFileHealth(t *testing.T) {
 		// Assert
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
-		require.Equal(t, "File Store: Healthy", message)
+		require.Regexp(t, `^File Store: Healthy \(.+ available of .+\)$`, message)
 	})
 
 	t.Run("non-existent path", func(t *testing.T) {
@@ -1362,417 +1419,7 @@ func TestFile_GetIoReader_WithHeaderAndFooter(t *testing.T) {
 }
 
 func TestFileGetAndSetDAH(t *testing.T) {
-	t.Run("get and set DAH", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-dah")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("dah-test-key")
-		content := []byte("test content")
-
-		// Set initial content without DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content)
-		require.NoError(t, err)
-
-		// Initially there should be no DAH
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Zero(t, dah)
-
-		// Set a DAH
-		newDAH := uint32(10)
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
-		require.NoError(t, err)
-
-		// Get and verify DAH
-		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, newDAH, dah)
-
-		// Remove DAH by setting it to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Verify DAH is removed
-		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Zero(t, dah)
-	})
-
-	t.Run("get DAH for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key-1")
-
-		// Try to get DAH for non-existent key
-		_, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
-	})
-
-	t.Run("set DAH for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-set-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key-2")
-		newDAH := uint32(6)
-
-		// Try to set DAH for non-existent key
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
-	})
-
-	t.Run("DAH expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-expiration")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("expiring-key")
-		content := []byte("test content")
-
-		// Set content with a short DAH
-		shortDAH := uint32(200)
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(shortDAH))
-		require.NoError(t, err)
-
-		// Verify content exists initially
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		f.SetCurrentBlockHeight(shortDAH + 1)
-		f.cleanupExpiredFiles()
-
-		// Verify content is removed after DAH expiration
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-
-		// Verify DAH file is also removed
-		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		_, err = os.Stat(filename + ".dah")
-		require.True(t, os.IsNotExist(err))
-	})
-
-	t.Run("update DAH before expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-update-1")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("updating-key-1")
-		content := []byte("test content")
-
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(10))
-		require.NoError(t, err)
-
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(10), dah)
-
-		// Update DAH
-		newDAH := uint32(100)
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
-		require.NoError(t, err)
-
-		f.SetCurrentBlockHeight(12)
-		f.cleanupExpiredFiles()
-
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		f.SetCurrentBlockHeight(100)
-		f.cleanupExpiredFiles()
-
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-	})
-	t.Run("set DAH, delete DAH file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-update-2")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("updating-key-2")
-		content := []byte("test content")
-
-		// Set content with initial short DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(101))
-		require.NoError(t, err)
-
-		f.cleanupExpiredFiles()
-
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// delete DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		err = os.Remove(filename + ".dah")
-		require.NoError(t, err)
-
-		f.SetCurrentBlockHeight(102)
-		f.cleanupExpiredFiles()
-
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-	})
-	t.Run("set DAH, manually change DAH file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-update-3")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("updating-key-3")
-		content := []byte("test content")
-
-		initialDAH := uint32(200)
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(initialDAH))
-		require.NoError(t, err)
-
-		// change DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-
-		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+10), 10)), 0o644) // nolint:gosec
-		require.NoError(t, err)
-
-		f.SetCurrentBlockHeight(initialDAH + 9)
-		f.cleanupExpiredFiles()
-
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// try again with a past time
-		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+5), 10)), 0o644) // nolint:gosec
-		require.NoError(t, err)
-
-		f.cleanupExpiredFiles()
-
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-	})
-}
-
-func TestFileCleanupExpiredFiles(t *testing.T) {
-	t.Run("clean expired files with various scenarios", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-clean-expired")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Test cases
-		tests := []struct {
-			key       []byte
-			content   []byte
-			dah       uint32
-			modifyDAH bool // If true, modify DAH file after creation
-		}{
-			{
-				key:     []byte("normal-expiring"),
-				content: []byte("normal content"),
-				dah:     300,
-			},
-			{
-				key:       []byte("modified-dah"),
-				content:   []byte("content with modified dah"),
-				dah:       300,
-				modifyDAH: true,
-			},
-		}
-
-		// Set up test files
-		for _, tc := range tests {
-			err := f.Set(context.Background(), tc.key, fileformat.FileTypeTesting, tc.content, options.WithDeleteAt(tc.dah))
-			require.NoError(t, err)
-
-			if tc.modifyDAH {
-				err = f.SetDAH(context.Background(), tc.key, fileformat.FileTypeTesting, tc.dah+100)
-				require.NoError(t, err)
-			}
-		}
-
-		// run cleaner - don't wait for cleaner to run automatically
-		f.SetCurrentBlockHeight(300)
-		f.cleanupExpiredFiles()
-
-		// Verify results
-		for _, tc := range tests {
-			exists, err := f.Exists(context.Background(), tc.key, fileformat.FileTypeTesting)
-			require.NoError(t, err)
-
-			filename, err := f.options.ConstructFilename(tempDir, tc.key, fileformat.FileTypeTesting)
-			require.NoError(t, err)
-
-			if tc.modifyDAH {
-				// File with modified (future) DAH should still exist
-				require.True(t, exists, "file with modified DAH should still exist")
-
-				_, err = os.Stat(filename + ".dah")
-				require.NoError(t, err, "DAH file should still exist")
-			} else {
-				// Normal expired and corrupt DAH files should be removed
-				require.False(t, exists, "expired file should be removed")
-
-				_, err = os.Stat(filename + ".dah")
-				require.True(t, os.IsNotExist(err), "DAH file should be removed")
-			}
-		}
-	})
-
-	t.Run("concurrent DAH modifications", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-concurrent-dah")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("concurrent-key")
-		content := []byte("concurrent content")
-
-		// Set initial content with DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(600))
-		require.NoError(t, err)
-
-		// Start multiple goroutines to modify DAH
-		var wg sync.WaitGroup
-
-		for i := 0; i < 5; i++ {
-			wg.Add(1)
-
-			go func(i int) {
-				defer wg.Done()
-				time.Sleep(time.Duration(i*50) * time.Millisecond)
-
-				// Alternate between extending and shortening DAH
-				var dah uint32
-				if i%2 == 0 {
-					dah = 400
-				} else {
-					dah = 200
-				}
-
-				err := f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, dah)
-				require.NoError(t, err)
-			}(i)
-		}
-
-		wg.Wait()
-
-		time.Sleep(400 * time.Millisecond)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		f.SetCurrentBlockHeight(600)
-		f.cleanupExpiredFiles()
-
-		// Verify final state
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists, "file should be removed after DAH expiration")
-
-		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		_, err = os.Stat(filename + ".dah")
-		require.True(t, os.IsNotExist(err), "DAH file should be removed")
-	})
-
-	t.Run("cleaner with missing files", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-missing-files")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("missing-file")
-		content := []byte("content")
-
-		// Set content with DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(800))
-		require.NoError(t, err)
-
-		// Manually delete the content file but leave DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		err = os.Remove(filename)
-		require.NoError(t, err)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		f.SetCurrentBlockHeight(800)
-		f.cleanupExpiredFiles()
-
-		// Verify DAH file is also cleaned up
-		_, err = os.Stat(filename + ".dah")
-		require.True(t, os.IsNotExist(err), "DAH file should be removed when content file is missing")
-	})
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 }
 
 func TestFileURLParameters(t *testing.T) {
@@ -1850,48 +1497,6 @@ func TestFileGetNonExistent(t *testing.T) {
 	})
 }
 
-func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
-	// Get a temporary directory
-	tempDir, err := os.MkdirTemp("", "test-checksum-delete-on-ttl-expiry")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	u, err := url.Parse("file://" + tempDir)
-	require.NoError(t, err)
-
-	f, err := New(ulogger.TestLogger{}, u)
-	require.NoError(t, err)
-
-	key := "test-key-ttl-checksum"
-	content := []byte("test content")
-
-	// Put a file with checksum
-	err = f.Set(context.Background(), []byte(key), fileformat.FileTypeTesting, content, options.WithDeleteAt(1))
-	require.NoError(t, err)
-
-	// Construct filename
-	merged := options.MergeOptions(f.options, []options.FileOption{})
-	filename, err := merged.ConstructFilename(tempDir, []byte(key), fileformat.FileTypeTesting)
-	require.NoError(t, err)
-
-	// Verify the checksum file exists
-	_, err = os.Stat(filename)
-	require.NoError(t, err, "checksum file should exist")
-
-	// run cleaner - don't wait for cleaner to run automatically
-	f.SetCurrentBlockHeight(1000)
-	f.cleanupExpiredFiles()
-
-	// Check if the file has expired
-	exists, err := f.Exists(context.Background(), []byte(key), fileformat.FileTypeTesting)
-	require.NoError(t, err)
-	require.False(t, exists, "file should be expired due to TTL")
-
-	// Check if checksum file still exists - this is the bug
-	_, err = os.Stat(filename)
-	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file has expired")
-}
-
 func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	// Get a temporary directory
 	tempDir, err := os.MkdirTemp("", "test-checksum-delete-on-delete")
@@ -1927,274 +1532,4 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	// Check if checksum file still exists - this is the bug
 	_, err = os.Stat(filename)
 	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file is deleted")
-}
-
-func TestDAHZeroHandling(t *testing.T) {
-	t.Run("readDAHFromFile with DAH 0 returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create a DAH file with value 0
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("0"), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for DAH 0")
-		require.Contains(t, err.Error(), "invalid DAH value 0")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("readDAHFromFile with empty file returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-empty")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create an empty DAH file
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte(""), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for empty DAH file")
-		require.Contains(t, err.Error(), "DAH file")
-		require.Contains(t, err.Error(), "is empty")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("readDAHFromFile with whitespace only returns error", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-whitespace")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create a DAH file with only whitespace
-		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("  \n\t  "), 0o600)
-		require.NoError(t, err)
-
-		// Try to read it
-		dah, err := f.readDAHFromFile(dahFile)
-		require.Error(t, err, "should return error for whitespace-only DAH file")
-		require.Contains(t, err.Error(), "DAH file")
-		require.Contains(t, err.Error(), "is empty")
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("cleanupExpiredFile removes invalid DAH file but keeps blob", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-cleanup-dah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Create a blob file
-		blobFile := filepath.Join(tempDir, "test.tx")
-		err = os.WriteFile(blobFile, []byte("blob content"), 0o600)
-		require.NoError(t, err)
-
-		// Create a DAH file with value 0
-		dahFile := filepath.Join(tempDir, "test.tx.dah")
-		err = os.WriteFile(dahFile, []byte("0"), 0o600)
-		require.NoError(t, err)
-
-		// Add to in-memory map
-		f.fileDAHsMu.Lock()
-		f.fileDAHs[blobFile] = 999
-		f.fileDAHsMu.Unlock()
-
-		// Run cleanup
-		f.cleanupExpiredFile(blobFile)
-
-		// Verify DAH file is removed
-		_, err = os.Stat(dahFile)
-		require.True(t, os.IsNotExist(err), "DAH file should be removed")
-
-		// Verify blob file still exists
-		_, err = os.Stat(blobFile)
-		require.NoError(t, err, "Blob file should still exist")
-
-		// Verify entry is removed from map
-		f.fileDAHsMu.Lock()
-		_, exists := f.fileDAHs[blobFile]
-		f.fileDAHsMu.Unlock()
-		require.False(t, exists, "Entry should be removed from map")
-	})
-
-	t.Run("loadDAHs handles invalid DAH files", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-load-dah-invalid")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		// Create some DAH files
-		validDAHFile := filepath.Join(tempDir, "valid.tx.dah")
-		err = os.WriteFile(validDAHFile, []byte("100"), 0o600)
-		require.NoError(t, err)
-
-		invalidDAHFile1 := filepath.Join(tempDir, "invalid1.tx.dah")
-		err = os.WriteFile(invalidDAHFile1, []byte("0"), 0o600)
-		require.NoError(t, err)
-
-		invalidDAHFile2 := filepath.Join(tempDir, "invalid2.tx.dah")
-		err = os.WriteFile(invalidDAHFile2, []byte(""), 0o600)
-		require.NoError(t, err)
-
-		// Create File struct directly to test loadDAHs without the New() function's
-		// fileCleanerOnce mechanism, which can prevent loadDAHs from running if another
-		// test has already registered a URL (package-level sync.Map is never cleared)
-		f := &File{
-			path:     tempDir,
-			logger:   ulogger.TestLogger{},
-			fileDAHs: make(map[string]uint32),
-		}
-
-		// Call loadDAHs directly
-		err = f.loadDAHs()
-		require.NoError(t, err)
-
-		// Verify valid DAH is loaded
-		validDAHKey := filepath.Join(tempDir, "valid.tx")
-		f.fileDAHsMu.Lock()
-		validDAH, exists := f.fileDAHs[validDAHKey]
-		f.fileDAHsMu.Unlock()
-		require.True(t, exists, "Valid DAH should be loaded")
-		require.Equal(t, uint32(100), validDAH)
-
-		// Verify invalid DAH file 1 is removed
-		_, err = os.Stat(invalidDAHFile1)
-		require.True(t, os.IsNotExist(err), "Invalid DAH file 1 should be removed")
-
-		// Verify invalid DAH file 2 is removed
-		_, err = os.Stat(invalidDAHFile2)
-		require.True(t, os.IsNotExist(err), "Invalid DAH file 2 should be removed")
-
-		// Verify invalid DAHs are not in map
-		f.fileDAHsMu.Lock()
-		_, exists1 := f.fileDAHs[filepath.Join(tempDir, "invalid1.tx")]
-		_, exists2 := f.fileDAHs[filepath.Join(tempDir, "invalid2.tx")]
-		f.fileDAHsMu.Unlock()
-		require.False(t, exists1, "Invalid DAH 1 should not be in map")
-		require.False(t, exists2, "Invalid DAH 2 should not be in map")
-	})
-
-	t.Run("SetDAH with 0 removes DAH file", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-setdah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := "test-key"
-		content := []byte("test content")
-
-		// Put a file
-		err = f.Set(context.Background(), []byte(key), fileformat.FileTypeTesting, content)
-		require.NoError(t, err)
-
-		// Set DAH to a valid value first
-		err = f.SetDAH(context.Background(), []byte(key), fileformat.FileTypeTesting, 100)
-		require.NoError(t, err)
-
-		// Verify DAH file exists
-		merged := options.MergeOptions(f.options, []options.FileOption{})
-		filename, err := merged.ConstructFilename(tempDir, []byte(key), fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		dahFile := filename + ".dah"
-		_, err = os.Stat(dahFile)
-		require.NoError(t, err, "DAH file should exist")
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), []byte(key), fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Verify DAH file is removed
-		_, err = os.Stat(dahFile)
-		require.True(t, os.IsNotExist(err), "DAH file should be removed when DAH is set to 0")
-
-		// Verify blob file still exists
-		_, err = os.Stat(filename)
-		require.NoError(t, err, "Blob file should still exist")
-	})
-
-	t.Run("writeDAHToFile validation prevents DAH 0", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-write-dah-zero")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		dahFile := filepath.Join(tempDir, "test.dah")
-
-		// Attempt to write DAH 0
-		err = f.writeDAHToFile(dahFile, 0)
-		require.Error(t, err, "Should error when attempting to write DAH 0")
-		require.Contains(t, err.Error(), "invalid DAH value 0")
-
-		// Verify no file was created
-		_, err = os.Stat(dahFile)
-		require.True(t, os.IsNotExist(err), "DAH file should not exist")
-
-		// Verify no temp file was left behind
-		_, err = os.Stat(dahFile + ".tmp")
-		require.True(t, os.IsNotExist(err), "Temp file should not exist")
-	})
-
-	t.Run("writeDAHToFile uses fsync", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-write-dah-fsync")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		dahFile := filepath.Join(tempDir, "test.dah")
-
-		// Write a valid DAH
-		err = f.writeDAHToFile(dahFile, 12345)
-		require.NoError(t, err)
-
-		// Verify file exists and contains correct value
-		content, err := os.ReadFile(dahFile)
-		require.NoError(t, err)
-		require.Equal(t, "12345", string(content))
-
-		// Verify no temp file was left behind
-		_, err = os.Stat(dahFile + ".tmp")
-		require.True(t, os.IsNotExist(err), "Temp file should be cleaned up")
-	})
 }

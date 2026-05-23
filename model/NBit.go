@@ -5,7 +5,7 @@ import (
 	"math/big"
 
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 type NBit [4]byte // nBits is 4 bytes array held internal in little endian format
@@ -23,7 +23,7 @@ func NewNBitFromSlice(nBits []byte) (*NBit, error) {
 }
 
 func NewNBitFromString(nBitStr string) (*NBit, error) {
-	nBits, err := utils.DecodeAndReverseHexString(nBitStr)
+	nBits, err := util.DecodeAndReverseHexString(nBitStr)
 	if err != nil {
 		return nil, errors.NewInvalidArgumentError("error decoding nBitStr ", err)
 	}
@@ -32,7 +32,7 @@ func NewNBitFromString(nBitStr string) (*NBit, error) {
 }
 
 func (b NBit) String() string {
-	return utils.ReverseAndHexEncodeSlice(b[:])
+	return util.ReverseAndHexEncodeSlice(b[:])
 }
 
 func (b NBit) MarshalJSON() ([]byte, error) {
@@ -40,7 +40,7 @@ func (b NBit) MarshalJSON() ([]byte, error) {
 }
 
 func (b NBit) UnmarshalJSON(data []byte) error {
-	nBits, err := utils.DecodeAndReverseHexString(string(data))
+	nBits, err := util.DecodeAndReverseHexString(string(data))
 	if err != nil {
 		return err
 	}
@@ -54,14 +54,36 @@ func (b NBit) CloneBytes() []byte {
 	return b[:]
 }
 
-// CalculateTarget from nBits returns the target as a big.Int
+// CalculateTarget from nBits returns the target as a big.Int.
+// Returns big.NewInt(0) for malformed nBits (negative-encoded or overflowing
+// 256 bits), matching SVNode's arith_uint256::SetCompact rejection
+// criteria. A zero target makes any positive hash fail the PoW comparison
+// and contributes zero chainwork — the safe semantic for a malformed value.
 func (b NBit) CalculateTarget() *big.Int {
 	nb := binary.LittleEndian.Uint32(b[:])
 
 	exponent := nb >> 24
 	mantissa := nb & 0x007FFFFF
 
-	// Invalid nBits
+	// Reject malformed encodings. The Bitcoin Protocol requires a non-zero mantissa
+	// for both negative and overflow flags — a zero mantissa just encodes
+	// the value zero, regardless of sign bit or exponent.
+	if mantissa != 0 {
+		// Negative-encoded: sign bit set in mantissa byte.
+		if nb&0x00800000 != 0 {
+			return big.NewInt(0)
+		}
+		// Overflow: target would exceed 2^256.
+		//   exponent > 34         → any non-zero mantissa overflows
+		//   mantissa > 0xff   + exponent > 33 → 9+ bits shifted by 240+
+		//   mantissa > 0xffff + exponent > 32 → 17+ bits shifted by 232+
+		if exponent > 34 ||
+			(mantissa > 0xff && exponent > 33) ||
+			(mantissa > 0xffff && exponent > 32) {
+			return big.NewInt(0)
+		}
+	}
+
 	if exponent <= 3 {
 		mantissa >>= 8 * (3 - exponent)
 		return big.NewInt(int64(mantissa))
@@ -76,11 +98,10 @@ func (b NBit) CalculateTarget() *big.Int {
 // CalculateDifficulty from nBits using the standard Bitcoin algorithm
 func (b NBit) CalculateDifficulty() *big.Float {
 	// This implementation follows the standard Bitcoin difficulty calculation
-	// as used in both Bitcoin Core and Bitcoin SV:
-	// https://github.com/bitcoin/bitcoin/blob/master/src/rpc/blockchain.cpp
+	// as used in SVNode:
 	// https://github.com/bitcoin-sv/bitcoin-sv/blob/master/src/rpc/blockchain.cpp
 	//
-	// The algorithm is identical in both implementations:
+	// The algorithm:
 	// double GetDifficulty(const CBlockIndex& blockindex) {
 	//     int nShift = (blockindex.nBits >> 24) & 0xff;
 	//     double dDiff = (double)0x0000ffff / (double)(blockindex.nBits & 0x00ffffff);

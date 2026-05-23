@@ -129,6 +129,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.inserted_at
 		,b.invalid
 		,b.processed_at
+		,b.median_time_past
 		FROM blocks b
 		WHERE invalid = false
 		ORDER BY chain_work DESC, peer_id ASC, id ASC
@@ -164,6 +165,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&insertedAt,
 		&blockHeaderMeta.Invalid,
 		&processedAt,
+		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBestBlockHeader", err)
@@ -193,10 +195,10 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, nil, errors.NewStorageError("failed to extract miner", err)
+			s.logger.Debugf("failed to extract miner in GetBestBlockHeader (block may be invalid): %v", err)
+		} else {
+			blockHeaderMeta.Miner = miner
 		}
-
-		blockHeaderMeta.Miner = miner
 	}
 
 	if processedAt != nil {

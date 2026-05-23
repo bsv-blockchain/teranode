@@ -1,4 +1,4 @@
-// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+// Package blockvalidation implements block validation for BSV Blockchain nodes in Teranode.
 //
 // This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
 // and processing transaction metadata. It is designed for high-performance operation at scale,
@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -45,12 +44,12 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -73,8 +72,8 @@ func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash
 	return args.Error(0)
 }
 
-func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
-	args := m.Called(ctx, block, blockHeight, peerID, baseURL)
+func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+	args := m.Called(ctx, block, blockHeight, peerID, baseURL, blockID)
 	return args.Error(0)
 }
 
@@ -98,6 +97,24 @@ var (
 	prevBlockHashStr = "000000000002d01c1fccc21636b607dfd930d31d01c3a62104612a1719011250"
 	bitsStr          = "1b04864c"
 )
+
+func TestGetCatchupStatusPopulatesCurrentHeightWhenNotCatchingUp(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	suite.Server.isCatchingUp.Store(false)
+
+	suite.MockBlockchain.
+		On("GetBestBlockHeader", mock.Anything).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 123, ID: 1}, nil).
+		Once()
+
+	resp, err := suite.Server.GetCatchupStatus(suite.Ctx, &blockvalidation_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.IsCatchingUp)
+	assert.Equal(t, uint32(123), resp.CurrentHeight)
+}
 
 func TestOneTransaction(t *testing.T) {
 	var err error
@@ -1005,7 +1022,7 @@ func Test_Start(t *testing.T) {
 	}
 
 	// Create a context with quick timeout since Start() blocks on GRPC server
-	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
 	readyCh := make(chan struct{})
@@ -1024,10 +1041,15 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+	// Clear the gRPC listen address to prevent port conflicts during testing
+	tSettings.BlockValidation.GRPCListenAddress = ""
 
 	// Create mock blockchain client that returns error
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(errors.New(errors.ERR_BLOCK_NOT_FOUND, "FSM not ready"))
+
+	// set the GRPC listen address to a random local port to avoid conflicts during testing
+	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
 
 	server := &Server{
 		logger:           logger,
@@ -1040,6 +1062,35 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "FSM not ready")
+	mockBlockchainClient.AssertExpectations(t)
+}
+
+// Test_Start_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func Test_Start_FSMContextCancellation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.GRPCListenAddress = ""
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+
+	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
+
+	server := &Server{
+		logger:           logger,
+		settings:         tSettings,
+		blockchainClient: mockBlockchainClient,
+	}
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
 }
 
@@ -1114,6 +1165,7 @@ func Test_BlockFound(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		// Mark block as existing
 		err := bv.SetBlockExists(&hash)
@@ -1146,6 +1198,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1188,6 +1241,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1228,6 +1282,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1306,11 +1361,10 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1351,11 +1405,10 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1454,11 +1507,10 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1526,11 +1578,10 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1559,7 +1610,7 @@ func Test_ValidateBlock(t *testing.T) {
 		resp, err := server.ValidateBlock(ctx, req)
 		require.Error(t, err) // ValidateBlock now returns error for bloom filter collection failures
 		require.Nil(t, resp)
-		require.Contains(t, err.Error(), "failed to collect necessary bloom filters")
+		require.Contains(t, err.Error(), "block is not valid")
 	})
 }
 
@@ -1586,6 +1637,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1606,9 +1658,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		require.NoError(t, err)
 
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)
@@ -1638,6 +1688,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1650,9 +1701,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 
 		// Invalid message that will cause a parsing error
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: []byte("invalid protobuf"),
-			},
+			Value: []byte("invalid protobuf"),
 		}
 
 		handler := server.consumerMessageHandler(ctx)
@@ -1675,19 +1724,26 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
-			logger:              logger,
-			settings:            tSettings,
-			blockFoundCh:        make(chan processBlockFound, 10),
+			logger:   logger,
+			settings: tSettings,
+			// Unbuffered: the inner blockHandler goroutine blocks on this send
+			// (no reader in the test), so the handler's select can only fire
+			// ctx.Done(). Without this, the buffered send returned immediately
+			// and racy select could pick errCh=nil.
+			blockFoundCh:        make(chan processBlockFound),
 			blockValidation:     bv,
 			stats:               gocore.NewStat("test"),
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		}
 
-		// Create a cancellable context
+		// Create a cancellable context, then cancel before invoking the handler
+		// so ctx.Done() is selectable for the very first iteration.
 		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 
 		kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
 			Hash: hashStr,
@@ -1697,15 +1753,10 @@ func Test_consumerMessageHandler(t *testing.T) {
 		require.NoError(t, err)
 
 		msg := &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Value: msgBytes,
-			},
+			Value: msgBytes,
 		}
 
 		handler := server.consumerMessageHandler(ctx)
-
-		// Cancel the context immediately
-		cancel()
 
 		err = handler(msg)
 		require.Error(t, err)

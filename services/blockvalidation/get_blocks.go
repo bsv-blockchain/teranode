@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -28,9 +29,16 @@ type workItem struct {
 
 // Result item represents completed work
 type resultItem struct {
-	block *model.Block
-	index int
-	err   error
+	block             *model.Block
+	index             int
+	err               error
+	contributingPeers map[string]struct{} // peers that provided subtree data for this block
+}
+
+// blockForValidation wraps a block with metadata about which peers contributed data
+type blockForValidation struct {
+	block             *model.Block
+	contributingPeers map[string]struct{}
 }
 
 // fetchBlocksConcurrently fetches blocks from a peer using a high-performance worker pool architecture.
@@ -51,7 +59,7 @@ type resultItem struct {
 //
 // Returns:
 //   - error: If fetching fails
-func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *CatchupContext, validateBlocksChan chan *model.Block, size *atomic.Int64) error {
+func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *CatchupContext, validateBlocksChan chan blockForValidation, size *atomic.Int64) error {
 	blockUpTo := catchupCtx.blockUpTo
 	baseURL := catchupCtx.baseURL
 	peerID := catchupCtx.peerID
@@ -65,7 +73,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	// Start tracing span for the entire operation
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchBlocksConcurrently",
 		tracing.WithParentStat(u.stats),
-		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchBlocksConcurrently][%s] starting high-performance pipeline for %d blocks from %s", blockUpTo.Hash().String(), len(blockHeaders), baseURL),
+		tracing.WithLogMessage(u.logger, "[catchup:fetchBlocksConcurrently][%s] starting high-performance pipeline for %d blocks from %s", blockUpTo.Hash().String(), len(blockHeaders), baseURL),
 	)
 	defer deferFn()
 
@@ -101,7 +109,20 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	// Start batch fetching and work distribution
 	g.Go(func() error {
 		defer close(workQueue)
-		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, peerID, baseURL, blockUpTo, largeBatchSize)
+
+		// In production, commonAncestorMeta is always set during catchup initialization
+		if catchupCtx == nil {
+			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] catchupCtx must not be nil", blockUpTo.Hash().String())
+		}
+
+		if catchupCtx.commonAncestorMeta == nil {
+			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] commonAncestorMeta must not be nil", blockUpTo.Hash().String())
+		}
+
+		// Calculate starting height from common ancestor
+		startingHeight := catchupCtx.commonAncestorMeta.Height + 1
+
+		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, peerID, baseURL, blockUpTo, largeBatchSize, startingHeight)
 	})
 
 	// Wait for all goroutines to complete
@@ -114,7 +135,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 }
 
 // batchFetchAndDistribute fetches blocks in large batches and immediately distributes them to workers
-func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, peerID string, baseURL string, blockUpTo *model.Block, batchSize int) error {
+func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, peerID string, baseURL string, blockUpTo *model.Block, batchSize int, startingHeight uint32) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "batchFetchAndDistribute",
 		tracing.WithParentStat(u.stats),
 	)
@@ -143,20 +164,17 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] expected %d blocks, got %d", blockUpTo.Hash().String(), len(batchHeaders), len(blocks))
 		}
 
-		// reverse the blocks to match the order of headers
-		for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
-			blocks[j], blocks[k] = blocks[k], blocks[j]
-		}
+		reverseBlocks(blocks)
 
-		// Verify each fetched block matches the expected header
-		for j, block := range blocks {
-			if block.Hash().String() != batchHeaders[j].Hash().String() {
-				return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s", blockUpTo.Hash().String(), j, batchHeaders[j].Hash().String(), block.Hash().String())
-			}
+		if err := verifyBlockHeaders(blocks, batchHeaders, blockUpTo); err != nil {
+			return err
 		}
 
 		// Immediately distribute blocks to workers
 		for _, block := range blocks {
+			// Set block height based on its position in the chain
+			block.Height = startingHeight + uint32(currentIndex)
+
 			select {
 			case workQueue <- workItem{
 				block: block,
@@ -191,7 +209,7 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 			}
 
 			// Fetch subtree data for this block
-			err := u.fetchSubtreeDataForBlock(ctx, work.block, peerID, baseURL)
+			contributingPeers, err := u.fetchSubtreeDataForBlock(ctx, work.block, peerID, baseURL)
 			if err != nil {
 				// Send result (even if error occurred)
 				result := resultItem{
@@ -211,8 +229,9 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 
 			// Send result
 			result := resultItem{
-				block: work.block,
-				index: work.index,
+				block:             work.block,
+				index:             work.index,
+				contributingPeers: contributingPeers,
 			}
 
 			select {
@@ -225,7 +244,7 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 }
 
 // orderedDelivery ensures blocks are delivered to validateBlocksChan in strict order
-func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan resultItem, validateBlocksChan chan<- *model.Block, totalBlocks int, blockUpTo *model.Block, size *atomic.Int64) error {
+func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan resultItem, validateBlocksChan chan<- blockForValidation, totalBlocks int, blockUpTo *model.Block, size *atomic.Int64) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(gCtx, "orderedDelivery",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:orderedDelivery][%s] starting ordered delivery for %d blocks", blockUpTo.Hash().String(), totalBlocks),
@@ -262,7 +281,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 					u.logger.Debugf("[catchup:orderedDelivery][%s] delivering block %s at index %d (received %d/%d)", blockUpTo.Hash().String(), orderedResult.block.Hash().String(), nextIndex, receivedCount, totalBlocks)
 
 					select {
-					case validateBlocksChan <- orderedResult.block:
+					case validateBlocksChan <- blockForValidation{block: orderedResult.block, contributingPeers: orderedResult.contributingPeers}:
 						delete(results, nextIndex)
 						nextIndex++
 						// Note: size counter is decremented by validateBlocksOnChannel after processing
@@ -292,18 +311,24 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 // fetchSubtreeDataForBlock fetches subtree and subtreeData for all subtrees in a block
 // and stores them in the subtreeStore for later use by block validation.
 // This function fetches both the subtree (for subtreeToCheck) and raw subtree data concurrently.
-func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, peerID, baseURL string) error {
+// When parallel fetching is enabled, subtrees are distributed across multiple peers at max height.
+// Returns a map of peer IDs that contributed subtree data for this block.
+func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(gCtx, "fetchSubtreeDataForBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchSubtreeDataForBlock][%s] fetching subtree data for block with %d subtrees", block.Hash().String(), len(block.Subtrees)),
+		tracing.WithLogMessage(u.logger, "[catchup:fetchSubtreeDataForBlock][%s] fetching subtree data for block with %d subtrees", block.Hash().String(), len(block.Subtrees)),
 	)
 	defer deferFn()
 
 	if len(block.Subtrees) == 0 {
 		u.logger.Debugf("[catchup:fetchSubtreeDataForBlock] Block %s has no subtrees, skipping", block.Hash().String())
 
-		return nil
+		return nil, nil
 	}
+
+	// Track which peers contributed subtree data for this block
+	var peersMu sync.Mutex
+	contributingPeers := make(map[string]struct{})
 
 	// Create error group for concurrent subtree fetching
 	g, ctx := errgroup.WithContext(ctx)
@@ -315,21 +340,55 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 	}
 	g.SetLimit(subtreeConcurrency)
 
+	// Get peer assignments for subtrees if parallel fetching is enabled
+	var peerAssignments []*PeerForSubtreeFetch
+	if u.settings.BlockValidation.CatchupParallelFetchEnabled && u.p2pClient != nil {
+		var err error
+		peerAssignments, err = DistributeSubtreesAcrossPeers(ctx, u.logger, u.p2pClient, peerID, baseURL, len(block.Subtrees))
+		if err != nil {
+			u.logger.Warnf("[catchup:fetchSubtreeDataForBlock][%s] Failed to distribute subtrees across peers: %v, using single peer", block.Hash().String(), err)
+			peerAssignments = nil
+		}
+	}
+
 	// Process each unique subtree concurrently
-	for _, subtreeHash := range block.Subtrees {
+	for i, subtreeHash := range block.Subtrees {
 		subtreeHashCopy := *subtreeHash // Capture for goroutine
+		subtreeIndex := i
+
+		// Determine which peer to use for this subtree
+		fetchPeerID := peerID
+		fetchBaseURL := baseURL
+		if peerAssignments != nil && subtreeIndex < len(peerAssignments) {
+			assignment := peerAssignments[subtreeIndex]
+			fetchPeerID = assignment.PeerID
+			fetchBaseURL = assignment.BaseURL
+		}
+
+		// Capture for goroutine
+		capturedPeerID := fetchPeerID
+		capturedBaseURL := fetchBaseURL
 
 		g.Go(func() error {
-			return u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, peerID, baseURL)
+			servingPeerID, err := u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, capturedPeerID, capturedBaseURL)
+			if err != nil {
+				return err
+			}
+			if servingPeerID != "" {
+				peersMu.Lock()
+				contributingPeers[servingPeerID] = struct{}{}
+				peersMu.Unlock()
+			}
+			return nil
 		})
 	}
 
 	// Wait for all subtree fetching to complete
 	if err := g.Wait(); err != nil {
-		return errors.NewServiceError("[catchup:fetchSubtreeDataForBlock] Failed to fetch subtree data for block %s", block.Hash().String(), err)
+		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataForBlock] Failed to fetch subtree data for block %s", block.Hash().String(), err)
 	}
 
-	return nil
+	return contributingPeers, nil
 }
 
 // fetchAndStoreSubtree fetches and stores only the subtree (for subtreeToCheck)
@@ -340,24 +399,26 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	)
 	defer deferFn()
 
-	dah := block.Height + u.settings.GlobalBlockHeightRetention
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	// Check if we already have the subtree
-	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	// Check if we already have the subtree, under either FileTypeSubtreeToCheck
+	// (peer-fetched, pending validation) or FileTypeSubtree (already validated).
+	// See findLocalSubtreeFile for why both must be consulted.
+	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
 	if err != nil {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Error checking subtree existence for %s: %v", subtreeHash.String(), err)
+		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
 	}
 
-	if subtreeExists {
+	if localExists {
 		u.logger.Debugf("[catchup:fetchAndStoreSubtree] Subtree already exists for %s, loading from store", subtreeHash.String())
 
-		// Load existing subtree from store
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+		// Load existing subtree from store under whichever file type was found
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], localFileType)
 		if err != nil {
 			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}
 
-		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
+		subtree, err := subtreeFromBytesWithMmap(subtreeBytes, u.settings.BlockValidation.SubtreeMmapDir)
 		if err != nil {
 			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to deserialize existing subtree for %s", subtreeHash.String(), err)
 		}
@@ -421,14 +482,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
 	}
 
-	// Don't report subtree fetch during catchup - wait for full validation
-	// Only report success after the entire block is validated
-	// This prevents inflating reputation for peers providing invalid chains
-	// if u.p2pClient != nil {
-	// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
-	// 		u.logger.Warnf("[fetchAndStoreSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
-	// 	}
-	// }
+	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers
 
 	return subtree, nil
 }
@@ -442,7 +496,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	)
 	defer deferFn()
 
-	dah := block.Height + u.settings.GlobalBlockHeightRetention
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
 	// Check if we already have the subtreeData
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -508,27 +562,90 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 }
 
 // fetchAndStoreSubtreeAndSubtreeData fetches both subtree and subtreeData for a single subtree hash
-// and stores them in the subtreeStore.
+// and stores them in the subtreeStore. If the primary peer fails, it will try alternative peers
+// at max height before giving up.
+// Returns the peer ID that actually served the data and any error.
 func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	peerID, baseURL string) error {
+	peerID, baseURL string) (string, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeAndSubtreeData",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeAndSubtreeData] fetching subtree and data for %s", subtreeHash.String()),
 	)
 	defer deferFn()
 
-	// First, fetch and store the subtree (or get it if it already exists)
+	// Try primary peer first
 	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL)
-	if err != nil {
-		return err
+	if err == nil {
+		// Primary peer succeeded for subtree, now try subtreeData
+		if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err == nil {
+			return peerID, nil // Success
+		}
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
+		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtreeData for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
+	} else {
+		// Check if error is local (not peer-related) - don't retry with other peers
+		if errors.IsLocalError(err) {
+			return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree for %s (not retrying with other peers)", subtreeHash.String(), err)
+		}
+		u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Primary peer %s failed to fetch subtree for %s: %v, trying alternatives", peerID, subtreeHash.String(), err)
 	}
 
-	// Then, fetch and store the subtreeData (if it doesn't already exist)
-	if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err != nil {
-		return err
+	// Primary peer failed, try alternative peers
+	var lastErr error = err
+	if u.p2pClient != nil {
+		alternativePeers, getPeersErr := GetPeersAtMaxHeight(ctx, u.logger, u.p2pClient, peerID)
+		if getPeersErr != nil {
+			u.logger.Warnf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Failed to get alternative peers: %v", getPeersErr)
+		} else if len(alternativePeers) > 0 {
+			u.logger.Infof("[catchup:fetchAndStoreSubtreeAndSubtreeData] Trying %d alternative peers for subtree %s", len(alternativePeers), subtreeHash.String())
+
+			for _, altPeer := range alternativePeers {
+				altPeerID := altPeer.ID.String()
+				altBaseURL := altPeer.DataHubURL
+
+				if altBaseURL == "" {
+					continue
+				}
+
+				u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Trying alternative peer %s for subtree %s", altPeerID, subtreeHash.String())
+
+				// Try to fetch subtree from alternative peer
+				subtree, err = u.fetchAndStoreSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
+				if err != nil {
+					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), err)
+					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtree %s (aborting peer retry)", subtreeHash.String(), err)
+					}
+					continue
+				}
+
+				// Subtree succeeded, try subtreeData
+				if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, altPeerID, altBaseURL); err != nil {
+					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtreeData %s: %v", altPeerID, subtreeHash.String(), err)
+					lastErr = err
+					// Don't continue trying other peers if it's a local error
+					if errors.IsLocalError(err) {
+						return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] Local error fetching subtreeData %s (aborting peer retry)", subtreeHash.String(), err)
+					}
+					continue
+				}
+
+				// Success with alternative peer
+				u.logger.Infof("[catchup:fetchAndStoreSubtreeAndSubtreeData] Successfully fetched subtree %s from alternative peer %s", subtreeHash.String(), altPeerID)
+				return altPeerID, nil
+			}
+		}
 	}
 
-	return nil
+	// All peers failed. errors.NewServiceError extracts the trailing error param as
+	// the wrapped error, so a "%v" placeholder for lastErr would render as
+	// %!v(MISSING). The wrapped error is preserved in the chain.
+	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
@@ -543,8 +660,14 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] fetching subtree from %s", url)
 
+	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
+	// streams more than this is malicious — fail fast rather than ReadAll into memory.
+	// This must be independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which
+	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
+	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
 	// Use the existing HTTP utility to fetch subtree
-	subtreeBytes, err := util.DoHTTPRequest(ctx, url)
+	subtreeBytes, err := util.DoHTTPRequestBounded(ctx, url, maxSubtreeBytes)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] failed to fetch subtree from %s", url, err)
 	}
@@ -598,8 +721,10 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 
-	// Use the existing HTTP utility to fetch subtree data
-	subtreeDataReader, err := util.DoHTTPRequestBodyReader(ctx, url)
+	// Retry on 503 — peer's asset service may reject under admission control while it
+	// generates the file on-demand from Aerospike. The retry loop honors the peer's
+	// Retry-After header.
+	subtreeDataReader, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] failed to fetch subtree data from %s", url, err)
 	}
@@ -711,14 +836,25 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 			hash.String(), len(blockBytes))
 	}
 
-	// Don't report block fetch during catchup - wait for full validation
-	// Only report success after the block is validated to prevent
-	// inflating reputation for peers providing invalid chains
-	// if u.p2pClient != nil && peerID != "" {
-	// 	if err := u.p2pClient.ReportValidBlock(ctx, peerID, hash.String()); err != nil {
-	// 		u.logger.Warnf("[fetchSingleBlock][%s] failed to report valid block: %s", hash.String(), err.Error())
-	// 	}
-	// }
+	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers
 
 	return block, nil
+}
+
+// reverseBlocks reverses a slice of blocks in place.
+func reverseBlocks(blocks []*model.Block) {
+	for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
+		blocks[j], blocks[k] = blocks[k], blocks[j]
+	}
+}
+
+// verifyBlockHeaders checks that each fetched block's hash matches the expected header.
+func verifyBlockHeaders(blocks []*model.Block, headers []*model.BlockHeader, blockUpTo *model.Block) error {
+	for j, block := range blocks {
+		if block.Hash().String() != headers[j].Hash().String() {
+			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s",
+				blockUpTo.Hash().String(), j, headers[j].Hash().String(), block.Hash().String())
+		}
+	}
+	return nil
 }

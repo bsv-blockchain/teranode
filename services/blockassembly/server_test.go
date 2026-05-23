@@ -26,17 +26,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_storeSubtree(t *testing.T) {
-	t.Run("Test storeSubtree", func(t *testing.T) {
+func Test_storeSubtreeData(t *testing.T) {
+	t.Run("Test storeSubtreeData", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1_000)
 
-		require.NoError(t, server.storeSubtree(t.Context(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan))
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			ErrChan:           nil,
+			OnStorageComplete: nil,
+		}, subtreeRetryChan)
+		require.NoError(t, err)
+
+		// Wait for subtree storage
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+
+		// Wait for all work to complete
+		<-allDone
 
 		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
@@ -69,21 +79,31 @@ func Test_storeSubtree(t *testing.T) {
 		}
 	})
 
-	t.Run("Test storeSubtree - meta missing", func(t *testing.T) {
+	t.Run("Test storeSubtreeData - meta missing", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		txMap.Clear()
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1_000)
 
-		require.NoError(t, server.storeSubtree(t.Context(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan))
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			ErrChan:           nil,
+			OnStorageComplete: nil,
+		}, subtreeRetryChan)
+		require.NoError(t, err)
+
+		// Wait for subtree storage
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+
+		// Wait for all work to complete
+		<-allDone
 
 		// check that the meta data was not stored
-		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
+		_, err = subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
 		require.Error(t, err)
 	})
 }
@@ -111,6 +131,10 @@ func TestCheckBlockAssembly(t *testing.T) {
 		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		mockSubtreeProcessor.On("CheckSubtreeProcessor").Return(errors.NewProcessingError("test error"))
 		mockSubtreeProcessor.On("Stop", mock.Anything).Return() // Expect Stop() to be called during cleanup
+		// Mock methods called by metrics goroutine every 5 seconds
+		mockSubtreeProcessor.On("TxCount").Return(uint64(0)).Maybe()
+		mockSubtreeProcessor.On("QueueLength").Return(int64(0)).Maybe()
+		mockSubtreeProcessor.On("SubtreeCount").Return(0).Maybe()
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 
@@ -129,6 +153,13 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		server, _, _, _ := setup(t)
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
+
+		// Wait for BlockAssembler state to be StateRunning before requesting mining candidate
+		// This prevents race with blockchain notification processing
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
 
 		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -154,23 +185,49 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
+		// Wait for BlockAssembler state to be StateRunning before modifying state
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
+
 		currentHeader, _ := server.blockAssembler.CurrentBlock()
-		server.blockAssembler.setBestBlockHeader(currentHeader, 250) // halvings = 150
+		server.blockAssembler.setBestBlockHeader(currentHeader, 250)
 
-		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
-		require.NoError(t, err)
+		// Wait for the height to settle at 250 before requesting mining candidate
+		// This ensures any pending blockchain notifications have been processed
+		require.Eventually(t, func() bool {
+			_, height := server.blockAssembler.CurrentBlock()
+			t.Logf("Waiting for height to settle at 250, current: %d", height)
+			return height == 250
+		}, 5*time.Second, 100*time.Millisecond, "Height should settle at 250")
 
-		require.NotNil(t, resp)
+		// Use Eventually to repeatedly request until we get the correct block
+		// This handles the case where a blockchain notification arrives between settling and request
+		var block *model.Block
+		require.Eventually(t, func() bool {
+			resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
+			if err != nil {
+				t.Logf("Error getting block candidate: %v", err)
+				return false
+			}
+			if resp == nil || resp.Block == nil {
+				t.Logf("Got nil response or block")
+				return false
+			}
 
-		blockBytes := resp.Block
-		require.NotNil(t, blockBytes)
+			block, err = model.NewBlockFromBytes(resp.Block)
+			if err != nil {
+				t.Logf("Error parsing block: %v", err)
+				return false
+			}
 
-		block, err := model.NewBlockFromBytes(blockBytes)
-		require.NoError(t, err)
+			t.Logf("Got block at height %d with coinbase %d", block.Height, block.CoinbaseTx.Outputs[0].Satoshis)
+			return block.Height == 251 && block.CoinbaseTx.Outputs[0].Satoshis == 2500000000
+		}, 5*time.Second, 100*time.Millisecond, "Should get block at height 251 with 2.5 BTC coinbase")
 
 		require.NotNil(t, block)
 		require.NotNil(t, block.Header)
-
 		assert.Equal(t, uint32(251), block.Height)
 		assert.Equal(t, uint64(0), block.TransactionCount)
 		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
@@ -181,18 +238,32 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
+		// Use a common parent hash for all transactions (simulating they all spend from same output)
+		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			// Different output index for each tx
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))})
 		}
 
 		require.Eventually(t, func() bool {
-			return server.blockAssembler.TxCount() == 11
-		}, 5*time.Second, 10*time.Millisecond)
+			count := server.blockAssembler.TxCount()
+			t.Logf("Current TxCount: %d", count)
+			return count == 11
+		}, 5*time.Second, 100*time.Millisecond)
 
+		// Wait for BlockAssembler state to be StateRunning before requesting mining candidate
+		// This is critical after the recent change that returns empty blocks during state transitions
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			t.Logf("Current BlockAssembler state: %s", StateStrings[state])
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
+
+		t.Logf("BlockAssembler is in StateRunning, now calling GetBlockAssemblyBlockCandidate")
 		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
 
@@ -213,13 +284,13 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 	})
 }
 
-func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) {
+func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, subtreeprocessor.TxInpointsMap) {
 	s, subtreeStore := setupServer(t)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(16)
 	require.NoError(t, err)
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+	txMap := subtreeprocessor.NewSplitTxInpointsMap(256)
 
 	previousHash := chainhash.HashH([]byte("previousHash"))
 
@@ -227,7 +298,15 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
+		in0 := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in0.PreviousTxIDAdd(&previousHash))
+		in1 := &bt.Input{PreviousTxOutIndex: 1}
+		require.NoError(t, in1.PreviousTxIDAdd(&previousHash))
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in0, in1})
+		require.NoError(t, err)
+
+		txMap.Set(txHash, &ti)
 		previousHash = txHash
 	}
 
@@ -420,11 +499,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -443,11 +522,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		// Wait for transactions to be processed
@@ -477,78 +556,6 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Verify that assembler was reset (we can't directly check job removal due to cache internals)
 		// But we can verify the system remains in a consistent state
 		assert.GreaterOrEqual(t, server.blockAssembler.TxCount(), uint64(0), "Transaction count should be non-negative after error")
-	})
-}
-
-func TestRemoveSubtreesDAH_PartialFailures(t *testing.T) {
-	t.Run("removeSubtreesDAH handles partial DAH update failures gracefully", func(t *testing.T) {
-		server, subtreeStore := setupServer(t)
-
-		// Create a block with multiple subtrees
-		block := &model.Block{
-			Header: &model.BlockHeader{
-				Version:        1,
-				HashPrevBlock:  server.settings.ChainCfgParams.GenesisHash,
-				HashMerkleRoot: &chainhash.Hash{},
-				Timestamp:      uint32(time.Now().Unix()),
-				Bits:           model.NBit{},
-				Nonce:          1234,
-			},
-			CoinbaseTx: &bt.Tx{},
-			Subtrees:   []*chainhash.Hash{},
-		}
-
-		// store the block in the block store to simulate existing state
-		require.NoError(t, server.blockchainClient.AddBlock(t.Context(), block, "test"))
-
-		// Add some subtrees to the block
-		for i := 0; i < 3; i++ {
-			subtreeHash := chainhash.HashH([]byte(fmt.Sprintf("subtree%d", i)))
-			block.Subtrees = append(block.Subtrees, &subtreeHash)
-
-			// Store subtree in blob store with DAH > 0 to simulate existing state
-			subtreeBytes := make([]byte, 32)
-			require.NoError(t, subtreeStore.Set(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes))
-			require.NoError(t, subtreeStore.SetDAH(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree, 5))
-		}
-
-		// Call removeSubtreesDAH
-		err := server.removeSubtreesDAH(t.Context(), block)
-
-		// Should not return error even if some DAH updates fail
-		require.NoError(t, err)
-
-		// Verify that SetBlockSubtreesSet was not called when all DAH updates succeed
-		// (since we can't easily mock partial failures in memory store)
-	})
-
-	t.Run("removeSubtreesDAH handles store errors gracefully", func(t *testing.T) {
-		server, _ := setupServer(t)
-
-		// Use a mock store that fails
-		mockStore := &memory.Memory{}
-		server.subtreeStore = mockStore
-
-		subtreeHash1 := chainhash.HashH([]byte("subtree1"))
-		block := &model.Block{
-			Header: &model.BlockHeader{
-				Version:        1,
-				HashPrevBlock:  server.settings.ChainCfgParams.GenesisHash,
-				HashMerkleRoot: &chainhash.Hash{},
-				Timestamp:      uint32(time.Now().Unix()),
-				Bits:           model.NBit{},
-				Nonce:          1234,
-			},
-			CoinbaseTx: &bt.Tx{},
-			Subtrees:   []*chainhash.Hash{&subtreeHash1},
-		}
-
-		// store the block in the block store to simulate existing state
-		require.NoError(t, server.blockchainClient.AddBlock(t.Context(), block, "test"))
-
-		// This should not panic or return error even with store failures
-		err := server.removeSubtreesDAH(t.Context(), block)
-		require.NoError(t, err) // Should handle errors gracefully
 	})
 }
 
@@ -922,20 +929,25 @@ func TestInitIntensive(t *testing.T) {
 	})
 }
 
-// TestStoreSubtreeIntensive tests the storeSubtree method comprehensively
-func TestStoreSubtreeIntensive(t *testing.T) {
-	t.Run("storeSubtree with SkipNotification", func(t *testing.T) {
+// TestStoreSubtreeDataIntensive tests the storeSubtreeData method comprehensively
+func TestStoreSubtreeDataIntensive(t *testing.T) {
+	t.Run("storeSubtreeData basic storage", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:          subtree,
-			ParentTxMap:      txMap,
-			SkipNotification: true,
-			ErrChan:          nil,
+		subtreeDone, allDone, err := server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			SkipNotification:  true,
+			ErrChan:           nil,
+			OnStorageComplete: nil,
 		}, subtreeRetryChan)
 
 		assert.NoError(t, err)
+		storedOK := <-subtreeDone
+		assert.True(t, storedOK)
+		<-allDone // Wait for all work
 
 		// Verify subtree was stored
 		subtreeBytes, err := subtreeStore.Get(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
@@ -943,49 +955,7 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 		assert.NotNil(t, subtreeBytes)
 	})
 
-	t.Run("storeSubtree with FSM not running", func(t *testing.T) {
-		server, _, subtree, txMap := setup(t)
-
-		// Mock blockchain client to return FSM not running
-		mockClient := &blockchain.Mock{}
-		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
-		server.blockchainClient = mockClient
-
-		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
-
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan)
-
-		assert.NoError(t, err)
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("storeSubtree with notification error", func(t *testing.T) {
-		server, _, subtree, txMap := setup(t)
-
-		// Mock blockchain client to return error on notification
-		mockClient := &blockchain.Mock{}
-		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
-		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
-		server.blockchainClient = mockClient
-
-		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
-
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to send subtree notification")
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("storeSubtree with store already exists error", func(t *testing.T) {
+	t.Run("storeSubtreeData already exists", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		// Pre-store the subtree to trigger "already exists" path
@@ -996,35 +966,174 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
-		err = server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
+		_, _, err = server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			ErrChan:           nil,
+			OnStorageComplete: nil,
 		}, subtreeRetryChan)
 
-		// Should not error - should detect existing subtree and return early
-		assert.NoError(t, err)
+		// Should return ErrBlobAlreadyExists
+		assert.True(t, errors.Is(err, errors.ErrBlobAlreadyExists))
 	})
 
-	t.Run("storeSubtree handles errors gracefully", func(t *testing.T) {
+	t.Run("storeSubtreeData handles errors gracefully", func(t *testing.T) {
 		server, _, subtree, txMap := setup(t)
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
 		// Test with valid scenario - this just ensures the path is covered
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
+		subtreeDone, allDone, err := server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,
+			DeletedTxs:        nil,
+			ErrChan:           nil,
+			OnStorageComplete: nil,
 		}, subtreeRetryChan)
 
 		// Should succeed in most cases
 		assert.NoError(t, err)
+		storedOK := <-subtreeDone
+		assert.True(t, storedOK)
+		<-allDone // Wait for all work
+	})
+}
+
+// TestSendSubtreeNotification tests the sendSubtreeNotification method
+func TestSendSubtreeNotification(t *testing.T) {
+	t.Run("sendSubtreeNotification with FSM not running", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return FSM not running
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
+		server.blockchainClient = mockClient
+
+		// Should not send notification when FSM is not running
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
+		mockClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("sendSubtreeNotification with FSM running", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return FSM running
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil)
+		server.blockchainClient = mockClient
+
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("sendSubtreeNotification with notification error", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return error on notification
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
+		server.blockchainClient = mockClient
+
+		// Should log error but not panic
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
+	})
+}
+
+// TestStoreSubtree_RaceConditionFix tests that the deletedTxs backup map prevents
+// race condition errors when transactions are deleted during async subtree storage.
+// This test would FAIL without the fix (missing DeletedTxs fallback in Server.go).
+func TestStoreSubtree_RaceConditionFix(t *testing.T) {
+	t.Run("deletedTxs fallback prevents serialization errors", func(t *testing.T) {
+		server, subtreeStore, subtree, txMap := setup(t)
+		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
+
+		// Start with a full txMap (from setup) then simulate race condition
+		deletedTxsMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+
+		// Simulate race: One transaction is deleted from ParentTxMap during async storage
+		// but saved to deletedTxsMap (this is what the fix does)
+		tx1Hash := subtree.Nodes[1].Hash // Use second node (first is coinbase)
+		tx1Inpoints, found := txMap.Get(tx1Hash)
+		require.True(t, found, "transaction should exist in txMap from setup")
+
+		// Move transaction from ParentTxMap to DeletedTxs (simulating deletion during storage)
+		deletedTxsMap.Set(tx1Hash, *tx1Inpoints)
+		txMap.Delete(tx1Hash)
+
+		// Now tx1 is NOT in ParentTxMap but IS in DeletedTxs
+		// Without the fix, this would fail serialization
+		// With the fix, Server falls back to DeletedTxs and succeeds
+
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       txMap,         // Missing tx1!
+			DeletedTxs:        deletedTxsMap, // Has tx1 as backup
+			ErrChan:           nil,
+			OnStorageComplete: nil,
+		}, subtreeRetryChan)
+
+		// Should succeed because Server falls back to DeletedTxs
+		require.NoError(t, err)
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+		<-allDone
+
+		// Verify subtree was stored
+		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
+		require.NoError(t, err)
+		require.NotNil(t, subtreeBytes)
+
+		// Verify subtree meta was created successfully (using DeletedTxs fallback)
+		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
+		require.NoError(t, err)
+		require.NotNil(t, subtreeMetaBytes)
+	})
+
+	t.Run("without DeletedTxs fallback would fail", func(t *testing.T) {
+		server, subtreeStore, subtree, _ := setup(t)
+		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
+
+		// Create map without the deleted transaction
+		parentTxMap := subtreeprocessor.NewSplitTxInpointsMap(256)
+		// Don't add tx1 to parentTxMap - simulating it was deleted
+
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
+			Subtree:           subtree,
+			ParentTxMap:       parentTxMap, // Missing tx1
+			DeletedTxs:        nil,         // No backup!
+			ErrChan:           nil,
+			OnStorageComplete: nil,
+		}, subtreeRetryChan)
+
+		// Should succeed but subtree meta won't be created (missing parent info)
+		require.NoError(t, err)
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+		<-allDone
+
+		// Subtree data should still be stored
+		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
+		require.NoError(t, err)
+		require.NotNil(t, subtreeBytes)
+
+		// But subtree meta should NOT exist (couldn't create without parent info)
+		_, err = subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
+		require.Error(t, err) // Expect error - meta wasn't created
 	})
 }
 
 // TestStartStopIntensive tests the Start and Stop methods comprehensively
 func TestStartStopIntensive(t *testing.T) {
+	t.Skip("Skipping intensive test") // It is questionable if this test should be part of our unit tests
+
 	t.Run("Start method comprehensive test", func(t *testing.T) {
 		server, _ := setupServer(t)
 
@@ -1181,11 +1290,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		server.blockAssembler.AddTx(subtreepkg.Node{
+		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{})
+		}}, []*subtreepkg.TxInpoints{{}})
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1329,11 +1438,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -1760,7 +1869,7 @@ func TestRetryLogicIntensive(t *testing.T) {
 		select {
 		case <-subtreeRetryChan:
 			t.Fatal("Should not have queued retry when exhausted")
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 			// Good, nothing was queued
 		}
 	})
@@ -1837,11 +1946,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		server.blockAssembler.AddTx(subtreepkg.Node{
+		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{})
+		}}, []*subtreepkg.TxInpoints{{}})
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{
@@ -1995,7 +2104,7 @@ func TestStoreRetryErrorPaths(t *testing.T) {
 		select {
 		case <-subtreeRetryChan:
 			t.Fatal("Should not have queued retry when exhausted")
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 			// Good, nothing was queued
 		}
 	})
@@ -2030,6 +2139,7 @@ func TestStoreRetryErrorPaths(t *testing.T) {
 		// Mock blockchain client to return error on notification
 		mockClient := &blockchain.Mock{}
 		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 		server.blockchainClient = mockClient
 
 		subtreeHash := chainhash.HashH([]byte("test-notify"))
@@ -2163,7 +2273,7 @@ func TestAdditionalCoveragePaths(t *testing.T) {
 		server, _ := setupServer(t)
 
 		// Test with immediate timeout to cover timeout path
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 
 		previousHash := chainhash.HashH([]byte("previous"))

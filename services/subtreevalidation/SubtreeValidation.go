@@ -34,6 +34,7 @@ package subtreevalidation
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -98,22 +99,12 @@ func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 }
 
 // GetSubtreeExists checks if a subtree exists in the local storage.
-//
-// This method queries the local storage to determine whether a specific subtree
-// has already been processed and stored. It's used to optimize processing by
-// avoiding duplicate work on subtrees that have already been validated.
-//
-// Parameters:
-//   - ctx: Context for cancellation and request-scoped values
-//   - subtreeHash: The hash identifier of the subtree to check
-//
-// Returns:
-//   - bool: Always false in the current implementation
-//   - error: Always nil in the current implementation
-//
-// TODO: Implement actual local storage lookup for subtree existence.
-func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
-	return false, nil
+func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if u.subtreeStore == nil {
+		return false, nil
+	}
+
+	return u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 }
 
 // txMetaCacheOps defines the interface for transaction metadata cache operations.
@@ -135,6 +126,23 @@ type txMetaCacheOps interface {
 	// This method allows direct storage of pre-serialized metadata for performance optimization.
 	// Returns an error if the cache operation fails.
 	SetCacheFromBytes(key, txMetaBytes []byte) error
+
+	// SetCacheMulti stores multiple cache entries in a single call.
+	// Implementations are expected to fan out across the cache's bucket-shard locks so that
+	// a single Kafka message containing many entries acquires each touched bucket lock once
+	// instead of once per entry. Critical for txmetaHandler throughput under heavy load.
+	SetCacheMulti(keys [][]byte, values [][]byte) error
+
+	// SetCacheMultiSequential is the partition-aware twin of SetCacheMulti: writes
+	// all keys on the caller's goroutine without errgroup fan-out. The txmeta
+	// handler uses this because it already has parallelism via per-partition
+	// Kafka consumer goroutines, so the inner cache fan-out is pure overhead.
+	SetCacheMultiSequential(keys [][]byte, values [][]byte) error
+
+	// SetCacheMultiSequentialWithHashes is SetCacheMultiSequential with caller-
+	// supplied xxhash values, so the receiver can pass the on-wire v2 hash
+	// straight through without recomputing. hashes[i] MUST equal xxhash.Sum64(keys[i]).
+	SetCacheMultiSequentialWithHashes(keys [][]byte, values [][]byte, hashes []uint64) error
 }
 
 // SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
@@ -159,6 +167,47 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
 
+	return nil
+}
+
+// SetTxMetaCacheMulti stores multiple transaction metadata entries in the cache in a single
+// call. The txmeta Kafka handler invokes this once per shard-batch, so the underlying cache
+// acquires each touched per-bucket lock once per shard-batch instead of once per entry.
+// Returns nil if the underlying store does not implement txMetaCacheOps.
+func (u *Server) SetTxMetaCacheMulti(_ context.Context, keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMulti(keys, values)
+	}
+	return nil
+}
+
+// SetTxMetaCacheMultiSequential stores multiple txmeta entries via the cache's
+// sequential write path (no errgroup fan-out). Used by the Kafka txmeta
+// handler, which is itself running on a per-partition goroutine — pushing
+// parallelism inside the cache call would just thrash the scheduler.
+func (u *Server) SetTxMetaCacheMultiSequential(_ context.Context, keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMultiSequential(keys, values)
+	}
+	return nil
+}
+
+// SetTxMetaCacheMultiSequentialWithHashes stores entries using caller-supplied
+// xxhash values. Used by the v2 txmeta handler to skip re-hashing on receive.
+// Returns nil if the underlying store does not implement txMetaCacheOps.
+func (u *Server) SetTxMetaCacheMultiSequentialWithHashes(_ context.Context, keys [][]byte, values [][]byte, hashes []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
+		return cache.SetCacheMultiSequentialWithHashes(keys, values, hashes)
+	}
 	return nil
 }
 
@@ -285,6 +334,13 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 // readTxFromReader reads and validates a single transaction from an io.ReadCloser.
 // It includes panic recovery for handling potential runtime errors from the go-bt library.
 //
+// Stays on the standard tx.ReadFrom path (no arena). The returned *bt.Tx is
+// consumed by the caller after this function returns, so script bytes must be
+// heap-owned — an arena allocated here would have to be Put before return, at
+// which point the script slices would alias soon-to-be-reused arena memory.
+// The arena variant is reserved for the bulk subtree-stream decode where the
+// entire batch of txs is consumed before the arena is returned to the pool.
+//
 // Parameters:
 //   - body: ReadCloser containing the transaction data
 //
@@ -368,13 +424,11 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	txMeta, err = u.validatorClient.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
+	if err != nil && !errors.Is(err, errors.ErrTxConflicting) {
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
+	}
 	if err != nil {
-		if errors.Is(err, errors.ErrTxConflicting) {
-			// conflicting transaction, which has been saved, but not spent
-			u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
-		} else {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
-		}
+		u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// Not recoverable, returning processing error
@@ -431,13 +485,9 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx is frozen", txHash.String())
 			}
 
-			counterConflictingTxMeta, err := u.utxoStore.GetMeta(gCtx, &counterConflictingTxHash)
-			if err != nil {
+			counterConflictingTxMeta := &meta.Data{}
+			if err := u.utxoStore.GetMeta(gCtx, &counterConflictingTxHash, counterConflictingTxMeta); err != nil {
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
-			}
-
-			if counterConflictingTxMeta == nil {
-				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx meta is nil", txHash.String())
 			}
 
 			counterConflictingTxMetas[idx] = counterConflictingTxMeta
@@ -500,6 +550,16 @@ type ValidateSubtree struct {
 	// When true, validation stops at the first error for quick failure detection.
 	// When false, validation attempts to process all transactions to collect comprehensive error information.
 	AllowFailFast bool
+}
+
+type metaSliceItem struct {
+	fee         uint64
+	sizeInBytes uint64
+	coinbase    bool
+	conflicting bool
+	creating    bool
+	isSet       bool
+	txInpoints  subtreepkg.TxInpoints
 }
 
 // ValidateSubtreeInternal performs the actual validation of a subtree.
@@ -609,10 +669,12 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	// in the retry attempts, only the tx hashes that are missing will be retried, not the whole subtree
-	txMetaSlice := make([]*meta.Data, len(txHashes))
+	txMetaSlice := make([]metaSliceItem, len(txHashes))
 
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
-		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		if attempt > 1 {
+			prometheusSubtreeValidationValidateSubtreeRetry.Inc()
+		}
 
 		var logMsg string
 
@@ -627,7 +689,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
-		u.logger.Debugf(logMsg)
+		u.logger.Debugf("%s", logMsg)
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
@@ -636,16 +698,8 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if err != nil {
 			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
-				select {
-				case <-ctx.Done():
-					break
-				case <-time.After(retrySleepDuration):
-					break
-				case <-time.After(10 * time.Millisecond):
-					if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
-						// break early - this is now a priority request. what the hell are we doing waiting around?
-						break
-					}
+				if waitErr := u.waitForRetryOrPriority(ctx, v.SubtreeHash.String(), retrySleepDuration); waitErr != nil {
+					return nil, waitErr
 				}
 
 				continue
@@ -680,7 +734,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			missingTxHashesCompacted := make([]utxo.UnresolvedMetaData, 0, missed)
 
 			for idx, txHash := range txHashes {
-				if txMetaSlice[idx] == nil && !txHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
+				if !txMetaSlice[idx].isSet && !txHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, utxo.UnresolvedMetaData{
 						Hash: txHash,
 						Idx:  idx,
@@ -716,9 +770,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	start = gocore.CurrentTime()
 
-	var txMeta *meta.Data
-
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
+
+	seen := make(map[chainhash.Hash]struct{}, len(txHashes))
 
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
@@ -731,23 +785,28 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			continue
 		}
 
-		txMeta = txMetaSlice[idx]
-		if txMeta == nil {
+		if _, dup := seen[txHash]; dup {
+			return nil, errors.NewBlockInvalidError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+		}
+
+		seen[txHash] = struct{}{}
+
+		if !txMetaSlice[idx].isSet {
 			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
-		if txMeta.IsCoinbase {
+		if txMetaSlice[idx].coinbase {
 			// Not recoverable, returning TxInvalid error
 			return nil, errors.NewTxInvalidError("[ValidateSubtreeInternal][%s] invalid subtree index for coinbase tx %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		// finally add the transaction hash and fee to the subtree
-		if err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes); err != nil {
+		if err = subtree.AddNode(txHash, txMetaSlice[idx].fee, txMetaSlice[idx].sizeInBytes); err != nil {
 			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
 		}
 
 		// mark the transaction as conflicting if it is
-		if txMeta.Conflicting {
+		if txMetaSlice[idx].conflicting {
 			if err = subtree.AddConflictingNode(txHash); err != nil {
 				return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add conflicting node to subtree", v.SubtreeHash.String(), err)
 			}
@@ -756,79 +815,16 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 
-		if err = subtreeMeta.SetTxInpoints(subtreeIdx, txMeta.TxInpoints); err != nil {
+		if err = subtreeMeta.SetTxInpoints(subtreeIdx, txMetaSlice[idx].txInpoints); err != nil {
 			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
 		}
 	}
 
 	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start)
 
-	// does the merkle tree give the correct root?
-	merkleRoot := subtree.RootHash()
-	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		return nil, errors.NewSubtreeInvalidError("subtree root hash does not match", err)
+	if err = u.storeSubtreeFiles(ctx, stat, &v.SubtreeHash, subtree, subtreeMeta); err != nil {
+		return nil, err
 	}
-
-	//
-	// store subtree meta in store
-	//
-	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
-
-	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
-	if err != nil {
-		return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String(), err)
-	}
-
-	start = gocore.CurrentTime()
-
-	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
-
-	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
-
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], fileformat.FileTypeSubtreeMeta, completeSubtreeMetaBytes, options.WithDeleteAt(dah))
-
-	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
-
-	if err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
-		} else {
-			return nil, errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
-		}
-	}
-
-	//
-	// store subtree in store
-	//
-	u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
-
-	completeSubtreeBytes, err := subtree.Serialize()
-	if err != nil {
-		return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String(), err)
-	}
-
-	start = gocore.CurrentTime()
-
-	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
-
-	err = u.subtreeStore.Set(ctx,
-		merkleRoot[:],
-		fileformat.FileTypeSubtree,
-		completeSubtreeBytes,
-		options.WithDeleteAt(dah),
-	)
-
-	stat.NewStat("8. storeSubtree").AddTime(start)
-
-	if err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
-		} else {
-			return nil, errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
-		}
-	}
-
-	_ = u.SetSubtreeExists(&v.SubtreeHash)
 
 	// only set this on no errors
 	prometheusSubtreeValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
@@ -843,6 +839,115 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	return subtree, nil
 }
 
+func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string, retrySleepDuration time.Duration) error {
+	if retrySleepDuration <= 0 || u.isPrioritySubtreeCheckActive(subtreeHash) {
+		return nil
+	}
+
+	timer := time.NewTimer(retrySleepDuration)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.NewContextCanceledError("[ValidateSubtreeInternal][%s] context canceled while waiting to retry: %v", subtreeHash, ctx.Err())
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			if u.isPrioritySubtreeCheckActive(subtreeHash) {
+				return nil
+			}
+		}
+	}
+}
+
+func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta) error {
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
+		tracing.WithParentStat(stat),
+		tracing.WithDebugLogMessage(u.logger, "[storeSubtreeFiles][%s] called", subtreeHash.String()),
+	)
+	defer deferFn()
+
+	// does the merkle tree give the correct root?
+	merkleRoot := subtree.RootHash()
+	if !merkleRoot.IsEqual(subtreeHash) {
+		return errors.NewSubtreeInvalidError("subtree root hash does not match")
+	}
+
+	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		//
+		// store subtree meta in store
+		//
+		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree meta", subtreeHash.String())
+
+		completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
+		if err != nil {
+			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", subtreeHash.String(), err)
+		}
+
+		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", subtreeHash.String())
+
+		if err = u.subtreeStore.Set(gCtx,
+			merkleRoot[:],
+			fileformat.FileTypeSubtreeMeta,
+			completeSubtreeMetaBytes,
+			options.WithDeleteAt(dah),
+		); err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", subtreeHash.String())
+			} else {
+				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", subtreeHash.String(), err)
+			}
+		}
+
+		return nil
+	})
+
+	g.Go(func() error {
+		//
+		// store subtree in store
+		//
+		u.logger.Debugf("[ValidateSubtreeInternal][%s] serialize subtree", subtreeHash.String())
+
+		completeSubtreeBytes, err := subtree.Serialize()
+		if err != nil {
+			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
+		}
+
+		u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
+
+		if err = u.subtreeStore.Set(gCtx,
+			merkleRoot[:],
+			fileformat.FileTypeSubtree,
+			completeSubtreeBytes,
+			options.WithDeleteAt(dah),
+		); err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", subtreeHash.String())
+			} else {
+				return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", subtreeHash.String(), err)
+			}
+		}
+
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	_ = u.SetSubtreeExists(subtreeHash)
+
+	return nil
+}
+
 // getSubtreeTxHashes retrieves transaction hashes for a subtree from a remote source.
 func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseURL string) ([]chainhash.Hash, error) {
 	if baseURL == "" {
@@ -853,14 +958,26 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
 
-	// check whether we have a subtreeToCheck file and use that instead of doing a network request
-	subtreeToCheckBytes, err := u.subtreeStore.Get(spanCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-	if err == nil && subtreeToCheckBytes != nil {
-		u.logger.Debugf("[getSubtreeTxHashes][%s] found subtreeToCheck file in store, using it instead of network request", subtreeHash.String())
+	// Use the local subtree file (under either FileTypeSubtreeToCheck or
+	// FileTypeSubtree) instead of a network request — see findLocalSubtreeFile.
+	localFileType, localExists, err := u.findLocalSubtreeFile(spanCtx, *subtreeHash)
+	if err != nil {
+		return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to check local subtree store", subtreeHash.String(), err)
+	}
+	if localExists {
+		localBytes, getErr := u.subtreeStore.Get(spanCtx, subtreeHash[:], localFileType)
+		if getErr != nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to read local subtree (%s)", subtreeHash.String(), localFileType.String(), getErr)
+		}
+		if localBytes == nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] local subtree (%s) returned nil bytes despite Exists=true", subtreeHash.String(), localFileType.String())
+		}
 
-		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeToCheckBytes)
+		u.logger.Debugf("[getSubtreeTxHashes][%s] found local subtree file in store (%s), using it instead of network request", subtreeHash.String(), localFileType.String())
+
+		subtree, err := subtreepkg.NewSubtreeFromBytes(localBytes)
 		if err != nil {
-			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from subtreeToCheck bytes", subtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from local bytes", subtreeHash.String(), err)
 		}
 
 		// return the transaction hashes from the subtree
@@ -875,8 +992,15 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	url := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
 	u.logger.Debugf("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), url)
 
+	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
+	// streams more than this is malicious — fail fast rather than ReadAll into memory.
+	// This must be independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which
+	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
+	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
 	// TODO add the metric for how long this takes
-	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
+	// body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
+	subtreeBytes, err := util.DoHTTPRequestBounded(spanCtx, url, maxSubtreeBytes)
 	if err != nil {
 		// check whether this is a 404 error
 		if errors.Is(err, errors.ErrNotFound) {
@@ -888,27 +1012,28 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request on host %s", subtreeHash.String(), baseURL, err)
 	}
-	defer body.Close()
+	// defer body.Close()
 
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 
 	start = gocore.CurrentTime()
-	buffer := make([]byte, chainhash.HashSize)
+	hashBuffer := make([]byte, chainhash.HashSize)
 
 	// Use pooled bufio.Reader
-	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
-	bufferedReader.Reset(body)
-	defer func() {
-		bufferedReader.Reset(nil)
-		bufioReaderPool.Put(bufferedReader)
-	}()
+	// bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	// bufferedReader.Reset(body)
+	// defer func() {
+	// 	bufferedReader.Reset(nil)
+	// 	bufioReaderPool.Put(bufferedReader)
+	// }()
+	buf := bytes.NewReader(subtreeBytes)
 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 
 	for {
-		n, err := io.ReadFull(bufferedReader, buffer)
+		n, err := io.ReadFull(buf, hashBuffer)
 		if n > 0 {
-			txHashes = append(txHashes, chainhash.Hash(buffer))
+			txHashes = append(txHashes, chainhash.Hash(hashBuffer))
 		}
 
 		if err != nil {
@@ -974,7 +1099,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 // Returns:
 //   - error: Any error encountered during retrieval or validation
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree,
-	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32,
+	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []metaSliceItem, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:processMissingTransactions",
 		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
@@ -1023,6 +1148,12 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		firstErrorOnce   sync.Once
 	)
 
+	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
+	// can read mtpStore[h] without locking and without making gRPC calls.
+	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
+		return errors.NewProcessingError("[processMissingTransactions][%s] failed to pre-load MTP store: %v", subtreeHash.String(), err)
+	}
+
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
@@ -1065,10 +1196,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
 
-						// return the error, so that the caller can handle it
-						if errors.Is(err, errors.ErrTxInvalid) {
-							return err
-						}
+						return err
 					} else {
 						// If the error is not a policy error, we log it as a processing error
 						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1084,7 +1212,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 					missedMu.Unlock()
 					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), tx.TxIDChainHash().String())
 				} else {
-					if txMetaSlice[txIdx] != nil {
+					if txMetaSlice[txIdx].isSet {
 						u.logger.Debugf("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
 						errorsFound.Add(1)
 
@@ -1095,7 +1223,15 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						return nil
 					}
 
-					txMetaSlice[txIdx] = txMeta
+					txMetaSlice[txIdx] = metaSliceItem{
+						fee:         txMeta.Fee,
+						sizeInBytes: txMeta.SizeInBytes,
+						coinbase:    txMeta.IsCoinbase,
+						conflicting: txMeta.Conflicting,
+						creating:    txMeta.Creating,
+						isSet:       true,
+						txInpoints:  txMeta.TxInpoints,
+					}
 				}
 
 				return nil
@@ -1170,7 +1306,9 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 			// get the whole subtree from the other peer
 			url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
 
-			body, subtreeDataErr := util.DoHTTPRequestBodyReader(ctx, url)
+			// Retry on 503 — peer's asset service may be admission-rejecting under load
+			// (asset_concurrency_subtree_data_create cap). Other errors fail through immediately.
+			body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 			if subtreeDataErr != nil {
 				// Peer cannot provide subtree data - report as invalid subtree
 				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, "peer_cannot_provide_subtree_data")
@@ -1202,7 +1340,16 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 						// load the subtree data, making sure to validate it against the subtree txs
 						// this is less efficient than reading straight to disk with SetFromReader, but we need to validate the
 						// data before storing it on disk
-						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, body)
+						// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+						// defer the pool return so a panic / future early return still releases the reader,
+						// matching the pattern used at check_block_subtrees.go:201 and the second callsite below.
+						bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+						bufferedReader.Reset(body)
+						defer func() {
+							bufferedReader.Reset(nil) // clear reference before returning to pool
+							bufioReaderPool.Put(bufferedReader)
+						}()
+						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufferedReader)
 						_ = body.Close()
 						if err != nil {
 							u.logger.Errorf("[validateSubtree][%s] failed to create subtree data from reader: %v", subtreeHash.String(), err)
@@ -1660,7 +1807,14 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	}
 	defer subtreeDataReader.Close()
 
-	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataReader)
+	// Use pooled buffered reader to reduce syscalls and avoid per-call 1MB buffer allocation.
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(subtreeDataReader)
+	defer func() {
+		bufferedReader.Reset(nil) // clear reference before returning to pool
+		bufioReaderPool.Put(bufferedReader)
+	}()
+	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
 		return nil, err
 	}
@@ -1774,139 +1928,4 @@ func (u *Server) isPrioritySubtreeCheckActive(subtreeHash string) bool {
 	active, ok := u.prioritySubtreeCheckActiveMap[subtreeHash]
 
 	return ok && active
-}
-
-// setPauseProcessing pauses the Kafka consumer and acquires the distributed pause lock.
-//
-// This method coordinates pausing of subtree processing across all pods in the cluster by:
-// 1. Pausing the Kafka consumer to stop fetching new subtree messages (prevents handler blocking)
-// 2. Acquiring a distributed lock via the quorum system for cross-pod coordination
-// 3. Setting the local atomic flag for fast local checks
-//
-// The Kafka consumer pause is superior to blocking in the handler because:
-// - Heartbeats continue to be sent (no risk of session timeout)
-// - No messages are held unprocessed
-// - Handler threads are not blocked
-//
-// The distributed lock is kept alive with periodic heartbeat updates and is automatically
-// released on context cancellation or if the pod crashes.
-//
-// To prevent indefinite pauses that could halt cluster-wide subtree processing, this method
-// enforces a maximum pause duration of 5 minutes. If the pause exceeds this duration, the
-// context will be cancelled automatically. The pause duration is tracked via Prometheus metrics
-// to enable monitoring and alerting on abnormally long pauses.
-//
-// Parameters:
-//   - ctx: Context for cancellation and request-scoped values
-//
-// Returns:
-//   - func(): Release function to explicitly release the pause lock and resume the consumer
-//   - error: Error if the distributed lock cannot be acquired
-func (u *Server) setPauseProcessing(ctx context.Context) (func(), error) {
-	// Create a context with timeout to prevent indefinite pauses
-	// Default to 5 minutes if not configured
-	maxPauseDuration := u.settings.SubtreeValidation.PauseTimeout
-	if maxPauseDuration == 0 {
-		maxPauseDuration = 5 * time.Minute
-	}
-	pauseCtx, cancelPause := context.WithTimeout(ctx, maxPauseDuration)
-
-	// Track when the pause started for metrics
-	pauseStartTime := time.Now()
-	// Pause the Kafka consumer first to stop receiving new messages
-	if u.subtreeConsumerClient != nil {
-		u.subtreeConsumerClient.PauseAll()
-		u.logger.Infof("[setPauseProcessing] Paused Kafka subtree consumer")
-	}
-
-	// Start goroutine to log periodic pause messages
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-pauseCtx.Done():
-				return
-			case <-ticker.C:
-				u.logger.Warnf("[setPauseProcessing] subtree validation paused (elapsed: %.0fs, max: %.0fs)", time.Since(pauseStartTime).Seconds(), maxPauseDuration.Seconds())
-			}
-		}
-	}()
-
-	// If quorum not initialized, just do local pause with consumer paused
-	if q == nil {
-		u.logger.Warnf("[setPauseProcessing] Quorum not initialized - falling back to local-only pause")
-		u.pauseSubtreeProcessing.Store(true)
-		return func() {
-			// Record pause duration when released
-			pauseDuration := time.Since(pauseStartTime).Seconds()
-			prometheusSubtreeValidationPauseDuration.Observe(pauseDuration)
-			u.logger.Infof("[setPauseProcessing] Pause duration: %.2f seconds", pauseDuration)
-
-			cancelPause()
-			u.pauseSubtreeProcessing.Store(false)
-			if u.subtreeConsumerClient != nil {
-				u.subtreeConsumerClient.ResumeAll()
-				u.logger.Infof("[setPauseProcessing] Resumed Kafka subtree consumer (local-only)")
-			}
-		}, nil
-	}
-
-	// Acquire distributed lock for cross-pod coordination with timeout
-	releaseLock, err := q.AcquirePauseLock(pauseCtx)
-	if err != nil {
-		cancelPause()
-		// If lock acquisition fails, resume the consumer
-		if u.subtreeConsumerClient != nil {
-			u.subtreeConsumerClient.ResumeAll()
-			u.logger.Warnf("[setPauseProcessing] Failed to acquire distributed lock, resumed Kafka consumer")
-		}
-		return noopFunc, err
-	}
-
-	u.pauseSubtreeProcessing.Store(true)
-	u.logger.Infof("[setPauseProcessing] Subtree processing paused across all pods (consumer paused, distributed lock acquired)")
-
-	// Track if resume was already called to prevent double-resume
-	resumed := &atomic.Bool{}
-
-	// Monitor for timeout in background and force resume if exceeded
-	go func() {
-		<-pauseCtx.Done()
-		if pauseCtx.Err() == context.DeadlineExceeded {
-			u.logger.Errorf("[setPauseProcessing] Pause exceeded maximum duration of %v - forcing consumer resume to prevent indefinite pause", maxPauseDuration)
-
-			// Force resume the consumer to prevent it being stuck forever
-			if resumed.CompareAndSwap(false, true) {
-				u.pauseSubtreeProcessing.Store(false)
-				releaseLock()
-				if u.subtreeConsumerClient != nil {
-					u.subtreeConsumerClient.ResumeAll()
-					u.logger.Warnf("[setPauseProcessing] TIMEOUT: Force-resumed Kafka subtree consumer after %v timeout", maxPauseDuration)
-				}
-			}
-		}
-	}()
-
-	return func() {
-		// Only resume if not already resumed by timeout goroutine
-		if !resumed.CompareAndSwap(false, true) {
-			u.logger.Debugf("[setPauseProcessing] Consumer already resumed by timeout, skipping normal resume")
-			return
-		}
-
-		// Record pause duration when released
-		pauseDuration := time.Since(pauseStartTime).Seconds()
-		prometheusSubtreeValidationPauseDuration.Observe(pauseDuration)
-		u.logger.Infof("[setPauseProcessing] Pause duration: %.2f seconds", pauseDuration)
-
-		cancelPause()
-		u.pauseSubtreeProcessing.Store(false)
-		releaseLock()
-		if u.subtreeConsumerClient != nil {
-			u.subtreeConsumerClient.ResumeAll()
-			u.logger.Infof("[setPauseProcessing] Resumed Kafka subtree consumer and released distributed lock")
-		}
-	}, nil
 }

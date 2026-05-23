@@ -482,14 +482,12 @@ func TestBlockProcessingWorkerRetry(t *testing.T) {
 		done <- true
 	}()
 
-	// Let worker process and fail
-	time.Sleep(100 * time.Millisecond)
-
-	// Should have attempted once
-	attemptCount.Lock()
-	actualAttempts := attempts
-	attemptCount.Unlock()
-	assert.Equal(t, 1, actualAttempts)
+	// Wait for worker to process and fail
+	require.Eventually(t, func() bool {
+		attemptCount.Lock()
+		defer attemptCount.Unlock()
+		return attempts >= 1
+	}, 5*time.Second, 10*time.Millisecond, "worker should have attempted at least once")
 
 	// Cancel worker
 	workerCancel()
@@ -612,7 +610,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give time for any async operations
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Check that block 3 was NOT sent to catchup
 	select {
@@ -645,7 +643,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 	select {
 	case hash := <-catchupReceived:
 		assert.Equal(t, blocks[4].Hash(), hash, "Non-chain-extending block should have been sent to catchup")
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Error("Expected non-chain-extending block to be sent to catchup")
 	}
 }

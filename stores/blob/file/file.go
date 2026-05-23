@@ -27,28 +27,68 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/debugflags"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/semaphore"
 )
 
 const checksumExtension = ".sha256"
+
+// fsyncMode controls how aggressively the file store flushes data to stable storage
+// during atomic publication. Set via the `fsyncMode` URL parameter.
+//
+//   - fsyncModeFull (default): fsync the temp file, then fsync the parent directory
+//     after rename. Correct on ext4/xfs/btrfs even across a crash; required for the
+//     atomic-publication guarantee on those filesystems.
+//   - fsyncModeData: fsync the temp file only; skip the parent-directory fsync. Final
+//     file content is durable but the directory entry of the freshly renamed name can
+//     be lost across a crash on Linux. Useful on filesystems where directory fsync is
+//     expensive or unsupported (notably NFS-backed paths) while still preserving the
+//     content of already-published files.
+//   - fsyncModeNone: skip both fsyncs. The rename remains atomic from the perspective
+//     of concurrent readers, but neither the file content nor its directory entry is
+//     guaranteed durable across a crash. Operators who choose this opt out of crash
+//     safety in exchange for throughput; only appropriate when the host filesystem
+//     provides its own durability guarantees or when the data is regenerable.
+type fsyncMode uint8
+
+const (
+	fsyncModeFull fsyncMode = iota
+	fsyncModeData
+	fsyncModeNone
+)
+
+func parseFsyncMode(s string) (fsyncMode, error) {
+	switch strings.ToLower(s) {
+	case "", "full":
+		return fsyncModeFull, nil
+	case "data":
+		return fsyncModeData, nil
+	case "none":
+		return fsyncModeNone, nil
+	default:
+		return fsyncModeFull, errors.NewConfigurationError("[File] invalid fsyncMode %q (must be full|data|none)", s)
+	}
+}
 
 // File implements the blob.Store interface using the local filesystem for storage.
 // It provides a robust, persistent blob storage solution with features like automatic
@@ -74,19 +114,38 @@ type File struct {
 	logger ulogger.Logger
 	// options contains default options for blob operations
 	options *options.Options
-	// fileDAHs maps filenames to their Delete-At-Height values for expiration tracking
-	fileDAHs map[string]uint32
-	// fileDAHsMu protects concurrent access to the fileDAHs map
-	fileDAHsMu sync.Mutex
-	// fileDAHsCtxCancel is used to stop the DAH cleanup background process on close
-	fileDAHsCtxCancel context.CancelFunc
 	// currentBlockHeight tracks the current blockchain height for DAH processing
 	currentBlockHeight atomic.Uint32
 	// persistSubDir is an optional subdirectory for organization within the base path
 	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient longtermStore
-	cleanupCh      chan struct{}
+	// blobDeletionScheduler is used to schedule blob deletions via blockchain service
+	blobDeletionScheduler options.BlobDeletionScheduler
+	// storeType identifies which blob store this is
+	storeType storetypes.BlobStoreType
+	// fsyncMode controls fsync behaviour during atomic publication; see fsyncMode docs.
+	fsyncMode fsyncMode
+}
+
+func (s *File) debugEnabled() bool {
+	if !debugflags.FileEnabled() || s == nil || s.logger == nil {
+		return false
+	}
+
+	return s.logger.LogLevel() <= int(gocore.DEBUG)
+}
+
+func (s *File) debugf(format string, args ...interface{}) {
+	if !s.debugEnabled() {
+		return
+	}
+
+	s.logger.Debugf(format, args...)
+}
+
+func formatKeyHex(key []byte) string {
+	return util.ReverseAndHexEncodeSlice(key)
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -108,18 +167,16 @@ type longtermStore interface {
 // the write permit is held for the entire streaming write operation.
 type semaphoreReadCloser struct {
 	io.ReadCloser
+	once sync.Once
 }
 
 func (r *semaphoreReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	// Only release the semaphore permit if the underlying close was successful.
-	// This provides natural idempotency: subsequent calls will fail at the OS level
-	// (file already closed) and won't release the permit again, avoiding the
-	// possible overhead of using a sync.Once to ensure the permit is released exactly once.
-	if err == nil {
-		releaseReadPermit()
-	}
-	return err
+	defer r.once.Do(releaseReadPermit)
+	// Always release the semaphore permit exactly once, even if close fails.
+	// The permit represents the right to have an open file, and once we attempt
+	// to close (regardless of success), we're done with that file operation.
+	// Using sync.Once ensures idempotent Close() calls don't double-release.
+	return r.ReadCloser.Close()
 }
 
 // Semaphore configuration constants
@@ -145,7 +202,7 @@ const (
 //    should be well under the system limit to account for other file descriptors
 //    (network sockets, log files, etc.). Default: 768 + 256 = 1024.
 //    ALL file operations MUST be protected by semaphores, including those in background
-//    goroutines (loadDAHs, cleanup), to ensure ulimit protection is comprehensive.
+//    cleanup goroutines, to ensure ulimit protection is comprehensive.
 //
 // 2. INITIALIZATION REQUIREMENT:
 //    InitSemaphores() MUST be called in main() before ANY file store operations begin.
@@ -160,15 +217,7 @@ const (
 //    - Calling it before any file operations that use the semaphores
 //    - Not testing the initialization function in the same suite as code using it
 //
-// 4. INTERNAL VARIANTS PATTERN:
-//    To avoid nested semaphore acquisition (which reduces effective capacity and wastes
-//    ulimit protection), helper functions have two variants:
-//    - Public versions (e.g., readDAHFromFile): acquire semaphore for standalone/background use
-//    - Internal versions (e.g., readDAHFromFile_internal): no semaphore, for use within
-//      already-protected contexts (API operations like SetFromReader that hold semaphores)
-//    This ensures every file operation is protected exactly once, maximizing ulimit protection.
-//
-// 5. SEPARATE READ/WRITE SEMAPHORES:
+// 4. SEPARATE READ/WRITE SEMAPHORES:
 //    Using separate semaphores prevents deadlocks where write operations holding the
 //    write semaphore are blocked waiting for pipe data, while the operations that
 //    would provide that data (ProcessSubtree reads) cannot acquire read slots because
@@ -357,8 +406,6 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	return newStore(logger, storeURL, opts...)
 }
 
-var fileCleanerOnce sync.Map
-
 func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
@@ -380,7 +427,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	}
 
-	options := options.NewStoreOptions(opts...)
+	storeOpts := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
 		val, err := strconv.ParseInt(hashPrefix, 10, 32)
@@ -388,7 +435,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
 
-		options.HashPrefix = int(val)
+		storeOpts.HashPrefix = int(val)
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
@@ -397,494 +444,73 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
 
-		options.HashPrefix = -int(val)
+		storeOpts.HashPrefix = -int(val)
 	}
 
 	// Parse disableDAH URL parameter
 	// This can be set via URL (?disableDAH=true/false) or via StoreOption (WithDisableDAH(true/false))
 	// URL parameter takes precedence over StoreOption (bidirectional override)
 	if disableDAH := storeURL.Query().Get("disableDAH"); disableDAH != "" {
-		options.DisableDAH = disableDAH == "true"
+		storeOpts.DisableDAH = disableDAH == "true"
 	}
 
-	if len(options.SubDirectory) > 0 {
-		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
+	parsedFsyncMode, err := parseFsyncMode(storeURL.Query().Get("fsyncMode"))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(storeOpts.SubDirectory) > 0 {
+		if err := os.MkdirAll(filepath.Join(path, storeOpts.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
 
-	fileDAHsCtx, fileDAHsCtxCancel := context.WithCancel(context.Background())
-
 	fileStore := &File{
-		path:              path,
-		logger:            logger,
-		options:           options,
-		fileDAHs:          make(map[string]uint32),
-		fileDAHsCtxCancel: fileDAHsCtxCancel,
-		persistSubDir:     options.PersistSubDir,
-		cleanupCh:         make(chan struct{}, 1),
+		path:                  path,
+		logger:                logger,
+		options:               storeOpts,
+		persistSubDir:         storeOpts.PersistSubDir,
+		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
+		storeType:             storeOpts.StoreType,
+		fsyncMode:             parsedFsyncMode,
 	}
 
 	// Check if longterm storage options are provided
-	if options.PersistSubDir != "" {
+	if storeOpts.PersistSubDir != "" {
 		// Validate PersistSubDir doesn't contain path traversal sequences
-		if strings.Contains(options.PersistSubDir, "..") {
+		if strings.Contains(storeOpts.PersistSubDir, "..") {
 			return nil, errors.NewInvalidArgumentError("[File] PersistSubDir contains path traversal sequence")
 		}
 
 		// Create persistent subdirectory
-		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(path, storeOpts.PersistSubDir), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)
 		}
 
 		// Initialize longterm storage client if URL is provided
-		if options.LongtermStoreURL != nil {
+		if storeOpts.LongtermStoreURL != nil {
 			var err error
 
-			fileStore.longtermClient, err = newStore(logger, options.LongtermStoreURL)
+			fileStore.longtermClient, err = newStore(logger, storeOpts.LongtermStoreURL)
 			if err != nil {
 				return nil, errors.NewStorageError("[File] failed to create longterm client", err)
 			}
 		}
 	}
 
-	if options.BlockHeightCh != nil {
+	if storeOpts.BlockHeightCh != nil {
 		go func() {
 			for {
-				select {
-				case <-fileDAHsCtx.Done():
-					return
-				case blockHeight := <-options.BlockHeightCh:
-					fileStore.SetCurrentBlockHeight(blockHeight)
-				}
+				fileStore.SetCurrentBlockHeight(<-storeOpts.BlockHeightCh)
 			}
 		}()
 	}
-
-	_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
-	if !loaded { // i.e. it was stored and not loaded
-		// load dah's in the background and start the dah cleaner
-		go func() {
-			if err := fileStore.loadDAHs(); err != nil {
-				fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
-			}
-		}()
-	}
-
-	// start the dah cleaner
-	go fileStore.dahCleaner(fileDAHsCtx)
 
 	return fileStore, nil
 }
 
 func (s *File) SetCurrentBlockHeight(height uint32) {
 	s.currentBlockHeight.Store(height)
-
-	select {
-	case s.cleanupCh <- struct{}{}:
-	default: // Channel is full; we are already cleaning up.
-	}
-}
-
-func (s *File) loadDAHs() error {
-	s.logger.Infof("[File] Loading file DAHs: %s", s.path)
-
-	// Clean up any leftover .dah.tmp files from incomplete writes
-	// Only remove files older than 10 minutes to avoid interfering with active writes
-	tmpFiles, err := findFilesByExtension(s.path, "dah.tmp")
-	if err == nil && len(tmpFiles) > 0 {
-		now := time.Now()
-		cleanupThreshold := 10 * time.Minute
-		var cleaned int
-
-		for _, tmpFile := range tmpFiles {
-			// Use anonymous function to create scope for defer statements.
-			// In Go, defer inside a loop doesn't execute until the outer function returns,
-			// which would cause semaphore permits to accumulate and not be released until
-			// the entire loop completes. The anonymous function ensures defer executes
-			// after each iteration, properly releasing permits and preventing resource exhaustion.
-			func() {
-				// Protect file stat operation
-				ctx := context.Background()
-				if err := acquireReadPermit(ctx); err != nil {
-					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
-					return
-				}
-				defer releaseReadPermit()
-
-				info, err := os.Stat(tmpFile)
-				if err != nil {
-					return
-				}
-
-				// Check if file is older than the threshold
-				if now.Sub(info.ModTime()) > cleanupThreshold {
-					// Protect file removal operation
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					err := os.Remove(tmpFile)
-					if err != nil && !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-					} else {
-						cleaned++
-					}
-				}
-			}()
-		}
-
-		if cleaned > 0 {
-			s.logger.Infof("[File] Cleaned up %d leftover .dah.tmp files (older than %v)", cleaned, cleanupThreshold)
-		}
-	}
-
-	// Clean up any leftover general .tmp files from incomplete SetFromReader writes
-	// Only remove files older than 10 minutes to avoid interfering with active writes
-	generalTmpFiles, err := findFilesByExtension(s.path, ".tmp")
-	if err == nil && len(generalTmpFiles) > 0 {
-		now := time.Now()
-		cleanupThreshold := 10 * time.Minute
-		var cleaned int
-
-		for _, tmpFile := range generalTmpFiles {
-			// Skip .dah.tmp files (already handled above) and .sha256.tmp files (hash temp files)
-			if strings.HasSuffix(tmpFile, ".dah.tmp") || strings.HasSuffix(tmpFile, ".sha256.tmp") {
-				continue
-			}
-
-			func() {
-				ctx := context.Background()
-				if err := acquireReadPermit(ctx); err != nil {
-					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
-					return
-				}
-				defer releaseReadPermit()
-
-				info, err := os.Stat(tmpFile)
-				if err != nil {
-					return
-				}
-
-				// Check if file is older than the threshold
-				if now.Sub(info.ModTime()) > cleanupThreshold {
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					err := os.Remove(tmpFile)
-					if err != nil && !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-					} else {
-						cleaned++
-					}
-				}
-			}()
-		}
-
-		if cleaned > 0 {
-			s.logger.Infof("[File] Cleaned up %d leftover .tmp files (older than %v)", cleaned, cleanupThreshold)
-		}
-	}
-
-	// get all files in the directory that end with .dah
-	files, err := findFilesByExtension(s.path, ".dah")
-	if err != nil {
-		return errors.NewStorageError("[File] failed to find DAH files", err)
-	}
-
-	var dah uint32
-
-	for _, fileName := range files {
-		// Use anonymous function to create scope for defer statements.
-		// In Go, defer inside a loop doesn't execute until the outer function returns,
-		// which would cause semaphore permits to accumulate and not be released until
-		// the entire loop completes. The anonymous function ensures defer executes
-		// after each iteration, properly releasing permits and preventing resource exhaustion.
-		func() {
-			if fileName[len(fileName)-4:] != ".dah" {
-				return
-			}
-
-			dah, err = s.readDAHFromFile(fileName)
-			if err != nil {
-				// Log the error but continue processing other files
-				s.logger.Warnf("[File] error reading DAH file %s: %v", fileName, err)
-
-				// If it's an invalid DAH file (0 or corrupt), remove it
-				var terr *errors.Error
-				if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
-					s.logger.Warnf("[File] removing invalid DAH file during initialization: %s", fileName)
-					// Protect file removal operation
-					ctx := context.Background()
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					removeErr := os.Remove(fileName)
-					if removeErr != nil && !os.IsNotExist(removeErr) {
-						s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName)
-					}
-				}
-				return
-			}
-
-			// This should not happen anymore with the validation in readDAHFromFile
-			if dah == 0 {
-				s.logger.Warnf("[File] unexpected DAH value 0 for file %s", fileName)
-				return
-			}
-
-			s.fileDAHsMu.Lock()
-			s.fileDAHs[fileName[:len(fileName)-4]] = dah
-			s.fileDAHsMu.Unlock()
-		}()
-	}
-
-	return nil
-}
-
-// readDAHFromFile_internal reads a DAH value from file WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore or be in a context where protection isn't needed.
-func (s *File) readDAHFromFile_internal(fileName string) (uint32, error) {
-	// read the dah
-	dahBytes, err := os.ReadFile(fileName)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, errors.NewNotFoundError("[File] DAH file %s not found", fileName)
-		}
-
-		return 0, errors.NewStorageError("[File] failed to read DAH file", err)
-	}
-
-	// Trim whitespace and validate content
-	dahStr := strings.TrimSpace(string(dahBytes))
-	if dahStr == "" {
-		return 0, errors.NewProcessingError("[File] DAH file %s is empty", fileName)
-	}
-
-	dah, err := strconv.ParseUint(dahStr, 10, 32)
-	if err != nil {
-		return 0, errors.NewProcessingError("[File] failed to parse DAH from %s: %s", fileName, dahStr)
-	}
-
-	// Validate DAH value - should never be 0
-	if dah == 0 {
-		return 0, errors.NewProcessingError("[File] invalid DAH value 0 in file %s", fileName)
-	}
-
-	return uint32(dah), nil
-}
-
-// readDAHFromFile reads a DAH value from file WITH semaphore protection.
-// Use this for background operations or when caller doesn't hold a semaphore.
-func (s *File) readDAHFromFile(fileName string) (uint32, error) {
-	ctx := context.Background()
-	if err := acquireReadPermit(ctx); err != nil {
-		return 0, err
-	}
-	defer releaseReadPermit()
-
-	return s.readDAHFromFile_internal(fileName)
-}
-
-// writeDAHToFile_internal writes a DAH value to file WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore.
-func (s *File) writeDAHToFile_internal(dahFilename string, dah uint32) error {
-	// Validate DAH value before writing
-	if dah == 0 {
-		return errors.NewProcessingError("[File] attempted to write invalid DAH value 0 to file %s", dahFilename)
-	}
-
-	dahContent := []byte(strconv.FormatUint(uint64(dah), 10))
-
-	// Write directly to the file
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err := os.WriteFile(dahFilename, dahContent, 0644); err != nil {
-		return errors.NewStorageError("[File][%s] failed to write DAH to file", dahFilename, err)
-	}
-
-	return nil
-}
-
-// writeDAHToFile writes a DAH value to file WITH semaphore protection.
-// Use this when caller doesn't already hold a semaphore.
-func (s *File) writeDAHToFile(dahFilename string, dah uint32) error {
-	ctx := context.Background()
-	if err := acquireWritePermit(ctx); err != nil {
-		return err
-	}
-	defer releaseWritePermit()
-
-	return s.writeDAHToFile_internal(dahFilename, dah)
-}
-
-func (s *File) dahCleaner(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.cleanupCh:
-			s.cleanupExpiredFiles()
-		}
-	}
-}
-
-func (s *File) cleanupExpiredFiles() {
-	s.logger.Debugf("[File] Cleaning file DAHs")
-
-	filesToRemove := s.getExpiredFiles()
-	for _, fileName := range filesToRemove {
-		s.cleanupExpiredFile(fileName)
-	}
-}
-
-func (s *File) getExpiredFiles() []string {
-	s.fileDAHsMu.Lock()
-	filesToRemove := make([]string, 0, len(s.fileDAHs))
-
-	currentBlockHeight := s.currentBlockHeight.Load()
-
-	s.logger.Debugf("[File] current block height is %d", currentBlockHeight)
-
-	for fileName, dah := range s.fileDAHs {
-		if dah <= currentBlockHeight {
-			filesToRemove = append(filesToRemove, fileName)
-			s.logger.Debugf("[File] removing expired file: %s", fileName)
-		}
-	}
-	s.fileDAHsMu.Unlock()
-
-	return filesToRemove
-}
-
-func (s *File) cleanupExpiredFile(fileName string) {
-	// check if the DAH file still exists, even if the map says it has expired, another process might have updated it
-	dah, err := s.readDAHFromFile(fileName + ".dah")
-	if err != nil {
-		// If it's a processing error (invalid DAH value or corrupt file), clean it up
-		if errors.Is(err, errors.ErrProcessing) {
-			s.logger.Warnf("[File] invalid DAH file detected during cleanup: %s, error: %v", fileName+".dah", err)
-			s.removeDAHFromMap(fileName)
-
-			// Remove the invalid DAH file, but keep the blob files
-			// Protect file removal operation
-			ctx := context.Background()
-			if err := acquireWritePermit(ctx); err != nil {
-				s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-				return
-			}
-			defer releaseWritePermit()
-
-			removeErr := os.Remove(fileName + ".dah")
-
-			if removeErr != nil && !os.IsNotExist(removeErr) {
-				s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
-			}
-		} else if errors.Is(err, errors.ErrNotFound) {
-			s.removeDAHFromMap(fileName)
-			s.logger.Debugf("[File] DAH file not found during cleanup, removing from map: %s", fileName+".dah")
-		} else {
-			s.logger.Debugf("[File] failed to read DAH from file: %s, error: %v", fileName+".dah", err)
-		}
-		return
-	}
-
-	// This should not happen anymore with the validation in readDAHFromFile
-	if dah == 0 {
-		s.removeDAHFromMap(fileName)
-		s.logger.Warnf("[File] unexpected DAH value 0, removing: %s", fileName+".dah")
-
-		// Remove the invalid DAH file, but keep the blob files
-		// Protect file removal operation
-		ctx := context.Background()
-		if err := acquireWritePermit(ctx); err != nil {
-			s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-			return
-		}
-		defer releaseWritePermit()
-
-		err := os.Remove(fileName + ".dah")
-		if err != nil && !os.IsNotExist(err) {
-			s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
-		}
-
-		return
-	}
-
-	if !s.shouldRemoveFile(fileName, dah) {
-		return
-	}
-
-	s.logger.Debugf("[File] removing expired file: %s", fileName)
-	s.removeFiles(fileName)
-	s.removeDAHFromMap(fileName)
-}
-
-func (s *File) shouldRemoveFile(fileName string, fileDAH uint32) bool {
-	currentBlockHeight := s.currentBlockHeight.Load()
-
-	if fileDAH > currentBlockHeight {
-		// Update the DAH in our map
-		s.fileDAHsMu.Lock()
-		mapDAH := s.fileDAHs[fileName]
-		s.fileDAHs[fileName] = fileDAH
-		s.fileDAHsMu.Unlock()
-
-		s.logger.Debugf("[File] DAH file %s has DAH of %d, but map has %d",
-			fileName+".dah",
-			fileDAH,
-			mapDAH)
-
-		return false
-	}
-
-	return true
-}
-
-// removeFiles_internal removes files WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore.
-func (s *File) removeFiles_internal(fileName string) {
-	// Use the Del method to allow logger.go to log the removal to help with troubleshooting
-	// FileTypeUnknown is "", which will remove the file, checksum and dah files
-	// err := s.Del(context.Background(), []byte(fileName), fileformat.FileTypeUnknown)
-
-	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove file: %s", fileName)
-	}
-
-	if err := os.Remove(fileName + ".dah"); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove DAH file: %s", fileName+".dah")
-	}
-
-	if err := os.Remove(fileName + checksumExtension); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove checksum file: %s", fileName+checksumExtension)
-	}
-}
-
-// removeFiles removes files WITH semaphore protection.
-// Use this when caller doesn't already hold a semaphore.
-func (s *File) removeFiles(fileName string) {
-	ctx := context.Background()
-	if err := acquireWritePermit(ctx); err != nil {
-		s.logger.Warnf("[File] failed to acquire write permit for file removal: %v", err)
-		return
-	}
-	defer releaseWritePermit()
-
-	s.removeFiles_internal(fileName)
-}
-
-func (s *File) removeDAHFromMap(fileName string) {
-	s.fileDAHsMu.Lock()
-	delete(s.fileDAHs, fileName)
-	s.fileDAHsMu.Unlock()
 }
 
 // Health checks the health status of the file-based blob store.
@@ -901,6 +527,8 @@ func (s *File) removeDAHFromMap(fileName string) {
 //   - string: Description of the health status ("OK" or an error message)
 //   - error: Any error that occurred during the health check
 func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
+	s.debugf("[File] Health check start path=%s", s.path)
+
 	if err := acquireWritePermit(ctx); err != nil {
 		return http.StatusServiceUnavailable, "File Store: Write concurrency limit reached", err
 	}
@@ -948,7 +576,37 @@ func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
 		return http.StatusInternalServerError, "File Store: Unable to delete file", err
 	}
 
-	return http.StatusOK, "File Store: Healthy", nil
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.path, &stat); err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to check disk space", err
+	}
+
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	totalBytes := stat.Blocks * uint64(stat.Bsize)
+
+	const minAvailableBytes = 1 << 30 // 1 GiB
+	if availableBytes < minAvailableBytes {
+		return http.StatusServiceUnavailable, fmt.Sprintf("File Store: Low disk space (%s available of %s)", humanBytes(availableBytes), humanBytes(totalBytes)),
+			errors.NewStorageUnavailableError("disk space below threshold: %s available", humanBytes(availableBytes))
+	}
+
+	s.debugf("[File] Health check succeeded path=%s", s.path)
+	return http.StatusOK, fmt.Sprintf("File Store: Healthy (%s available of %s)", humanBytes(availableBytes), humanBytes(totalBytes)), nil
+}
+
+func humanBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // Close performs any necessary cleanup for the file store.
@@ -961,9 +619,6 @@ func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
 // Returns:
 //   - error: Always returns nil
 func (s *File) Close(_ context.Context) error {
-	// stop DAH cleaner
-	s.fileDAHsCtxCancel()
-
 	return nil
 }
 
@@ -978,6 +633,47 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	}
 
 	return nil
+}
+
+func (s *File) storeRelPath(filename string) (string, error) {
+	if filename == "" {
+		return "", errors.NewInvalidArgumentError("file store path is empty")
+	}
+
+	rel, err := filepath.Rel(s.path, filename)
+	if err != nil {
+		return "", errors.NewStorageError("[File][%s] failed to calculate relative file path", filename, err)
+	}
+
+	if rel == "." || !filepath.IsLocal(rel) {
+		return "", errors.NewInvalidArgumentError("[File][%s] path escapes file store root %s", filename, s.path)
+	}
+
+	return rel, nil
+}
+
+func (s *File) openStoreRoot() (*os.Root, error) {
+	root, err := os.OpenRoot(s.path)
+	if err != nil {
+		return nil, errors.NewStorageError("[File][%s] failed to open store root", s.path, err)
+	}
+
+	return root, nil
+}
+
+func (s *File) removeStorePath(filename string) error {
+	rel, err := s.storeRelPath(filename)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	return root.Remove(rel)
 }
 
 // SetFromReader stores a blob in the file store from a streaming reader.
@@ -1008,9 +704,12 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 	defer releaseWritePermit()
 
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] SetFromReader start key=%s type=%s", keyHex, fileType)
+
 	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", util.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	merged := options.MergeOptions(s.options, opts)
@@ -1019,28 +718,24 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return err
 	}
 
-	// Generate a cryptographically secure random number
-	randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+	file, tmpFilename, err := s.createTempSibling(filename, 0644)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] failed to generate random number", err)
-	}
-
-	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, randNum)
-
-	// Create the file first
-	file, err := os.Create(tmpFilename)
-	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", filename, err)
+		return err
 	}
 
 	// Track whether we should clean up the temp file on exit.
 	// Default to true (cleanup); only set to false on success path after rename.
 	cleanupTmpFile := true
 	defer func() {
-		file.Close()
+		if file != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][SetFromReader] failed to close temp file %s during cleanup: %v", tmpFilename, closeErr)
+			}
+		}
+
 		if cleanupTmpFile {
 			// Remove temp file on any error path to prevent incomplete files
-			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
+			if removeErr := s.removeStorePath(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
 				s.logger.Warnf("[File][SetFromReader] failed to remove temp file %s: %v", tmpFilename, removeErr)
 			}
 		}
@@ -1068,28 +763,28 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return errors.NewStorageError("[File][SetFromReader] [%s] reader provided zero bytes of data", filename)
 	}
 
-	// Success path - don't cleanup temp file, we're about to rename it
-	cleanupTmpFile = false
+	if err = s.syncAndCloseTempFile(file, tmpFilename); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
 
 	// rename the file to remove the .tmp extension
-	if err = os.Rename(tmpFilename, filename); err != nil {
-		// check is some other process has created this file before us
-		if _, statErr := os.Stat(filename); statErr != nil {
-			// Rename failed and file doesn't exist - clean up temp file
-			_ = os.Remove(tmpFilename)
-			return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
-		} else {
-			// Another process created the file - clean up our temp file
-			_ = os.Remove(tmpFilename)
-			s.logger.Warnf("[File][SetFromReader] [%s] already exists so another process created it first", filename)
-		}
+	if err = s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite); err != nil {
+		return err
 	}
+	cleanupTmpFile = false
 
 	// Write SHA256 hash file
 	if err = s.writeHashFile(hasher, filename); err != nil {
+		if removeErr := s.removeStorePath(filename); removeErr != nil && !os.IsNotExist(removeErr) {
+			s.logger.Warnf("[File][SetFromReader] failed to remove blob file %s after hash write error: %v", filename, removeErr)
+		}
+
 		return errors.NewStorageError("[File][SetFromReader] failed to write hash file", err)
 	}
 
+	s.debugf("[File] SetFromReader completed key=%s type=%s filename=%s", keyHex, fileType, filename)
 	return nil
 }
 
@@ -1107,22 +802,11 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 		base)
 
 	hashFilename := filename + checksumExtension
-	tmpHashFilename := hashFilename + ".tmp"
 
-	var err error
-
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(tmpHashFilename, []byte(hashStr), 0644); err != nil {
-		return errors.NewStorageError("[File] failed to write hash file", err)
-	}
-
-	if err = os.Rename(tmpHashFilename, hashFilename); err != nil {
-		// check is some other process has created this file before us
-		if _, statErr := os.Stat(hashFilename); statErr != nil {
-			return errors.NewStorageError("[File] failed to rename hash file", err)
-		} else {
-			s.logger.Warnf("[File] hash file %s already exists so another process created it first", hashFilename)
-		}
+	// Allow overwrite for the checksum sidecar: it always corresponds to the most recent
+	// blob publication, mirroring the pre-PR behaviour that used os.WriteFile.
+	if err := s.writeFileAtomically(hashFilename, []byte(hashStr), 0644, true); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write hash file atomically", hashFilename, err)
 	}
 
 	return nil
@@ -1142,9 +826,17 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 // Returns:
 //   - error: Any error that occurred during the operation
 func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] Set start key=%s type=%s size=%d", keyHex, fileType, len(value))
+
 	reader := io.NopCloser(bytes.NewReader(value))
 
-	return s.SetFromReader(ctx, key, fileType, reader, opts...)
+	err := s.SetFromReader(ctx, key, fileType, reader, opts...)
+	if err == nil {
+		s.debugf("[File] Set completed key=%s type=%s size=%d", keyHex, fileType, len(value))
+	}
+
+	return err
 }
 
 func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts []options.FileOption) (string, error) {
@@ -1176,22 +868,17 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	}
 
 	if dah > 0 {
-		dahFilename := fileName + ".dah"
-		// Use _internal variant since this is called from SetFromReader which holds writeSemaphore
-		if err := s.writeDAHToFile_internal(dahFilename, dah); err != nil {
-			return "", err
+		// Schedule deletion via blockchain service
+		if s.blobDeletionScheduler == nil {
+			return "", errors.NewConfigurationError("cannot schedule blob deletion: blob deletion scheduler not configured")
 		}
 
-		s.fileDAHsMu.Lock()
-		s.fileDAHs[fileName] = dah
-		s.fileDAHsMu.Unlock()
-	} else {
-		// delete DAH file, if it existed
-		_ = os.Remove(fileName + ".dah")
-
-		s.fileDAHsMu.Lock()
-		delete(s.fileDAHs, fileName)
-		s.fileDAHsMu.Unlock()
+		// Use background context since SetFromReader might be cancelled
+		// but we still want the deletion to be scheduled
+		bgCtx := context.Background()
+		if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(bgCtx, key, string(fileType), s.storeType, dah); err != nil {
+			return "", errors.NewStorageError("failed to schedule blob deletion", err)
+		}
 	}
 
 	return fileName, nil
@@ -1199,8 +886,8 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 
 // SetDAH sets the Delete-At-Height (DAH) value for a blob in the file store.
 // The DAH value determines at which blockchain height the blob will be automatically deleted.
-// This implementation stores the DAH value in a separate file with the same name as the blob
-// but with a .dah extension, and also maintains an in-memory map of DAH values for quick access.
+// This implementation schedules or cancels deletion via the configured blob deletion scheduler;
+// the pruner service owns deletion execution.
 //
 // If the store has DisableDAH=true, this method returns immediately without error, as DAH
 // functionality is disabled for this store (lifecycle managed externally).
@@ -1226,6 +913,9 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	}
 	defer releaseWritePermit()
 
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] SetDAH start key=%s type=%s newDAH=%d", keyHex, fileType, newDAH)
+
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
@@ -1233,18 +923,17 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
+	// Blob deletion scheduler is required for DAH operations
+	if s.blobDeletionScheduler == nil {
+		return errors.NewConfigurationError("cannot modify DAH: blob deletion scheduler not configured")
+	}
+
 	if newDAH == 0 {
-		s.fileDAHsMu.Lock()
-		delete(s.fileDAHs, fileName)
-		s.fileDAHsMu.Unlock()
-
-		// delete the DAH file
-		if err = os.Remove(fileName + ".dah"); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-
-			return errors.NewStorageError("[File][%s] failed to remove DAH file", fileName, err)
+		// Cancel scheduled deletion
+		// CRITICAL: This must succeed to prevent data loss - if cancellation fails,
+		// the blob could still be deleted even though we want to persist it forever
+		if _, err := s.blobDeletionScheduler.CancelBlobDeletion(ctx, key, string(fileType), s.storeType); err != nil {
+			return errors.NewStorageError("failed to cancel blob deletion (critical for DAH=0)", err)
 		}
 
 		return nil
@@ -1259,57 +948,12 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File][%s] failed to get file info", fileName, err)
 	}
 
-	// write DAH to file
-	// Use _internal variant since we already hold writeSemaphore
-	dahFilename := fileName + ".dah"
-	if err = s.writeDAHToFile_internal(dahFilename, newDAH); err != nil {
-		return err
+	// Schedule deletion via blockchain service
+	if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(ctx, key, string(fileType), s.storeType, newDAH); err != nil {
+		return errors.NewStorageError("failed to schedule blob deletion", err)
 	}
-
-	s.fileDAHsMu.Lock()
-	s.fileDAHs[fileName] = newDAH
-	s.fileDAHsMu.Unlock()
 
 	return nil
-}
-
-func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	merged := options.MergeOptions(s.options, opts)
-
-	fileName, err := merged.ConstructFilename(s.path, key, fileType)
-	if err != nil {
-		return 0, err
-	}
-
-	// Check if the file (not the DAH file) exists
-	exists, err := s.Exists(ctx, key, fileType, opts...)
-	if err != nil {
-		return 0, err
-	}
-
-	// If the file doesn't exist, why are we trying to get the DAH?  Return an error
-	if !exists {
-		return 0, errors.ErrNotFound
-	}
-
-	// Get the DAH from the map
-	s.fileDAHsMu.Lock()
-	dah, ok := s.fileDAHs[fileName]
-	s.fileDAHsMu.Unlock()
-
-	if !ok {
-		// check whether the DAH file exists, it could have been created by another process
-		dah, err = s.readDAHFromFile(fileName + ".dah")
-		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) {
-				return 0, nil
-			}
-
-			return 0, err
-		}
-	}
-
-	return dah, nil
 }
 
 // GetIoReader retrieves a blob from the file store as a streaming reader.
@@ -1334,6 +978,9 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 //   - io.ReadCloser: Reader for streaming the blob data
 //   - error: Any error that occurred during the operation
 func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] GetIoReader start key=%s type=%s", keyHex, fileType)
+
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
@@ -1353,6 +1000,7 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 		return nil, err
 	}
 
+	s.debugf("[File] GetIoReader result key=%s type=%s filename=%s", keyHex, fileType, fileName)
 	return f, nil
 }
 
@@ -1444,6 +1092,9 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 //   - []byte: The blob data
 //   - error: Any error that occurred during the operation
 func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] Get start key=%s type=%s", keyHex, fileType)
+
 	fileReader, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
 		return nil, err
@@ -1458,7 +1109,10 @@ func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType
 		return nil, errors.NewStorageError("[File][Get] failed to read data from file reader", err)
 	}
 
-	return fileData.Bytes(), nil
+	data := fileData.Bytes()
+	s.debugf("[File] Get result key=%s type=%s bytes=%d", keyHex, fileType, len(data))
+
+	return data, nil
 }
 
 // Exists checks if a blob exists in the file store.
@@ -1481,6 +1135,9 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 	}
 	defer releaseReadPermit()
 
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] Exists start key=%s type=%s", keyHex, fileType)
+
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
@@ -1491,6 +1148,7 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 	// check whether the file exists
 	fileInfo, err := os.Stat(fileName)
 	if err == nil && fileInfo != nil {
+		s.debugf("[File] Exists result key=%s type=%s result=true (primary)", keyHex, fileType)
 		return true, nil
 	}
 
@@ -1503,14 +1161,21 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 
 		fileInfo, err = os.Stat(persistedFilename)
 		if err == nil && fileInfo != nil {
+			s.debugf("[File] Exists result key=%s type=%s result=true (persist)", keyHex, fileType)
 			return true, nil
 		}
 	}
 
 	if s.longtermClient != nil {
-		return s.longtermClient.Exists(ctx, key, fileType, opts...)
+		exists, err := s.longtermClient.Exists(ctx, key, fileType, opts...)
+		if err == nil {
+			s.debugf("[File] Exists result key=%s type=%s result=%t (longterm)", keyHex, fileType, exists)
+		}
+
+		return exists, err
 	}
 
+	s.debugf("[File] Exists result key=%s type=%s result=false", keyHex, fileType)
 	return false, nil
 }
 
@@ -1533,91 +1198,312 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 	}
 	defer releaseWritePermit()
 
-	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(key))
+	keyHex := formatKeyHex(key)
+	s.debugf("[File] Del start key=%s type=%s", keyHex, fileType)
 
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
+		s.logger.Debugf("[FILE_DEL] Failed to construct filename: key=%s type=%s error=%v", keyHex, fileType, err)
 		return err
 	}
 
-	// remove DAH file, if exists
-	_ = os.Remove(fileName + ".dah")
+	s.logger.Debugf("[File] Del constructed filename: key=%s type=%s file=%s", keyHex, fileType, fileName)
+	s.logger.Debugf("[FILE_DEL] Attempting deletion: base_path=%s key=%s file=%s", s.path, keyHex, fileName)
 
 	// remove checksum file, if exists
-	_ = os.Remove(fileName + checksumExtension)
+	checksumFile := fileName + checksumExtension
+	if err := os.Remove(checksumFile); err == nil {
+		s.logger.Debugf("[FILE_DEL] Deleted checksum file: %s", checksumFile)
+	}
 
 	if err = os.Remove(fileName); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// If the file does not exist, consider it deleted
+			s.logger.Debugf("[FILE_DEL] File not found (already deleted): %s - treating as success", fileName)
+			s.debugf("[File] Del skipped key=%s type=%s reason=file_missing", keyHex, fileType)
 			return nil
 		}
 
+		s.logger.Debugf("[FILE_DEL] Failed to remove file: %s error=%v", fileName, err)
 		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
+	}
+
+	// Do NOT attempt to remove the hash prefix directory here. The "remove if
+	// empty" check races with concurrent writes into the same prefix dir:
+	//
+	//   1. Goroutine A (Del):   removes the last file in "44/", then rmdir "44".
+	//   2. Goroutine B (Write): OpenFile("44/.tmp", O_CREATE|O_EXCL) → ENOENT.
+	//
+	// The write path only retries on EEXIST, so ENOENT propagates as a hard
+	// failure. Observed on mainnet legacy catchup where the pruner deletes
+	// expired subtree files concurrently with the next block's subtree-meta
+	// write into the same hex-prefix directory.
+	//
+	// Empty prefix dirs are cheap (one inode each, 256 possible two-char
+	// prefixes) and will get re-populated as soon as another file lands in
+	// that bucket, so leaving them is free.
+
+	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)
+	s.debugf("[File] Del completed key=%s type=%s", keyHex, fileType)
+	return nil
+}
+
+// createTempSibling creates a new temporary file in the same directory as filename.
+//
+// The same-directory constraint is intentional. POSIX rename is atomic only when the
+// source and destination are on the same filesystem, so callers that intend to publish
+// data with renameTempFile must first write to a sibling of the final path. The temp
+// filename includes the final basename, a cryptographically random suffix, and ".tmp";
+// this keeps operational debugging straightforward while avoiding collisions between
+// concurrent writers for the same blob.
+//
+// The file is opened with O_EXCL so an existing temp path is never truncated. Random
+// collisions are retried a small fixed number of times. Any non-collision creation
+// failure is returned immediately because it usually indicates a real storage problem
+// such as permissions, a missing directory, or an exhausted filesystem.
+//
+// The caller owns the returned file descriptor and must close it. On any failure after
+// this function returns successfully, the caller is also responsible for removing the
+// returned temporary filename.
+func (s *File) createTempSibling(filename string, perm os.FileMode) (*os.File, string, error) {
+	const maxAttempts = 10
+
+	finalRel, err := s.storeRelPath(filename)
+	if err != nil {
+		return nil, "", err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+
+	dir := filepath.Dir(finalRel)
+	base := filepath.Base(finalRel)
+
+	for i := 0; i < maxAttempts; i++ {
+		randNum, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		if err != nil {
+			return nil, "", errors.NewStorageError("[File][%s] failed to generate temporary filename", filename, err)
+		}
+
+		tmpRel := filepath.Join(dir, fmt.Sprintf(".%s.%d.tmp", base, randNum))
+		//nolint:gosec // Blob store files intentionally preserve the existing 0644 file mode.
+		file, err := root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err == nil {
+			return file, filepath.Join(s.path, tmpRel), nil
+		}
+
+		if os.IsExist(err) {
+			continue
+		}
+
+		return nil, "", errors.NewStorageError("[File][%s] failed to create temporary file", filename, err)
+	}
+
+	return nil, "", errors.NewStorageError("[File][%s] failed to create unique temporary file after %d attempts", filename, maxAttempts)
+}
+
+// syncAndCloseTempFile flushes a temporary file's contents to stable storage and closes it.
+//
+// This helper is used immediately before publishing a temp file with renameTempFile.
+// Syncing before rename prevents the final filename from becoming visible while the
+// data still only exists in userspace or kernel buffers. That does not make the whole
+// operation fully crash-proof by itself: the directory entry created by the later rename
+// has its own durability boundary, handled best-effort by syncParentDirBestEffort.
+//
+// Close errors are treated as write failures. Some filesystems report delayed write
+// errors on close, so a caller must not publish the temp file if this function returns
+// an error. If Sync fails, this function still attempts to close the descriptor and logs
+// a close failure without replacing the original sync error.
+func (s *File) syncAndCloseTempFile(file *os.File, tmpFilename string) error {
+	if s.fsyncMode != fsyncModeNone {
+		if err := file.Sync(); err != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][%s] failed to close temporary file after sync error: %v", tmpFilename, closeErr)
+			}
+
+			return errors.NewStorageError("[File][%s] failed to sync temporary file", tmpFilename, err)
+		}
+	}
+
+	if err := file.Close(); err != nil {
+		return errors.NewStorageError("[File][%s] failed to close temporary file", tmpFilename, err)
 	}
 
 	return nil
 }
 
-// findFilesByExtension performs directory traversal to find files by extension.
-// NOTE: This is intentionally not semaphore-protected since it's a bulk scanning
-// operation that doesn't open many file descriptors simultaneously. It's called
-// infrequently (at startup and during background DAH loading).
-func findFilesByExtension(root, ext string) ([]string, error) {
-	var a []string
-
-	// Normalize extension: remove leading dot if present for 'find' command
-	// filepath.Ext returns extension with leading dot, but find pattern needs "*.<ext>"
-	extForFind := strings.TrimPrefix(ext, ".")
-
-	useFind := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
-
-	// Check if 'find' is available
-	if useFind {
-		if _, err := exec.LookPath("find"); err == nil {
-			pattern := "*." + extForFind
-			cmd := exec.Command("find", root, "-type", "f", "-name", pattern)
-
-			var out bytes.Buffer
-
-			cmd.Stdout = &out
-			if err := cmd.Run(); err != nil {
-				return nil, err
-			}
-
-			for _, line := range strings.Split(out.String(), "\n") {
-				if line != "" {
-					a = append(a, line)
-				}
-			}
-
-			return a, nil
-		}
+// syncParentDirBestEffort attempts to persist the directory entry for filename.
+//
+// On ext4, xfs, and btrfs — the dominant production Linux filesystems — this directory
+// sync is correctness-critical for crash safety, not a "nice to have". After os.Rename
+// succeeds, readers will observe the final filename atomically, but the directory entry
+// is held in cache until the parent directory itself is synced. A crash between rename
+// and the next checkpoint can therefore lose the freshly published file's name even when
+// the file's data has been fsynced. Removing this call regresses crash safety on those
+// filesystems; future maintainers should not delete it under the assumption that "best
+// effort" implies optional.
+//
+// The "best-effort" framing applies only to failure handling: directory sync is not
+// supported uniformly across platforms (notably some Windows and network-attached
+// filesystems), so a failure to open or sync the parent directory is logged at debug
+// level rather than turning an already-successful rename into a failed blob write.
+// Where the platform supports it, this call is a correctness step and must run.
+func (s *File) syncParentDirBestEffort(filename string) {
+	if s.fsyncMode != fsyncModeFull {
+		return
 	}
 
-	// Normalize extension: ensure it has a leading dot for filepath.Ext comparison
-	extForWalk := ext
-	if !strings.HasPrefix(extForWalk, ".") {
-		extForWalk = "." + extForWalk
-	}
-
-	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
-		if e != nil {
-			return e
-		}
-
-		// Use HasSuffix instead of filepath.Ext to support multi-dot extensions
-		// filepath.Ext("file.dah.tmp") returns ".tmp", not ".dah.tmp"
-		if strings.HasSuffix(d.Name(), extForWalk) {
-			a = append(a, s)
-		}
-
-		return nil
-	})
+	rel, err := s.storeRelPath(filename)
 	if err != nil {
-		return nil, err
+		s.debugf("[File][%s] failed to calculate parent directory for sync: %v", filename, err)
+		return
 	}
 
-	return a, nil
+	root, err := s.openStoreRoot()
+	if err != nil {
+		s.debugf("[File][%s] failed to open store root for parent sync: %v", filename, err)
+		return
+	}
+	defer root.Close()
+
+	dir, err := root.Open(filepath.Dir(rel))
+	if err != nil {
+		s.debugf("[File][%s] failed to open parent directory for sync: %v", filename, err)
+		return
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		s.debugf("[File][%s] failed to sync parent directory: %v", filename, err)
+	}
+}
+
+// renameTempFile publishes a completed temp file at its final filename.
+//
+// The temp file must be a sibling of filename; createTempSibling enforces that pattern.
+// When source and destination are on the same filesystem, rename makes the final path
+// appear atomically, so readers either see the previous complete file or the new complete
+// file, never a partially written final file.
+//
+// Cross-platform rename semantics differ when the destination already exists:
+//
+//   - POSIX (Linux, macOS, *BSD): rename(2) atomically replaces an existing regular file
+//     with the same name. The "destination exists" branch below is therefore unreachable
+//     on those platforms; an existing final file is silently overwritten on rename. The
+//     blob store's no-overwrite contract is enforced by SetFromReader's earlier call to
+//     errorOnOverwrite, not here. There is a small TOCTOU window between that check and
+//     this rename in which two concurrent writers can both pass the check and then race
+//     on rename — that race is out of scope for this helper.
+//   - Windows / some non-POSIX targets: rename can fail when the destination exists. The
+//     fallback handles that case: if allowOverwrite is true we remove the destination and
+//     retry the rename; otherwise we normalize the error to ErrBlobAlreadyExists.
+//
+// On success this helper also attempts to sync the parent directory so the newly published
+// name is more likely to survive a crash. That directory sync is correctness-critical on
+// ext4/xfs/btrfs and best-effort everywhere else; see syncParentDirBestEffort.
+func (s *File) renameTempFile(tmpFilename, filename string, allowOverwrite bool) error {
+	tmpRel, err := s.storeRelPath(tmpFilename)
+	if err != nil {
+		return err
+	}
+
+	finalRel, err := s.storeRelPath(filename)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.openStoreRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if err := root.Rename(tmpRel, finalRel); err != nil {
+		if fileInfo, statErr := root.Stat(finalRel); statErr == nil && !fileInfo.IsDir() {
+			if !allowOverwrite {
+				return errors.NewBlobAlreadyExistsError("[File][%s] already exists in store", filename)
+			}
+
+			// Non-POSIX path: rename refused to replace an existing destination but the caller
+			// asked for overwrite semantics. Remove the destination and retry.
+			if removeErr := root.Remove(finalRel); removeErr != nil {
+				return errors.NewStorageError("[File][%s] failed to remove existing file before overwrite", filename, removeErr)
+			}
+
+			if retryErr := root.Rename(tmpRel, finalRel); retryErr != nil {
+				return errors.NewStorageError("[File][%s] failed to rename temporary file %s after overwrite cleanup", filename, tmpFilename, retryErr)
+			}
+
+			s.syncParentDirBestEffort(filename)
+			return nil
+		}
+
+		return errors.NewStorageError("[File][%s] failed to rename temporary file %s", filename, tmpFilename, err)
+	}
+
+	s.syncParentDirBestEffort(filename)
+	return nil
+}
+
+// writeFileAtomically writes a small sidecar file via temp-file publication.
+//
+// This is used for metadata sidecars such as checksum files, where the complete payload is
+// already available in memory. It mirrors the blob publication sequence used by
+// SetFromReader: create a sibling temp file, write the full payload, sync and close it,
+// then rename it into place. The final filename is not created or replaced until all data
+// has been written successfully.
+//
+// The helper owns cleanup for the temp path. Any error before a successful rename leaves
+// cleanupTmpFile set and the deferred cleanup removes the temp file. After a successful
+// rename, cleanup is disabled because tmpFilename no longer exists. The file descriptor is
+// also closed during cleanup if an early return happens before syncAndCloseTempFile takes
+// ownership of closing it.
+//
+// Callers should use this only for bounded in-memory data. Large blob bodies should continue
+// to use SetFromReader so they can be streamed without loading the full content into memory.
+//
+// allowOverwrite is forwarded to renameTempFile; see that function for the cross-platform
+// behaviour when the final filename already exists.
+func (s *File) writeFileAtomically(filename string, data []byte, perm os.FileMode, allowOverwrite bool) error {
+	file, tmpFilename, err := s.createTempSibling(filename, perm)
+	if err != nil {
+		return err
+	}
+
+	cleanupTmpFile := true
+	defer func() {
+		if file != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				s.logger.Warnf("[File][%s] failed to close temporary file during cleanup: %v", tmpFilename, closeErr)
+			}
+		}
+
+		if cleanupTmpFile {
+			if removeErr := s.removeStorePath(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
+				s.logger.Warnf("[File][%s] failed to remove temporary file: %v", tmpFilename, removeErr)
+			}
+		}
+	}()
+
+	if _, err = file.Write(data); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write temporary file", filename, err)
+	}
+
+	if err = s.syncAndCloseTempFile(file, tmpFilename); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
+
+	if err = s.renameTempFile(tmpFilename, filename, allowOverwrite); err != nil {
+		return err
+	}
+	cleanupTmpFile = false
+
+	return nil
 }

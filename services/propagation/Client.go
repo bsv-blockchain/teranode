@@ -1,5 +1,5 @@
-// Package propagation provides Bitcoin SV transaction propagation functionality for the Teranode system.
-// This package implements efficient transaction processing and distribution across the Bitcoin SV network,
+// Package propagation provides BSV Blockchain transaction propagation functionality for the Teranode system.
+// This package implements efficient transaction processing and distribution across the BSV Blockchain network,
 // supporting both individual transaction handling and high-throughput batch processing operations.
 //
 // Key Features:
@@ -12,7 +12,7 @@
 //
 // Architecture:
 // The propagation service acts as a bridge between transaction producers (such as mining pools,
-// wallets, and applications) and the Bitcoin SV network. It optimizes transaction throughput
+// wallets, and applications) and the BSV Blockchain network. It optimizes transaction throughput
 // through intelligent batching while maintaining reliability through robust error handling.
 //
 // The service provides multiple interfaces:
@@ -23,7 +23,7 @@
 // Integration:
 // This package integrates with other Teranode services including the mempool, validator,
 // and P2P services to ensure transactions are properly validated and distributed across
-// the network according to Bitcoin SV protocol specifications.
+// the network according to Bitcoin protocol specifications.
 package propagation
 
 import (
@@ -34,7 +34,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -42,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -173,7 +174,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
-	c.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	c.batcher = *batcher.NewWithPool(batchSize, duration, sendBatch, true,
+		batcher.WithName("propagation_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("PropagationClient").OTelTracer()),
+	)
 
 	return c, nil
 }
@@ -221,7 +227,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	if c.batchSize > 0 {
 		done := make(chan error)
 
-		c.batcher.Put(&batchItem{
+		c.batcher.PutCtx(ctx, &batchItem{
 			ctx:  ctx,
 			tx:   tx,
 			done: done,
@@ -234,7 +240,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	// Try gRPC first
 	_, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: tx.SerializeBytes(),
+		Tx: txBytes,
 	})
 
 	// If successful, return nil
@@ -343,7 +349,7 @@ func (c *Client) TriggerBatcher() {
 //   - error: Returns the input error for convenience in call chaining
 func (c *Client) handleBatchError(batch []*batchItem, err error, format string, args ...interface{}) error {
 	wrappedErr := errors.NewServiceError(format, append(args, err)...)
-	c.logger.Errorf(wrappedErr.Error())
+	c.logger.Errorf("%s", wrappedErr.Error())
 
 	for _, tx := range batch {
 		tx.done <- wrappedErr
@@ -549,6 +555,7 @@ func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSett
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "propagation",
 	}, tSettings)
 	if err != nil {
 		return nil, err

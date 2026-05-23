@@ -28,6 +28,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -35,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	blockchain_sql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -44,7 +46,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/looplab/fsm"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -61,10 +62,21 @@ import (
 //
 // This struct enables the publish-subscribe pattern where multiple services can
 // receive real-time updates about blockchain state changes without polling.
+// subscriberBufferSize is the cap of each subscriber's pending-notification
+// channel. When this fills, the subscriber is too slow to keep up and is
+// evicted via deadSubscriptions to prevent backpressure on the broadcast loop.
+//
+// At normal block cadence (~1 notification per block) plus ~6 heartbeats/min,
+// 64 messages is roughly 9 minutes of buffer before eviction — short enough
+// that operators see the disconnect promptly, long enough to tolerate brief
+// consumer lag during reorgs.
+const subscriberBufferSize = 64
+
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
 	source       string                                       // Source identifier of the subscription
 	done         chan struct{}                                // Channel to signal when subscription is done
+	pending      chan *blockchain_api.Notification            // Per-subscriber delivery buffer (issue #872)
 }
 
 // Blockchain represents the main blockchain service structure.
@@ -103,6 +115,25 @@ type Blockchain struct {
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
 	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+
+	// Blob deletion batch token management
+	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
+	batchTokensMu sync.RWMutex                       // Mutex for batch tokens map
+
+	// In-process Median Time Past cache. Avoids re-fetching MTP values from the
+	// store on every block validation and validator MTP refresh — the store-level
+	// responseCache is wiped per StoreBlock, so committed-block MTPs there have
+	// near-zero hit rate during sync.
+	mtpCache *mtpCache
+}
+
+// blobDeletionBatchToken represents an acquired batch of deletions with a lock.
+type blobDeletionBatchToken struct {
+	token         string
+	acquiredAt    time.Time
+	expiresAt     time.Time
+	deletionIDs   []int64
+	deletionCount int
 }
 
 // New creates a new Blockchain instance with the provided dependencies.
@@ -136,12 +167,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	b := &Blockchain{
-		store:                         store,
-		logger:                        logger,
-		settings:                      tSettings,
-		addBlockChan:                  make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:              make(chan subscriber, 10),
-		deadSubscriptions:             make(chan subscriber, 10),
+		store:            store,
+		logger:           logger,
+		settings:         tSettings,
+		addBlockChan:     make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions: make(chan subscriber, 10),
+		// deadSubscriptions buffered large enough to absorb a connection-pool
+		// burst where many subscribers fail Send simultaneously. The original
+		// cap (10) made the dead-push from drain goroutines a potential
+		// bottleneck during the kind of 18-EOF burst observed in issue #872.
+		deadSubscriptions:             make(chan subscriber, 1000),
 		subscribers:                   make(map[subscriber]bool),
 		notifications:                 make(chan *blockchain_api.Notification, 100),
 		newBlock:                      make(chan struct{}, 10),
@@ -149,6 +184,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
+		batchTokens:                   make(map[string]*blobDeletionBatchToken),
+		mtpCache:                      newMTPCache(),
 	}
 
 	// Initialize subscription manager as not ready
@@ -394,6 +431,12 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	go b.startSubscriptions()
 
+	// Start heartbeat sender for subscription health monitoring
+	go b.startHeartbeatSender(ctx)
+
+	// Start batch token cleanup
+	go b.cleanupExpiredBatchTokens()
+
 	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
 	}
@@ -465,7 +508,7 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 
 		err := e.Shutdown(context.Background())
 		if err != nil {
-			b.logger.Errorf("[Blockchain] %s (http) service shutdown error: %s", err)
+			b.logger.Errorf("[Blockchain] (http) service shutdown error: %s", err)
 		}
 	}()
 
@@ -576,6 +619,43 @@ func (b *Blockchain) startKafka() {
 	b.blocksFinalKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
 }
 
+// startHeartbeatSender sends periodic heartbeat (PING) notifications to all subscribers.
+// This allows clients to detect subscription staleness and reconnect if needed.
+// The heartbeat interval is configurable via settings (default: 10s).
+func (b *Blockchain) startHeartbeatSender(ctx context.Context) {
+	heartbeatInterval := b.settings.BlockChain.HeartbeatInterval
+
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	b.logger.Infof("[Blockchain][startHeartbeatSender] Starting heartbeat sender with %v interval", heartbeatInterval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Infof("[Blockchain][startHeartbeatSender] Stopping heartbeat sender")
+			return
+		case <-ticker.C:
+			b.broadcastHeartbeat()
+		}
+	}
+}
+
+// broadcastHeartbeat sends a PING notification to all subscribers.
+func (b *Blockchain) broadcastHeartbeat() {
+	notification := &blockchain_api.Notification{
+		Type: model.NotificationType_PING,
+	}
+
+	// Use a select with default to avoid blocking if the notifications channel is full
+	select {
+	case b.notifications <- notification:
+		b.logger.Debugf("[Blockchain][broadcastHeartbeat] Heartbeat sent to subscribers")
+	default:
+		b.logger.Warnf("[Blockchain][broadcastHeartbeat] Notifications channel full, skipping heartbeat")
+	}
+}
+
 // startSubscriptions manages blockchain subscriptions in a goroutine.
 //
 // This method handles all subscription management including:
@@ -602,9 +682,11 @@ func (b *Blockchain) startSubscriptions() {
 		case <-b.AppCtx.Done():
 			b.logger.Infof("[Blockchain][startSubscriptions] Stopping channel listeners go routine")
 
+			b.subscribersMu.RLock()
 			for sub := range b.subscribers {
 				safeClose(sub.done)
 			}
+			b.subscribersMu.RUnlock()
 
 			return
 		case notification := <-b.notifications:
@@ -613,56 +695,173 @@ func (b *Blockchain) startSubscriptions() {
 			func() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
+				b.subscribersMu.RLock()
+				// Non-blocking fan-out: push to each subscriber's pending buffer.
+				// One slow subscriber can no longer block delivery to the others
+				// (issue #872). Subscribers whose buffers are full are evicted as
+				// dead — that bounds how long a stuck consumer applies backpressure.
+				var dead []subscriber
 				for sub := range b.subscribers {
-					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+					select {
+					case sub.pending <- notification:
+					default:
+						b.logger.Warnf("[Blockchain][startSubscriptions] Subscriber %s pending buffer full (cap=%d), marking dead", sub.source, subscriberBufferSize)
+						prometheusBlockchainSubscriberPendingFull.WithLabelValues(sub.source).Inc()
+						dead = append(dead, sub)
+					}
+				}
+				b.subscribersMu.RUnlock()
 
-					go func(s subscriber) {
-						b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s: %s", s.source, notification.Stringify())
-
-						if err := s.subscription.Send(notification); err != nil {
-							b.deadSubscriptions <- s
-						}
-					}(sub)
+				// Queue dead subscribers for removal
+				for _, s := range dead {
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+						return
+					}
 				}
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 		case s := <-b.newSubscriptions:
+			// Add to map and start drain goroutine first so the subscriber is
+			// ready to receive before we enqueue the initial notification. This
+			// keeps the newSubscriptions case non-blocking: sendInitialNotification
+			// now enqueues into s.pending (non-blocking) rather than calling
+			// sub.subscription.Send directly, so a slow stream cannot stall here.
 			b.subscribersMu.Lock()
 			b.subscribers[s] = true
 			b.subscribersMu.Unlock()
 
-			// Send initial notification to let the subscriber know the subscription is ready
-			// and provide the current blockchain state
-			go func(sub subscriber) {
-				chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
-				var initialNotification *blockchain_api.Notification
-				if err != nil {
-					// If no best block exists yet (e.g., empty blockchain), send notification with genesis hash
-					b.logger.Warnf("[Blockchain][startSubscriptions] No best block header available for initial notification to %s: %v", sub.source, err)
-					initialNotification = &blockchain_api.Notification{
-						Type: model.NotificationType_Block,
-						Hash: b.settings.ChainCfgParams.GenesisHash.CloneBytes(),
-					}
-				} else {
-					initialNotification = &blockchain_api.Notification{
-						Type: model.NotificationType_Block,
-						Hash: chainTip.Hash().CloneBytes(),
-					}
-				}
+			// One drain goroutine per subscriber owns Send on that stream.
+			// Concurrent Send() on a single gRPC ServerStream is unsafe; the
+			// per-subscriber goroutine preserves the no-concurrent-Send invariant
+			// while letting a slow Send block only its own stream.
+			go b.runSubscriberDrain(s)
 
-				b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
-				if err := sub.subscription.Send(initialNotification); err != nil {
-					b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
-					b.deadSubscriptions <- sub
-				}
-			}(s)
+			// Enqueue the initial chain-tip notification so it arrives ahead of
+			// any subsequent broadcast. Goes through pending so the broadcast loop
+			// is never blocked on initial delivery.
+			b.sendInitialNotification(s)
 
 		case s := <-b.deadSubscriptions:
-			delete(b.subscribers, s)
+			b.subscribersMu.Lock()
+			_, existed := b.subscribers[s]
+			if existed {
+				delete(b.subscribers, s)
+			}
+			remaining := len(b.subscribers)
+			b.subscribersMu.Unlock()
+			if existed && s.pending != nil {
+				// Close pending only on the first dead notice for this subscriber.
+				// A second dead push (e.g. the drain goroutine reporting a Send
+				// error after the broadcast loop has already marked the sub dead
+				// via buffer-full) would panic on a double-close. The map check
+				// above guards that.
+				close(s.pending)
+			}
 			safeClose(s.done)
-			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", len(b.subscribers))
+			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
+	}
+}
+
+// sendDeadline is the maximum time a single Send call is allowed before the
+// subscriber is evicted. gRPC ServerStream.Send has no context parameter, so
+// the deadline is enforced by racing the Send against a timer in a helper
+// goroutine. When the deadline fires, the drain goroutine exits immediately;
+// the helper goroutine continues until Send eventually returns, then discards
+// the result — this residual goroutine is bounded to one per stuck stream.
+const sendDeadline = 5 * time.Second
+
+// runSubscriberDrain pulls notifications from the subscriber's pending buffer
+// and calls Send on its gRPC stream. One goroutine per subscriber preserves
+// the gRPC no-concurrent-Send invariant on each stream while isolating slow
+// consumers — Send blocking here parks only this goroutine, not the broadcast
+// loop in startSubscriptions.
+//
+// Exits when:
+//   - pending is closed (cleanup path in startSubscriptions)
+//   - Send returns an error (stream broken or context cancelled)
+//   - Send exceeds sendDeadline (subscriber evicted to bound goroutine lifetime)
+//   - AppCtx is cancelled (service shutdown)
+//
+// On Send error or deadline the goroutine pushes itself onto deadSubscriptions
+// so cleanup is triggered. A second dead-push for the same subscriber (when
+// the broadcast loop already evicted it via buffer-full) is benign — the
+// cleanup path's map check makes the second handler a no-op.
+func (b *Blockchain) runSubscriberDrain(s subscriber) {
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			return
+		case <-s.done:
+			return
+		case n, ok := <-s.pending:
+			if !ok {
+				return
+			}
+			// Race Send against a deadline. gRPC ServerStream.Send does not
+			// accept a context, so we use a helper goroutine. If the deadline
+			// fires first, we evict the subscriber and return. The helper
+			// goroutine is a residual leak bounded to one per stuck stream; it
+			// exits once Send eventually returns (error or success).
+			sendErr := make(chan error, 1)
+			go func() { sendErr <- s.subscription.Send(n) }()
+
+			select {
+			case err := <-sendErr:
+				if err != nil {
+					b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s failed: %v", s.source, err)
+					prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+					}
+					return
+				}
+			case <-time.After(sendDeadline):
+				b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s exceeded %s deadline, evicting", s.source, sendDeadline)
+				prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+				select {
+				case b.deadSubscriptions <- s:
+				case <-b.AppCtx.Done():
+				}
+				return
+			case <-b.AppCtx.Done():
+				return
+			case <-s.done:
+				return
+			}
+		}
+	}
+}
+
+// sendInitialNotification enqueues the current chain tip (or genesis) into the
+// subscriber's pending buffer. The drain goroutine delivers it via Send.
+// Non-blocking: if the buffer is full the subscriber is already overloaded and
+// will be evicted shortly; dropping the initial notification is acceptable.
+func (b *Blockchain) sendInitialNotification(sub subscriber) {
+	chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
+	var initialNotification *blockchain_api.Notification
+	if err != nil {
+		b.logger.Warnf("[Blockchain][startSubscriptions] No best block header available for initial notification to %s: %v", sub.source, err)
+		initialNotification = &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: b.settings.ChainCfgParams.GenesisHash.CloneBytes(),
+		}
+	} else {
+		initialNotification = &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: chainTip.Hash().CloneBytes(),
+		}
+	}
+
+	b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
+	select {
+	case sub.pending <- initialNotification:
+	default:
+		b.logger.Warnf("[Blockchain][startSubscriptions] Pending buffer full on initial notification for %s, dropping", sub.source)
 	}
 }
 
@@ -746,6 +945,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		Subtrees:         subtreeHashes,
 		TransactionCount: request.TransactionCount,
 		SizeInBytes:      request.SizeInBytes,
+		CoinbaseBUMP:     request.CoinbaseBump,
 	}
 
 	// process options for storing
@@ -768,6 +968,15 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	// Clear difficulty cache when chain state changes to prevent stale cached values
+	// from causing incorrect difficulty calculations during rapid block processing
+	b.difficulty.ResetCache()
+
+	// Drop any speculative MTP cache entries at or above the new block's height
+	// so the next GetMedianTimePastRange/ForHeights call repopulates them from the
+	// store. Heights below the new block remain valid.
+	b.mtpCache.truncate(height)
 
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
@@ -821,10 +1030,10 @@ func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 			b.logger.Warnf("[AddBlock] blocks-final message size %d bytes maybe too large for Kafka, block hash: %s (height: %d)", len(value), block.Header.Hash(), block.Height)
 		}
 
-		b.kafkaChan <- &kafka.Message{
+		b.blocksFinalKafkaAsyncProducer.Publish(&kafka.Message{
 			Key:   []byte(key),
 			Value: value,
-		}
+		})
 	}
 
 	return nil
@@ -854,7 +1063,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", util.ReverseAndHexEncodeSlice(request.Hash)),
 	)
 	defer deferFn()
 
@@ -886,6 +1095,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 
@@ -894,7 +1104,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", utils.ReverseAndHexEncodeSlice(req.Hash)),
+		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
 	)
 	defer deferFn()
 
@@ -956,6 +1166,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 
@@ -964,7 +1175,7 @@ func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.G
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Id),
+		tracing.WithLogMessage(b.logger, "[GetBlockByID] called for %d", request.Id),
 	)
 	defer deferFn()
 
@@ -991,6 +1202,7 @@ func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.G
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+		CoinbaseBump:     block.CoinbaseBUMP,
 	}, nil
 }
 
@@ -1174,14 +1386,15 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: blockHeader.Bytes(),
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		ChainWork:   meta.ChainWork,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
+		BlockHeader:    blockHeader.Bytes(),
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		ChainWork:      meta.ChainWork,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1261,14 +1474,15 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: chainTip.Bytes(),
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
-		ChainWork:   meta.ChainWork,
+		BlockHeader:    chainTip.Bytes(),
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		ChainWork:      meta.ChainWork,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1287,6 +1501,30 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 
 	return &blockchain_api.CheckBlockIsCurrentChainResponse{
 		IsPartOfCurrentChain: result,
+	}, nil
+}
+
+// CheckBlockIsAncestorOfBlock verifies if any of the given block IDs are ancestors of a specific block.
+// This is used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+func (b *Blockchain) CheckBlockIsAncestorOfBlock(ctx context.Context, req *blockchain_api.CheckBlockIsAncestorOfBlockRequest) (*blockchain_api.CheckBlockIsAncestorOfBlockResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsAncestorOfBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainCheckBlockIsAncestorOfBlock),
+	)
+	defer deferFn()
+
+	blockHash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][CheckBlockIsAncestorOfBlock] request's hash is not valid", err))
+	}
+
+	result, err := b.store.CheckBlockIsAncestorOfBlock(ctx, req.BlockIDs, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.CheckBlockIsAncestorOfBlockResponse{
+		IsAncestor: result,
 	}, nil
 }
 
@@ -1332,20 +1570,21 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: blockHeader.Bytes(),
-		Id:          meta.ID,
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		PeerId:      meta.PeerID,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
-		MinedSet:    meta.MinedSet,
-		ChainWork:   meta.ChainWork,
-		SubtreesSet: meta.SubtreesSet,
-		Invalid:     meta.Invalid,
-		ProcessedAt: processedAt,
+		BlockHeader:    blockHeader.Bytes(),
+		Id:             meta.ID,
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		PeerId:         meta.PeerID,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		MinedSet:       meta.MinedSet,
+		ChainWork:      meta.ChainWork,
+		SubtreesSet:    meta.SubtreesSet,
+		Invalid:        meta.Invalid,
+		ProcessedAt:    processedAt,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1524,6 +1763,34 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// GetMedianTimePastByHeights retrieves MTP values for multiple block heights in batch.
+// This method implements the gRPC service endpoint for efficiently fetching Median Time Past
+// values for a list of block heights. This is useful for BIP68 relative locktime validation
+// where the validator needs MTP values for multiple blocks.
+//
+// Parameters:
+//   - ctx: Request context for timeout and cancellation
+//   - req: GetMedianTimePastByHeightsRequest containing array of heights
+//
+// Returns:
+//   - GetMedianTimePastByHeightsResponse containing MTP values (0 for height < 11)
+//   - error: Any error encountered during MTP calculation
+func (b *Blockchain) GetMedianTimePastByHeights(ctx context.Context, req *blockchain_api.GetMedianTimePastByHeightsRequest) (*blockchain_api.GetMedianTimePastByHeightsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetMedianTimePastByHeights",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	mtps, err := b.GetMedianTimePastForHeights(ctx, req.Heights)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetMedianTimePastByHeightsResponse{
+		MedianTimePast: mtps,
+	}, nil
+}
+
 // GetBlocksByHeight retrieves full blocks within a specified height range.
 // This method implements the gRPC service endpoint for fetching complete blocks
 // between two heights in a single efficient operation. It delegates to the
@@ -1640,14 +1907,15 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	defer deferFn()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
-	ch := make(chan struct{})
+	s := subscriber{
+		subscription: sub,
+		done:         make(chan struct{}),
+		source:       req.Source,
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
 
 	b.logger.Infof("[Blockchain] Sending new subscription to handler for source: %s", req.Source)
-	b.newSubscriptions <- subscriber{
-		subscription: sub,
-		done:         ch,
-		source:       req.Source,
-	}
+	b.newSubscriptions <- s
 
 	b.subscribersMu.RLock()
 	noOfSubscribers := len(b.subscribers)
@@ -1657,14 +1925,33 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected.
+			// Client disconnected - clean up subscriber from map.
+			// Must pass the same subscriber value (including pending) so the map
+			// key matches the entry added in the newSubscriptions case.
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
+			select {
+			case b.deadSubscriptions <- s:
+			case <-b.AppCtx.Done():
+				// Server is shutting down, startSubscriptions already cleaned up
+			}
 			return nil
-		case <-ch:
-			// Subscription ended.
+		case <-s.done:
+			// Subscription ended (drained and cleaned up by startSubscriptions).
 			return nil
 		}
 	}
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (b *Blockchain) GetSubscribers(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetSubscribersResponse, error) {
+	b.subscribersMu.RLock()
+	defer b.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(b.subscribers))
+	for sub := range b.subscribers {
+		sources = append(sources, sub.source)
+	}
+	return &blockchain_api.GetSubscribersResponse{Sources: sources}, nil
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.
@@ -1879,7 +2166,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainInvalidateBlock),
-		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", utils.ReverseAndHexEncodeSlice(request.BlockHash)),
+		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", util.ReverseAndHexEncodeSlice(request.BlockHash)),
 	)
 	defer deferFn()
 
@@ -1909,6 +2196,17 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
+
+	// Reorg-style invalidation: MTP for heights at and above the invalidated block
+	// is no longer authoritative. Truncate from that height so ancestors below it
+	// remain cached. Fall back to a full reset if the header lookup fails — that
+	// is the safe behaviour and should not happen under normal operation.
+	if _, invalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(invalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[InvalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
 
 	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
 	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -2013,6 +2311,16 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
+	// Revalidation can change which block is considered canonical at heights from
+	// the revalidated block forward. Truncate from that height so ancestors below
+	// it remain cached. Fall back to a full reset if the header lookup fails.
+	if _, revalidateMeta, lookupErr := b.store.GetBlockHeader(ctx, blockHash); lookupErr == nil {
+		b.mtpCache.truncate(revalidateMeta.Height)
+	} else {
+		b.logger.Debugf("[RevalidateBlock] could not look up height for %s to truncate MTP cache, resetting: %v", blockHash, lookupErr)
+		b.mtpCache.reset()
+	}
+
 	return &emptypb.Empty{}, nil
 }
 
@@ -2056,7 +2364,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithDebugLogMessage(b.logger, "[SendNotification] called"),
+		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 
@@ -2388,10 +2696,48 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 
 	priorState := b.finiteStateMachine.Current()
 
+	// Prevent manual transitions from CATCHINGBLOCKS state
+	// The state should only exit CATCHINGBLOCKS programmatically when catchup completes
+	if priorState == blockchain_api.FSMStateType_CATCHINGBLOCKS.String() {
+		// Only allow RUN event (catchup completion) to exit CATCHINGBLOCKS
+		if eventReq.Event != blockchain_api.FSMEventType_RUN {
+			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first"
+			b.logger.Warnf("[Blockchain Server] %s (attempted event: %v)", errMsg, eventReq.Event)
+			return nil, errors.NewInvalidArgumentError(errMsg)
+		}
+	}
+
+	// Refuse to transition to RUNNING while the local chain tip is still below
+	// the network's highest hard-coded checkpoint. Pre-checkpoint heights are
+	// guaranteed to be deep history (mainnet's highest is block 938000), so a
+	// node sitting below them is mid-IBD even if a catchup worker thinks it
+	// has finished its current chunk. Going to RUNNING in that state lets the
+	// mempool/validator operate under pre-Genesis output rules and the legacy
+	// service relay tx invs that post-Genesis peers ban on sight
+	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
+	//
+	// The gate only applies when the prior state already implies a "caught
+	// up" claim (LEGACYSYNCING or CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
+	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
+	// downstream services (legacy, p2p) to start syncing, and tx relay is
+	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
+		priorState != blockchain_api.FSMStateType_IDLE.String() {
+		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
-		return nil, err
+		switch err.(type) {
+		case fsm.InvalidEventError, fsm.NoTransitionError:
+			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected in state %s", eventReq.Event.String(), priorState, err))
+		default:
+			return nil, errors.WrapGRPC(err)
+		}
 	}
 
 	state := b.finiteStateMachine.Current()
@@ -2423,6 +2769,57 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.stateChangeTimestamp = time.Now()
 
 	return resp, nil
+}
+
+// guardRunBelowHighestCheckpoint blocks the RUN transition when the local
+// chain tip has not yet reached the highest hard-coded checkpoint for the
+// active network. Returns nil when the chain has reached the checkpoint, the
+// network defines no checkpoints (regtest, brand-new networks), or the store
+// has no chain tip yet (returns a state error so the caller retries later).
+func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
+		return nil
+	}
+
+	highest := HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
+	if highest == 0 {
+		return nil
+	}
+
+	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
+	}
+	if meta == nil {
+		return errors.NewStateError("best block header meta unavailable; refusing RUN")
+	}
+
+	if meta.Height < highest {
+		return errors.NewStateError(
+			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s",
+			meta.Height, highest, b.settings.ChainCfgParams.Name,
+		)
+	}
+
+	return nil
+}
+
+// HighestCheckpointHeight returns the largest Height in the supplied
+// checkpoint list, or 0 if the list is empty. Exported so callers in
+// other packages (e.g. blockvalidation) can share the same definition
+// rather than maintaining a parallel copy.
+func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	var highest uint32
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+		h := uint32(cp.Height)
+		if h > highest {
+			highest = h
+		}
+	}
+	return highest
 }
 
 // Run transitions the blockchain service to the running state.
@@ -2850,4 +3247,357 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 // This method should only be used in tests to simulate subscription manager readiness.
 func (b *Blockchain) SetSubscriptionManagerReadyForTesting(ready bool) {
 	b.subscriptionManagerReady.Store(ready)
+}
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_api.ScheduleBlobDeletionRequest) (*blockchain_api.ScheduleBlobDeletionResponse, error) {
+	if len(req.BlobKey) == 0 {
+		return &blockchain_api.ScheduleBlobDeletionResponse{
+			Scheduled: false,
+			Message:   "blob_key is required",
+		}, nil
+	}
+
+	if req.FileType == "" {
+		return &blockchain_api.ScheduleBlobDeletionResponse{
+			Scheduled: false,
+			Message:   "file_type is required",
+		}, nil
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		ScheduleBlobDeletion(ctx context.Context, req *blockchain_sql.ScheduleRequest) (int64, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	schedReq := &blockchain_sql.ScheduleRequest{
+		BlobKey:        req.BlobKey,
+		FileType:       req.FileType,
+		StoreType:      int32(req.StoreType),
+		DeleteAtHeight: req.DeleteAtHeight,
+	}
+
+	id, err := storeWithBlobDeletion.ScheduleBlobDeletion(ctx, schedReq)
+	if err != nil {
+		b.logger.Errorf("Failed to schedule blob deletion: %v", err)
+		return nil, errors.NewStorageError("failed to schedule deletion", err)
+	}
+
+	return &blockchain_api.ScheduleBlobDeletionResponse{
+		DeletionId: id,
+		Scheduled:  true,
+		Message:    "Deletion scheduled successfully",
+	}, nil
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api.CancelBlobDeletionRequest) (*blockchain_api.CancelBlobDeletionResponse, error) {
+	if len(req.BlobKey) == 0 {
+		return &blockchain_api.CancelBlobDeletionResponse{
+			Cancelled: false,
+			Message:   "blob_key is required",
+		}, nil
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType int32) error
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	err := storeWithBlobDeletion.CancelBlobDeletion(ctx, req.BlobKey, req.FileType, int32(req.StoreType))
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return &blockchain_api.CancelBlobDeletionResponse{
+				Cancelled: false,
+				Message:   "No pending deletion found",
+			}, nil
+		}
+		return nil, err
+	}
+
+	return &blockchain_api.CancelBlobDeletionResponse{
+		Cancelled: true,
+		Message:   "Deletion cancelled",
+	}, nil
+}
+
+// ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain_api.ListScheduledDeletionsRequest) (*blockchain_api.ListScheduledDeletionsResponse, error) {
+	limit := int(req.Limit)
+	if limit == 0 {
+		limit = 100
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		ListScheduledBlobDeletions(ctx context.Context, filters *blockchain_sql.ListFilters) ([]*blockchain_sql.ScheduledDeletion, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	filters := &blockchain_sql.ListFilters{
+		MinHeight:     req.MinHeight,
+		MaxHeight:     req.MaxHeight,
+		StoreType:     int32(req.StoreType),
+		FilterByStore: req.FilterByStore,
+		Limit:         limit,
+		Offset:        int(req.Offset),
+	}
+
+	deletions, total, err := storeWithBlobDeletion.ListScheduledBlobDeletions(ctx, filters)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to list deletions", err)
+	}
+
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      d.StoreType,
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	return &blockchain_api.ListScheduledDeletionsResponse{
+		Deletions:  protoDeletions,
+		TotalCount: int32(total),
+	}, nil
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchain_api.GetPendingBlobDeletionsRequest) (*blockchain_api.GetPendingBlobDeletionsResponse, error) {
+	limit := int(req.Limit)
+	if limit == 0 {
+		limit = 100
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_sql.ScheduledDeletion, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	deletions, err := storeWithBlobDeletion.GetPendingBlobDeletions(ctx, req.Height, limit)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to get pending deletions", err)
+	}
+
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      d.StoreType,
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	return &blockchain_api.GetPendingBlobDeletionsResponse{
+		Deletions: protoDeletions,
+	}, nil
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+func (b *Blockchain) RemoveBlobDeletion(ctx context.Context, req *blockchain_api.RemoveBlobDeletionRequest) (*emptypb.Empty, error) {
+	storeWithBlobDeletion, ok := b.store.(interface {
+		RemoveBlobDeletion(ctx context.Context, id int64) error
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	err := storeWithBlobDeletion.RemoveBlobDeletion(ctx, req.DeletionId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (b *Blockchain) IncrementBlobDeletionRetry(ctx context.Context, req *blockchain_api.IncrementBlobDeletionRetryRequest) (*blockchain_api.IncrementBlobDeletionRetryResponse, error) {
+	storeWithBlobDeletion, ok := b.store.(interface {
+		IncrementBlobDeletionRetry(ctx context.Context, id int64, maxRetries int) (shouldRemove bool, newRetryCount int, err error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	shouldRemove, newRetryCount, err := storeWithBlobDeletion.IncrementBlobDeletionRetry(ctx, req.DeletionId, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.IncrementBlobDeletionRetryResponse{
+		ShouldRemove:  shouldRemove,
+		NewRetryCount: int32(newRetryCount),
+	}, nil
+}
+
+// CompleteBlobDeletions handles batch completion of multiple deletions.
+func (b *Blockchain) CompleteBlobDeletions(ctx context.Context, req *blockchain_api.CompleteBlobDeletionsRequest) (*blockchain_api.CompleteBlobDeletionsResponse, error) {
+	storeWithBatchCompletion, ok := b.store.(interface {
+		CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch blob deletion")
+	}
+
+	removedCount, retryIncrementedCount, err := storeWithBatchCompletion.CompleteBlobDeletions(ctx, req.CompletedIds, req.FailedIds, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	b.logger.Infof("Batch completed: %d removed, %d retry incremented", removedCount, retryIncrementedCount)
+
+	return &blockchain_api.CompleteBlobDeletionsResponse{
+		RemovedCount:          int32(removedCount),
+		RetryIncrementedCount: int32(retryIncrementedCount),
+	}, nil
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error) {
+	storeWithBatchAcquisition, ok := b.store.(interface {
+		AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) ([]*blockchain_sql.ScheduledDeletion, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch acquisition")
+	}
+
+	lockTimeout := int(req.LockTimeoutSeconds)
+	if lockTimeout == 0 {
+		lockTimeout = 300 // Default: 5 minutes
+	}
+
+	deletions, err := storeWithBatchAcquisition.AcquireBlobDeletionBatch(ctx, req.Height, int(req.Limit), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(deletions) == 0 {
+		return &blockchain_api.AcquireBlobDeletionBatchResponse{
+			BatchToken: "",
+			Deletions:  nil,
+		}, nil
+	}
+
+	// Generate batch token
+	token := b.generateBatchToken()
+
+	// Store batch token info
+	deletionIDs := make([]int64, len(deletions))
+	for i, d := range deletions {
+		deletionIDs[i] = d.ID
+	}
+
+	b.batchTokensMu.Lock()
+	b.batchTokens[token] = &blobDeletionBatchToken{
+		token:         token,
+		acquiredAt:    time.Now(),
+		expiresAt:     time.Now().Add(time.Duration(lockTimeout) * time.Second),
+		deletionIDs:   deletionIDs,
+		deletionCount: len(deletions),
+	}
+	b.batchTokensMu.Unlock()
+
+	// Convert to protobuf format
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      d.StoreType,
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	b.logger.Infof("Acquired blob deletion batch: token=%s, count=%d, height=%d", token, len(deletions), req.Height)
+
+	return &blockchain_api.AcquireBlobDeletionBatchResponse{
+		BatchToken: token,
+		Deletions:  protoDeletions,
+	}, nil
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (b *Blockchain) CompleteBlobDeletionBatch(ctx context.Context, req *blockchain_api.CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error) {
+	// Validate batch token
+	b.batchTokensMu.Lock()
+	tokenInfo, exists := b.batchTokens[req.BatchToken]
+	if !exists {
+		b.batchTokensMu.Unlock()
+		return nil, errors.NewInvalidArgumentError("invalid or expired batch token")
+	}
+
+	// Check if expired
+	if time.Now().After(tokenInfo.expiresAt) {
+		delete(b.batchTokens, req.BatchToken)
+		b.batchTokensMu.Unlock()
+		return nil, errors.NewInvalidArgumentError("batch token expired")
+	}
+
+	// Remove token (it's single-use)
+	delete(b.batchTokens, req.BatchToken)
+	b.batchTokensMu.Unlock()
+
+	// Complete the batch
+	storeWithBatchCompletion, ok := b.store.(interface {
+		CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch completion")
+	}
+
+	removedCount, retryIncrementedCount, err := storeWithBatchCompletion.CompleteBlobDeletions(ctx, req.CompletedIds, req.FailedIds, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	b.logger.Infof("Batch %s completed: %d removed, %d retry incremented", req.BatchToken, removedCount, retryIncrementedCount)
+
+	return &emptypb.Empty{}, nil
+}
+
+// generateBatchToken generates a unique batch token.
+func (b *Blockchain) generateBatchToken() string {
+	// Use timestamp + counter for uniqueness (no crypto needed for batch tokens)
+	return fmt.Sprintf("batch_%d_%p", time.Now().UnixNano(), b)
+}
+
+// cleanupExpiredBatchTokens removes expired batch tokens periodically.
+// This should be called as a goroutine during service startup.
+func (b *Blockchain) cleanupExpiredBatchTokens() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			return
+		case <-ticker.C:
+			b.batchTokensMu.Lock()
+			now := time.Now()
+			for token, info := range b.batchTokens {
+				if now.After(info.expiresAt) {
+					b.logger.Warnf("Cleaning up expired batch token: %s (acquired: %s, expired: %s)",
+						token, info.acquiredAt, info.expiresAt)
+					delete(b.batchTokens, token)
+				}
+			}
+			b.batchTokensMu.Unlock()
+		}
+	}
 }

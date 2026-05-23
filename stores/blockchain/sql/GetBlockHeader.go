@@ -133,6 +133,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.invalid
 		,b.inserted_at
 		,b.processed_at
+		,b.median_time_past
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -169,6 +170,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.Invalid,
 		&insertedAt,
 		&processedAt,
+		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
@@ -204,10 +206,10 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 
 		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to extract miner", err)
+			s.logger.Debugf("failed to extract miner in GetBlockHeader (block may be invalid): %v", err)
+		} else {
+			blockHeaderMeta.Miner = miner
 		}
-
-		blockHeaderMeta.Miner = miner
 	}
 
 	// Cache the result in response cache

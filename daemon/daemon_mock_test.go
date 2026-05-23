@@ -131,3 +131,8 @@ func (ml *mockLogger) Duplicate(_ ...ulogger.Option) ulogger.Logger {
 func (ml *mockLogger) Infof(format string, args ...interface{}) {
 	ml.logs = append(ml.logs, fmt.Sprintf(format, args...))
 }
+
+// WithTraceContext returns the same logger since mockLogger is a test logger.
+func (ml *mockLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return ml
+}

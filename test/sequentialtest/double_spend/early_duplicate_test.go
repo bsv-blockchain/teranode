@@ -91,7 +91,7 @@ func testEarlyDuplicatePartiallySpentAndPruned(t *testing.T, utxoStore string) {
 	_, block102 := td.CreateTestBlock(t, block101, 10202, duplicateTx, spendingTx, duplicateTx)
 
 	// Process the block - should fail
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with early duplicate transaction should be rejected even when partially spent")
 	require.Contains(t, err.Error(), "duplicate transaction", "Error should mention duplicate transaction")
 
@@ -148,7 +148,7 @@ func testEarlyDuplicateNotSpent(t *testing.T, utxoStore string) {
 	_, block102 := td.CreateTestBlock(t, block101, 10203, duplicateTx, duplicateTx)
 
 	// Process the block - should fail
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy", 0)
 	require.Error(t, err, "Block with duplicate transaction should be rejected")
 	require.Contains(t, err.Error(), "duplicate transaction", "Error should mention duplicate transaction")
 

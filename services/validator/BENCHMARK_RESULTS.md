@@ -34,20 +34,7 @@ Full validation includes all checks: ratio validation, script standardness, conf
 
 **Key Finding**: Performance scales linearly with the number of inputs. Even large consolidations (1000 inputs) complete in under 0.4ms.
 
-### 3. Script Validation (`isStandardInputScript`)
-
-Performance of push-only script validation:
-
-| Script Type | Time per Operation |
-|-------------|-------------------|
-| Empty script | 4.356 ns |
-| Standard P2PKH unlock | 422.9 ns |
-| Complex push-only (10 pushes) | 861.8 ns |
-| Non-standard with ops | 177.6 ns |
-
-**Key Finding**: Script validation is efficient, with typical P2PKH scripts validated in ~423ns.
-
-### 4. Fee Validation Impact Comparison
+### 3. Fee Validation Impact Comparison
 
 Comparison of fee validation with and without consolidation checks:
 

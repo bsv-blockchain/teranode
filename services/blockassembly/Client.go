@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -15,6 +15,10 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/tracing"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // batchItem represents an item in a transaction batch.
@@ -55,7 +59,7 @@ type Client struct {
 	batchCh chan []*batchItem
 
 	// batcher manages transaction batching
-	batcher batcher.Batcher[batchItem]
+	batcher *batcher.Batcher[batchItem]
 }
 
 // NewClient creates a new block assembly client.
@@ -87,6 +91,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		&util.ConnectionOptions{
 			MaxRetries:   maxRetries,
 			RetryBackoff: retryBackoff,
+			CallerName:   "blockassembly",
 		}, tSettings,
 	)
 	if err != nil {
@@ -113,7 +118,20 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
+		batcher.WithName("blockassembly_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
+	)
+	if tSettings.BatcherDrainMode {
+		b.SetDrainMode(true)
+	}
+	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
+		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
+		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
+	}
+	client.batcher = b
 
 	return client, nil
 }
@@ -133,6 +151,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		CallerName:   "blockassembly",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)
@@ -158,7 +177,20 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
+		batcher.WithName("blockassembly_client"),
+		batcher.WithLogger(logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("blockassembly").OTelTracer()),
+	)
+	if tSettings.BatcherDrainMode {
+		b.SetDrainMode(true)
+	}
+	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
+		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
+		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
+	}
+	client.batcher = b
 
 	return client, nil
 }
@@ -232,7 +264,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	} else {
 		/* batch mode */
 		done := make(chan error)
-		s.batcher.Put(&batchItem{
+		s.batcher.PutCtx(ctx, &batchItem{
 			req:  req,
 			done: done,
 		})
@@ -355,12 +387,39 @@ func (s *Client) GenerateBlocks(ctx context.Context, req *blockassembly_api.Gene
 	return unwrappedErr
 }
 
+// GetCandidateBlock retrieves block metadata for an existing mining candidate.
+// Returns the 80-byte header, coinbase tx, subtree hashes, and tx count.
+func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
+	res, err := s.client.GetCandidateBlock(ctx, &blockassembly_api.GetCandidateBlockRequest{
+		Id: candidateID,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return res, nil
+}
+
 // sendBatchToBlockAssembly sends a batch of transactions to block assembly.
+// Uses columnar format if enabled in settings, otherwise uses traditional row format.
+//
+// The columnar format reduces CPU by 15-20% and GC pressure by 50% at high throughput (>2M tx/sec)
+// by storing transaction data in column-oriented arrays instead of row-oriented structures.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - batch: Batch of transactions to send
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
+	if s.settings.BlockAssembly.UseColumnarBatch {
+		s.sendBatchColumnar(ctx, batch)
+	} else {
+		s.sendBatchRowOriented(ctx, batch)
+	}
+}
+
+// sendBatchRowOriented sends batch using traditional row-oriented format (existing implementation).
+// This is the backward-compatible format that works with all block assembly versions.
+func (s *Client) sendBatchRowOriented(ctx context.Context, batch []*batchItem) {
 	txRequests := make([]*blockassembly_api.AddTxRequest, len(batch))
 	for i, item := range batch {
 		txRequests[i] = item.req
@@ -384,6 +443,151 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	for _, item := range batch {
 		item.done <- nil
 	}
+}
+
+// sendBatchColumnar sends batch using optimized columnar format.
+// Provides 15-20% CPU reduction and 50% GC pressure reduction compared to row-oriented format.
+func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
+	columnarReq, err := s.convertToColumnarFormat(batch)
+	if err != nil {
+		s.logger.Errorf("failed to convert batch to columnar format: %v", err)
+		for _, item := range batch {
+			item.done <- err
+		}
+		return
+	}
+
+	_, err = s.client.AddTxBatchColumnar(ctx, columnarReq)
+	if err != nil {
+		// Peer server predates PR #889 and doesn't implement the columnar
+		// RPC. Fall back to the row-oriented path for this call so a
+		// rolling-deploy mismatch doesn't stall tx ingestion. No
+		// connection-level stickiness: each batch re-tries columnar
+		// independently. Costs one wasted RPC per batch against a
+		// persistently-old server; acceptable for the simpler code path.
+		if status.Code(err) == codes.Unimplemented {
+			s.logger.Debugf("[blockassembly] columnar AddTxBatch unimplemented on peer; falling back to row-oriented batch (rolling deploy?): %v", err)
+			s.sendBatchRowOriented(ctx, batch)
+			return
+		}
+
+		s.logger.Errorf("%v", err)
+
+		for _, item := range batch {
+			item.done <- errors.UnwrapGRPC(err)
+		}
+
+		return
+	}
+
+	for _, item := range batch {
+		item.done <- nil
+	}
+}
+
+// convertToColumnarFormat converts a batch of items to columnar format.
+// Single allocation strategy: pre-allocate all arrays based on batch size to minimize allocations.
+//
+// OPTIMIZATION: This version deserializes TxInpoints on the Client (which runs on multiple machines)
+// and sends them in columnar format. This shifts deserialization work away from the single-machine Server.
+//
+// The columnar format packs all data into contiguous arrays:
+//   - txids_packed: All 32-byte TXIDs concatenated
+//   - fees: All fees in a single array
+//   - sizes: All sizes in a single array
+//   - parent_tx_hashes_packed: All parent tx hashes (from TxInpoints) concatenated
+//   - parent_tx_offsets: Offset table for parent hashes per transaction
+//   - vout_idxs_packed: Count-prefixed packed vouts in the exact shape the
+//     server's TxInpoints.voutIdxs stores internally. For each parent, one
+//     uint32 count word followed by that many vout-value words, concatenated
+//     across all transactions.
+//   - vout_idxs_tx_offsets: Per-tx offsets into vout_idxs_packed.
+//
+// This pushes all TxInpoints layout work to the Client (horizontally scalable
+// validators) so the single-instance block-assembly Server can construct
+// TxInpoints from a per-tx slice with zero allocation
+// (subtree.NewTxInpointsFromPacked).
+func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api.AddTxBatchColumnarRequest, error) {
+	batchSize := len(batch)
+	if batchSize == 0 {
+		return nil, errors.NewInvalidArgumentError("empty batch")
+	}
+
+	// Pre-allocate with exact/estimated sizes (minimize allocations)
+	// These use exact capacity to avoid reallocation
+	txidsPacked := make([]byte, batchSize*32)
+	fees := make([]uint64, batchSize)
+	sizes := make([]uint64, batchSize)
+	parentTxOffsets := make([]uint32, batchSize+1)
+	voutIdxsTxOffsets := make([]uint32, batchSize+1)
+
+	// For variable-length fields, estimate capacity based on typical usage
+	// Estimate: avg 3 parent hashes per tx
+	estimatedParentHashes := batchSize * 3
+	parentTxHashesPacked := make([]byte, 0, estimatedParentHashes*32)
+
+	// Estimate: avg 2 vout indices per parent hash, plus a count word per
+	// parent. Sized as estimatedParentHashes * 3 ≈ count word + 2 values.
+	voutIdxsPacked := make([]uint32, 0, estimatedParentHashes*3)
+
+	// Start with offset 0
+	parentTxOffsets[0] = 0
+	voutIdxsTxOffsets[0] = 0
+
+	currentParentHashCount := uint32(0)
+
+	for i, item := range batch {
+		req := item.req
+
+		// Validate TXID length
+		if len(req.Txid) != 32 {
+			return nil, errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid))
+		}
+
+		// Pack basic columns - use copy for fixed-size arrays to avoid bounds checks
+		copy(txidsPacked[i*32:(i+1)*32], req.Txid)
+		fees[i] = req.Fee
+		sizes[i] = req.Size
+
+		// Deserialize TxInpoints on the Client side
+		txInpoints, err := subtree.NewTxInpointsFromBytes(req.TxInpoints)
+		if err != nil {
+			return nil, errors.NewInvalidArgumentError("failed to deserialize TxInpoints at index %d: %v", i, err)
+		}
+
+		// Pack parent transaction hashes
+		parentHashes := txInpoints.GetParentTxHashes()
+		for j := range parentHashes {
+			parentTxHashesPacked = append(parentTxHashesPacked, parentHashes[j][:]...)
+			currentParentHashCount++
+		}
+		parentTxOffsets[i+1] = currentParentHashCount
+
+		// Pack vouts in count-prefixed layout, one parent at a time. The
+		// resulting slice is byte-identical to TxInpoints.voutIdxs on the
+		// Server side, so it can be aliased directly with no decoding.
+		for j := range parentHashes {
+			vouts, err := txInpoints.GetParentVoutsAtIndex(j)
+			if err != nil {
+				return nil, errors.NewInvalidArgumentError("failed to read vouts at parent %d of tx %d: %v", j, i, err)
+			}
+
+			voutIdxsPacked = append(voutIdxsPacked, uint32(len(vouts)))
+			voutIdxsPacked = append(voutIdxsPacked, vouts...)
+		}
+
+		voutIdxsTxOffsets[i+1] = uint32(len(voutIdxsPacked))
+	}
+
+	return &blockassembly_api.AddTxBatchColumnarRequest{
+		TxidsPacked:          txidsPacked,
+		Fees:                 fees,
+		Sizes:                sizes,
+		ParentTxHashesPacked: parentTxHashesPacked,
+		ParentTxOffsets:      parentTxOffsets,
+		VoutIdxsPacked:       voutIdxsPacked,
+		VoutIdxsTxOffsets:    voutIdxsTxOffsets,
+	}, nil
 }
 
 // ResetBlockAssembly triggers a reset of the block assembly state.
@@ -420,6 +624,26 @@ func (s *Client) ResetBlockAssemblyFully(ctx context.Context) error {
 	}
 
 	return unwrappedErr
+}
+
+// ResetBlockAssemblyValidateInputs performs a full reset with UTXO input validation.
+// For each unmined transaction, verifies inputs are still spent by this tx.
+// If an input is spent by a different tx, marks the tx as conflicting and excludes it.
+func (s *Client) ResetBlockAssemblyValidateInputs(ctx context.Context) error {
+	_, err := s.client.ResetBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
+}
+
+// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
+func (s *Client) CheckBlockAssemblyValidateInputs(ctx context.Context) error {
+	_, err := s.client.CheckBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+	return errors.UnwrapGRPC(err)
 }
 
 // GetBlockAssemblyState retrieves the current state of block assembly.

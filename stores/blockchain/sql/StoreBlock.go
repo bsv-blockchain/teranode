@@ -22,6 +22,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"modernc.org/sqlite"
 )
@@ -104,13 +106,164 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
-	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
+	// Acquire slowPathMu for the duration of every StoreBlock call. The cost is
+	// one uncontended mutex acquire on the common path; the benefit is that
+	// the read of preBestHash, the INSERT, the maxBlockID CAS, and any
+	// post-INSERT classification all observe a serialized view of the chain.
+	//
+	// Without this lock, two concurrent same-parent extensions can both read
+	// the same cached preBestHash, both compute onMainChain=true, both INSERT
+	// rows with on_main_chain=true, and both succeed at the maxBlockID CAS in
+	// sequence — leaving two flagged siblings at the same height. The CAS
+	// only proves "I am at the head of the ID sequence", not "I have the
+	// chain_work tiebreak best": canonical selection is by chain_work DESC,
+	// peer_id ASC, id ASC, so a CAS-winning sibling can still be the loser.
+	// Serializing forces the second writer to observe the first's row as the
+	// new best, which makes its onMainChain calculation false (parent !=
+	// preBestHash anymore), routes it through the slow-path classifier, and
+	// reconciles correctly.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
+	// Capture the best block hash before insert. Used for:
+	//   1. Reorg detection after insert
+	//   2. Determining whether to set on_main_chain = true directly in the INSERT
+	//      (avoids a post-insert UPDATE for the common extend-chain case)
+	// getBestBlockID is cached, so this is essentially free. The reorg-case
+	// reconciliation does not depend on the caller's pre-best snapshot —
+	// reconcileOnMainChain re-reads the actual best inside its own transaction
+	// to avoid races against concurrent fast-path inserts.
+	var preBestHash *chainhash.Hash
+	{
+		var preBestErr error
+		_, preBestHash, preBestErr = s.getBestBlockID(ctx)
+		if preBestErr != nil {
+			s.logger.Warnf("StoreBlock: failed to get pre-insert best block ID: %v", preBestErr)
+		}
+	}
+
+	// A block is on the main chain at insert time if it extends the current best block.
+	// If preBestHash is nil (empty DB, or getBestBlockID failed) we insert as false and
+	// let rebuildOnMainChainFlag correct it (genesis case, or startup recovery).
+	// Invalid blocks are never on the main chain.
+	onMainChain := !storeBlockOptions.Invalid &&
+		preBestHash != nil &&
+		block.Header.HashPrevBlock != nil &&
+		*block.Header.HashPrevBlock == *preBestHash
+
+	// mainChainRebuilding only needs to cover the window where on_main_chain
+	// is in flux — i.e. when the INSERT writes false but the row may turn out
+	// to be the new best (reorg / fork). The common extend (onMainChain=true)
+	// is written atomically with on_main_chain=true and needs no guard.
+	if !onMainChain {
+		s.mainChainRebuilding.Add(1)
+		defer s.mainChainRebuilding.Add(-1)
+	}
+
+	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
 	if err != nil {
 		return 0, height, err
 	}
 
-	// Reset response cache to invalidate cached block headers and best block
+	// Reset response cache to invalidate cached best block ID and headers
 	s.ResetResponseCache()
+
+	// Fast path: the block was inserted with onMainChain=true (its parent is the
+	// pre-insert best block) AND we won the race for the highest ID. In this
+	// case we can skip the post-insert getBestBlockID query entirely — the new
+	// block is necessarily the new best (its chain_work is strictly greater
+	// than its parent, which was the previous best). This halves the Postgres
+	// round-trips per StoreBlock call during sequential seeding / catch-up.
+	//
+	// The maxBlockID.CompareAndSwap guards against a concurrent writer: if we
+	// are not the highest ID, another StoreBlock inserted while we were mid-op
+	// and we must fall through to the slow path for authoritative classification.
+	//
+	// We prime the getBestBlockID cache with our identity so the next caller's
+	// pre-insert lookup is a cache hit (no DB round-trip). Begin() is called
+	// after ResetResponseCache() so the captured generation matches current; a
+	// concurrent invalidation between Begin and Set is still safe (the Set is a
+	// no-op under generational tracking).
+	if onMainChain && s.maxBlockID.CompareAndSwap(newBlockID-1, newBlockID) {
+		// Defensive symmetry with slow-path Case 3 at line 218: the CAS above
+		// already advanced maxBlockID from newBlockID-1 to newBlockID, so this
+		// call is a no-op under the max-CAS loop in updateMaxBlockID. Kept
+		// explicit so the intent ("the new tip is maxBlockID") is identical to
+		// the slow path and survives future refactors of the race-detection gate.
+		s.updateMaxBlockID(newBlockID)
+
+		cacheID := chainhash.HashH([]byte("getBestBlockID"))
+		cacheOp := s.responseCache.Begin(cacheID)
+		cacheOp.Set(bestBlockIDResult{id: uint32(newBlockID), hash: block.Hash()}, s.cacheTTL)
+
+		return newBlockID, height, nil
+	}
+
+	// Slow path — classifier for fork/reorg/orphan insertions, or concurrent-
+	// writer races where onMainChain was true but we lost the maxBlockID race.
+	postBestCtx, postBestCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+	defer postBestCancel()
+	postBestID, _, bestErr := s.getBestBlockID(postBestCtx)
+	if bestErr != nil {
+		s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
+	} else if uint64(postBestID) != newBlockID {
+		// Case 1: fork — new block is not the best. The INSERT wrote
+		// on_main_chain=false when onMainChain was false at compute time, so
+		// no clear is needed in that path. But if onMainChain was true and
+		// the chain_work tiebreak nevertheless picked a sibling above us (a
+		// scenario that slowPathMu serialization should prevent under
+		// current code, but which the previous Case 1 comment glossed over),
+		// the row is now flagged true on a fork. Clear it defensively, with
+		// mainChainRebuilding bracketing so concurrent readers fall back to
+		// the CTE for the brief inconsistency window.
+		if onMainChain {
+			s.mainChainRebuilding.Add(1)
+			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
+				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
+			}
+			s.mainChainRebuilding.Add(-1)
+		}
+		if s.useInMemoryChainCheck {
+			s.blockTimestampCache.Clear()
+			s.updateMaxBlockID(newBlockID)
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	} else if preBestHash == nil || *block.Header.HashPrevBlock != *preBestHash {
+		// Case 2: new block is the best but doesn't extend the old best (reorg),
+		// or preBestHash was unavailable. The mainChainRebuilding guard and
+		// slowPathMu are already held from the !onMainChain branch above —
+		// they cover the full window from before the INSERT through reconcile.
+		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+		defer rebuildCancel()
+		if s.useInMemoryChainCheck {
+			s.blockTimestampCache.Clear()
+			s.updateMaxBlockID(newBlockID)
+			s.resetChainWalkCache()
+		}
+		// Reconcile against the actual chain_work-best block read inside the
+		// helper transaction. We pass no caller-side tip IDs because they are
+		// inherently racy (a concurrent fast-path StoreBlock can extend the
+		// best between our INSERT and the helper's transaction).
+		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
+			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
+		}
+		if s.useInMemoryChainCheck {
+			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
+	} else if s.useInMemoryChainCheck {
+		// Case 3: normal extend — update maxBlockID for the in-memory upper-bound check.
+		s.updateMaxBlockID(newBlockID)
+	}
 
 	return newBlockID, height, nil
 }
@@ -209,7 +362,7 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - error: Any error encountered during the operation, including validation failures
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions) (uint64, uint32, []byte, bool, error) {
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -221,10 +374,17 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
 	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to get previous block data for block %s: %v", block.Hash().String(), err)
 		return 0, 0, nil, false, err
 	}
 
 	storeAsInvalid := previousBlockInvalid || storeBlockOptions.Invalid
+
+	// Genesis is always on the main chain (it IS the chain). Override the caller's
+	// value, which may be false when the DB was empty and getBestBlockID returned nothing.
+	if genesis {
+		onMainChain = !storeAsInvalid
+	}
 
 	// Determine if we should use a custom ID or auto-increment
 	// ID=0 is special: it means "not set" for regular blocks, but "use ID=0" for genesis
@@ -259,11 +419,14 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+	,coinbase_bump
+	,on_main_chain
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id
 			`
 		} else {
@@ -286,11 +449,14 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+	,coinbase_bump
+	,on_main_chain
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		}
@@ -316,11 +482,14 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+	,coinbase_bump
+	,on_main_chain
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING id
 			`
 		} else {
@@ -343,11 +512,14 @@ INSERT INTO blocks (
 	,subtrees
 	,peer_id
 	,coinbase_tx
+	,median_time_past
 	,invalid
 	,mined_set
 	,subtrees_set
 	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+	,coinbase_bump
+	,on_main_chain
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 RETURNING id
 			`
 		}
@@ -358,12 +530,19 @@ RETURNING id
 		return 0, 0, nil, false, err // Return error from calculation
 	}
 
+	// Calculate Median Time Past (MTP) for this block
+	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height, previousBlockID)
+	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to calculate MTP for height %d (CSVHeight=%d): %v", height, s.chainParams.CSVHeight, err)
+		return 0, 0, nil, false, err
+	}
+
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
 		return 0, 0, nil, false, errors.NewStorageError("failed to get subtree bytes", err)
 	}
 
-	var coinbaseBytes []byte
+	coinbaseBytes := []byte{}
 	if block.CoinbaseTx != nil {
 		coinbaseBytes = block.CoinbaseTx.Bytes()
 	}
@@ -381,6 +560,12 @@ RETURNING id
 			// SQLite stores timestamps as TEXT - format as "YYYY-MM-DD HH:MM:SS"
 			persistedAt = now.UTC().Format("2006-01-02 15:04:05")
 		}
+	}
+
+	// coinbaseBump is nil for blocks without a proof (e.g., peer-received or pre-migration)
+	var coinbaseBump []byte
+	if len(block.CoinbaseBUMP) > 0 {
+		coinbaseBump = block.CoinbaseBUMP
 	}
 
 	if useCustomID {
@@ -403,10 +588,13 @@ RETURNING id
 			subtreeBytes,
 			peerID,
 			coinbaseBytes,
+			medianTimePast,
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
+			coinbaseBump,
+			onMainChain,
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
@@ -427,10 +615,13 @@ RETURNING id
 			subtreeBytes,
 			peerID,
 			coinbaseBytes,
+			medianTimePast,
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
 			persistedAt,
+			coinbaseBump,
+			onMainChain,
 		)
 	}
 
@@ -448,6 +639,12 @@ RETURNING id
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
 		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
+	}
+
+	// Update MTP cache with this block's timestamp for future MTP calculations.
+	// Only cache valid blocks — invalid blocks are excluded from MTP queries.
+	if !storeAsInvalid {
+		s.blockTimestampCache.Add(height, block.Header.Timestamp)
 	}
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
@@ -476,9 +673,15 @@ RETURNING id
 //   - error: A domain-specific error with appropriate context, typically wrapped as
 //     a BlockAlreadyExistsError for duplicates or a more general StorageError for other issues
 func (*SQL) parseSQLError(err error, block *model.Block) error {
-	// check whether this is a postgres exists constraint error
+	// check whether this is a postgres exists constraint error (pgx driver)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrUniqueViolation {
+		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+	}
+
+	// check whether this is a postgres exists constraint error (lib/pq fallback)
 	var pqErr *pq.Error
-	if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
+	if errors.As(err, &pqErr) && pqErr.Code == usql.PgErrUniqueViolation {
 		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 	}
 
@@ -702,6 +905,115 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 	}
 
 	return nil // No validation needed or validation passed
+}
+
+// calculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
+// MTP is defined as the median of the timestamps of the previous 11 blocks (BIP113).
+//
+// BIP113 (Median Time Past) was activated as part of the CSV softfork at a specific block height
+// on each network (mainnet: 419328, testnet3: 770112, etc.). Before this activation height,
+// MTP was not used and this function returns 0.
+//
+// Parameters:
+//   - ctx: Context for the database operation
+//   - height: The block height to calculate MTP for
+//   - parentBlockID: The database ID of the parent block, used to walk the correct chain
+//
+// Returns:
+//   - uint32: The MTP value as Unix timestamp, or 0 if height < CSVHeight or height < 11
+//   - error: Error if block timestamps cannot be retrieved
+func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint32, parentBlockID uint64) (uint32, error) {
+	// BIP113 is only active from CSVHeight onwards
+	// Before CSVHeight, MTP was not used
+	if height < s.chainParams.CSVHeight {
+		return 0, nil
+	}
+
+	// MTP requires at least 11 previous blocks
+	// For early blocks (height < 11), return 0
+	// MTP of block N is the median of timestamps from blocks [N-11, N-1] (previous 11 blocks)
+	const medianTimeBlocks = 11
+	if height < medianTimeBlocks {
+		return 0, nil
+	}
+
+	// Calculate the range: [height-11, height-1] (previous 11 blocks)
+	startHeight := height - medianTimeBlocks
+	endHeight := height - 1
+
+	// Fast path: check in-memory cache before hitting the database.
+	if cached := s.blockTimestampCache.GetRange(startHeight, endHeight); cached != nil {
+		return calculateMTPFromTimestamps(cached)
+	}
+
+	// Slow path: walk back through the parent chain from the parent block.
+	// This ensures we only get timestamps from the actual chain being extended,
+	// not from fork blocks that happen to share the same height range.
+	timestamps, err := s.fetchBlockTimestampsByParentChain(ctx, parentBlockID, medianTimeBlocks)
+	if err != nil {
+		return 0, err
+	}
+
+	return calculateMTPFromTimestamps(timestamps)
+}
+
+// fetchBlockTimestampsByParentChain retrieves block timestamps by walking back through
+// the parent_id chain starting from the given block. This correctly handles forks by
+// only following the chain that the current block is being built on, rather than
+// querying by height range which can return timestamps from competing fork blocks.
+func (s *SQL) fetchBlockTimestampsByParentChain(ctx context.Context, startBlockID uint64, count int) ([]uint32, error) {
+	q := `
+		WITH RECURSIVE chain AS (
+			SELECT block_time, parent_id, 1 AS depth
+			FROM blocks WHERE id = $1
+			UNION ALL
+			SELECT b.block_time, b.parent_id, c.depth + 1
+			FROM blocks b
+			JOIN chain c ON b.id = c.parent_id
+			WHERE c.depth < $2
+		)
+		SELECT block_time FROM chain ORDER BY depth DESC
+	`
+	rows, err := s.db.QueryContext(ctx, q, startBlockID, count)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to walk parent chain from block ID %d for %d blocks", startBlockID, count, err)
+	}
+	defer rows.Close()
+
+	timestamps := make([]uint32, 0, count)
+	for rows.Next() {
+		var blockTime uint32
+		if err := rows.Scan(&blockTime); err != nil {
+			return nil, errors.NewStorageError("failed to scan block timestamp", err)
+		}
+		timestamps = append(timestamps, blockTime)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("error iterating block timestamps", err)
+	}
+
+	if len(timestamps) != count {
+		return nil, errors.NewStorageError("expected %d timestamps walking parent chain from block ID %d, got %d", count, startBlockID, len(timestamps))
+	}
+
+	return timestamps, nil
+}
+
+// calculateMTPFromTimestamps computes the Median Time Past from a slice of
+// block timestamps (expected to be in ascending height order).
+func calculateMTPFromTimestamps(timestamps []uint32) (uint32, error) {
+	times := make([]time.Time, len(timestamps))
+	for i, ts := range timestamps {
+		times[i] = time.Unix(int64(ts), 0)
+	}
+
+	medianTime, err := model.CalculateMedianTimestamp(times)
+	if err != nil {
+		return 0, errors.NewStorageError("failed to calculate median timestamp", err)
+	}
+
+	return uint32(medianTime.Unix()), nil
 }
 
 // getCumulativeChainWork calculates the total proof-of-work up to and including this block.

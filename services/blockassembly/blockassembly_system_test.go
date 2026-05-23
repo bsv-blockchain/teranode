@@ -59,6 +59,8 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	baPort := getFreePort(t)
 	tSettings.BlockAssembly.GRPCListenAddress = fmt.Sprintf("localhost:%d", baPort)
 	tSettings.BlockAssembly.GRPCAddress = fmt.Sprintf("localhost:%d", baPort)
+	// Set DoubleSpendWindow to 0 so transactions are dequeued immediately in tests
+	tSettings.BlockAssembly.DoubleSpendWindow = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	memStore := memory.New()
@@ -303,17 +305,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -322,7 +324,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	var s []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		// Use internal method to get subtrees directly (gRPC client doesn't return SubtreeSlices)
-		_, subtrees, err := ba.blockAssembler.getMiningCandidate()
+		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 		if err != nil {
 			return false
 		}
@@ -440,15 +442,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -468,19 +470,21 @@ func TestShouldHandleReorg(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for Chain A block to be processed")
 
-	// Wait for the block assembly service to process the block
+	// Wait for the block assembly service to process the block AND for transactions to be available
+	var mc1 *model.MiningCandidate
+	var st1 []*subtree.Subtree
 	require.Eventually(t, func() bool {
-		mc1, _, err := ba.blockAssembler.getMiningCandidate()
+		var err error
+		mc1, st1, err = ba.blockAssembler.GetMiningCandidate(context.Background())
 		if err != nil || mc1 == nil {
 			return false
 		}
 		prevHash := chainhash.Hash(mc1.PreviousHash)
-		return prevHash.String() == chainAHeader1.Hash().String()
+		// Wait for both correct previous hash AND subtrees to be available
+		return prevHash.String() == chainAHeader1.Hash().String() && len(st1) > 0
 	}, 5*time.Second, 100*time.Millisecond, "Timeout waiting for block assembly to process the block")
 
 	// Verify transactions in original chain
-	mc1, st1, err := ba.blockAssembler.getMiningCandidate()
-	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, st1)
 
@@ -510,7 +514,7 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
-	mc2, st2, err := ba.blockAssembler.getMiningCandidate()
+	mc2, st2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, st2)
@@ -542,6 +546,30 @@ func TestShouldHandleReorg(t *testing.T) {
 }
 
 // waitForBestBlockHash waits for the best block to match the expected hash
+// waitForAssemblerBlock polls until the block assembler's current block matches the
+// expected hash or the timeout elapses. This is used after a reorg to ensure the
+// assembler has finished processing (including reloading unmined transactions) before
+// assertions are made about the mining candidate.
+func waitForAssemblerBlock(ctx context.Context, assembler *BlockAssembler, expectedHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			header, _ := assembler.CurrentBlock()
+			if header != nil && header.Hash().IsEqual(expectedHash) {
+				return nil
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return errors.NewProcessingError("timeout waiting for block assembler to adopt block %s", expectedHash)
+}
+
 func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.ClientI, expectedHash *chainhash.Hash, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -654,15 +682,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")
@@ -716,7 +744,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
 
-	mc1, subtrees1, err := ba.blockAssembler.getMiningCandidate()
+	mc1, subtrees1, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
@@ -743,11 +771,14 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for reorganization to complete")
 
-	// Additional wait to ensure block assembly has processed the reorg
-	time.Sleep(500 * time.Millisecond)
+	// Wait for block assembly to adopt Chain B as its current block, then wait for it
+	// to finish reloading unmined transactions. Polling is more reliable than a fixed
+	// sleep on slow CI runners where 500ms is not sufficient.
+	err = waitForAssemblerBlock(ctx, ba.blockAssembler, chainBHeader1.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for block assembler to adopt Chain B")
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.blockAssembler.getMiningCandidate()
+	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
@@ -793,6 +824,268 @@ func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
 	_, err := ba.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
 	require.Error(t, err, "Should return error for bad coinbase length")
 	require.Contains(t, err.Error(), "bad coinbase length")
+}
+
+// TestResetWithBlockchainAhead_Integration verifies that when block assembly performs
+// a reset() while blockchain is ahead by multiple blocks, ALL intermediate moveForward
+// blocks get their processed_at timestamp set (not just the last one).
+//
+// This is an integration test using the full blockchain daemon (gRPC, real stores)
+// that exercises the same bug as the unit test
+// TestResetWithBlockchainAhead_MissesIntermediateBlockProcessing but through the
+// full service stack.
+//
+// Bug 1: SubtreeProcessor.reset() only called finalizeBlockProcessing (and thus
+// SetBlockProcessedAt) for the LAST moveForward block. Intermediate blocks never
+// got processed_at set.
+func TestResetWithBlockchainAhead_Integration(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	// Get initial state
+	initialHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Initial block hash: %s", initialHeader.Hash())
+
+	// Build chain of 4 blocks
+	chainBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	headers := make([]*model.BlockHeader, 4)
+	prevHash := initialHeader.Hash()
+	for i := 0; i < 4; i++ {
+		headers[i] = &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: &chainhash.Hash{},
+			Nonce:          uint32(i + 1),
+			Bits:           *chainBits,
+			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		}
+		prevHash = headers[i].Hash()
+	}
+
+	// Add all 4 blocks
+	for i, header := range headers {
+		err = ba.blockchainClient.AddBlock(ctx, &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}, "", options.WithMinedSet(true))
+		require.NoError(t, err, "failed to add block %d", i+1)
+	}
+
+	// Wait for blockchain to be at block 4
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, headers[3].Hash(), 10*time.Second)
+	require.NoError(t, err, "timeout waiting for blockchain to reach block 4")
+
+	// Wait for BA to process up to block 4
+	require.Eventually(t, func() bool {
+		currentHeader, _ := ba.blockAssembler.CurrentBlock()
+		return currentHeader.Hash().IsEqual(headers[3].Hash())
+	}, 10*time.Second, 100*time.Millisecond, "timeout waiting for BA to process block 4")
+
+	t.Log("BA is at block 4, now setting up reset scenario...")
+
+	// Clear processed_at for blocks 2, 3, 4 so we can verify reset sets them
+	for i := 1; i < 4; i++ {
+		err = ba.blockchainClient.SetBlockProcessedAt(ctx, headers[i].Hash(), true) // true = clear
+		require.NoError(t, err, "failed to clear processed_at for block %d", i+1)
+	}
+
+	// Verify processed_at is cleared
+	for i := 1; i < 4; i++ {
+		_, meta, err := ba.blockchainClient.GetBlockHeader(ctx, headers[i].Hash())
+		require.NoError(t, err)
+		require.Nil(t, meta.ProcessedAt, "block %d processed_at should be cleared before reset", i+1)
+	}
+
+	// Set BA back to block 1, simulating BA being 3 blocks behind blockchain
+	ba.blockAssembler.setBestBlockHeader(headers[0], 1)
+	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(headers[0])
+
+	t.Log("BA reset to block 1, blockchain at block 4. Triggering reset()...")
+
+	// Trigger reset — blockchain is at block 4, BA is at block 1
+	// moveForward = [block2, block3, block4]
+	err = ba.blockAssembler.reset(ctx, false)
+	require.NoError(t, err, "reset should succeed")
+
+	// Verify BA jumped to block 4
+	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+	require.True(t, currentHeader.Hash().IsEqual(headers[3].Hash()),
+		"BA should be at block 4 after reset, got %s", currentHeader.Hash())
+	require.Equal(t, uint32(4), currentHeight, "BA height should be 4")
+
+	// Bug 1 verification: ALL moveForward blocks should have processed_at set
+	// Without the fix, only block 4 (last moveForward) would have processed_at.
+	// Blocks 2 and 3 (intermediate) would have nil processed_at.
+	for i := 1; i < 4; i++ {
+		_, meta, err := ba.blockchainClient.GetBlockHeader(ctx, headers[i].Hash())
+		require.NoError(t, err, "failed to get block header for block %d", i+1)
+		assert.NotNil(t, meta.ProcessedAt,
+			"block %d (height %d) should have processed_at set after reset — intermediate blocks must be finalized individually",
+			i+1, meta.Height)
+	}
+
+	t.Log("All moveForward blocks have processed_at set — Bug 1 fix verified")
+}
+
+// TestHandleReorgWithInvalidBlock_Integration verifies that when handleReorg
+// encounters an invalid block in the moveBack set and falls back to reset(),
+// block assembly ends up on the correct chain.
+//
+// This is an integration test using the full blockchain daemon that exercises
+// the handleReorg fallback reset path.
+//
+// Bug 2: handleReorg returned nil after fallback reset instead of
+// ErrBlockAssemblyReset, which allowed processNewBlockAnnouncement to
+// overwrite the reset's setBestBlockHeader with a potentially stale value.
+func TestHandleReorgWithInvalidBlock_Integration(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	// Get initial state
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Initial block height: %d, hash: %s", initialMetadata.Height, initialHeader.Hash())
+
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	// Build chain A: genesis → A1 → A2 → A3 (lower difficulty)
+	chainABits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	chainAHeaders := make([]*model.BlockHeader, 3)
+	prevHash := initialHeader.Hash()
+	for i := 0; i < 3; i++ {
+		chainAHeaders[i] = &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: &chainhash.Hash{},
+			Nonce:          uint32(i + 1),
+			Bits:           *chainABits,
+			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		}
+		prevHash = chainAHeaders[i].Hash()
+	}
+
+	t.Log("Adding chain A blocks...")
+	for i, header := range chainAHeaders {
+		err = ba.blockchainClient.AddBlock(ctx, &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}, "", options.WithMinedSet(true))
+		require.NoError(t, err, "failed to add chain A block %d", i+1)
+	}
+
+	// Wait for blockchain to be at A3
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeaders[2].Hash(), 10*time.Second)
+	require.NoError(t, err, "timeout waiting for blockchain to reach chain A tip")
+
+	// Wait for BA to process up to A3
+	require.Eventually(t, func() bool {
+		currentHeader, _ := ba.blockAssembler.CurrentBlock()
+		return currentHeader.Hash().IsEqual(chainAHeaders[2].Hash())
+	}, 10*time.Second, 100*time.Millisecond, "timeout waiting for BA to process chain A")
+
+	t.Logf("BA is on chain A tip: %s (height 3)", chainAHeaders[2].Hash())
+
+	// Invalidate chain A block 2 (A2). This makes A2 and A3 invalid.
+	// Blockchain should reorg to A1 (the last valid block on chain A).
+	t.Log("Invalidating chain A block 2...")
+	invalidatedHashes, err := ba.blockchainClient.InvalidateBlock(ctx, chainAHeaders[1].Hash())
+	require.NoError(t, err, "failed to invalidate chain A block 2")
+
+	// Simulate BlockValidation's async reaction to InvalidateBlock: it would
+	// process the BlockMinedUnset notification and re-set mined_set=true after
+	// unsetting tx mined status. BlockValidation isn't running in this test,
+	// so call SetBlockMinedSet directly — otherwise BA's reset() blocks in
+	// waitForBlockMinedSet until its retry budget exhausts.
+	for i := range invalidatedHashes {
+		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i]),
+			"failed to re-set mined_set on invalidated block %s", invalidatedHashes[i].String())
+	}
+
+	// Build chain B: genesis → B1 → B2 → B3 (higher difficulty, from genesis)
+	chainBBits, err := model.NewNBitFromString("1d00ffff")
+	require.NoError(t, err)
+
+	chainBHeaders := make([]*model.BlockHeader, 3)
+	prevHash = initialHeader.Hash()
+	for i := 0; i < 3; i++ {
+		chainBHeaders[i] = &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: &chainhash.Hash{},
+			Nonce:          uint32(i + 100),
+			Bits:           *chainBBits,
+			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		}
+		prevHash = chainBHeaders[i].Hash()
+	}
+
+	t.Log("Adding chain B blocks (higher difficulty)...")
+	for i, header := range chainBHeaders {
+		err = ba.blockchainClient.AddBlock(ctx, &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}, "", options.WithMinedSet(true))
+		require.NoError(t, err, "failed to add chain B block %d", i+1)
+	}
+
+	// Wait for blockchain to be on chain B
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeaders[2].Hash(), 10*time.Second)
+	require.NoError(t, err, "timeout waiting for blockchain to reach chain B tip")
+
+	// Wait for BA to settle on chain B AND for processed_at to be flushed on
+	// every chain B block. BlockAssembler.reset() stores bestBlock=B3 before
+	// subtreeProcessor.Reset writes processed_at for moveForward blocks, so a
+	// hash-only check can pass while those writes are still in flight.
+	require.Eventually(t, func() bool {
+		currentHeader, _ := ba.blockAssembler.CurrentBlock()
+		if !currentHeader.Hash().IsEqual(chainBHeaders[2].Hash()) {
+			return false
+		}
+		for _, header := range chainBHeaders {
+			_, meta, err := ba.blockchainClient.GetBlockHeader(ctx, header.Hash())
+			if err != nil || meta.ProcessedAt == nil {
+				return false
+			}
+		}
+		return true
+	}, 15*time.Second, 200*time.Millisecond,
+		"timeout waiting for BA to settle on chain B and flush processed_at after reorg with invalid block")
+
+	// Verify BA is on chain B tip
+	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+	assert.True(t, currentHeader.Hash().IsEqual(chainBHeaders[2].Hash()),
+		"BA should be on chain B tip after reorg with invalid block, got %s", currentHeader.Hash())
+	assert.Equal(t, uint32(3), currentHeight, "BA height should be 3")
+
+	// Verify all chain B blocks have processed_at set
+	for i, header := range chainBHeaders {
+		_, meta, err := ba.blockchainClient.GetBlockHeader(ctx, header.Hash())
+		require.NoError(t, err, "failed to get block header for chain B block %d", i+1)
+		assert.NotNil(t, meta.ProcessedAt,
+			"chain B block %d (height %d) should have processed_at set after reorg",
+			i+1, meta.Height)
+	}
+
+	t.Logf("BA correctly settled on chain B tip after reorg involving invalid blocks")
+	t.Logf("Chain A difficulty: %s (3 blocks, A2 invalidated)", chainABits.String())
+	t.Logf("Chain B difficulty: %s (3 blocks)", chainBBits.String())
 }
 
 func CreateCoinbaseTxCandidate(t *testing.T, m *model.MiningCandidate) (*bt.Tx, error) {

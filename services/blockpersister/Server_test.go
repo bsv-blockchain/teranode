@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -731,8 +732,24 @@ func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash 
 func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	return nil, nil
 }
+func (m *MockBlockchainClient) GetSubscribers(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
 func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
+}
+func (m *MockBlockchainClient) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	// Return simple mock values - tests don't rely on actual MTP calculation
+	mtps := make([]uint32, len(heights))
+	// All zeros - sufficient for tests that don't check MTP values
+	return mtps, nil
+}
+
+func (m *MockBlockchainClient) GetMedianTimePastRange(_ context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+	return make([]uint32, toHeight-fromHeight+1), nil
 }
 func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
 	return nil
@@ -764,6 +781,10 @@ func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
 	return true, nil
+}
+func (m *MockBlockchainClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	// Default to false - blocks are not ancestors unless specifically testing reorg scenarios
+	return false, nil
 }
 func (m *MockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	return nil, nil
@@ -825,6 +846,43 @@ func (m *MockBlockchainClient) SetBlockPersistedAt(ctx context.Context, blockHas
 	return nil
 }
 
+// Blob deletion methods (no-op implementations for interface compliance)
+func (m *MockBlockchainClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, false, nil
+}
+
+func (m *MockBlockchainClient) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	return false, nil
+}
+
+func (m *MockBlockchainClient) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	return nil, 0, nil
+}
+
+func (m *MockBlockchainClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	return nil, nil
+}
+
+func (m *MockBlockchainClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	return nil
+}
+
+func (m *MockBlockchainClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	return false, 0, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	return 0, 0, nil
+}
+
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	return "", nil, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	return nil
+}
+
 // MockStore implements basic store interfaces for testing
 type MockBlobStore struct {
 	data      map[string][]byte
@@ -876,9 +934,7 @@ func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType 
 func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...bloboptions.FileOption) error {
 	return nil
 }
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (uint32, error) {
-	return 0, nil
-}
+
 func (m *MockBlobStore) GetPartial(ctx context.Context, key []byte, fileType fileformat.FileType, offset, length int64, opts ...bloboptions.FileOption) ([]byte, error) {
 	return nil, nil
 }
@@ -922,8 +978,8 @@ func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
+	return nil
 }
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
@@ -934,7 +990,22 @@ func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagA
 func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+func (m *MockUTXOStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }
@@ -948,6 +1019,9 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 	return nil
 }
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error { return nil }
+func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	return nil
+}
 func (m *MockUTXOStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }
@@ -1018,6 +1092,35 @@ func TestStart_FSMTransitionError(t *testing.T) {
 		// Expected - channel should be closed
 	default:
 		t.Fatal("Ready channel should be closed on error")
+	}
+}
+
+// TestStart_FSMContextCancellation verifies graceful shutdown handling when
+// the context is cancelled during the FSM wait. The error must be returned
+// (not swallowed) and must be a context error so the service manager can
+// distinguish it from a real failure.
+func TestStart_FSMContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMTransitionFromIdleError(context.Canceled)
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+	readyCh := make(chan struct{})
+
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
+
+	select {
+	case <-readyCh:
+	default:
+		t.Fatal("Ready channel should be closed on shutdown")
 	}
 }
 

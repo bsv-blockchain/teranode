@@ -12,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/labstack/gommon/random"
 )
 
@@ -69,12 +71,22 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		sslMode = val[0] // Use the first value if multiple are provided
 	}
 
+	// Build connection string for pgx
 	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d", dbUser, dbPassword, dbName, sslMode, dbHost, dbPort)
 
-	db, err := usql.Open(storeURL.Scheme, dbInfo)
+	// Use pgx/stdlib with QueryExecModeExec to skip prepared statement overhead.
+	// QueryExecModeExec skips the Prepare step (no Parse/Describe round-trip),
+	// sending parameters as bound values without caching a named statement.
+	// This avoids generic-plan degradation that CacheStatement mode can cause
+	// with CTE+UNNEST batch queries on large datasets.
+	connConfig, err := pgx.ParseConfig(dbInfo)
 	if err != nil {
-		return nil, errors.NewServiceError("failed to open postgres DB", err)
+		return nil, errors.NewServiceError("failed to parse postgres config", err)
 	}
+	connConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+
+	sqlDB := stdlib.OpenDB(*connConfig)
+	db := usql.WrapDB(sqlDB)
 
 	logger.Infof("Using postgres DB: %s@%s:%d/%s", dbUser, dbHost, dbPort, dbName)
 
@@ -83,10 +95,18 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	if servicePoolSettings != nil {
 		// Merge service-specific settings with global defaults (zero values use global)
 		poolSettings = &settings.PostgresSettings{
-			MaxOpenConns:    servicePoolSettings.MaxOpenConns,
-			MaxIdleConns:    servicePoolSettings.MaxIdleConns,
-			ConnMaxLifetime: servicePoolSettings.ConnMaxLifetime,
-			ConnMaxIdleTime: servicePoolSettings.ConnMaxIdleTime,
+			MaxOpenConns:                   servicePoolSettings.MaxOpenConns,
+			MaxIdleConns:                   servicePoolSettings.MaxIdleConns,
+			ConnMaxLifetime:                servicePoolSettings.ConnMaxLifetime,
+			ConnMaxIdleTime:                servicePoolSettings.ConnMaxIdleTime,
+			RetryMaxAttempts:               servicePoolSettings.RetryMaxAttempts,
+			RetryBaseDelay:                 servicePoolSettings.RetryBaseDelay,
+			RetryEnabled:                   servicePoolSettings.RetryEnabled,
+			CircuitBreakerEnabled:          servicePoolSettings.CircuitBreakerEnabled,
+			CircuitBreakerFailureThreshold: servicePoolSettings.CircuitBreakerFailureThreshold,
+			CircuitBreakerHalfOpenMax:      servicePoolSettings.CircuitBreakerHalfOpenMax,
+			CircuitBreakerCooldown:         servicePoolSettings.CircuitBreakerCooldown,
+			CircuitBreakerFailureWindow:    servicePoolSettings.CircuitBreakerFailureWindow,
 		}
 		// Use global defaults for zero values
 		if poolSettings.MaxOpenConns == 0 {
@@ -101,6 +121,29 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.ConnMaxIdleTime == 0 {
 			poolSettings.ConnMaxIdleTime = tSettings.Postgres.ConnMaxIdleTime
 		}
+		if poolSettings.RetryMaxAttempts == 0 {
+			poolSettings.RetryMaxAttempts = tSettings.Postgres.RetryMaxAttempts
+		}
+		if poolSettings.RetryBaseDelay == 0 {
+			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
+		}
+		// Circuit breaker settings: use global defaults for zero values
+		// Note: CircuitBreakerEnabled is explicit - if service sets false, it stays false
+		if !poolSettings.CircuitBreakerEnabled && tSettings.Postgres.CircuitBreakerEnabled {
+			poolSettings.CircuitBreakerEnabled = true
+		}
+		if poolSettings.CircuitBreakerFailureThreshold == 0 {
+			poolSettings.CircuitBreakerFailureThreshold = tSettings.Postgres.CircuitBreakerFailureThreshold
+		}
+		if poolSettings.CircuitBreakerHalfOpenMax == 0 {
+			poolSettings.CircuitBreakerHalfOpenMax = tSettings.Postgres.CircuitBreakerHalfOpenMax
+		}
+		if poolSettings.CircuitBreakerCooldown == 0 {
+			poolSettings.CircuitBreakerCooldown = tSettings.Postgres.CircuitBreakerCooldown
+		}
+		if poolSettings.CircuitBreakerFailureWindow == 0 {
+			poolSettings.CircuitBreakerFailureWindow = tSettings.Postgres.CircuitBreakerFailureWindow
+		}
 	}
 
 	// Configure connection pool settings
@@ -109,11 +152,48 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	db.SetConnMaxLifetime(poolSettings.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(poolSettings.ConnMaxIdleTime)
 
+	// Configure retry settings
+	db.SetRetryConfig(usql.RetryConfig{
+		MaxAttempts: poolSettings.RetryMaxAttempts,
+		BaseDelay:   poolSettings.RetryBaseDelay,
+		Enabled:     poolSettings.RetryEnabled,
+	})
+
+	// Configure circuit breaker if enabled (requires all settings to be explicitly set)
+	if poolSettings.CircuitBreakerEnabled {
+		cbConfig := usql.CircuitBreakerConfig{
+			FailureThreshold: poolSettings.CircuitBreakerFailureThreshold,
+			HalfOpenMax:      poolSettings.CircuitBreakerHalfOpenMax,
+			Cooldown:         poolSettings.CircuitBreakerCooldown,
+			FailureWindow:    poolSettings.CircuitBreakerFailureWindow,
+			Enabled:          poolSettings.CircuitBreakerEnabled,
+			OnStateChange: func(from, to usql.CircuitState, reason string) {
+				logger.Warnf("PostgreSQL circuit breaker state changed: %s -> %s (%s)", from.String(), to.String(), reason)
+			},
+		}
+		cb := usql.NewCircuitBreaker(cbConfig)
+		if cb != nil {
+			db.SetCircuitBreaker(cb)
+			logger.Infof("PostgreSQL circuit breaker configured: FailureThreshold=%d, HalfOpenMax=%d, Cooldown=%v, FailureWindow=%v",
+				poolSettings.CircuitBreakerFailureThreshold,
+				poolSettings.CircuitBreakerHalfOpenMax,
+				poolSettings.CircuitBreakerCooldown,
+				poolSettings.CircuitBreakerFailureWindow)
+		} else {
+			logger.Warnf("PostgreSQL circuit breaker enabled but not configured correctly (all threshold/timing values must be > 0)")
+		}
+	}
+
 	logger.Infof("PostgreSQL connection pool configured: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetime=%v, ConnMaxIdleTime=%v",
 		poolSettings.MaxOpenConns,
 		poolSettings.MaxIdleConns,
 		poolSettings.ConnMaxLifetime,
 		poolSettings.ConnMaxIdleTime)
+
+	logger.Infof("PostgreSQL retry configured: MaxAttempts=%d, BaseDelay=%v, Enabled=%v",
+		poolSettings.RetryMaxAttempts,
+		poolSettings.RetryBaseDelay,
+		poolSettings.RetryEnabled)
 
 	// Log initial pool metrics
 	logPostgresPoolMetrics(logger, db)
@@ -130,7 +210,12 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 	var err error
 
 	if storeURL.Scheme == "sqlitememory" {
-		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
+		// `_pragma=foreign_keys=on` ensures every connection from the pool
+		// enforces FKs. Without it, FK enforcement is per-connection state
+		// that only applies to whichever connection happened to run a
+		// `PRAGMA foreign_keys = ON` call — other pooled connections start
+		// with FKs OFF (SQLite default) and silently allow violations.
+		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma=foreign_keys=on", random.String(16))
 	} else {
 		folder := tSettings.DataFolder
 		dbName := storeURL.Path[1:]
@@ -148,7 +233,8 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */
-		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL", filename)
+		// See sqlitememory branch for rationale on `foreign_keys=on`.
+		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL&_pragma=foreign_keys=on", filename)
 	}
 
 	logger.Infof("Using sqlite DB: %s", filename)
@@ -160,10 +246,11 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 		return nil, errors.NewServiceError("failed to open sqlite DB", err)
 	}
 
-	if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
-		_ = db.Close()
-		return nil, errors.NewServiceError("could not enable foreign keys support", err)
-	}
+	// foreign_keys is set per-connection via the `_pragma=foreign_keys=on`
+	// DSN parameter above. A post-open `db.Exec("PRAGMA foreign_keys = ON")`
+	// would only affect a single pooled connection — other connections from
+	// the pool would silently start with FKs OFF (the SQLite default),
+	// causing constraint violations to be missed.
 
 	if _, err = db.Exec(`PRAGMA locking_mode = SHARED;`); err != nil {
 		_ = db.Close()

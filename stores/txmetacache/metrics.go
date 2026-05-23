@@ -5,7 +5,9 @@
 package txmetacache
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -16,7 +18,7 @@ var (
 	// for the transaction metadata cache to help with monitoring and tuning
 
 	// Current number of entries in the cache; monitors utilization and capacity
-	prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
+	// prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
 	// Total count of cache insertions since startup; tracks write throughput
 	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	// Count of successful cache retrievals (cache hits); indicates cache effectiveness
@@ -35,6 +37,12 @@ var (
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
 	// Count of hits for transactions that were deemed too old to use; monitors expiration policy
 	prometheusBlockValidationTxMetaCacheHitOldTx prometheus.Gauge
+	// Number of valid (readable) entries; equals current_gen_entries + previous_gen_entries
+	prometheusBlockValidationTxMetaCacheValidEntriesCount prometheus.Gauge
+	// Count of entries written in the current ring generation
+	prometheusBlockValidationTxMetaCacheCurrentGenEntries prometheus.Gauge
+	// Count of valid entries from the previous generation not yet overwritten
+	prometheusBlockValidationTxMetaCachePreviousGenEntries prometheus.Gauge
 )
 
 var (
@@ -43,6 +51,122 @@ var (
 	// for thread-safety when multiple instances or components might initialize metrics.
 	prometheusMetricsInitOnce sync.Once
 )
+
+var txMetaCacheMetricsRegistry = struct {
+	mu     sync.Mutex
+	caches map[*TxMetaCache]struct{}
+	cancel context.CancelFunc
+}{}
+
+const txMetaCachePrometheusUpdateInterval = 5 * time.Second
+
+func registerTxMetaCacheMetrics(cache *TxMetaCache) func() {
+	var unregisterOnce sync.Once
+
+	txMetaCacheMetricsRegistry.mu.Lock()
+	if txMetaCacheMetricsRegistry.caches == nil {
+		txMetaCacheMetricsRegistry.caches = make(map[*TxMetaCache]struct{})
+	}
+	txMetaCacheMetricsRegistry.caches[cache] = struct{}{}
+
+	if txMetaCacheMetricsRegistry.cancel == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		txMetaCacheMetricsRegistry.cancel = cancel
+		go runTxMetaCachePrometheusUpdater(ctx)
+	}
+	txMetaCacheMetricsRegistry.mu.Unlock()
+
+	return func() {
+		unregisterOnce.Do(func() {
+			txMetaCacheMetricsRegistry.mu.Lock()
+			delete(txMetaCacheMetricsRegistry.caches, cache)
+			if len(txMetaCacheMetricsRegistry.caches) == 0 && txMetaCacheMetricsRegistry.cancel != nil {
+				txMetaCacheMetricsRegistry.cancel()
+				txMetaCacheMetricsRegistry.cancel = nil
+			}
+			txMetaCacheMetricsRegistry.mu.Unlock()
+		})
+	}
+}
+
+func runTxMetaCachePrometheusUpdater(ctx context.Context) {
+	ticker := time.NewTicker(txMetaCachePrometheusUpdateInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updateTxMetaCachePrometheusMetrics()
+		}
+	}
+}
+
+func txMetaCacheMetricsSnapshot() []*TxMetaCache {
+	txMetaCacheMetricsRegistry.mu.Lock()
+	defer txMetaCacheMetricsRegistry.mu.Unlock()
+
+	caches := make([]*TxMetaCache, 0, len(txMetaCacheMetricsRegistry.caches))
+	for cache := range txMetaCacheMetricsRegistry.caches {
+		caches = append(caches, cache)
+	}
+
+	return caches
+}
+
+func updateTxMetaCachePrometheusMetrics() {
+	if prometheusBlockValidationTxMetaCacheInsertions == nil {
+		return
+	}
+
+	caches := txMetaCacheMetricsSnapshot()
+
+	var (
+		insertions         uint64
+		hits               uint64
+		misses             uint64
+		evictions          uint64
+		getOrigin          uint64
+		hitOldTx           uint64
+		trimCount          uint64
+		totalMapSize       uint64
+		totalElementsAdded uint64
+		validEntriesCount  uint64
+		currentGenEntries  uint64
+		previousGenEntries uint64
+	)
+
+	for _, cache := range caches {
+		insertions += cache.metrics.insertions.Load()
+		hits += cache.metrics.hits.Load()
+		misses += cache.metrics.misses.Load()
+		evictions += cache.metrics.evictions.Load()
+		getOrigin += cache.metrics.getOrigin.Load()
+		hitOldTx += cache.metrics.hitOldTx.Load()
+
+		cacheStats := cache.GetCacheStats()
+		trimCount += cacheStats.TrimCount
+		totalMapSize += cacheStats.TotalMapSize
+		totalElementsAdded += cacheStats.TotalElementsAdded
+		validEntriesCount += cacheStats.ValidEntriesCount
+		currentGenEntries += cacheStats.CurrentGenEntries
+		previousGenEntries += cacheStats.PreviousGenEntries
+	}
+
+	prometheusBlockValidationTxMetaCacheInsertions.Set(float64(insertions))
+	prometheusBlockValidationTxMetaCacheHits.Set(float64(hits))
+	prometheusBlockValidationTxMetaCacheMisses.Set(float64(misses))
+	prometheusBlockValidationTxMetaCacheGetOrigin.Set(float64(getOrigin))
+	prometheusBlockValidationTxMetaCacheEvictions.Set(float64(evictions))
+	prometheusBlockValidationTxMetaCacheTrims.Set(float64(trimCount))
+	prometheusBlockValidationTxMetaCacheMapSize.Set(float64(totalMapSize))
+	prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(totalElementsAdded))
+	prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(hitOldTx))
+	prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(validEntriesCount))
+	prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(currentGenEntries))
+	prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(previousGenEntries))
+}
 
 // initPrometheusMetrics initializes all Prometheus metrics for the txmetacache package.
 // It uses sync.Once to ensure metrics are registered only once with Prometheus,
@@ -75,17 +199,17 @@ func initPrometheusMetrics() {
 //   - evictions: Number of entries removed from the cache due to memory constraints
 //   - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
-	// Size metric tracks the current number of entries in the transaction metadata cache.
-	// This is a point-in-time measurement that indicates cache utilization level and
-	// helps identify potential capacity issues or unexpected cache clearing events.
-	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_meta_cache",
-			Name:      "size",
-			Help:      "Number of items in the tx meta cache",
-		},
-	)
+	// // Size metric tracks the current number of entries in the transaction metadata cache.
+	// // This is a point-in-time measurement that indicates cache utilization level and
+	// // helps identify potential capacity issues or unexpected cache clearing events.
+	// prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
+	// 	prometheus.GaugeOpts{
+	// 		Namespace: "teranode",
+	// 		Subsystem: "tx_meta_cache",
+	// 		Name:      "size",
+	// 		Help:      "Number of items in the tx meta cache",
+	// 	},
+	// )
 
 	// Insertions metric tracks the total number of items added to the transaction metadata cache.
 	// This counter increases monotonically and helps track write load on the cache,
@@ -190,6 +314,36 @@ func _initPrometheusMetrics() {
 			Subsystem: "tx_meta_cache",
 			Name:      "hit_old_tx",
 			Help:      "Number of hits on old txs in the tx meta cache",
+		},
+	)
+
+	// ValidEntriesCount is the number of valid (readable) entries in the cache
+	prometheusBlockValidationTxMetaCacheValidEntriesCount = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "valid_entries_count",
+			Help:      "Number of valid (readable) entries in the tx meta cache",
+		},
+	)
+
+	// CurrentGenEntries is the count of entries in the current ring generation
+	prometheusBlockValidationTxMetaCacheCurrentGenEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "current_gen_entries",
+			Help:      "Number of entries in the current generation of the tx meta cache",
+		},
+	)
+
+	// PreviousGenEntries is the count of valid entries from the previous generation
+	prometheusBlockValidationTxMetaCachePreviousGenEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "previous_gen_entries",
+			Help:      "Number of valid entries from the previous generation in the tx meta cache",
 		},
 	)
 }

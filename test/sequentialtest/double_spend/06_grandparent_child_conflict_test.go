@@ -68,6 +68,7 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -84,6 +85,7 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	td.VerifyOnLongestChainInUtxoStore(t, parent)
@@ -113,12 +115,12 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 
 	// Create block3b with grandparent (same as 3a content)
 	_, block3b := td.CreateTestBlock(t, block2, 10302, grandparent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy", 0),
 		"Failed to process block3b")
 
 	// Create block4b with conflictingChild
 	_, block4b := td.CreateTestBlock(t, block3b, 10402, conflictingChild)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b")
 
 	//            / 3a [grandparent] -> 4a [parent] (*)
@@ -138,7 +140,7 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 
 	// Now make chain B longer by mining block5b
 	_, block5b := td.CreateTestBlock(t, block4b, 10502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0),
 		"Failed to process block5b")
 
 	//            / 3a [grandparent] -> 4a [parent]

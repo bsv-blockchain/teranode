@@ -1,13 +1,13 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements BSV Blockchain transaction validation functionality.
 
 The validator package is a critical component of the Teranode architecture that handles
-transaction validation according to Bitcoin SV consensus rules. It enforces transaction
+transaction validation according to Bitcoin consensus rules. It enforces transaction
 rules, manages UTXO state transitions, and ensures that only valid transactions are
 accepted into the mempool and blocks.
 
 Key features of the validator package include:
-- Comprehensive transaction validation against Bitcoin SV consensus rules
+- Comprehensive transaction validation against Bitcoin consensus rules
 - Multiple script execution engines (GoBDK, GoSDK, GoBT) for script verification
 - Integration with UTXO store for input/output tracking and double-spend prevention
 - Batch processing capability for efficient validation of transaction groups
@@ -325,8 +325,11 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
+		if errors.IsContextError(err) {
+			v.logger.Infof("[Validator] Shutting down during FSM wait")
+			return err
+		}
 		v.logger.Errorf("[Validator] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -341,7 +344,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
 
 			return err
 		}
@@ -483,6 +486,16 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 		validationOptions.CreateConflicting = *req.CreateConflicting
 	}
 
+	if req.SkipTxmetaPublishing != nil {
+		validationOptions.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
+	}
+
+	// Pre-warm the MTP store for BIP68 validation before running transaction validation.
+	// EnsureMTPLoaded is a no-op when BIP68 is not yet active for this blockHeight.
+	if err := v.validator.EnsureMTPLoaded(ctx, req.BlockHeight); err != nil {
+		return nil, err
+	}
+
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
@@ -537,6 +550,16 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	)
 	defer deferFn()
 
+	// Pre-warm the MTP store for BIP68 validation before spawning per-transaction goroutines.
+	// All transactions in a block share the same blockHeight; loading the store here (serially)
+	// means the concurrent goroutines below can look up MTPs via direct array reads, with no
+	// locking and no per-transaction gRPC calls.
+	if len(req.GetTransactions()) > 0 {
+		if err := v.validator.EnsureMTPLoaded(ctx, req.GetTransactions()[0].GetBlockHeight()); err != nil {
+			return nil, err
+		}
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
@@ -551,6 +574,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 			metaData[idx] = validatorResponse.Metadata
 			errReasons[idx] = errors.Wrap(err)
 
+			// Never return an error because we don't want to cancel the context for other transactions in the batch.
 			return nil
 		})
 	}
@@ -559,6 +583,8 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	_ = g.Wait()
 
 	return &validator_api.ValidateTransactionBatchResponse{
+		// Valid is always true at the batch level by design — callers must
+		// inspect per-item Errors. The field is retained for wire compatibility.
 		Valid:    true,
 		Errors:   errReasons,
 		Metadata: metaData,
@@ -842,7 +868,13 @@ func (v *Server) startHTTPServer(ctx context.Context, httpAddresses string) erro
 
 	// Configure middleware and timeouts
 	v.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(v.settings.Validator.HTTPRateLimit))))
+
+	if v.settings.Validator.HTTPBodyLimit != "" {
+		v.httpServer.Use(middleware.BodyLimit(v.settings.Validator.HTTPBodyLimit))
+	}
+
 	v.httpServer.Server.ReadTimeout = 5 * time.Second
+	v.httpServer.Server.ReadHeaderTimeout = 5 * time.Second
 	v.httpServer.Server.WriteTimeout = 10 * time.Second
 	v.httpServer.Server.IdleTimeout = 120 * time.Second
 

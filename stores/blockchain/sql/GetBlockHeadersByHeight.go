@@ -21,7 +21,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/model/time"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"golang.org/x/exp/constraints"
 )
 
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.
@@ -86,7 +85,28 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	blockHeaders := make([]*model.BlockHeader, 0, capacity)
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
-	q := `
+	var q string
+	if s.mainChainRebuilding.Load() > 0 {
+		q = `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE invalid = false
+			AND hash = (
+				SELECT b.hash
+				FROM blocks b
+				WHERE b.invalid = false
+				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				LIMIT 1
+			)
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND bb.invalid = false
+			  AND bb.height >= $1
+		)
 		SELECT
 		 b.version
 		,b.block_time
@@ -101,35 +121,36 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		,b.peer_id
 		,b.block_time
 		,b.inserted_at
+		,b.median_time_past
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE invalid = false
-					AND hash = (
-						SELECT b.hash
-						FROM blocks b
-						WHERE b.invalid = false
-						ORDER BY chain_work DESC, peer_id ASC, id ASC
-						LIMIT 1
-					)
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-					  AND bb.invalid = false
-				)
-				SELECT id FROM ChainBlocks
-				WHERE height >= $1 AND height <= $2
-				  AND invalid = FALSE
-				ORDER BY height ASC
-			)
-		)
+		JOIN ChainBlocks cb ON b.id = cb.id
+		WHERE cb.height >= $1 AND cb.height <= $2
+		ORDER BY cb.height ASC
 	`
+	} else {
+		q = `
+		SELECT
+		 b.version
+		,b.block_time
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.n_bits
+		,b.id
+		,b.height
+		,b.tx_count
+		,b.size_in_bytes
+		,b.peer_id
+		,b.block_time
+		,b.inserted_at
+		,b.median_time_past
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height >= $1
+		  AND b.height <= $2
+		ORDER BY b.height ASC
+	`
+	}
 	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -166,6 +187,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 			&blockHeaderMeta.PeerID,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
+			&blockHeaderMeta.MedianTimePast,
 		); err != nil {
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
@@ -191,26 +213,4 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	cacheOp.Set([2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 
 	return blockHeaders, blockMetas, nil
-}
-
-// max returns the larger of two ordered values.
-// This is a generic helper function that works with any ordered type (integers, floats, etc.)
-// and is used to safely calculate capacity for slices when dealing with height ranges.
-//
-// The function uses Go's generics feature with the constraints.Ordered constraint to ensure
-// that only types that support ordering operations (>, <, ==, etc.) can be used with this function.
-// This approach provides type safety while allowing the function to work with different numeric types.
-//
-// Parameters:
-//   - a: First value to compare
-//   - b: Second value to compare
-//
-// Returns:
-//   - T: The larger of the two input values
-func max[T constraints.Ordered](a, b T) T {
-	if a > b {
-		return a
-	}
-
-	return b
 }

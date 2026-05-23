@@ -12,6 +12,11 @@ export enum ScriptType {
   UNKNOWN = 'Unknown'
 }
 
+export interface LegacyAddressVersions {
+  p2pkh: number
+  p2sh: number
+}
+
 // Bitcoin opcodes
 const OP_FALSE = 0x00
 const OP_DUP = 0x76
@@ -356,8 +361,26 @@ async function doubleSha256(data: Uint8Array): Promise<Uint8Array> {
  * @param scriptType - The detected script type
  * @returns The Bitcoin address or null if not applicable
  */
-export async function extractAddress(scriptHex: string, scriptType: ScriptType): Promise<string | null> {
+export async function extractAddress(
+  scriptHex: string,
+  scriptType: ScriptType,
+  versionsOverride?: Partial<LegacyAddressVersions>,
+): Promise<string | null> {
   const bytes = hexToBytes(scriptHex)
+
+  const versions: LegacyAddressVersions = {
+    p2pkh: 0x00,
+    p2sh: 0x05,
+  }
+
+  if (versionsOverride) {
+    if (typeof versionsOverride.p2pkh === 'number') {
+      versions.p2pkh = versionsOverride.p2pkh
+    }
+    if (typeof versionsOverride.p2sh === 'number') {
+      versions.p2sh = versionsOverride.p2sh
+    }
+  }
   
   if (scriptType === ScriptType.P2PKH) {
     // P2PKH: Extract the 20-byte public key hash
@@ -367,7 +390,7 @@ export async function extractAddress(scriptHex: string, scriptType: ScriptType):
       
       // Add version byte (0x00 for mainnet P2PKH)
       const versionedHash = new Uint8Array(21)
-      versionedHash[0] = 0x00 // Bitcoin mainnet P2PKH version
+      versionedHash[0] = versions.p2pkh
       versionedHash.set(pubKeyHash, 1)
       
       // Calculate checksum (first 4 bytes of double SHA-256)
@@ -389,7 +412,7 @@ export async function extractAddress(scriptHex: string, scriptType: ScriptType):
       
       // Add version byte (0x05 for mainnet P2SH)
       const versionedHash = new Uint8Array(21)
-      versionedHash[0] = 0x05 // Bitcoin mainnet P2SH version
+      versionedHash[0] = versions.p2sh
       versionedHash.set(scriptHash, 1)
       
       // Calculate checksum

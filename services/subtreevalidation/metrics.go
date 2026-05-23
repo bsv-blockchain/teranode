@@ -78,11 +78,12 @@ var (
 	// from Kafka messages, which helps identify issues with the cache or Kafka connection.
 	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors prometheus.Counter
 
-	// prometheusSubtreeValidationPauseDuration tracks the duration of subtree processing pauses.
-	// This histogram measures how long the distributed pause lock is held during block validation,
-	// which is critical for detecting when pauses exceed expected durations and may indicate
-	// issues with block validation or lock release mechanisms.
-	prometheusSubtreeValidationPauseDuration prometheus.Histogram
+	// prometheusSubtreeKafkaMalformed counts malformed Kafka subtree messages that were dropped,
+	// labelled by the reason for the drop. Returning nil from the consumer for permanently-malformed
+	// messages preserves Kafka offset progression (avoids a poison-pill retry loop), but ops still
+	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
+	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
+	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
 )
 
 var (
@@ -192,13 +193,13 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusSubtreeValidationPauseDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
+	prometheusSubtreeKafkaMalformed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "subtreevalidation",
-			Name:      "pause_duration",
-			Help:      "Duration of subtree processing pauses (in seconds)",
-			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 12), // 0.1s to ~6.8 minutes
+			Name:      "kafka_malformed_messages_total",
+			Help:      "Number of malformed Kafka subtree messages dropped, by reason",
 		},
+		[]string{"reason"},
 	)
 }

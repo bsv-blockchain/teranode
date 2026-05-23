@@ -2,6 +2,7 @@ package doublespendtest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
@@ -10,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/require"
 )
+
+const helperBlockWait = 5 * time.Second
 
 func setupDoubleSpendTest(t *testing.T, utxoStoreType string, blockOffset ...uint32) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
 	// Default to aerospike if not specified
@@ -46,6 +49,7 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreType string, blockOffset ...uin
 
 	err1 := td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal)
 	require.NoError(t, err1)
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(txOriginal, helperBlockWait))
 
 	// td.Logger.SkipCancelOnFail(true)
 

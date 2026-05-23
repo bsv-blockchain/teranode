@@ -200,7 +200,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		previousHash := header.HashPrevBlock
 		height := meta.Height
 
-		c.logger.Infof("Processing header at height %d (%s)", height, hash.String())
+		c.logger.Debugf("Processing header at height %d (%s)", height, hash.String())
 
 		if hash.String() == c.settings.ChainCfgParams.GenesisHash.String() {
 			continue
@@ -213,7 +213,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		r, err := us.GetUTXODeletionsReader(ctx)
-		if err != nil {
+		if err != nil && !errors.Is(err, errors.ErrBlobNotFound) {
 			return err
 		}
 

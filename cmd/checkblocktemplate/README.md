@@ -14,7 +14,7 @@ This package is typically used for developing and testing block templates in a b
 ## Development
 
 - See `check_block_template.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ---
 

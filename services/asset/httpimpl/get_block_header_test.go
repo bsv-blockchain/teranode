@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -237,5 +238,129 @@ func TestGetBlockHeader(t *testing.T) {
 
 		// Check response body
 		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
+	})
+
+	t.Run("JSON success with valid ProcessedAt", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// Create test data with valid ProcessedAt
+		testBlockHeaderMetaWithProcessedAt := &model.BlockHeaderMeta{
+			Height:      1,
+			TxCount:     2,
+			SizeInBytes: 3,
+			Miner:       "Miner",
+			ProcessedAt: func() *time.Time { t := time.Unix(1609459200, 0).UTC(); return &t }(), // Valid timestamp: 2021-01-01 UTC
+		}
+
+		// set mock response
+		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(testBlockHeader, testBlockHeaderMetaWithProcessedAt, nil)
+
+		// set echo context
+		echoContext.SetPath("/block/header/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		// Call GetBlockHeader handler
+		err := httpServer.GetBlockHeader(JSON)(echoContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Check response status code
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		// Check response body contains processed_at
+		var response map[string]interface{}
+		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should have processed_at field
+		assert.Contains(t, response, "processed_at")
+		assert.Equal(t, "2021-01-01T00:00:00Z", response["processed_at"])
+	})
+
+	t.Run("JSON success with invalid ProcessedAt - negative timestamp", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// Create test data with invalid ProcessedAt (year way before 0)
+		testBlockHeaderMetaWithInvalidProcessedAt := &model.BlockHeaderMeta{
+			Height:      1,
+			TxCount:     2,
+			SizeInBytes: 3,
+			Miner:       "Miner",
+			ProcessedAt: func() *time.Time { t := time.Unix(-999999999999, 0); return &t }(), // Invalid: year -29686
+		}
+
+		// set mock response
+		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(testBlockHeader, testBlockHeaderMetaWithInvalidProcessedAt, nil)
+
+		// set echo context
+		echoContext.SetPath("/block/header/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		// Call GetBlockHeader handler - should not fail even with invalid timestamp
+		err := httpServer.GetBlockHeader(JSON)(echoContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Check response status code
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		// Check response body
+		var response map[string]interface{}
+		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should not contain processed_at field or should be null
+		processedAt, exists := response["processed_at"]
+		if exists {
+			assert.Nil(t, processedAt, "ProcessedAt should be null for invalid timestamps")
+		}
+	})
+
+	t.Run("JSON success with invalid ProcessedAt - far future timestamp", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// Create test data with invalid ProcessedAt (year way beyond 9999)
+		testBlockHeaderMetaWithInvalidProcessedAt := &model.BlockHeaderMeta{
+			Height:      1,
+			TxCount:     2,
+			SizeInBytes: 3,
+			Miner:       "Miner",
+			ProcessedAt: func() *time.Time { t := time.Unix(999999999999, 0); return &t }(), // Invalid: year 33658
+		}
+
+		// set mock response
+		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(testBlockHeader, testBlockHeaderMetaWithInvalidProcessedAt, nil)
+
+		// set echo context
+		echoContext.SetPath("/block/header/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		// Call GetBlockHeader handler - should not fail even with invalid timestamp
+		err := httpServer.GetBlockHeader(JSON)(echoContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Check response status code
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		// Check response body
+		var response map[string]interface{}
+		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should not contain processed_at field or should be null
+		processedAt, exists := response["processed_at"]
+		if exists {
+			assert.Nil(t, processedAt, "ProcessedAt should be null for invalid timestamps")
+		}
 	})
 }

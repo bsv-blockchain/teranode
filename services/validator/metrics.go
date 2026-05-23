@@ -1,5 +1,5 @@
 /*
-Package validator implements comprehensive Bitcoin SV transaction validation functionality
+Package validator implements comprehensive BSV Blockchain transaction validation functionality
 for the Teranode blockchain node. This service provides critical validation operations
 including transaction structure validation, script execution, UTXO verification, and
 consensus rule enforcement to ensure blockchain integrity and compliance.

@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +11,7 @@ import (
 
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
-	"golang.org/x/term"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ZLoggerWrapper struct {
@@ -68,7 +69,11 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 }
 
 func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *ZLoggerWrapper {
-	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+	isTerminal := isStdoutTerminal()
+
+	// Cache working directory once at logger initialization to avoid expensive syscall on every log message
+	cachedCwd, _ := os.Getwd()
+
 	output := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
 		NoColor:    !isTerminal,
@@ -123,8 +128,8 @@ func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *Z
 		}
 
 		if len(c) > 0 {
-			if cwd, err := os.Getwd(); err == nil {
-				if rel, err := filepath.Rel(cwd, c); err == nil {
+			if cachedCwd != "" {
+				if rel, err := filepath.Rel(cachedCwd, c); err == nil {
 					c = rel
 				}
 			}
@@ -431,6 +436,42 @@ func (z *ZLoggerWrapper) Printf(format string, v ...interface{}) {
 // for the standard library log.
 func (z *ZLoggerWrapper) Write(p []byte) (n int, err error) {
 	return z.Logger.Write(p)
+}
+
+// WithTraceContext returns a new logger enriched with traceId and spanId from
+// the OpenTelemetry span context. If the context has no valid span, the
+// original logger is returned unchanged.
+func (z *ZLoggerWrapper) WithTraceContext(ctx context.Context) Logger {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return z
+	}
+
+	traceID := spanCtx.TraceID().String()
+	spanID := spanCtx.SpanID().String()
+
+	// Create new logger with trace fields baked in
+	enrichedLogger := z.Logger.With().
+		Str("traceId", traceID).
+		Str("spanId", spanID).
+		Logger()
+
+	var enrichedJSONLogger *zerolog.Logger
+	if z.jsonLogger != nil {
+		jl := z.jsonLogger.With().
+			Str("traceId", traceID).
+			Str("spanId", spanID).
+			Logger()
+		enrichedJSONLogger = &jl
+	}
+
+	return &ZLoggerWrapper{
+		Logger:     enrichedLogger,
+		service:    z.service,
+		w:          z.w,
+		skipFrame:  z.skipFrame,
+		jsonLogger: enrichedJSONLogger,
+	}
 }
 
 // colorize returns the string s wrapped in ANSI code c, unless disabled is true or c is 0.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Propagation Server is a component of a Bitcoin SV implementation that handles the propagation of transactions across the network. It supports multiple communication protocols, including UDP and gRPC, and integrates with various services such as transaction validation, blockchain, and Kafka for efficient data distribution and processing.
+The Propagation Server is a component of a BSV Blockchain implementation that handles the propagation of transactions across the network. It supports multiple communication protocols, including UDP and gRPC, and integrates with various services such as transaction validation, blockchain, and Kafka for efficient data distribution and processing.
 
 ## Types
 
@@ -20,6 +20,10 @@ type PropagationServer struct {
     validatorKafkaProducerClient kafka.KafkaAsyncProducerI    // Kafka producer for async validation
     httpServer                   *echo.Echo                   // HTTP server for REST endpoints
     validatorHTTPAddr            *url.URL                     // Validator HTTP endpoint URL
+    banList                      banlist.Interface            // IP ban list for UDP/gRPC security
+    udpWorkerPool                chan struct{}                 // Semaphore limiting concurrent UDP processing goroutines
+    udpConns                     []*net.UDPConn               // Active UDP connections
+    udpConnsMu                   sync.Mutex                   // Mutex protecting udpConns
 }
 ```
 
@@ -30,7 +34,7 @@ The `PropagationServer` struct is the main type for the Propagation Server. It c
 ### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer
 ```
 
 Creates a new instance of the Propagation Server with the provided dependencies.
@@ -185,7 +189,7 @@ Performs basic sanity checks on transactions to ensure they have at least one in
 
 The server listens on multiple IPv6 multicast addresses for incoming transactions. The implementation has the following characteristics:
 
-- Supports configurable UDP datagram size (default: 512 bytes)
+- Uses a fixed UDP datagram size of 512 bytes
 - Uses the default IPv6 port 9999 for multicast listeners
 - Creates independent listeners for each multicast address specified in `settings.Propagation.IPv6Addresses`
 - Processes incoming datagrams concurrently through separate goroutines
@@ -211,16 +215,17 @@ The Propagation Server is configured through the settings system instead of dire
 ### Propagation Settings
 
 - `settings.Propagation.IPv6Addresses`: Comma-separated list of IPv6 multicast addresses for UDP listeners
-- `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: "en0")
+- `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: empty string, falls back to "en0" at runtime)
 - `settings.Propagation.HTTPListenAddress`: HTTP addresses for transaction submission endpoints
 - `settings.Propagation.HTTPAddresses`: Array of HTTP addresses for multiple endpoint configurations
 - `settings.Propagation.HTTPRateLimit`: HTTP request rate limiting (requests per second)
 - `settings.Propagation.AlwaysUseHTTP`: Boolean flag to prefer HTTP over other protocols
 - `settings.Propagation.SendBatchSize`: Batch size for sending transactions (default: 100)
-- `settings.Propagation.SendBatchTimeout`: Timeout for batch sending operations (default: 5 seconds)
+- `settings.Propagation.SendBatchTimeout`: Timeout for batch sending operations in milliseconds (default: 5 milliseconds)
 - `settings.Propagation.GRPCListenAddress`: gRPC server address for the Propagation API
 - `settings.Propagation.GRPCAddresses`: Array of gRPC addresses for multiple endpoint configurations
 - `settings.Propagation.GRPCMaxConnectionAge`: Maximum age for gRPC connections before forced refresh
+- `settings.Propagation.IPv6AllowedSources`: List of allowed UDP source IPs or CIDR ranges (empty = allow all sources)
 
 ### Validator Settings
 
@@ -261,3 +266,10 @@ The server initializes Prometheus metrics for monitoring various aspects of its 
 ## Extensibility
 
 The server is designed to be extensible, supporting multiple communication protocols (UDP, gRPC) for transaction ingestion. New protocols or processing methods can be added by implementing additional handlers and integrating them into the server's start-up process.
+
+## Related Documents
+
+- [Propagation Topic Guide](../../topics/services/propagation.md)
+- [Propagation Settings](../settings/services/propagation_settings.md)
+- [Propagation Protobuf Reference](../protobuf_docs/propagationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

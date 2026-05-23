@@ -73,8 +73,8 @@ func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.
 	return nil, nil
 }
 
-func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	return nil
 }
 
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
@@ -89,8 +89,28 @@ func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 	return nil, nil
 }
 
-func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (m *MockUTXOStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
+}
+
+func (m *MockUTXOStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *MockUTXOStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
 }
 
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -110,6 +130,10 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 }
 
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
+	return nil
+}
+
+func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	return nil
 }
 

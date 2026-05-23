@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -30,21 +31,34 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		err          error
 	)
 
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxBlockMessageSize {
+		s.logger.Errorf("[handleBlockTopic] message size %d exceeds max %d from peer %s", len(m), maxBlockMessageSize, fromID)
+		return
+	}
+
 	// decode request
 	blockMessage = BlockMessage{}
 
-	err = json.Unmarshal(m, &blockMessage)
-	if err != nil {
+	if err = json.Unmarshal(m, &blockMessage); err != nil {
 		s.logger.Errorf("[handleBlockTopic] json unmarshal error: %v", err)
 		return
 	}
 
 	// Check that fromID matches the block peer ID
 	if fromID != blockMessage.PeerID {
-		// For now, log an error. In the future, we might want to take banning action against peers spoofing other IDs
-		s.logger.Errorf("[handleBlockTopic] mismatch between fromID (%s) and blockMessage.PeerID (%s)", fromID, blockMessage.PeerID)
+		s.logger.Errorf("[handleBlockTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, blockMessage.PeerID)
+		s.addProtocolViolation(fromID)
 		return
 	}
+
+	// Validate DataHubURL to prevent SSRF attacks
+	if err = s.validateDataHubURL(blockMessage.DataHubURL); err != nil {
+		s.logger.Errorf("[handleBlockTopic] invalid DataHubURL from peer %s: %v", fromID, err)
+		s.addProtocolViolation(fromID)
+		return
+	}
+
 	s.logger.Infof("[handleBlockTopic] received block %s fromID %s", blockMessage.Hash, blockMessage.PeerID)
 
 	select {
@@ -132,21 +146,34 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		err            error
 	)
 
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxSubtreeMessageSize {
+		s.logger.Errorf("[handleSubtreeTopic] message size %d exceeds max %d from peer %s", len(m), maxSubtreeMessageSize, fromID)
+		return
+	}
+
 	// decode request
 	subtreeMessage = SubtreeMessage{}
 
-	err = json.Unmarshal(m, &subtreeMessage)
-	if err != nil {
+	if err = json.Unmarshal(m, &subtreeMessage); err != nil {
 		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error: %v", err)
 		return
 	}
 
 	// Check that fromID matches the subtree peer ID
 	if fromID != subtreeMessage.PeerID {
-		// For now, log an error. In the future, we might want to take banning action against peers spoofing other IDs
-		s.logger.Errorf("[handleSubtreeTopic] mismatch between fromID (%s) and subtreeMessage.PeerID (%s)", fromID, subtreeMessage.PeerID)
+		s.logger.Errorf("[handleSubtreeTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, subtreeMessage.PeerID)
+		s.addProtocolViolation(fromID)
 		return
 	}
+
+	// Validate DataHubURL to prevent SSRF attacks
+	if err = s.validateDataHubURL(subtreeMessage.DataHubURL); err != nil {
+		s.logger.Errorf("[handleSubtreeTopic] invalid DataHubURL from peer %s: %v", fromID, err)
+		s.addProtocolViolation(fromID)
+		return
+	}
+
 	s.logger.Debugf("[handleSubtreeTopic] received subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
 	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
@@ -222,6 +249,13 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	}
 }
 
+// addProtocolViolation records a protocol violation against a peer if the ban manager is available.
+func (s *Server) addProtocolViolation(peerID string) {
+	if s.banManager != nil {
+		s.banManager.AddScore(peerID, ReasonProtocolViolation)
+	}
+}
+
 // isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
 func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
 	inputHost := s.extractHost(baseURL)
@@ -271,11 +305,80 @@ func (s *Server) extractHost(urlStr string) string {
 	return strings.ToLower(host)
 }
 
+// isUnsafeIP checks if an IP address points to an internal/unsafe network.
+// Returns a non-empty reason string if unsafe, empty string if safe.
+func isUnsafeIP(ip net.IP) string {
+	switch {
+	case ip.IsLoopback():
+		return "loopback address"
+	case ip.IsPrivate():
+		return "private address"
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return "link-local address"
+	case ip.IsUnspecified():
+		return "unspecified address"
+	default:
+		return ""
+	}
+}
+
+// isLocalhostHostname checks if a hostname refers to localhost.
+func isLocalhostHostname(hostname string) bool {
+	return hostname == "localhost" || strings.HasSuffix(hostname, ".localhost")
+}
+
+// validateDataHubURL validates that a DataHubURL is safe to use (not pointing to internal resources).
+// This prevents SSRF attacks by rejecting URLs with:
+// - Invalid schemes (only http/https allowed)
+// - Loopback addresses (127.x.x.x, ::1)
+// - Private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7)
+// - Link-local addresses (169.254.x.x, fe80::/10)
+func (s *Server) validateDataHubURL(urlStr string) error {
+	if urlStr == "" {
+		return errors.NewInvalidArgumentError("DataHubURL is empty")
+	}
+
+	parsed, err := url.Parse(urlStr)
+	if err != nil {
+		return errors.NewInvalidArgumentError("invalid DataHubURL: %v", err)
+	}
+
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.NewInvalidArgumentError("DataHubURL has invalid scheme: %s (only http/https allowed)", parsed.Scheme)
+	}
+
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
+	}
+
+	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)
+	if s != nil && s.settings != nil && s.settings.P2P.AllowPrivateIPs {
+		return nil
+	}
+
+	if ip := net.ParseIP(hostname); ip != nil {
+		if reason := isUnsafeIP(ip); reason != "" {
+			return errors.NewInvalidArgumentError("DataHubURL points to %s", reason)
+		}
+	} else if isLocalhostHostname(hostname) {
+		return errors.NewInvalidArgumentError("DataHubURL points to localhost")
+	}
+
+	return nil
+}
+
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID string) {
 	var (
 		rejectedTxMessage RejectedTxMessage
 		err               error
 	)
+
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxRejectedTxMessageSize {
+		s.logger.Errorf("[handleRejectedTxTopic] message size %d exceeds max %d from peer %s", len(m), maxRejectedTxMessageSize, fromID)
+		return
+	}
 
 	rejectedTxMessage = RejectedTxMessage{}
 
@@ -287,7 +390,8 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
-		s.logger.Errorf("[handleRejectedTxTopic] peerID does not match fromID: peerID=%s fromID=%s", rejectedTxMessage.PeerID, fromID)
+		s.logger.Errorf("[handleRejectedTxTopic] peer ID spoofing detected: from=%s claimed=%s", fromID, rejectedTxMessage.PeerID)
+		s.addProtocolViolation(fromID)
 		return
 	}
 
@@ -864,6 +968,53 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// startPeerRegistryCleanup runs periodic TTL+LRU eviction on the peer registry
+// so it cannot grow unboundedly under churn.
+func (s *Server) startPeerRegistryCleanup(ctx context.Context) {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	interval := s.settings.P2P.PeerRegistryCleanupInterval
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ttl := s.settings.P2P.PeerRegistryTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	maxSize := s.settings.P2P.PeerRegistryMaxSize
+
+	s.peerRegistryCleanupTimer = time.NewTicker(interval)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Infof("[startPeerRegistryCleanup] stopping peer registry cleanup")
+				return
+			case <-s.peerRegistryCleanupTimer.C:
+				expired, lru := s.peerRegistry.Cleanup(maxSize, ttl)
+				size := s.peerRegistry.PeerCount()
+				if expired+lru > 0 {
+					s.logger.Infof("[startPeerRegistryCleanup] evicted %d expired and %d over-limit entries (registry size now %d)",
+						expired, lru, size)
+				}
+				// LRU cannot evict connected/banned peers; if exempt entries alone
+				// exceed maxSize, the registry stays over-cap until they age out.
+				// Surface that explicitly so it does not look like cleanup is broken.
+				if maxSize > 0 && size > maxSize {
+					s.logger.Warnf("[startPeerRegistryCleanup] registry size %d exceeds max %d — exempt (connected or banned) peers cannot be evicted",
+						size, maxSize)
+				}
+			}
+		}
+	}()
+
+	s.logger.Infof("[startPeerRegistryCleanup] started peer registry cleanup with interval %v, ttl %v, max size %d",
+		interval, ttl, maxSize)
 }
 
 // startPeerRegistryCacheSave starts periodic saving of peer registry cache

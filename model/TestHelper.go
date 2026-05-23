@@ -131,10 +131,17 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		binary.LittleEndian.PutUint64(parentTxID[:], uint64(i-1)) // Reference the previous transaction as parent
 		parentHash := chainhash.Hash(parentTxID)
 
-		if err = subtreeMeta.SetTxInpoints(len(subtree.Nodes)-1, subtreepkg.TxInpoints{
-			ParentTxHashes: []chainhash.Hash{parentHash},
-			Idxs:           [][]uint32{{0}}, // Reference output 0 of parent transaction
-		}); err != nil {
+		parentInput := &bt.Input{PreviousTxOutIndex: 0}
+		if err = parentInput.PreviousTxIDAdd(&parentHash); err != nil {
+			return nil, err
+		}
+
+		txInpoints, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+		if err != nil {
+			return nil, err
+		}
+
+		if err = subtreeMeta.SetTxInpoints(len(subtree.Nodes)-1, txInpoints); err != nil {
 			return nil, err
 		}
 
@@ -506,7 +513,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 
 type TestLocalSubtreeStore struct {
 	Files    map[chainhash.Hash]int
-	FileData map[string][]byte // For bloom filters and other non-subtree data
+	FileData map[string][]byte // For non-subtree data
 }
 
 func NewLocalSubtreeStore() *TestLocalSubtreeStore {
@@ -521,7 +528,7 @@ func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, fileType fil
 		return nil, errors.NewProcessingError("key cannot be empty")
 	}
 
-	// Try to find the data in the FileData map first (for bloom filters and other data)
+	// Try to find the data in the FileData map first (for other data)
 	keyString := string(key)
 	keyString = keyString + "." + fileType.String()
 
@@ -578,7 +585,7 @@ func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, fileType fi
 		return errors.NewProcessingError("key cannot be empty")
 	}
 
-	// Create a map for storing bloom filters and other data if it doesn't exist
+	// Create a map for storing other data if it doesn't exist
 	if l.FileData == nil {
 		l.FileData = make(map[string][]byte)
 	}

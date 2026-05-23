@@ -12,6 +12,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// SubtreeMeta represents metadata for a single subtree within a block.
+//
+// swagger:model SubtreeMeta
 type SubtreeMeta struct {
 	TxCount int    `json:"txCount"`
 	Hash    string `json:"hash"`

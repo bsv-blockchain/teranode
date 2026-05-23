@@ -368,7 +368,7 @@ When a ban event occurs:
 Ban-related settings in the configuration:
 
 | Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| --------- | ------ | --------- | ------------- | -------- |
 | `banlist_db` | string | "" | Database connection string for ban storage | Required for ban list persistence across restarts |
 | `ban_default_duration` | duration | 24h | Default duration for bans | Controls how long banned peers are excluded from the network |
 | `ban_max_entries` | int | 1000 | Maximum number of banned entries to maintain | Prevents unbounded memory growth in ban list |
@@ -494,7 +494,7 @@ For detailed documentation on the peer registry and reputation system, see [Peer
 12. **go-p2p (github.com/bsv-blockchain/go-p2p)**:
 
     - Public P2P networking package that provides the core P2P node implementation
-    - Offers standardized interfaces for P2P communication in Bitcoin SV applications
+    - Offers standardized interfaces for P2P communication in BSV Blockchain applications
     - Enables external developers to build compatible P2P solutions
 
 13. **Environmental Configuration**:

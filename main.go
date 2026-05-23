@@ -27,43 +27,34 @@ func init() {
 }
 
 func populateVersionInfo() {
-	// Get git commit (short hash)
-	if cmd := exec.Command("git", "rev-parse", "--short", "HEAD"); cmd != nil {
-		if output, err := cmd.Output(); err == nil {
-			commit = strings.TrimSpace(string(output))
-		} else {
-			commit = "unknown"
-		}
-	}
+	commit = runGitCommand("unknown", "rev-parse", "--short", "HEAD")
 
-	// Get git tag (if on a tagged commit)
-	var gitTag string
-	if cmd := exec.Command("git", "describe", "--tags", "--exact-match"); cmd != nil {
-		if output, err := cmd.Output(); err == nil {
-			gitTag = strings.TrimSpace(string(output))
-		}
-	}
+	gitTag := runGitCommand("", "describe", "--tags", "--exact-match")
 
-	// Generate version using same logic as determine-git-version.sh
 	if gitTag != "" && strings.HasPrefix(gitTag, "v") {
 		version = gitTag
-	} else {
-		// Get git timestamp or use current time
-		var timestamp string
-		if cmd := exec.Command("git", "show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M%S", "HEAD"); cmd != nil {
-			if output, err := cmd.Output(); err == nil {
-				timestamp = strings.TrimSpace(string(output))
-			} else {
-				timestamp = time.Now().Format("20060102150405")
-			}
-		}
-
-		if commit == "unknown" {
-			version = fmt.Sprintf("v0.0.0-%s-unknown", timestamp)
-		} else {
-			version = fmt.Sprintf("v0.0.0-%s-%s", timestamp, commit)
-		}
+		return
 	}
+
+	timestamp := runGitCommand(
+		time.Now().Format("20060102150405"),
+		"show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M%S", "HEAD",
+	)
+
+	if commit == "unknown" {
+		version = fmt.Sprintf("v0.0.0-%s-unknown", timestamp)
+	} else {
+		version = fmt.Sprintf("v0.0.0-%s-%s", timestamp, commit)
+	}
+}
+
+// runGitCommand runs a git command and returns the trimmed output, or fallback on failure.
+func runGitCommand(fallback string, args ...string) string {
+	output, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return fallback
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func main() {

@@ -81,7 +81,8 @@ func AppHandler(c echo.Context) error {
 		b, err = res.ReadFile(resource)
 
 		if err != nil {
-			resource = "build/index.html"
+			// Use SvelteKit's 200.html fallback for SPA routing
+			resource = "build/200.html"
 			b, err = res.ReadFile(resource)
 
 			if err != nil {

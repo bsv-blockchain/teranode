@@ -1,4 +1,4 @@
-// Package alert implements the Bitcoin SV alert system server and related functionality.
+// Package alert implements the BSV Blockchain alert system server and related functionality.
 package alert
 
 import (
@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/alert-system/app/config"
-	"github.com/bitcoin-sv/alert-system/app/models"
+	"github.com/bsv-blockchain/go-alert-system/app/config"
+	"github.com/bsv-blockchain/go-alert-system/app/models"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"

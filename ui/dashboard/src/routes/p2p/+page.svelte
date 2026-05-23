@@ -258,7 +258,7 @@
               variant="text"
               size="sm"
               value={peerClientNames[peer] || '(not set)'}
-              color="rgba(255, 255, 255, 0.66)"
+              color="var(--comp-label-color)"
               wrap={false}
             />
           </div>
@@ -303,8 +303,7 @@
     padding: 24px;
 
     border-radius: 12px;
-    background: linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.04) 100%),
-      #0a1018;
+    background: var(--comp-bg-color);
   }
 
   .tools {
@@ -316,7 +315,7 @@
     margin-top: -8px;
   }
   .tools .title {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: var(--font-family);
     font-size: 22px;
@@ -353,14 +352,14 @@
   }
 
   .filter-label {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-size: 14px;
     font-weight: 500;
   }
 
   .peer {
     margin-bottom: 5px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -401,7 +400,7 @@
 
   .column .peer {
     padding: 8px 12px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--app-subtle-bg-color);
     border-radius: 8px;
     margin-bottom: 12px;
     text-align: center;

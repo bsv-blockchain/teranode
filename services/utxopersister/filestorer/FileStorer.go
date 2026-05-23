@@ -17,8 +17,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/bytesize"
-	"github.com/ordishs/go-utils"
 )
 
 // FileStorer handles the storage and management of blockchain-related files.
@@ -74,7 +74,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if exists {
-		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", utils.ReverseAndHexEncodeSlice(key), fileType)
+		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", util.ReverseAndHexEncodeSlice(key), fileType)
 	}
 
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
@@ -119,6 +119,12 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		// reader's interaction with the pipe can create deadlocks in error scenarios.
 		err := store.SetFromReader(ctx, key, fileType, reader, fileOptions...)
 		if err != nil {
+			// Close the pipe reader with the error BEFORE acquiring the mutex.
+			// This unblocks any Write() call stuck on pipe.write(), which holds
+			// fs.mu. Without this, we deadlock: Write holds mu waiting for the
+			// pipe to drain, and we wait for mu to set readerError.
+			_ = reader.CloseWithError(err)
+
 			fs.mu.Lock()
 			fs.readerError = err
 			fs.mu.Unlock()
@@ -144,8 +150,8 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 }
 
 // Close finalizes the file storage operation.
-// It flushes the buffer, closes the pipe writer, waits for the background goroutine to complete,
-// and sets the DAH for the file.
+// It flushes the buffer, closes the pipe writer, and waits for the background goroutine to complete.
+// Callers are responsible for setting DAH after Close() if needed.
 // Returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
 	// Flush the buffered writer to ensure all data is written to the pipe
@@ -173,11 +179,6 @@ func (f *FileStorer) Close(ctx context.Context) error {
 
 	if readerErr != nil {
 		return errors.NewStorageError("Error in reader goroutine", readerErr)
-	}
-
-	// Set DAH to 0 (no expiration) as per the memory about Aerospike DAH usage
-	if err := f.store.SetDAH(ctx, f.key, f.fileType, 0); err != nil {
-		return errors.NewStorageError("Error setting DAH on file", err)
 	}
 
 	if err := f.waitUntilFileIsAvailable(ctx); err != nil {
@@ -228,5 +229,5 @@ func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context) error {
 		time.Sleep(retryInterval)
 	}
 
-	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), f.fileType)
+	return errors.NewStorageError("file %s.%s is not available", util.ReverseAndHexEncodeSlice(f.key), f.fileType)
 }

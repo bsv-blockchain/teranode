@@ -63,6 +63,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
 		APIKey:       apiKey, // Add the API key to the connection options
+		CallerName:   "p2p",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init p2p service connection ", err)

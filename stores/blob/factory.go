@@ -1,6 +1,6 @@
 // Package blob provides blob storage functionality with various storage backend implementations.
 // This file contains the factory functions for creating and configuring blob stores with
-// different backends and optional wrapper functionality like batching and Delete-At-Height (DAH).
+// different backends and optional wrapper functionality like batching.
 // The factory pattern used here allows for flexible configuration of blob stores through URL parameters,
 // enabling runtime selection of storage backends and features.
 package blob
@@ -8,13 +8,11 @@ package blob
 import (
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/blob/batcher"
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blob/http"
-	"github.com/bsv-blockchain/teranode/stores/blob/localdah"
 	storelogger "github.com/bsv-blockchain/teranode/stores/blob/logger"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/null"
@@ -27,7 +25,6 @@ var (
 	_ Store = (*batcher.Batcher)(nil)
 	_ Store = (*file.File)(nil)
 	_ Store = (*http.HTTPStore)(nil)
-	_ Store = (*localdah.LocalDAH)(nil)
 	_ Store = (*memory.Memory)(nil)
 	_ Store = (*null.Null)(nil)
 	_ Store = (*s3.S3)(nil)
@@ -47,11 +44,6 @@ var (
 func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
 	switch storeURL.Scheme {
 	case "null":
-		// Prevent null stores from using DAH functionality
-		if storeURL.Query().Get("localDAHStore") != "" {
-			return nil, errors.NewStorageError("null store does not support DAH functionality")
-		}
-
 		store, err = null.New(logger)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating null blob store", err)
@@ -85,66 +77,12 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	}
 
-	if storeURL.Query().Get("localDAHStore") != "" {
-		store, err = createDAHStore(storeURL, logger, opts, store)
-		if err != nil {
-			return nil, errors.NewStorageError("error creating local DAH blob store", err)
-		}
-	}
-
 	if storeURL.Query().Get("logger") == "true" {
 		logger.Infof("enabling blob store logging at DEBUG level")
 		store = storelogger.New(logger, store)
 	}
 
 	return
-}
-
-// createDAHStore wraps a store with Delete-At-Height (DAH) capabilities using a local cache.
-// DAH functionality allows blobs to be automatically deleted when a specific blockchain
-// height is reached. This implementation uses a local cache to track the DAH values
-// for blobs in the underlying store.
-//
-// The DAH implementation supports various storage backends for the cache itself, specified
-// via the localDAHStore query parameter in the URL (e.g., ?localDAHStore=memory://)
-//
-// Parameters:
-//   - storeURL: URL containing DAH store configuration and parameters
-//   - logger: Logger instance for DAH operations and error reporting
-//   - opts: Store options to be passed to the DAH store and cache store
-//   - store: The base store to wrap with DAH functionality
-//
-// Returns:
-//   - Store: The DAH-enabled store instance
-//   - error: Any error that occurred during creation, particularly if the local DAH cache
-//     cannot be initialized
-func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
-	localDAHStorePath := storeURL.Query().Get("localDAHStorePath")
-
-	if len(localDAHStorePath) == 0 {
-		localDAHStorePath = "/tmp/localDAH"
-	} else if localDAHStorePath[0] != '/' && !strings.HasPrefix(localDAHStorePath, "./") {
-		localDAHStorePath = "./" + localDAHStorePath
-	}
-
-	u, err := url.Parse("file://" + localDAHStorePath)
-	if err != nil {
-		return nil, errors.NewStorageError("failed to parse localDAHStorePath", err)
-	}
-
-	var dahStore Store
-
-	dahStore, err = file.New(logger, u, opts...)
-	if err != nil {
-		return nil, errors.NewStorageError("failed to create file store", err)
-	}
-
-	store, err = localdah.New(logger.New("localDAH"), dahStore, store)
-	if err != nil {
-		return nil, errors.NewStorageError("failed to create localDAH store", err)
-	}
-
-	return store, nil
 }
 
 // createBatchedStore wraps a store with batching capabilities for improved performance.

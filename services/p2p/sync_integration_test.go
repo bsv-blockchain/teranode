@@ -53,8 +53,6 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 	// Create peer selector
 	selector := NewPeerSelector(logger, nil)
 
-	// Create health checker
-
 	// Create sync coordinator
 	coordinator := NewSyncCoordinator(
 		logger,

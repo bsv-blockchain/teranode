@@ -62,6 +62,35 @@ func initTestTracer() error {
 	return nil
 }
 
+// initTestTracerWithSampler initializes a test tracer with the override sampler wrapping a custom base
+func initTestTracerWithSampler(baseSampler sdktrace.Sampler) error {
+	SetTracingEnabled(true)
+
+	exporter := tracetest.NewNoopExporter()
+
+	res, err := resource.New(
+		context.Background(),
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String("test-service"),
+			semconv.ServiceVersionKey.String("test"),
+		),
+	)
+	if err != nil {
+		return err
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(10*time.Millisecond)),
+		sdktrace.WithSampler(newOverrideSampler(baseSampler)),
+		sdktrace.WithResource(res),
+	)
+
+	otel.SetTracerProvider(tp)
+	setTestTracerProvider(tp)
+
+	return nil
+}
+
 func TestUTracer_WithError(t *testing.T) {
 	gocore.SetInfo("name", "v0.1.2b", "76b9cdd7e5ff85b62f6fec6cc20cfe02b4a12c17")
 
@@ -205,6 +234,10 @@ func (l *lineLogger) Fatalf(format string, args ...interface{}) {
 
 func (l *lineLogger) log(_ string, format string, args ...interface{}) {
 	l.lastLog = fmt.Sprintf(format, args...)
+}
+
+func (l *lineLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
 }
 
 func setTestTracerProvider(provider *sdktrace.TracerProvider) {
@@ -502,4 +535,241 @@ func TestTracingDisabled_NoAllocation(t *testing.T) {
 	// End functions should work
 	end1()
 	end2()
+}
+
+// TestWithSampleRate_AlwaysSample verifies WithSampleRate(1.0) forces sampling
+func TestWithSampleRate_AlwaysSample(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Use NeverSample as base — without override, spans would be dropped
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+	_, span, endFn := tracer.Start(context.Background(), "test-operation",
+		WithSampleRate(1.0),
+	)
+	defer endFn()
+
+	assert.True(t, span.IsRecording(), "span should be recording with WithSampleRate(1.0)")
+}
+
+// TestWithAlwaysSample verifies the convenience function
+func TestWithAlwaysSample(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+	_, span, endFn := tracer.Start(context.Background(), "test-operation",
+		WithAlwaysSample(),
+	)
+	defer endFn()
+
+	assert.True(t, span.IsRecording(), "span should be recording with WithAlwaysSample()")
+}
+
+// TestWithSampleRate_NeverSample verifies WithSampleRate(0.0) suppresses sampling
+func TestWithSampleRate_NeverSample(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Use AlwaysSample as base — without override, spans would be sampled
+	err := initTestTracerWithSampler(sdktrace.AlwaysSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+	_, span, endFn := tracer.Start(context.Background(), "test-operation",
+		WithSampleRate(0.0),
+	)
+	defer endFn()
+
+	assert.False(t, span.IsRecording(), "span should not be recording with WithSampleRate(0.0)")
+}
+
+// TestWithSampleRate_Clamping verifies out-of-range values are clamped
+func TestWithSampleRate_Clamping(t *testing.T) {
+	opts := &TraceOptions{}
+
+	WithSampleRate(-0.5)(opts)
+	require.NotNil(t, opts.SampleRate)
+	assert.Equal(t, 0.0, *opts.SampleRate, "negative rate should be clamped to 0")
+
+	WithSampleRate(1.5)(opts)
+	require.NotNil(t, opts.SampleRate)
+	assert.Equal(t, 1.0, *opts.SampleRate, "rate > 1 should be clamped to 1")
+}
+
+// TestWithSampleRate_NoOverheadWhenNotUsed verifies no context injection without the option
+func TestWithSampleRate_NoOverheadWhenNotUsed(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	err := initTestTracer()
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+	ctx, _, endFn := tracer.Start(context.Background(), "test-operation")
+	defer endFn()
+
+	// Context should NOT contain the override key
+	val := ctx.Value(sampleRateOverrideKey{})
+	assert.Nil(t, val, "context should not contain sample rate override when option not used")
+}
+
+// TestShortCircuit_UnsampledParentSkipsOTelSDK verifies that child spans of unsampled
+// parents are short-circuited and don't enter the OTel SDK.
+func TestShortCircuit_UnsampledParentSkipsOTelSDK(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Use NeverSample so root spans are dropped (unsampled)
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+
+	// Start a root span — NeverSample means it won't be sampled
+	ctx, rootSpan, endRoot := tracer.Start(context.Background(), "root-operation")
+	defer endRoot()
+
+	// Root span is not recording (unsampled)
+	require.False(t, rootSpan.IsRecording(), "root span should not be recording with NeverSample")
+	require.True(t, rootSpan.SpanContext().IsValid(), "root span should have a valid SpanContext")
+	require.False(t, rootSpan.SpanContext().IsSampled(), "root span should not be sampled")
+
+	// Start child span — should be short-circuited since parent is unsampled
+	_, childSpan, endChild := tracer.Start(ctx, "child-operation")
+	defer endChild()
+
+	// Child span should also not be recording
+	assert.False(t, childSpan.IsRecording(), "child span should not be recording (short-circuited)")
+
+	// The child span should be the same as the parent span (short-circuit reuses parent)
+	assert.Equal(t, rootSpan.SpanContext(), childSpan.SpanContext(),
+		"short-circuited child should reuse the parent span context")
+
+	// Ending the child should not panic (it should be a no-op for the OTel span)
+	endChild()
+}
+
+// TestShortCircuit_WithSampleRateOverrideBypasses verifies that WithSampleRate
+// prevents short-circuiting even when the parent is unsampled.
+func TestShortCircuit_WithSampleRateOverrideBypasses(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Use NeverSample so root spans are dropped
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+
+	// Start unsampled root
+	ctx, rootSpan, endRoot := tracer.Start(context.Background(), "root-operation")
+	defer endRoot()
+	require.False(t, rootSpan.IsRecording())
+
+	// Start child with forced sampling — should NOT be short-circuited
+	_, childSpan, endChild := tracer.Start(ctx, "child-operation",
+		WithAlwaysSample(),
+	)
+	defer endChild()
+
+	// Child should be recording despite unsampled parent
+	assert.True(t, childSpan.IsRecording(),
+		"child with WithAlwaysSample should be recording even with unsampled parent")
+}
+
+// TestShortCircuit_MetricsAndLoggingStillWork verifies that stats, metrics,
+// and logging still function correctly on the short-circuited path.
+func TestShortCircuit_MetricsAndLoggingStillWork(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	logger := newLineLogger()
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_shortcircuit_counter",
+		Help: "Test counter",
+	})
+
+	tracer := Tracer("test-service")
+
+	// Start unsampled root
+	ctx, _, endRoot := tracer.Start(context.Background(), "root-operation")
+	defer endRoot()
+
+	// Start short-circuited child with metrics and logging
+	parentStat := gocore.NewStat("test-parent")
+	_, _, endChild := tracer.Start(ctx, "child-operation",
+		WithLogMessage(logger, "Processing child"),
+		WithParentStat(parentStat),
+		WithCounter(counter),
+	)
+
+	time.Sleep(5 * time.Millisecond)
+	endChild()
+
+	// Logging should still work
+	assert.Contains(t, logger.lastLog, "Processing child DONE in")
+
+	// Counter should still be incremented
+	metric := &dto.Metric{}
+	err = counter.Write(metric)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), metric.Counter.GetValue(),
+		"counter should be incremented even on short-circuited path")
+}
+
+// TestWithSampleRate_ChildSpanInheritsOverride verifies children of force-sampled spans are also sampled
+func TestWithSampleRate_ChildSpanInheritsOverride(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	err := initTestTracerWithSampler(sdktrace.NeverSample())
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	tracer := Tracer("test-service")
+
+	// Parent with forced sampling
+	ctx, parentSpan, endParent := tracer.Start(context.Background(), "parent",
+		WithAlwaysSample(),
+	)
+	defer endParent()
+	require.True(t, parentSpan.IsRecording(), "parent should be recording")
+
+	// Child without explicit sample rate — should inherit via context
+	_, childSpan, endChild := tracer.Start(ctx, "child")
+	defer endChild()
+	assert.True(t, childSpan.IsRecording(), "child should be recording due to inherited context override")
 }

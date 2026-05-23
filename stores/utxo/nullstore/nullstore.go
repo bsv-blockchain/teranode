@@ -80,8 +80,17 @@ func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return m.Get(ctx, hash)
+func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	result, err := m.Get(ctx, hash)
+	if err != nil {
+		return err
+	}
+
+	if result != nil {
+		*data = *result
+	}
+
+	return nil
 }
 
 func (m *NullStore) MetaBatchDecorate(_ context.Context, _ []*utxo.UnresolvedMetaData, _ ...string) error {
@@ -98,6 +107,15 @@ func (m *NullStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error 
 		input.PreviousTxSatoshis = 100_000_000_000
 	}
 
+	return nil
+}
+
+func (m *NullStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	for _, tx := range txs {
+		if err := m.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -143,8 +161,28 @@ func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 	return nil, nil
 }
 
-func (m *NullStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
+func (m *NullStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
+}
+
+func (m *NullStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
 }
 
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {

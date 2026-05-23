@@ -14,7 +14,6 @@
     i18n as i18nStore,
     tippy,
   } from '$lib/stores/media'
-  import { dark as darkTheme } from '$internal/styles/themes/dark'
   import { sm, md, lg, xl } from '$lib/styles/breakpoints'
   import GlobalStyle from '$lib/styles/GlobalStyle.svelte'
   import Spinner from '$lib/components/spinner/index.svelte'
@@ -24,7 +23,7 @@
 
   import { connectToP2PServer } from '$internal/stores/p2pStore'
 
-  onMount(async () => {
+  onMount(() => {
     connectToP2PServer()
   })
 
@@ -62,23 +61,6 @@
     },
   })
   $injectedLogos = logos
-
-  $theme = 'dark'
-  // $theme = 'light'
-
-  let customThemeProps = {}
-
-  $: {
-    switch ($theme) {
-      case 'dark':
-        customThemeProps = darkTheme
-        break
-      case 'light':
-        customThemeProps = {}
-        break
-      default:
-    }
-  }
 
   $pageLinks = {
     type: 'page-links',
@@ -126,6 +108,12 @@
         path: '/admin',
         label: $i18n.t('page.admin.menu-label'),
       },
+      {
+        icon: 'icon-settings-line',
+        iconSelected: 'icon-settings-solid',
+        path: '/settings',
+        label: $i18n.t('page.settings.menu-label'),
+      },
       // {
       //   icon: 'icon-bell-line',
       //   iconSelected: 'icon-bell-solid',
@@ -144,8 +132,8 @@
       items = $pageLinks.items.map((route) => ({
         ...route,
         selected:
-          (pathname === '/' && route.path == '/') || 
-          pathname === route.path || 
+          (pathname === '/' && route.path == '/') ||
+          pathname === route.path ||
           pathname.indexOf(`${route.path}/`) === 0,
       }))
       $pageLinks.items = items
@@ -180,7 +168,7 @@
   }
 </script>
 
-<GlobalStyle theme={$theme} themeNs={$themeNs} {customThemeProps}>
+<GlobalStyle theme={$theme} themeNs={$themeNs}>
   <slot />
 </GlobalStyle>
 

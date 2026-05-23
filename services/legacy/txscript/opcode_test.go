@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestOpcodeDisabled tests the opcodeDisabled function manually because all
@@ -208,4 +210,25 @@ func TestOpcodeDisasm(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// TestOpcodeNum2binSizeTooBig verifies that OP_NUM2BIN rejects sizes greater
+// than MaxScriptElementSize and that the returned error message references
+// the correct constant (the value of MaxScriptElementSize, not
+// defaultScriptNumLen). Regression for issue #4591.
+func TestOpcodeNum2binSizeTooBig(t *testing.T) {
+	vm := Engine{}
+
+	vm.dstack.PushByteArray([]byte{0x01})
+	vm.dstack.PushInt(scriptNum(MaxScriptElementSize + 1))
+
+	pop := parsedOpcode{opcode: &opcodeArray[OP_NUM2BIN], data: nil}
+
+	err := opcodeNum2bin(&pop, &vm)
+	require.Error(t, err)
+	require.True(t, IsErrorCode(err, ErrNumberTooBig),
+		"expected ErrNumberTooBig, got %v", err)
+	require.Contains(t, err.Error(), strconv.Itoa(MaxScriptElementSize),
+		"error message should reference MaxScriptElementSize (%d), got %q",
+		MaxScriptElementSize, err.Error())
 }

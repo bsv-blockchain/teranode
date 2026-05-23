@@ -30,7 +30,7 @@
 
 ## 1. Description
 
-This service implements a local Bitcoin SV (BSV) Blockchain service, maintaining the blockchain as understood by the node.
+This service implements a local BSV Blockchain service, maintaining the blockchain as understood by the node.
 
 The service exposes various RPC methods such as `AddBlock`, `GetBlock`, `InvalidateBlock` and `Subscribe`.
 
@@ -79,7 +79,8 @@ There are 2 clients invoking this endpoint:
 The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:
 
 ![blockchain_add_block.svg](img/plantuml/blockchain/blockchain_add_block.svg)
-2. **The `Block Validation` service:**
+
+1. **The `Block Validation` service:**
     - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
 
 The sequence diagram for the Block Validation to add a new block to the blockchain is as follows:
@@ -315,27 +316,27 @@ The Blockchain works with the [Block Data Model](../datamodel/block_data_model.m
 
 The blockchain database stores the block header, coinbase TX, and block merkle root. The following is the structure of the `blocks` data:
 
-| Field          | Type              | Constraints                           | Description                                          |
-|----------------|-------------------|---------------------------------------|------------------------------------------------------|
-| id             | BIGSERIAL         | PRIMARY KEY                           | Unique identifier for each block.                    |
-| parent_id      | BIGSERIAL         | REFERENCES blocks(id)                 | Identifier of the parent block.                      |
-| version        | INTEGER           | NOT NULL                              | Version of the block.                                |
-| hash           | BYTEA             | NOT NULL                              | Hash of the block.                                   |
-| previous_hash  | BYTEA             | NOT NULL                              | Hash of the previous block.                          |
-| merkle_root    | BYTEA             | NOT NULL                              | Merkle root of the block.                            |
-| block_time     | BIGINT            | NOT NULL                              | Timestamp of when the block was created.             |
-| n_bits         | BYTEA             | NOT NULL                              | Compact form of the block's target difficulty.       |
-| nonce          | BIGINT            | NOT NULL                              | Nonce used during the mining process.                |
-| height         | BIGINT            | NOT NULL                              | Height of the block in the blockchain.               |
-| chain_work     | BYTEA             | NOT NULL                              | Cumulative proof of work of the blockchain up to this block. |
-| tx_count       | BIGINT            | NOT NULL                              | Number of transactions in the block.                 |
-| size_in_bytes  | BIGINT            | NOT NULL                              | Size of the block in bytes.                          |
-| subtree_count  | BIGINT            | NOT NULL                              | Number of subtrees in the block.                     |
-| subtrees       | BYTEA             | NOT NULL                              | Serialized data of the subtrees.                     |
-| coinbase_tx    | BYTEA             | NOT NULL                              | Serialized data of the coinbase transaction.         |
-| invalid        | BOOLEAN           | NOT NULL DEFAULT FALSE                | Flag to mark the block as valid or invalid.          |
-| peer_id        | VARCHAR(64)       | NOT NULL                              | Identifier of the peer that provided the block.      |
-| inserted_at    | TIMESTAMPTZ       | NOT NULL DEFAULT CURRENT_TIMESTAMP   | Timestamp of when the block was inserted in the database. |
+| Field            | Type                | Constraints                             | Description                                                  |
+| ---------------- | ------------------- | --------------------------------------- | ------------------------------------------------------------ |
+| id               | BIGSERIAL           | PRIMARY KEY                             | Unique identifier for each block.                            |
+| parent_id        | BIGSERIAL           | REFERENCES blocks(id)                   | Identifier of the parent block.                              |
+| version          | INTEGER             | NOT NULL                                | Version of the block.                                        |
+| hash             | BYTEA               | NOT NULL                                | Hash of the block.                                           |
+| previous_hash    | BYTEA               | NOT NULL                                | Hash of the previous block.                                  |
+| merkle_root      | BYTEA               | NOT NULL                                | Merkle root of the block.                                    |
+| block_time       | BIGINT              | NOT NULL                                | Timestamp of when the block was created.                     |
+| n_bits           | BYTEA               | NOT NULL                                | Compact form of the block's target difficulty.               |
+| nonce            | BIGINT              | NOT NULL                                | Nonce used during the mining process.                        |
+| height           | BIGINT              | NOT NULL                                | Height of the block in the blockchain.                       |
+| chain_work       | BYTEA               | NOT NULL                                | Cumulative proof of work of the blockchain up to this block. |
+| tx_count         | BIGINT              | NOT NULL                                | Number of transactions in the block.                         |
+| size_in_bytes    | BIGINT              | NOT NULL                                | Size of the block in bytes.                                  |
+| subtree_count    | BIGINT              | NOT NULL                                | Number of subtrees in the block.                             |
+| subtrees         | BYTEA               | NOT NULL                                | Serialized data of the subtrees.                             |
+| coinbase_tx      | BYTEA               | NOT NULL                                | Serialized data of the coinbase transaction.                 |
+| invalid          | BOOLEAN             | NOT NULL DEFAULT FALSE                  | Flag to mark the block as valid or invalid.                  |
+| peer_id          | VARCHAR(64)         | NOT NULL                                | Identifier of the peer that provided the block.              |
+| inserted_at      | TIMESTAMPTZ         | NOT NULL DEFAULT CURRENT_TIMESTAMP      | Timestamp of when the block was inserted in the database.    |
 
 The table structure is designed to store comprehensive information about each block in the blockchain, including its relationships with other blocks, its contents, and metadata.
 
@@ -613,6 +614,67 @@ The service employs an optimized algorithm for tracking and selecting the longes
 
 - Implements transaction-based operations with the store to maintain consistency.
 - Reports persistent storage errors through health endpoints.
+
+### 9.3 Known Performance Limitations
+
+#### Catchup Performance During Block Sync
+
+**Issue:** Block synchronization (catchup) can become progressively slower as the blockchain grows, particularly on deployments with large block counts.
+
+**Root Cause:**
+
+The blockchain store uses a recursive CTE (Common Table Expression) query to traverse the chain when storing blocks:
+
+```sql
+WITH RECURSIVE ChainBlocks AS (
+    SELECT id, parent_id
+    FROM blocks
+    WHERE hash = $1
+    UNION ALL
+    SELECT bb.id, bb.parent_id
+    FROM blocks bb
+    JOIN ChainBlocks cb ON bb.id = cb.parent_id
+    WHERE bb.id != cb.id
+)
+SELECT id FROM ChainBlocks
+LIMIT $2
+```
+
+This query can become expensive as the blockchain grows. The issue is compounded by the current caching strategy:
+
+1. Query results are cached in `responseCache` for performance
+2. Every time `StoreBlock()` is called, it calls `ResetResponseCache()` which invalidates the entire cache
+3. The next block storage operation must re-run the expensive recursive query from scratch
+4. During catchup, this results in the query being executed for every single block
+
+**Impact:**
+
+On large blockchains (>1.7M blocks), index scan counts can reach hundreds of billions, causing catchup speeds to drop from initial rates to as low as 6-7 blocks per minute.
+
+**Tracking:**
+
+This is a known issue being tracked in internal issue #4374.
+
+**Potential Optimization:**
+
+Instead of invalidating the entire cache on each block store, the cache could be incrementally updated:
+
+- Reuse existing cached chain traversal results
+- Append the new block to the cached chain
+- Only invalidate cache entries that are directly affected by the new block
+- This would reduce the recursive query to a one-time cost at startup
+
+**Current Workaround:**
+
+For faster initial synchronization:
+
+- Use the seeder with exported UTXO data instead of full catchup
+- See [How to Sync the Node](../../howto/miners/kubernetes/minersHowToSyncTheNode.md) for seeding procedures
+- Seeding bypasses the incremental block-by-block catchup process
+
+**Status:**
+
+Performance optimization work is ongoing and may be addressed in future releases.
 
 ## 10. Other Resources
 

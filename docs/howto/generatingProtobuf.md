@@ -1,47 +1,52 @@
-### How to Generate Protobuf Files
+# How to Generate Protobuf Files
 
 This guide will walk you through the process of generating Protobuf files for the Teranode project. Protobuf files define the structure and services used across the project, and the `Makefile` provides a simple way to compile these `.proto` files into Go source code using the `protoc` compiler.
 
-### Prerequisites
+## Prerequisites
 
 Before proceeding, make sure the following tools and resources are available:
 
-1. **Protobuf Compiler (`protoc`)**: Ensure you have the `protoc` tool installed. If you have followed the [Installation Guide for Developers and Contributors](../tutorials/developers/developerSetup.md), you are ready to use it. For more information, you can follow the [official guide](https://grpc.io/docs/protoc-installation/) too.
+1. **Protobuf Compiler (`protoc`)**: Ensure you have the `protoc` tool installed. If you have followed the [Installation Guide for Developers and Contributors](./developerSetup.md), you are ready to use it. For more information, you can follow the [official guide](https://grpc.io/docs/protoc-installation/) too.
 2. **Makefile**: This project uses the Teranode `Makefile` to manage protobuf compilation tasks. Familiarity with running `make` commands is useful.
 
-### Step-by-Step: Generating Protobuf Files
+## Step-by-Step: Generating Protobuf Files
 
-#### Step 1: Overview of `.proto` Files
+### Step 1: Overview of `.proto` Files
 
 The project uses `.proto` files to define the structure of its services and messages. Each service is typically located in the `services` directory, and they follow the pattern:
 
-```
-services/<service_name>/<service_name>_api.proto
+```text
+services/<service_name>/<service_name>_api/<service_name>_api.proto
 ```
 
-For example, the file `services/subtreevalidation/subtreevalidation_api.proto` defines the RPC services and message types for the `SubtreeValidationService`.
+For example, the file `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` defines the RPC services and message types for the subtree validation service.
+
+> Note: The following `proto` snippet is a **simplified example** intended only to illustrate how `.proto` files are structured for code generation. It does **not** show all fields or exact types used in the real `CheckSubtreeFromBlockRequest`. For the authoritative schema, always refer directly to `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` in the repository.
 
 ```proto
 syntax = "proto3";
 
-package subtreevalidation;
+option go_package = "./;subtreevalidation_api";
 
-service SubtreeValidationService {
-rpc ValidateSubtree (SubtreeValidationRequest) returns (SubtreeValidationResponse);
+package subtreevalidation_api;
+
+// Simplified example - refer to the real subtreevalidation_api.proto
+// for the complete and accurate message definitions (fields, types, etc.).
+service SubtreeValidationAPI {
+  rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {}
 }
 
-message SubtreeValidationRequest {
-string tree_id = 1;
-int32 max_depth = 2;
+message CheckSubtreeFromBlockRequest {
+  string subtree_hash = 1;
+  string base_url = 2;
 }
 
-message SubtreeValidationResponse {
-bool is_valid = 1;
-string validation_message = 2;
+message CheckSubtreeFromBlockResponse {
+  bool blessed = 1;
 }
 ```
 
-#### Step 2: Generating the Protobuf Files
+### Step 2: Generating the Protobuf Files
 
 To generate the Go files from the `.proto` definitions, simply run the following command from the project’s root directory:
 
@@ -54,7 +59,7 @@ This command will:
 - Process all `.proto` files listed in the `Makefile` using `protoc`.
 - Generate the corresponding Go source code files (`*.pb.go` and `*_grpc.pb.go`) in the same directory as the `.proto` files.
 
-#### How the `make gen` Command Works
+### How the `make gen` Command Works
 
 The `make gen` command runs several `protoc` commands, which are defined in the `Makefile`. Each `protoc` command processes a `.proto` file and generates its corresponding Go files.
 
@@ -75,7 +80,7 @@ This generates:
 - `services/blockassembly/blockassembly_api/blockassembly_api.pb.go` (message definitions)
 - `services/blockassembly/blockassembly_api/blockassembly_api_grpc.pb.go` (gRPC client and server stubs)
 
-#### Step 3: Handling Dependencies
+### Step 3: Handling Dependencies
 
 Some services have dependencies on common `.proto` files, like `model.proto`. The `Makefile` is configured to handle these dependencies.
 
@@ -89,7 +94,7 @@ model/model.proto
 ```
 This command generates the necessary Go files for `model.proto` and ensures that services depending on `model.proto` can compile successfully.
 
-#### Step 4: Cleaning Generated Files
+### Step 4: Cleaning Generated Files
 
 If you need to remove the generated Protobuf files, you can run the following command:
 
@@ -99,17 +104,17 @@ make clean_gen
 
 This will remove all `.pb.go` files generated by the `make gen` command across the different services, as defined in the `Makefile`.
 
-#### Additional Make Commands
+### Additional Make Commands
 
 More information on available `make` commands, including options for customization and dependency handling, can be found in the [Makefile Documentation](makefile.md).
 
-### Common Errors and Troubleshooting
+## Common Errors and Troubleshooting
 
 1. **`protoc` not found**: Ensure that the `protoc` tool is installed and available in your system’s PATH.
 2. **Missing dependencies**: If a `.proto` file depends on another file (e.g., `model.proto`), ensure that all required `.proto` files are included in the `proto_path` during compilation.
 
 
-### Conclusion
+## Conclusion
 
 You should now be able to generate Protobuf files for the Teranode Go services. The `make gen` command simplifies the process by automating the `protoc` compilation.
 

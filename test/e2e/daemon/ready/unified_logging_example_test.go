@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
@@ -24,6 +25,10 @@ import (
 //
 //	go test -v -run TestUnifiedLoggingExample ./test/e2e/daemon/ready/
 func TestUnifiedLoggingExample(t *testing.T) {
+	// Skip in CI - this is a demonstration test meant for local development
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("Skipping example test in CI - run locally with -v to see unified logging output")
+	}
 
 	// Create daemon with unified logging enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -79,54 +84,4 @@ func TestUnifiedLoggingExample(t *testing.T) {
 	td.Logger.Infof("Direct logger call example")
 
 	td.Log("Unified logging example test completed successfully")
-}
-
-// TestUnifiedLoggingComparisonOldStyle shows the old logging style for comparison.
-// This test does NOT use unified logging, so application logs appear in their
-// default format (separate from t.Logf output).
-//
-// Compare the output of this test with TestUnifiedLoggingExample to see the difference.
-func TestUnifiedLoggingComparisonOldStyle(t *testing.T) {
-
-	// Create daemon WITHOUT unified logging (backward compatible - default behavior)
-	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
-		// UseUnifiedLogger: false, // This is the default - no change needed
-		UTXOStoreType: "aerospike",
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-			func(s *settings.Settings) {
-				// Any additional settings overrides
-			},
-		),
-	})
-
-	defer td.Stop(t)
-
-	// Test logging using standard t.Logf - appears in default test output format
-	t.Logf("Starting old-style logging comparison test")
-
-	// Mine blocks - application logs appear in their default format (if EnableFullLogging)
-	// or are suppressed (if using ErrorTestLogger - default)
-	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
-	t.Logf("Got spendable coinbase: %s", coinbaseTx.TxID())
-
-	// Create and send transaction
-	newTx := td.CreateTransactionWithOptions(t,
-		transactions.WithInput(coinbaseTx, 0),
-		transactions.WithP2PKHOutputs(1, 10000),
-	)
-	t.Logf("Created transaction: %s", newTx.TxID())
-
-	err := td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
-	require.NoError(t, err)
-	t.Logf("Transaction sent successfully")
-
-	td.WaitForBlockAssemblyToProcessTx(t, newTx.TxIDChainHash().String())
-	t.Logf("Transaction processed by block assembly")
-
-	block := td.MineAndWait(t, 1)
-	t.Logf("Mined block at height %d", block.Height)
-
-	t.Logf("Old-style logging comparison test completed")
 }

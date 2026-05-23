@@ -28,7 +28,8 @@ func TestTryQuickValidation(t *testing.T) {
 			highestCheckpointHeight: 200,
 		}
 
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test")
+		// Pass nil channel - not needed when quick validation is disabled
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil)
 
 		assert.NoError(t, err)
 		assert.True(t, shouldTryNormal, "should return true to use normal validation when quick validation is disabled")
@@ -46,7 +47,8 @@ func TestTryQuickValidation(t *testing.T) {
 			highestCheckpointHeight: 200,
 		}
 
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test")
+		// Pass nil channel - not needed when block is above checkpoint
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil)
 
 		assert.NoError(t, err)
 		assert.True(t, shouldTryNormal, "should return true to use normal validation when block is above checkpoint height")
@@ -78,9 +80,12 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// The quick validation will fail because we didn't set up all the necessary mocks
 		// This should trigger the subtree cleanup logic
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
 
 		assert.NoError(t, err, "should not return error even when quick validation fails")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
@@ -115,8 +120,11 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// This should succeed and return false (no need for normal validation)
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
 
 		assert.NoError(t, err)
 		assert.False(t, shouldTryNormal, "should return false when quick validation succeeds")
@@ -141,8 +149,11 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// The quick validation will fail and try to delete non-existent subtrees
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
 
 		assert.NoError(t, err, "should handle not found error gracefully")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
@@ -243,6 +254,48 @@ func TestValidateForkDepth(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds coinbase maturity")
 	})
+}
+
+// TestValidateForkDepth_Boundary locks in the boundary semantics of validateForkDepth
+// against CoinbaseMaturity. See issue #4592 for the proof: a reorg of depth d invalidates
+// a coinbase at height G iff G >= H - d + 1; for that coinbase to have been spent in the
+// old chain we need G + CoinbaseMaturity <= H, which has a solution only when
+// d > CoinbaseMaturity. So d == CoinbaseMaturity is safe and the operator must remain `>`.
+func TestValidateForkDepth_Boundary(t *testing.T) {
+	const coinbaseMaturity = 100
+
+	tests := []struct {
+		name      string
+		forkDepth uint32
+		wantErr   bool
+	}{
+		{name: "depth N-1 below maturity is accepted", forkDepth: coinbaseMaturity - 1, wantErr: false},
+		{name: "depth N at maturity is accepted (boundary)", forkDepth: coinbaseMaturity, wantErr: false},
+		{name: "depth N+1 above maturity is rejected", forkDepth: coinbaseMaturity + 1, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			suite.Server.settings.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
+
+			catchupCtx := &CatchupContext{
+				blockUpTo: testhelpers.CreateTestBlocks(t, 1)[0],
+				forkDepth: tt.forkDepth,
+				peerID:    "peer-boundary",
+			}
+
+			err := suite.Server.validateForkDepth(catchupCtx)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "exceeds coinbase maturity")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 // TestRecordMaliciousAttempt tests the recordMaliciousAttempt method

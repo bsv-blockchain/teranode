@@ -83,6 +83,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -102,6 +103,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
@@ -136,12 +138,12 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Create block2b with grandparent (same tx in both chains)
 	_, block3b := td.CreateTestBlock(t, block2, 10202, grandparent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy", 0),
 		"Failed to process block3b")
 
 	// Create block3b with conflictingChild
 	_, block4b := td.CreateTestBlock(t, block3b, 10302, conflictingChild)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b")
 
 	//        / 2a [grandparent] -> 3a [parent] (*)
@@ -168,7 +170,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Now make chain B longer by mining block4b
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0),
 		"Failed to process block5b")
 
 	//        / 2a [grandparent] -> 3a [parent]
@@ -256,6 +258,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
 	require.NoError(t, err)
@@ -270,6 +273,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	// Create child A that spends parent:0 (normal child in main chain)
@@ -282,6 +286,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine childA
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, childA))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(childA, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
@@ -305,7 +310,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Create block4b with childB (skipping parent entirely)
 	_, block4b := td.CreateTestBlock(t, block3a, 10302, childB)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy", 0),
 		"Failed to process block4b")
 
 	//                  / 3a [parent] -> 4a [childA] (*)
@@ -324,10 +329,10 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Make fork longer to trigger reorg
 	_, block5b := td.CreateTestBlock(t, block4b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy", 0))
 
 	_, block6b := td.CreateTestBlock(t, block5b, 10502)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy", 0))
 
 	//                  / 3a [parent] -> 4a [childA]
 	// 0 -> 1 -> 2 [grandparent]

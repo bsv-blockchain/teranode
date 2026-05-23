@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"strings"
 
+	tnerrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/labstack/echo/v4"
 )
 
 // errorResponse defines the standard error response structure used across all API endpoints.
 // It provides a consistent format that includes both HTTP and application-level error details.
+//
+// swagger:model errorResponse
 type errorResponse struct {
 	// Status contains the HTTP status code
 	// Required: true
@@ -76,7 +79,7 @@ func sendError(c echo.Context, status int, code int32, err error) error {
 	e := &errorResponse{
 		Status: int32(status), //nolint:gosec
 		Code:   code,
-		Err:    err.Error(),
+		Err:    tnerrors.UserMessage(err),
 	}
 
 	return c.JSON(status, e)

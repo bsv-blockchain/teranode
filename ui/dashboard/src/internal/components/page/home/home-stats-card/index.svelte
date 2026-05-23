@@ -104,7 +104,7 @@
     align-items: center;
     gap: 4px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 13px;
@@ -122,7 +122,7 @@
     color: #15b241;
   }
   .live-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .content {
@@ -151,7 +151,7 @@
     align-items: flex-start;
     gap: 8px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 13px;
     font-style: normal;
@@ -161,7 +161,7 @@
 
     margin-right: 28px;
     padding: 14px 0;
-    border-right: 1px solid #0a1018;
+    border-right: 1px solid var(--app-bg-color);
   }
   /* .block-content.first {
     background: red;
@@ -181,7 +181,7 @@
   }
 
   .value {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 22px;

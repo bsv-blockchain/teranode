@@ -4,7 +4,7 @@
 
 ### Why a Custom Test Framework?
 
-Bitcoin SV node testing presents unique challenges that standard testing frameworks can't fully address:
+BSV Blockchain node testing presents unique challenges that standard testing frameworks can't fully address:
 
 1. **Complex Distributed Systems**
     - Multiple nodes need to interact
@@ -70,7 +70,7 @@ The framework uses three nodes by default because this is the minimum number nee
 
 ### Service Organization
 
-```
+```text
 Node Instance
 ├── Blockchain Service
 ├── Block Assembly Service
@@ -227,7 +227,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 1. **Setup**
 
-    ```
+    ```text
     Initialize Framework
     ├── Create Docker environment
     ├── Start services
@@ -237,7 +237,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 2. **Execution**
 
-    ```
+    ```text
     Run Test
     ├── Prepare test state
     ├── Execute test actions
@@ -247,7 +247,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 3. **Teardown**
 
-    ```
+    ```text
     Cleanup
     ├── Stop services
     ├── Remove containers

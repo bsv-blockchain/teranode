@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -24,11 +23,11 @@ func TestGetTransactions(t *testing.T) {
 
 		// Set up mock responses for transaction hashes
 		// We use mock.Anything for the hash parameter since the exact value isn't critical for this test
-		mockRepo.On("GetTransaction", mock.Anything).Return(test.TX1RawBytes, nil).Once()
-		mockRepo.On("GetTransaction", mock.Anything).Return(test.TX2RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX1RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything).Return(testTX2RawBytes, nil).Once()
 
 		// Create a slice with both transaction hashes
-		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
+		transactionHashes := append(testTX1Hash.CloneBytes(), testTX2Hash.CloneBytes()...)
 
 		// Set up the request
 		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
@@ -41,7 +40,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
 		// Verify transactions using helper function
-		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), test.TX1Hash.String(), test.TX2Hash.String())
+		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), testTX1Hash.String(), testTX2Hash.String())
 	})
 
 	t.Run("Valid transaction hashes with subtree hash", func(t *testing.T) {
@@ -52,12 +51,12 @@ func TestGetTransactions(t *testing.T) {
 		emptyTxMap := make(map[chainhash.Hash]*bt.Tx)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil).Once()
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX2RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX2RawBytes, nil).Once()
 		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
 		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(emptyTxMap, nil)
 
-		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
+		transactionHashes := append(testTX1Hash.CloneBytes(), testTX2Hash.CloneBytes()...)
 
 		// Set up the request with subtree hash
 		echoContext.SetPath("/subtree/:hash/txs")
@@ -73,7 +72,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
 		// Verify transactions using helper function
-		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), test.TX1Hash.String(), test.TX2Hash.String())
+		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), testTX1Hash.String(), testTX2Hash.String())
 	})
 
 	t.Run("With invalid subtree hash", func(t *testing.T) {
@@ -114,7 +113,7 @@ func TestGetTransactions(t *testing.T) {
 	t.Run("Invalid transaction hash length", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 		// set echo context
 		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
@@ -142,7 +141,7 @@ func TestGetTransactions(t *testing.T) {
 		// set echo context
 		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(test.TX1Hash.CloneBytes()))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX1Hash.CloneBytes()))
 
 		// Call GetTransactions handler
 		err := httpServer.GetTransactions()(echoContext)
@@ -165,7 +164,7 @@ func TestGetTransactions(t *testing.T) {
 		// set echo context
 		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
 
-		echoContext.Request().Body = io.NopCloser(bytes.NewReader(test.TX1Hash.CloneBytes()))
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(testTX1Hash.CloneBytes()))
 
 		// Call GetTransactions handler
 		err := httpServer.GetTransactions()(echoContext)

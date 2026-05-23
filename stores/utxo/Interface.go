@@ -1,4 +1,4 @@
-// Package utxo provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
+// Package utxo provides UTXO (Unspent Transaction Output) management for the BSV Blockchain Teranode implementation.
 //
 // The package implements a UTXO store interface that handles:
 //   - UTXO creation, retrieval, and deletion
@@ -129,6 +129,22 @@ type IgnoreFlags struct {
 	IgnoreLocked      bool
 }
 
+// ConflictingChildRemoval identifies one (parent, child) pair that should be
+// scrubbed from the parent's conflictingChildren list.
+// Used with utxo.Store.RemoveFromConflictingChildren.
+type ConflictingChildRemoval struct {
+	ParentHash *chainhash.Hash
+	ChildHash  *chainhash.Hash
+}
+
+// BlockIDsRemoval identifies the set of block IDs to strip from one
+// transaction's blockIDs membership.
+// Used with utxo.Store.RemoveBlockIDs.
+type BlockIDsRemoval struct {
+	TxHash   *chainhash.Hash
+	BlockIDs []uint32
+}
+
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
 	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
@@ -244,8 +260,8 @@ type Store interface {
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
-	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)    // Remove? Only used in tests
-	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?
+	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
+	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
 	// Blockchain specific functions
 
@@ -256,11 +272,34 @@ type Store interface {
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
-	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
+	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
+	//
+	// Postcondition (when minedBlockInfo.UnsetMined is false and a nil error is returned):
+	//   - Every hash in `hashes` MUST appear as a key in the returned map.
+	//   - Every returned slice MUST contain minedBlockInfo.BlockID.
+	// Implementations that cannot prove this MUST return a non-nil error.
+	//
+	// When minedBlockInfo.UnsetMined is true, missing or empty entries are tolerated:
+	// the call may no-op for transactions that no longer exist.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
-	// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
-	GetUnminedTxIterator(fullScan bool) (UnminedTxIterator, error)
+	// GetUnminedTxIterator returns an iterator for unmined transactions in the store.
+	// Uses the unmined_since secondary index to query only transactions with unmined_since set,
+	// and does NOT scan all records. For full consistency checking that scans all records
+	// regardless of unmined_since, see ScanInconsistentUnminedTxs.
+	GetUnminedTxIterator() (UnminedTxIterator, error)
+
+	// ScanInconsistentUnminedTxs returns a lightweight iterator that scans all records
+	// to detect unmined_since inconsistencies (mined txs with unmined_since still set).
+	// Only fetches txid, block_ids, and unmined_since — no heavy data like TxInpoints.
+	ScanInconsistentUnminedTxs() (ConsistencyScanIterator, error)
+
+	// GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner's needs.
+	// Unlike GetUnminedTxIterator, this iterator:
+	// - Filters server-side for only unmined transactions with unminedSince <= cutoffBlockHeight
+	// - Fetches only the bins needed by the pruner (txID, unminedSince, external, inputs)
+	// This reduces bandwidth by 90-99%+ compared to the full iterator when the mempool is large.
+	GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (UnminedTxIterator, error)
 
 	// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
 	// This method is used by the store-agnostic cleanup implementation.
@@ -285,6 +324,12 @@ type Store interface {
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
 	PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
 
+	// BatchPreviousOutputsDecorate fetches previous output information for inputs across
+	// multiple transactions in bulk. This is more efficient than calling PreviousOutputsDecorate
+	// per-transaction because it reduces database round-trips.
+	// Inputs that are already decorated (PreviousTxScript != nil) are skipped.
+	BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error
+
 	// functions related to Alert System
 
 	// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
@@ -306,6 +351,29 @@ type Store interface {
 
 	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
 	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
+
+	// RemoveFromConflictingChildren removes each child hash from its parent's
+	// conflictingChildren list. Used by repair tooling when child transactions
+	// are deleted and must no longer appear in any surviving parent's
+	// conflictingChildren field. The call is idempotent — missing parents,
+	// missing list bins, and missing list entries are silently tolerated.
+	// Implementations must use the backend's batch API (e.g. Aerospike
+	// BatchOperate) so large removals stay fast.
+	RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error
+
+	// RemoveBlockIDs trims the supplied block IDs from each transaction's
+	// blockIDs membership without deleting the transaction record. Used by
+	// repair tooling when transactions are referenced by multiple blocks and
+	// only a subset is being removed. Idempotent.
+	// Implementations must batch across removals using the backend's batch
+	// API.
+	RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error
+
+	// GetConflictingTxIterator returns an iterator over transactions currently
+	// marked conflicting=true. Complements GetUnminedTxIterator, which filters
+	// out conflicting records. Used by repair tooling to purge losing-side
+	// transactions during a rewind.
+	GetConflictingTxIterator() (UnminedTxIterator, error)
 
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error

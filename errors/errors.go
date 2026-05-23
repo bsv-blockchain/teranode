@@ -11,9 +11,9 @@
 package errors
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime"
 	"strings"
 	"unicode/utf8"
@@ -24,6 +24,9 @@ import (
 	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+// errCodeMsgFmt is the format string for error code and message: "NAME (code): message".
+const errCodeMsgFmt = "%s (%d): %s"
 
 // Error represents a custom error type with additional context.
 type Error struct {
@@ -191,25 +194,22 @@ func (e *Error) As(target interface{}) bool {
 		return true
 	}
 
-	// 1. Try the data payload.
+	// Try the data payload (not reachable via Unwrap, so check it here).
 	if err, ok := e.data.(error); ok {
-		var as interface{ As(interface{}) bool }
-		if as, ok = err.(interface{ As(interface{}) bool }); ok && as.As(target) {
-			return true
-		}
-	}
-
-	// 2. Try an explicitly wrapped error.
-	if err := e.wrappedErr; err != nil && !reflect.ValueOf(err).IsNil() {
 		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
 			return true
 		}
 	}
 
-	// 3. Finally, get whatever "errors.Unwrap" gives us.
-	if err := errors.Unwrap(e); err != nil {
-		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
-			return true
+	// Try wrapped error, but ONLY if it's not an *Error type.
+	// If wrapped error is *Error, skip here - Go's errors.As will find it via Unwrap().
+	// This prevents infinite recursion when *Error wraps *Error.
+	if e.wrappedErr != nil {
+		// Skip if wrapped error is *Error to avoid recursive loop
+		if _, isError := e.wrappedErr.(*Error); !isError {
+			if as, ok := e.wrappedErr.(interface{ As(interface{}) bool }); ok && as.As(target) {
+				return true
+			}
 		}
 	}
 
@@ -440,10 +440,10 @@ func (x *TError) Error() string {
 	}
 
 	if x.WrappedError == nil {
-		return fmt.Sprintf("%s (%d): %s", x.Code.String(), x.Code, x.Message)
+		return fmt.Sprintf(errCodeMsgFmt, x.Code.String(), x.Code, x.Message)
 	}
 
-	return fmt.Sprintf("%s (%d): %s -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
+	return fmt.Sprintf(errCodeMsgFmt+" -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
 }
 
 // IsNil checks if the TError is nil or has no meaningful content.
@@ -669,6 +669,108 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// UserMessage returns a concise, user-facing error message without wrapped error chains or data.
+// It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
+func UserMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
+	var tErr *Error
+	if errors.As(err, &tErr) && tErr != nil {
+		return fmt.Sprintf(errCodeMsgFmt, tErr.code.String(), tErr.code, tErr.message)
+	}
+
+	var tProtoErr *TError
+	if errors.As(err, &tProtoErr) && tProtoErr != nil {
+		return fmt.Sprintf(errCodeMsgFmt, tProtoErr.Code.String(), tProtoErr.Code, tProtoErr.Message)
+	}
+
+	return "internal error"
+}
+
+// PublicError returns a sanitized Error suitable for returning to external callers.
+// It strips wrapped errors, file/line/function details, and error data.
+func PublicError(err error) *Error {
+	if err == nil {
+		return nil
+	}
+
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
+	var tErr *Error
+	if errors.As(err, &tErr) && tErr != nil {
+		return &Error{
+			code:    tErr.code,
+			message: tErr.message,
+		}
+	}
+
+	var tProtoErr *TError
+	if errors.As(err, &tProtoErr) && tProtoErr != nil {
+		return &Error{
+			code:    tProtoErr.Code,
+			message: tProtoErr.Message,
+		}
+	}
+
+	return &Error{
+		code:    ERR_ERROR,
+		message: "internal error",
+	}
+}
+
+// WrapGRPCPublic wraps an error for gRPC without exposing internal structured details.
+// It includes a sanitized TError detail (code + message only) so that UnwrapGRPC
+// can reconstruct the correct application error code on the client side.
+// Structured metadata such as file paths, line numbers, function names, wrapped error
+// chains, and error data is omitted; the error message itself is preserved (UTF-8 sanitized).
+func WrapGRPCPublic(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	publicErr := PublicError(err)
+	if publicErr == nil {
+		return nil
+	}
+
+	// Sanitize message for valid UTF-8 to prevent gRPC/protobuf marshaling failures
+	sanitizedMsg := RemoveInvalidUTF8(publicErr.message)
+
+	st := status.New(ErrorCodeToGRPCCode(publicErr.code), sanitizedMsg)
+
+	// Attach a sanitized TError detail so clients can recover the application error code.
+	// After UTF-8 sanitization this cannot practically fail, but if it does we fall
+	// through and return the bare status (same as pre-fix behavior).
+	detail, pbErr := anypb.New(&TError{
+		Code:    publicErr.code,
+		Message: sanitizedMsg,
+	})
+	if pbErr == nil {
+		if newSt, detailsErr := st.WithDetails(detail); detailsErr == nil {
+			st = newSt
+		}
+	}
+
+	return st.Err()
+}
+
+// WrapPublic converts an error into a TError without wrapped details for external use.
+func WrapPublic(err error) *TError {
+	if err == nil {
+		return nil
+	}
+
+	return Wrap(PublicError(err))
+}
+
 // UnwrapGRPC unwraps a gRPC error and returns the underlying Error type.
 func UnwrapGRPC(err error) *Error {
 	if err == nil {
@@ -793,11 +895,18 @@ func Join(errs ...error) error {
 
 // Is checks if the error matches the target error.
 func Is(err, target error) bool {
+	origErr := err
+
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
 	}
 
-	return errors.Is(err, target)
+	if errors.Is(err, target) {
+		return true
+	}
+
+	// we have additional control for GRPC context errors
+	return checkGRPCContextError(origErr, err, target)
 }
 
 // AsData attempts to assign the error data to the target if types are compatible.
@@ -846,6 +955,34 @@ func As(err error, target any) bool {
 func isGRPCWrappedError(err error) bool {
 	_, ok := status.FromError(err)
 	return ok
+}
+
+// hasGRPCCode checks whether any error in the unwrap chain is a gRPC status
+// with the specified code.
+func hasGRPCCode(err error, code codes.Code) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if st, ok := status.FromError(current); ok && st.Code() == code {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkGRPCContextError maps Go context sentinels to equivalent gRPC status
+// codes and checks both original and normalized error shapes.
+func checkGRPCContextError(origErr error, normalizedErr error, target error) bool {
+	var code codes.Code
+	switch target {
+	case context.Canceled:
+		code = codes.Canceled
+	case context.DeadlineExceeded:
+		code = codes.DeadlineExceeded
+	default:
+		return false
+	}
+
+	return hasGRPCCode(origErr, code) || hasGRPCCode(normalizedErr, code)
 }
 
 // buildStackTrace returns just the stack trace portion of the error message.

@@ -191,11 +191,11 @@
     width: 24px;
     height: 24px;
     border-radius: 12px;
-    background-color: rgba(255, 255, 255, 0);
+    background-color: transparent;
     color: var(--comp-color);
 
     z-index: 3;
-    box-shadow: 0px 0px 4px rgba(0, 0, 0, 0);
+    box-shadow: 0px 0px 4px transparent;
   }
 
   .tui-drawer .collapse-icon {
@@ -214,8 +214,8 @@
   }
   .tui-drawer .collapse-icon:hover {
     cursor: pointer;
-    background-color: rgba(255, 255, 255, 0.05);
-    box-shadow: 0px 0px 4px rgba(0, 0, 0, 0.08);
+    background-color: var(--app-subtle-bg-color);
+    box-shadow: 0px 0px 4px var(--app-overlay-color);
   }
 
   .tui-drawer .footer {

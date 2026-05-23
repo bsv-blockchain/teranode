@@ -38,7 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from the database by a block locator.
@@ -91,7 +91,48 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	var q string
 	var args []interface{}
 
-	baseQuery := `
+	// The fast path filters blocks by on_main_chain = true and height <=
+	// bestBlockHash's height. That matches the CTE's walk-from-bestBlockHash
+	// semantics only when bestBlockHash is itself on the main chain. When it is
+	// a fork tip (a known hash with on_main_chain = false), the two paths
+	// disagree — the CTE follows the fork's ancestors, the fast path would
+	// substitute whichever main-chain block sits at the same heights. Fall
+	// back to the CTE in that case. Treat DB errors or unknown hashes as
+	// "not on main chain" so the CTE (which also surfaces that error) stays
+	// authoritative.
+	//
+	// TOCTOU: the guard check and bestOnMain preflight are non-atomic with the
+	// main query that follows. A concurrent writer can bump the guard after
+	// this check but before the main query runs. In the worst case the caller
+	// sees one call's worth of slightly-stale data; on the next call the
+	// guard is observed > 0 and the CTE path is taken. Acceptable under the
+	// store's single-writer model, where these transient inconsistencies are
+	// bounded and self-healing.
+	rebuilding := s.mainChainRebuilding.Load() > 0
+	bestOnMain := false
+	if !rebuilding {
+		if scanErr := s.db.QueryRowContext(ctx,
+			`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+			bestBlockHash[:],
+		).Scan(&bestOnMain); scanErr != nil {
+			// Error falls through to the CTE path, which will re-run the same
+			// kind of DB access and surface the error to the caller.
+			bestOnMain = false
+		}
+	}
+
+	if rebuilding || !bestOnMain {
+		baseQuery := `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+		)
 		SELECT
 	   	 b.version
 		,b.block_time
@@ -105,51 +146,82 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		,b.height
 		,b.tx_count
 		,b.chain_work
+		,b.median_time_past
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-			)
-		)`
+		JOIN ChainBlocks cb ON b.id = cb.id`
 
-	if s.engine == util.Postgres {
-		// Convert []chainhash.Hash to [][]byte
-		hashBytes := make([][]byte, len(blockLocator))
-		for i, hash := range blockLocator {
-			hashBytes[i] = hash[:]
-		}
-
-		q = baseQuery + `
+		if s.engine == util.Postgres {
+			hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
+			for i, hash := range blockLocator {
+				hashBytes[i] = hash[:]
+			}
+			q = baseQuery + `
 			AND b.hash = ANY($2)
-			ORDER BY height DESC
+			ORDER BY b.height DESC
 			LIMIT 1`
-		args = []interface{}{bestBlockHash[:], pq.Array(hashBytes)}
-	} else {
-		// SQLite: Generate dynamic placeholders for IN clause
-		placeholders := make([]string, len(blockLocator))
-		args = make([]interface{}, len(blockLocator)+1)
-		args[0] = bestBlockHash[:]
-
-		for i, hash := range blockLocator {
-			placeholders[i] = fmt.Sprintf("$%d", i+2)
-			args[i+1] = hash[:]
-		}
-
-		q = baseQuery + fmt.Sprintf(`
+			args = []interface{}{bestBlockHash[:], hashBytes}
+		} else {
+			placeholders := make([]string, len(blockLocator))
+			args = make([]interface{}, len(blockLocator)+1)
+			args[0] = bestBlockHash[:]
+			for i, hash := range blockLocator {
+				placeholders[i] = fmt.Sprintf("$%d", i+2)
+				args[i+1] = hash[:]
+			}
+			q = baseQuery + fmt.Sprintf(`
 			AND b.hash IN (%s)
-			ORDER BY height DESC
+			ORDER BY b.height DESC
 			LIMIT 1`, strings.Join(placeholders, ","))
+		}
+	} else {
+		// Fast path: use on_main_chain flag instead of the recursive CTE walk.
+		// We still enforce the bestBlockHash height constraint so that only blocks
+		// that are ancestors-of or equal-to bestBlockHash are considered — matching
+		// the CTE's walk-from-bestBlockHash semantics exactly.
+		// If bestBlockHash is not in the DB the subquery returns NULL and the height
+		// comparison yields no rows, producing the same ErrNoRows as the CTE path.
+		fastBase := `
+		SELECT
+	   	 b.version
+		,b.block_time
+		,b.n_bits
+		,b.nonce
+		,b.previous_hash
+		,b.merkle_root
+		,b.size_in_bytes
+		,b.coinbase_tx
+		,b.peer_id
+		,b.height
+		,b.tx_count
+		,b.chain_work
+		,b.median_time_past
+		FROM blocks b
+		WHERE b.on_main_chain = true
+		  AND b.height <= (SELECT height FROM blocks WHERE hash = $1 LIMIT 1)`
+
+		if s.engine == util.Postgres {
+			hashBytes := make(pgtype.FlatArray[[]byte], len(blockLocator))
+			for i, hash := range blockLocator {
+				hashBytes[i] = hash[:]
+			}
+			q = fastBase + `
+			AND b.hash = ANY($2)
+			ORDER BY b.height DESC
+			LIMIT 1`
+			args = []interface{}{bestBlockHash[:], hashBytes}
+		} else {
+			placeholders := make([]string, len(blockLocator))
+			args = make([]interface{}, len(blockLocator)+1)
+			args[0] = bestBlockHash[:]
+			for i, hash := range blockLocator {
+				placeholders[i] = fmt.Sprintf("$%d", i+2)
+				args[i+1] = hash[:]
+			}
+			q = fastBase + fmt.Sprintf(`
+			AND b.hash IN (%s)
+			ORDER BY b.height DESC
+			LIMIT 1`, strings.Join(placeholders, ","))
+		}
 	}
 
 	blockHeader := &model.BlockHeader{}
@@ -176,6 +248,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		&blockHeaderMeta.Height,
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.ChainWork,
+		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
@@ -205,10 +278,10 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to extract miner", err)
+			s.logger.Debugf("failed to extract miner in GetLatestHeaderFromBlockLocator (block may be invalid): %v", err)
+		} else {
+			blockHeaderMeta.Miner = miner
 		}
-
-		blockHeaderMeta.Miner = miner
 	}
 
 	// Cache the result in response cache

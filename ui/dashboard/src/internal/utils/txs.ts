@@ -35,7 +35,7 @@ export const getTpsStrFromValue = (tps: number) => {
 export const getTpsValue = (transactionCount: number, diff: number) => {
   const timeDiff = diff / 1000 // The time diff between blocks (in seconds)
   if (timeDiff === 0) {
-    return 0
+    return null
   } else {
     return transactionCount / timeDiff || 0
   }

@@ -28,6 +28,14 @@ var (
 	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
 	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
 
+	// prometheusLegacyNetsyncPrewarmErrors counts validator errors observed during the
+	// pre-warm path in validateTransactions, labelled by error class. The pre-warm runs
+	// before full subtree validation and intentionally drops errors (real validation
+	// catches consensus violations on its own), but ops still need a signal so they
+	// can detect bursts of service/processing failures that would otherwise be silent.
+	// Class labels: tx_invalid, service, processing, policy, other.
+	prometheusLegacyNetsyncPrewarmErrors *prometheus.CounterVec
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -204,4 +212,12 @@ func _initPrometheusMetrics() {
 		Buckets:   util.MetricsBucketsSeconds,
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphanTime)
+
+	prometheusLegacyNetsyncPrewarmErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "prewarm_validation_errors_total",
+		Help:      "Number of validator errors observed during the pre-warm path in validateTransactions, by class",
+	}, []string{"class"})
+	prometheus.MustRegister(prometheusLegacyNetsyncPrewarmErrors)
 }

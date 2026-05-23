@@ -1,4 +1,3 @@
-// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -9,60 +8,127 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Prometheus metrics for monitoring Kafka consumer performance and health.
-//
-// These metrics provide comprehensive observability into the Kafka consumer,
-// enabling monitoring of watchdog recovery operations, stuck consumer detection,
-// and overall consumer health. The metrics are automatically registered with Prometheus
-// and can be scraped by monitoring systems.
-//
-// Metric Categories:
-//   - Watchdog metrics: Recovery attempts and stuck consumer detection
-//   - Duration metrics: Time spent in various consumer states
 var (
-	// prometheusKafkaWatchdogRecoveryAttempts counts the number of times the watchdog
-	// triggered a force recovery due to a stuck Consume() call.
-	// Labels: topic, consumer_group
-	// This counter helps identify how often consumers get stuck and need recovery,
-	// which may indicate issues with Kafka brokers or network connectivity.
-	prometheusKafkaWatchdogRecoveryAttempts *prometheus.CounterVec
-
-	// prometheusKafkaWatchdogStuckDuration tracks how long the consumer was stuck
-	// before the watchdog triggered recovery.
-	// Labels: topic
-	// This histogram measures the duration between when Consume() was called and
-	// when the watchdog detected it as stuck, helping diagnose consumer hangs.
-	prometheusKafkaWatchdogStuckDuration *prometheus.HistogramVec
+	prometheusBytesWritten          prometheus.Counter
+	prometheusWriteDuration         prometheus.Histogram
+	prometheusWriteErrors           prometheus.Counter
+	prometheusE2EDuration           prometheus.Histogram
+	prometheusBatchRecords          prometheus.Counter
+	prometheusBatchCompressedBytes  prometheus.Counter
+	prometheusSlowTransferDetected  *prometheus.CounterVec
+	prometheusProduceRequestLatency prometheus.Histogram
+	prometheusBrokerConnects        prometheus.Counter
+	prometheusBrokerDisconnects     prometheus.Counter
+	prometheusBackpressureSignals   *prometheus.CounterVec
+	prometheusBufferedMessages      *prometheus.GaugeVec
 )
 
-var (
-	prometheusMetricsInitOnce sync.Once
-)
+var prometheusMetricsInitOnce sync.Once
 
-// InitPrometheusMetrics initializes Prometheus metrics for Kafka consumers.
-// This function is idempotent and can be called multiple times safely.
-func InitPrometheusMetrics() {
-	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+func initProducerMetrics() {
+	prometheusMetricsInitOnce.Do(_initProducerMetrics)
 }
 
-func _initPrometheusMetrics() {
-	prometheusKafkaWatchdogRecoveryAttempts = promauto.NewCounterVec(
+func _initProducerMetrics() {
+	prometheusBytesWritten = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
-			Subsystem: "kafka",
-			Name:      "watchdog_recovery_attempts_total",
-			Help:      "Number of times the watchdog triggered force recovery for stuck consumer",
+			Subsystem: "kafka_producer",
+			Name:      "bytes_written_total",
+			Help:      "Total bytes written to Kafka brokers",
 		},
-		[]string{"topic", "consumer_group"},
 	)
-
-	prometheusKafkaWatchdogStuckDuration = promauto.NewHistogramVec(
+	prometheusWriteDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
-			Subsystem: "kafka",
-			Name:      "watchdog_stuck_duration_seconds",
-			Help:      "Duration (in seconds) that consumer was stuck before watchdog recovery",
-			Buckets:   util.MetricsBucketsSeconds,
+			Subsystem: "kafka_producer",
+			Name:      "write_duration_seconds",
+			Help:      "Time to write produce requests to brokers",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusWriteErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "write_errors_total",
+			Help:      "Total broker write errors encountered during produce",
+		},
+	)
+	prometheusE2EDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "e2e_duration_seconds",
+			Help:      "End-to-end duration from writing a produce request to reading its response",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+	prometheusBatchRecords = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "batch_records_total",
+			Help:      "Total records successfully produced in batches",
+		},
+	)
+	prometheusBatchCompressedBytes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "batch_compressed_bytes_total",
+			Help:      "Total compressed bytes of successfully produced batches",
+		},
+	)
+	prometheusSlowTransferDetected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "slow_transfer_detected_total",
+			Help:      "Number of sustained slow transfer conditions detected (transfer rate below threshold)",
+		},
+		[]string{"topic"},
+	)
+	prometheusProduceRequestLatency = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "produce_request_latency_seconds",
+			Help:      "Latency of produce requests (API key 0) including write wait",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+	prometheusBrokerConnects = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "broker_connects_total",
+			Help:      "Total broker connection events",
+		},
+	)
+	prometheusBrokerDisconnects = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "broker_disconnects_total",
+			Help:      "Total broker disconnection events",
+		},
+	)
+	prometheusBackpressureSignals = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "backpressure_signals_total",
+			Help:      "Number of times producer backlog exceeded backpressure threshold",
+		},
+		[]string{"topic"},
+	)
+	prometheusBufferedMessages = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "kafka_producer",
+			Name:      "buffered_messages",
+			Help:      "Current number of buffered messages in adaptive producer loop",
 		},
 		[]string{"topic"},
 	)
