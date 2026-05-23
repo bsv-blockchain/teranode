@@ -3002,6 +3002,45 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		assert.NotNil(t, result)
 	})
 
+	// Regression guard for the dual file-type lookup: if the subtree has
+	// already been promoted to FileTypeSubtree (e.g. by an earlier validation
+	// pass) and the to-check file no longer exists, fetchAndStoreSubtree must
+	// still load it from the store rather than fall back to a peer fetch.
+	t.Run("SubtreeAlreadyExists_AsFileTypeSubtree", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		hash1 := chainhash.DoubleHashH([]byte("tx1"))
+		hash2 := chainhash.DoubleHashH([]byte("tx2"))
+		hash3 := chainhash.DoubleHashH([]byte("tx3"))
+		hash4 := chainhash.DoubleHashH([]byte("tx4"))
+
+		require.NoError(t, subtree.AddNode(hash1, 100, 250))
+		require.NoError(t, subtree.AddNode(hash2, 200, 350))
+		require.NoError(t, subtree.AddNode(hash3, 150, 300))
+		require.NoError(t, subtree.AddNode(hash4, 180, 400))
+
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+
+		subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+
+		// Pre-store under the "already validated" marker only.
+		err = suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes)
+		require.NoError(t, err)
+
+		testBlock := &model.Block{Height: 100}
+
+		// Should succeed with no HTTP mock registered: load from store, not network.
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
 	t.Run("SubtreeDoesNotExist_FetchFromPeer", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()

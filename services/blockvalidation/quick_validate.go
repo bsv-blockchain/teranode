@@ -720,8 +720,17 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 
 // readSubtree reads a single subtree from disk and validates its transactions.
 func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) subtreeResult {
-	// get the subtree from disk, should be in .subtreeToCheck
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	// On retry the subtree may already be promoted to FileTypeSubtree (the
+	// "already validated" marker) and FileTypeSubtreeToCheck cleaned up, so
+	// consult both file types — see findLocalSubtreeFile.
+	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
+	if err != nil {
+		return subtreeResult{err: errors.NewStorageError("[getBlockTransactions][%s] failed to locate subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+	}
+	if !localExists {
+		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())}
+	}
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 	if err != nil {
 		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
 	}
@@ -783,9 +792,13 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		}
 	}
 
-	// Check if full .subtree file already exists (for retry scenarios)
-	// This check is done here during prefetch I/O to avoid separate disk access during build phase
-	fullSubtreeExists, _ := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	// Check if full .subtree file already exists (for retry scenarios). If the
+	// reader above already pulled from FileTypeSubtree we know it's present
+	// without another store round-trip.
+	fullSubtreeExists := localFileType == fileformat.FileTypeSubtree
+	if !fullSubtreeExists {
+		fullSubtreeExists, _ = u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	}
 
 	return subtreeResult{
 		subtree:           subtree,
