@@ -401,17 +401,19 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 
 	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	// Check if we already have the subtree
-	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	// Check if we already have the subtree, under either FileTypeSubtreeToCheck
+	// (peer-fetched, pending validation) or FileTypeSubtree (already validated).
+	// See findLocalSubtreeFile for why both must be consulted.
+	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
 	if err != nil {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Error checking subtree existence for %s: %v", subtreeHash.String(), err)
+		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
 	}
 
-	if subtreeExists {
+	if localExists {
 		u.logger.Debugf("[catchup:fetchAndStoreSubtree] Subtree already exists for %s, loading from store", subtreeHash.String())
 
-		// Load existing subtree from store
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+		// Load existing subtree from store under whichever file type was found
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], localFileType)
 		if err != nil {
 			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}

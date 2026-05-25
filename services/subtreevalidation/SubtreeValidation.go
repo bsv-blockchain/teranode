@@ -99,22 +99,12 @@ func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 }
 
 // GetSubtreeExists checks if a subtree exists in the local storage.
-//
-// This method queries the local storage to determine whether a specific subtree
-// has already been processed and stored. It's used to optimize processing by
-// avoiding duplicate work on subtrees that have already been validated.
-//
-// Parameters:
-//   - ctx: Context for cancellation and request-scoped values
-//   - subtreeHash: The hash identifier of the subtree to check
-//
-// Returns:
-//   - bool: Always false in the current implementation
-//   - error: Always nil in the current implementation
-//
-// TODO: Implement actual local storage lookup for subtree existence.
-func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
-	return false, nil
+func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if u.subtreeStore == nil {
+		return false, nil
+	}
+
+	return u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 }
 
 // txMetaCacheOps defines the interface for transaction metadata cache operations.
@@ -343,6 +333,13 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 
 // readTxFromReader reads and validates a single transaction from an io.ReadCloser.
 // It includes panic recovery for handling potential runtime errors from the go-bt library.
+//
+// Stays on the standard tx.ReadFrom path (no arena). The returned *bt.Tx is
+// consumed by the caller after this function returns, so script bytes must be
+// heap-owned — an arena allocated here would have to be Put before return, at
+// which point the script slices would alias soon-to-be-reused arena memory.
+// The arena variant is reserved for the bulk subtree-stream decode where the
+// entire batch of txs is consumed before the arena is returned to the pool.
 //
 // Parameters:
 //   - body: ReadCloser containing the transaction data
@@ -961,14 +958,26 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
 
-	// check whether we have a subtreeToCheck file and use that instead of doing a network request
-	subtreeToCheckBytes, err := u.subtreeStore.Get(spanCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-	if err == nil && subtreeToCheckBytes != nil {
-		u.logger.Debugf("[getSubtreeTxHashes][%s] found subtreeToCheck file in store, using it instead of network request", subtreeHash.String())
+	// Use the local subtree file (under either FileTypeSubtreeToCheck or
+	// FileTypeSubtree) instead of a network request — see findLocalSubtreeFile.
+	localFileType, localExists, err := u.findLocalSubtreeFile(spanCtx, *subtreeHash)
+	if err != nil {
+		return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to check local subtree store", subtreeHash.String(), err)
+	}
+	if localExists {
+		localBytes, getErr := u.subtreeStore.Get(spanCtx, subtreeHash[:], localFileType)
+		if getErr != nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to read local subtree (%s)", subtreeHash.String(), localFileType.String(), getErr)
+		}
+		if localBytes == nil {
+			return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] local subtree (%s) returned nil bytes despite Exists=true", subtreeHash.String(), localFileType.String())
+		}
 
-		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeToCheckBytes)
+		u.logger.Debugf("[getSubtreeTxHashes][%s] found local subtree file in store (%s), using it instead of network request", subtreeHash.String(), localFileType.String())
+
+		subtree, err := subtreepkg.NewSubtreeFromBytes(localBytes)
 		if err != nil {
-			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from subtreeToCheck bytes", subtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from local bytes", subtreeHash.String(), err)
 		}
 
 		// return the transaction hashes from the subtree

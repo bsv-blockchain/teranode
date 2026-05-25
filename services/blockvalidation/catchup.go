@@ -539,6 +539,12 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 3: Validating fork depth against coinbase maturity", catchupCtx.blockUpTo.Hash().String())
 
+	// Reject only when fork depth strictly exceeds CoinbaseMaturity. A reorg of depth d
+	// invalidates a coinbase at height G iff G >= H - d + 1; for that coinbase to have
+	// been spent in the old chain we need G + CoinbaseMaturity <= H, which has a solution
+	// only when d > CoinbaseMaturity. So d == CoinbaseMaturity is safe (no matured
+	// coinbase in the reorged range can yet have been spent), and `>` is the correct
+	// operator here, not `>=`. See issue #4592.
 	if catchupCtx.forkDepth > uint32(u.settings.ChainCfgParams.CoinbaseMaturity) {
 		u.logger.Errorf("[catchup][%s] fork depth (%d blocks) exceeds coinbase maturity (%d blocks)", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
 

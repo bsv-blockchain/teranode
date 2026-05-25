@@ -350,6 +350,65 @@ func TestSubtreeMessageHandler_BlocksOnlyFalse_ProcessesMessage(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 }
 
+// TestSubtreesHandler_NilSubtree exercises the race shape where ValidateSubtreeInternal
+// returns (nil, nil) because the subtree was written to the store between the lock
+// acquisition and the in-store existence check. The handler must not panic dereferencing
+// the returned subtree.
+func TestSubtreesHandler_NilSubtree(t *testing.T) {
+	subtreeHash, _ := chainhash.NewHashFromStr("d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf")
+	baseURL, _ := url.Parse("http://localhost:8000")
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.SubtreeValidation.QuorumPath = "./data/subtree_quorum_nil"
+
+	defer func() {
+		_ = os.RemoveAll(tSettings.SubtreeValidation.QuorumPath)
+	}()
+
+	logger := ulogger.TestLogger{}
+	subtreeStore := memory.New()
+	utxoStore, _ := nullstore.NewNullStore()
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+
+	// pre-populate the subtree store so GetSubtreeExists returns true once ValidateSubtreeInternal
+	// reaches the store check, simulating another goroutine having completed the write.
+	require.NoError(t, subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated")))
+
+	blockIDsMap := make(map[uint32]bool)
+
+	server := &Server{
+		logger:           logger,
+		settings:         tSettings,
+		blockchainClient: blockchainClient,
+		subtreeStore:     subtreeStore,
+		utxoStore:        utxoStore,
+		validatorClient:  &validator.MockValidator{},
+		orphanage: func() *Orphanage {
+			o, err := NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
+			require.NoError(t, err)
+			return o
+		}(),
+		currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
+		bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
+		bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
+	}
+	server.currentBlockIDsMap.Store(&blockIDsMap)
+	server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: 100})
+
+	// use MockExister for the quorum so the lock is acquired even though the file exists in the
+	// subtree store; this reproduces the race window where Exists() succeeded before the writer
+	// committed the subtree but the handler's later GetSubtreeExists() observes the new entry.
+	var err error
+	server.quorum, err = NewQuorum(logger, MockExister{}, tSettings.SubtreeValidation.QuorumPath)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		err = server.subtreesHandler(context.Background(), subtreeHash, baseURL, "peer1")
+	})
+	require.NoError(t, err)
+}
+
 // TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips verifies that when FSM is in
 // CATCHINGBLOCKS state, processing is skipped regardless of BlocksOnly setting.
 func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T) {

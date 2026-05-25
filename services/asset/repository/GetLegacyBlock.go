@@ -102,6 +102,9 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
 		}
 
+		arena := getAssetArena()
+		defer putAssetArena(arena)
+
 		for subtreeIdx, subtreeHash := range block.Subtrees {
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 			if err == nil && subtreeDataExists {
@@ -121,8 +124,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				for {
 					tx := &bt.Tx{}
 
-					// this will read the transaction into the tx object
-					if _, err = tx.ReadFrom(bufferedReader); err != nil {
+					if _, err = tx.ReadFromWithArena(bufferedReader, arena); err != nil {
 						if err == io.EOF {
 							break
 						}
@@ -133,6 +135,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					// Skip if this is the coinbase transaction
 					// Include the subtreeIdx check to avoid needing to do string comparison every iteration
 					if subtreeIdx == 0 && tx.IsCoinbase() {
+						// Reset the arena so a coinbase-only iteration doesn't leak slab space.
+						arena.Reset()
 						continue
 					}
 
@@ -143,6 +147,11 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 						return errors.NewProcessingError("error writing transaction to writer: %s", err)
 					}
+
+					// tx.WriteTo finished serialising the tx to w; the arena-backed scripts
+					// are no longer needed. Reset rewinds the cursor so the next tx reuses
+					// the same slab.
+					arena.Reset()
 				}
 
 				// close the subtree data reader after processing all transactions

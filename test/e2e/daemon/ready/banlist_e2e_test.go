@@ -479,20 +479,17 @@ func TestBanListRPCAbsoluteTimeE2E(t *testing.T) {
 	})
 }
 
-// TestBanListRPCIPv6SubnetBug documents a bug in the RPC isIPOrSubnet validation.
-// The function at handlers.go:2681-2684 incorrectly treats colons in IPv6 CIDR
-// notation (e.g., "2406:da18:1f7:353b::/64") as port separators, stripping
-// the IPv6 address to just the first octet (e.g., "2406") before CIDR parsing.
+// TestBanListRPCIPv6Subnet tests IPv6 CIDR subnet banning via RPC.
+// This test verifies that the isIPOrSubnet function correctly handles IPv6 CIDR
+// notation (e.g., "2406:da18:1f7:353b::/64") without incorrectly treating colons
+// as port separators.
 //
-// BUG: isIPOrSubnet splits on ":" before ParseCIDR for subnet validation,
-// which breaks IPv6 subnet notation. IPv4 subnets work correctly.
-//
-// Workaround: Use gRPC P2P client (see TestBanListGRPCE2E) for IPv6 subnet bans.
-func TestBanListRPCIPv6SubnetBug(t *testing.T) {
-	t.Skip("KNOWN BUG: isIPOrSubnet in handlers.go:2681-2684 incorrectly parses IPv6 CIDR notation")
-
+// Previously tracked bug: isIPOrSubnet was splitting on ":" before ParseCIDR,
+// which broke IPv6 subnet notation. This has been fixed by passing CIDR notation
+// directly to net.ParseCIDR without port-stripping logic.
+func TestBanListRPCIPv6Subnet(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-ipv6-subnet-bug-api-key" //nolint:gosec // test API key, not a real credential
+		const testAPIKey = "test-ipv6-subnet-api-key" //nolint:gosec // test API key, not a real credential
 
 		// Use file-based SQLite to avoid requiring PostgreSQL
 		sqliteURL, err := url.Parse(sqliteURLStr)
@@ -514,7 +511,7 @@ func TestBanListRPCIPv6SubnetBug(t *testing.T) {
 		ctx := context.Background()
 		banTimeSeconds := int64(3600)
 
-		// This should work but fails due to bug in isIPOrSubnet
+		// Ban IPv6 subnet via RPC setban command
 		ipv6Subnet := "2406:da18:1f7:353b::/64"
 		_, err = daemonNode.CallRPC(ctx, "setban", []interface{}{ipv6Subnet, "add", banTimeSeconds, false})
 		require.NoError(t, err, "Should be able to ban IPv6 subnet via RPC")
@@ -526,23 +523,19 @@ func TestBanListRPCIPv6SubnetBug(t *testing.T) {
 	})
 }
 
-// TestIsBannedRPCBug documents a bug where the 'isbanned' RPC command is effectively unusable.
+// TestIsBannedRPCWithPeerID tests the 'isbanned' RPC command with PeerID format.
 //
-// The bug is a mismatch between validation and implementation:
-// - handlers.go:2019 validates input with isIPOrSubnet() which requires IP/subnet format
-// - handlers.go:2030 then calls s.p2pClient.IsBanned() which checks PeerID-based bans (banManager)
+// This test verifies that the 'isbanned' RPC correctly handles both IP addresses
+// and PeerID strings. The implementation now:
+// - Accepts both IP/subnet format and PeerID format (removed strict IP validation)
+// - Checks both banList (IP-based) and banManager (PeerID-based) via P2P client
+// - Only calls legacy client for valid IP formats
 //
-// This creates an impossible situation:
-// - For IP-based bans: 'isbanned' won't work because it checks banManager (PeerID-based), not banList
-// - For PeerID bans: 'isbanned' won't work because isIPOrSubnet() rejects PeerID format as invalid
-//
-// The fix should be one of:
-// 1. Change 'isbanned' to check banList (IP-based) to match 'setban'
-// 2. Remove IP validation and accept PeerID strings for banManager check
-// 3. Support both: check banList for IP format, banManager for PeerID format
-func TestIsBannedRPCBug(t *testing.T) {
-	t.Skip("KNOWN BUG: 'isbanned' RPC validates for IP format but checks PeerID-based bans - see handlers.go:2019-2030")
-
+// Previously tracked bug: There was a mismatch where 'isbanned' validated for IP
+// format but only checked PeerID-based bans (banManager). This has been fixed to
+// support both ban systems by making IP validation optional and checking both
+// banList and banManager.
+func TestIsBannedRPCWithPeerID(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
 		const testAPIKey = "test-isbanned-rpc-api-key"
 
@@ -577,9 +570,9 @@ func TestIsBannedRPCBug(t *testing.T) {
 		require.NoError(t, err)
 		peerIDStr := peerID.String()
 
-		// This fails with "Invalid IP or subnet" because isIPOrSubnet rejects PeerID format
+		// Check if PeerID is not initially banned (now accepts PeerID format)
 		result, err := daemonNode.CallRPC(ctx, "isbanned", []interface{}{peerIDStr})
-		require.NoError(t, err, "Should accept PeerID format since it checks banManager")
+		require.NoError(t, err, "Should accept PeerID format since it checks both ban systems")
 		require.Contains(t, result, "false", msgPeerNotInitiallyBanned)
 
 		// Add ban score via gRPC to trigger a ban (spam=50 x 2 = 100 = threshold)
