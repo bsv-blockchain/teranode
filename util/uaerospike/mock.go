@@ -23,15 +23,18 @@ type MockAerospikeClient struct {
 	GetCalled          int
 	OperateCalled      int
 	BatchOperateCalled int
+	ExecuteCalled      int
 	CloseCalled        int
 
 	// Store last call parameters for verification
-	LastKey        *aerospike.Key
-	LastBinMap     aerospike.BinMap
-	LastBins       []*aerospike.Bin
-	LastBinNames   []string
-	LastOperations []*aerospike.Operation
-	LastRecords    []aerospike.BatchRecordIfc
+	LastKey          *aerospike.Key
+	LastBinMap       aerospike.BinMap
+	LastBins         []*aerospike.Bin
+	LastBinNames     []string
+	LastOperations   []*aerospike.Operation
+	LastRecords      []aerospike.BatchRecordIfc
+	LastPackageName  string
+	LastFunctionName string
 
 	// Synchronization for concurrent access
 	mu sync.RWMutex
@@ -133,6 +136,22 @@ func (m *MockAerospikeClient) BatchOperate(policy *aerospike.BatchPolicy, record
 	return nil
 }
 
+// Execute implements the aerospike Execute (UDF) operation
+func (m *MockAerospikeClient) Execute(policy *aerospike.WritePolicy, key *aerospike.Key, packageName string, functionName string, args ...aerospike.Value) (any, aerospike.Error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ExecuteCalled++
+	m.LastKey = key
+	m.LastPackageName = packageName
+	m.LastFunctionName = functionName
+
+	if m.ShouldError {
+		return nil, m.ErrorToReturn
+	}
+	return nil, nil
+}
+
 // Close implements the aerospike Close operation
 func (m *MockAerospikeClient) Close() {
 	m.mu.Lock()
@@ -177,6 +196,7 @@ func (m *MockAerospikeClient) Reset() {
 	m.GetCalled = 0
 	m.OperateCalled = 0
 	m.BatchOperateCalled = 0
+	m.ExecuteCalled = 0
 	m.CloseCalled = 0
 
 	m.LastKey = nil
@@ -185,6 +205,8 @@ func (m *MockAerospikeClient) Reset() {
 	m.LastBinNames = nil
 	m.LastOperations = nil
 	m.LastRecords = nil
+	m.LastPackageName = ""
+	m.LastFunctionName = ""
 }
 
 // MockAerospikeError is a mock implementation of aerospike.Error for testing

@@ -56,7 +56,7 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		LuaPackage:    LuaPackage,
 	}
 
-	// Create a new pruner service
+	// Create a new pruner service.
 	prunerService, err := aeropruner.NewService(s.settings, opts)
 	if err != nil {
 		prunerServiceError = err

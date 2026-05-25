@@ -422,6 +422,33 @@ func (s *Store) GetSet() string {
 	return s.setName
 }
 
+// registerScanBudget declares a long-running scan service's expected max concurrent
+// connection use with the shared uaerospike client. When the cumulative budget across
+// services exceeds ConnectionQueueSize × pruner_connectionPoolWarningThreshold, a single
+// WARN is emitted with the per-service breakdown so an operator can see exactly which
+// configured concurrencies over-subscribe the pool.
+//
+// Re-registering the same service replaces the prior value, so it is safe to call from
+// scan-construction code that may run multiple times across a process lifetime.
+func (s *Store) registerScanBudget(service string, budget int) {
+	if s.client == nil {
+		return
+	}
+	threshold := s.settings.Pruner.ConnectionPoolWarningThreshold
+	report := s.client.RegisterConnectionBudget(service, budget, threshold)
+	if report.Exceeded {
+		s.logger.Warnf(
+			"Aerospike connection budget exceeded: %d/%d declared (%.1f%% of pool, threshold %.1f%%, recommended max %d). "+
+				"Breakdown by service: %v. "+
+				"Increase ConnectionQueueSize or reduce per-service concurrency to avoid pool starvation.",
+			report.TotalBudget, report.PoolSize,
+			float64(report.TotalBudget)/float64(report.PoolSize)*100,
+			report.Threshold*100,
+			report.Recommended, report.Breakdown,
+		)
+	}
+}
+
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	if blockHeight == 0 {
 		return errors.NewInvalidArgumentError("block height cannot be zero")

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -51,11 +52,34 @@ func NewClientStats() *ClientStats {
 	}
 }
 
-// Client is a wrapper around aerospike.Client that provides a semaphore to limit concurrent connections.
+// ConnectionBudgetReport summarises declared connection use across services so
+// operators can see when configured concurrency over-subscribes the pool.
+//
+// Recommended is computed as int(PoolSize * Threshold). Exceeded is true when
+// TotalBudget > Recommended. The breakdown is a snapshot of all currently
+// registered service budgets, safe to read or mutate by the caller.
+type ConnectionBudgetReport struct {
+	TotalBudget int
+	PoolSize    int
+	Threshold   float64
+	Recommended int
+	Exceeded    bool
+	Breakdown   map[string]int
+}
+
+// Client is a wrapper around aerospike.Client that limits concurrent connections
+// via a single connSemaphore sized to ConnectionQueueSize and exposes a
+// connection-budget registry so each long-running query consumer can declare
+// its max concurrent use. The registry is diagnostic only -- it does not
+// throttle; it lets operators see when configured concurrency would
+// over-subscribe the pool (see RegisterConnectionBudget).
 type Client struct {
 	*aerospike.Client
-	connSemaphore chan struct{} // Simple channel-based semaphore
-	stats         *ClientStats  // Always initialized, never nil
+	connSemaphore chan struct{}
+	stats         *ClientStats
+
+	budgetMu sync.Mutex
+	budgets  map[string]int
 }
 
 // NewClient creates a new Aerospike client with the specified hostname and port.
@@ -73,6 +97,7 @@ func NewClient(hostname string, port int) (*Client, error) {
 		Client:        client,
 		connSemaphore: make(chan struct{}, queueSize),
 		stats:         NewClientStats(),
+		budgets:       make(map[string]int),
 	}, nil
 }
 
@@ -132,6 +157,7 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 		Client:        client,
 		connSemaphore: make(chan struct{}, queueSize),
 		stats:         NewClientStats(),
+		budgets:       make(map[string]int),
 	}, nil
 }
 
@@ -290,49 +316,121 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 	return c.Client.BatchOperate(policy, records)
 }
 
+// Execute is a wrapper around aerospike.Client.Execute that uses the connection semaphore
+// to limit concurrent connections. Execute runs a server-side UDF on a single key.
+func (c *Client) Execute(policy *aerospike.WritePolicy, key *aerospike.Key, packageName string, functionName string, args ...aerospike.Value) (any, aerospike.Error) {
+	if err := c.acquirePermit(policy); err != nil {
+		return nil, err
+	}
+	defer c.releasePermit()
+
+	start := gocore.CurrentTime()
+	defer func() {
+		c.stats.stat.NewStat("Execute").AddTime(start)
+	}()
+
+	return c.Client.Execute(policy, key, packageName, functionName, args...)
+}
+
+// RegisterConnectionBudget records a service's expected max concurrent connection
+// use and returns a report covering all currently registered services. The
+// registry is diagnostic only: callers use the returned report to emit an
+// operator-facing log when Exceeded is true. It does not throttle.
+//
+// Re-registering the same service replaces the prior value (use this when a
+// service's worker count is re-computed). Passing a budget of 0 removes the
+// service from the breakdown.
+//
+// Concurrent calls from different services are safe. The threshold parameter
+// is applied to the returned report only; it is not persisted.
+func (c *Client) RegisterConnectionBudget(service string, budget int, threshold float64) ConnectionBudgetReport {
+	c.budgetMu.Lock()
+	defer c.budgetMu.Unlock()
+
+	if c.budgets == nil {
+		c.budgets = make(map[string]int)
+	}
+	if budget <= 0 {
+		delete(c.budgets, service)
+	} else {
+		c.budgets[service] = budget
+	}
+
+	return c.connectionBudgetReportLocked(threshold)
+}
+
+// ConnectionBudget returns the current cumulative report without changing any
+// registration. Use this for periodic diagnostics or in tests.
+func (c *Client) ConnectionBudget(threshold float64) ConnectionBudgetReport {
+	c.budgetMu.Lock()
+	defer c.budgetMu.Unlock()
+	return c.connectionBudgetReportLocked(threshold)
+}
+
+func (c *Client) connectionBudgetReportLocked(threshold float64) ConnectionBudgetReport {
+	poolSize := cap(c.connSemaphore)
+	total := 0
+	breakdown := make(map[string]int, len(c.budgets))
+	for k, v := range c.budgets {
+		total += v
+		breakdown[k] = v
+	}
+
+	recommended := int(float64(poolSize) * threshold)
+	return ConnectionBudgetReport{
+		TotalBudget: total,
+		PoolSize:    poolSize,
+		Threshold:   threshold,
+		Recommended: recommended,
+		Exceeded:    total > recommended,
+		Breakdown:   breakdown,
+	}
+}
+
 // GetConnectionQueueSize returns the size of the connection semaphore.
 // This represents the maximum number of concurrent Aerospike operations allowed.
 func (c *Client) GetConnectionQueueSize() int {
 	return cap(c.connSemaphore)
 }
 
-// acquirePermit attempts to acquire a permit from the connection semaphore with an optional timeout.
-// The policy parameter can be nil, in which case no timeout is used (blocks until available).
-// If the policy has a TotalTimeout > 0, a fraction of that timeout (semaphoreTimeoutFraction)
-// is used for permit acquisition to ensure the total operation time stays within bounds.
-// Returns an error if the timeout expires before a permit becomes available.
-//
-// Accepts any Aerospike policy type (BasePolicy, WritePolicy, BatchPolicy) as they all
-// embed BasePolicy which contains TotalTimeout.
-func (c *Client) acquirePermit(policy any) aerospike.Error {
-	totalTimeout := time.Duration(0)
-
-	// Extract timeout from policy if available
-	if policy != nil {
-		switch p := policy.(type) {
-		case *aerospike.BasePolicy:
-			if p != nil && p.TotalTimeout > 0 {
-				totalTimeout = p.TotalTimeout
-			}
-		case *aerospike.WritePolicy:
-			if p != nil && p.TotalTimeout > 0 {
-				totalTimeout = p.TotalTimeout
-			}
-		case *aerospike.BatchPolicy:
-			if p != nil && p.TotalTimeout > 0 {
-				totalTimeout = p.TotalTimeout
-			}
+// extractTimeout extracts the TotalTimeout from any Aerospike policy type.
+// Returns 0 if the policy is nil or does not have a TotalTimeout set.
+func extractTimeout(policy any) time.Duration {
+	if policy == nil {
+		return 0
+	}
+	switch p := policy.(type) {
+	case *aerospike.BasePolicy:
+		if p != nil && p.TotalTimeout > 0 {
+			return p.TotalTimeout
+		}
+	case *aerospike.WritePolicy:
+		if p != nil && p.TotalTimeout > 0 {
+			return p.TotalTimeout
+		}
+	case *aerospike.BatchPolicy:
+		if p != nil && p.TotalTimeout > 0 {
+			return p.TotalTimeout
+		}
+	case *aerospike.QueryPolicy:
+		if p != nil && p.TotalTimeout > 0 {
+			return p.TotalTimeout
 		}
 	}
+	return 0
+}
 
+// acquireSemaphore attempts to acquire a permit from the given semaphore with an optional timeout.
+// If totalTimeout > 0, a fraction of that timeout (semaphoreTimeoutFraction) is used for
+// acquisition to ensure the total operation time stays within bounds.
+func acquireSemaphore(sem chan struct{}, totalTimeout time.Duration) aerospike.Error {
 	if totalTimeout <= 0 {
 		// No timeout - block until available
-		c.connSemaphore <- struct{}{}
+		sem <- struct{}{}
 		return nil
 	}
 
 	// Calculate semaphore timeout as a fraction of total timeout
-	// This ensures total operation time (semaphore wait + actual operation) stays within bounds
 	semaphoreTimeout := time.Duration(float64(totalTimeout) * semaphoreTimeoutFraction)
 	if semaphoreTimeout < minSemaphoreTimeout {
 		semaphoreTimeout = minSemaphoreTimeout
@@ -342,11 +440,23 @@ func (c *Client) acquirePermit(policy any) aerospike.Error {
 	defer timer.Stop()
 
 	select {
-	case c.connSemaphore <- struct{}{}:
+	case sem <- struct{}{}:
 		return nil
 	case <-timer.C:
 		return aerospike.ErrTimeout
 	}
+}
+
+// acquirePermit attempts to acquire a permit from the connection semaphore with an optional timeout.
+// The policy parameter can be nil, in which case no timeout is used (blocks until available).
+// If the policy has a TotalTimeout > 0, a fraction of that timeout (semaphoreTimeoutFraction)
+// is used for permit acquisition to ensure the total operation time stays within bounds.
+// Returns an error if the timeout expires before a permit becomes available.
+//
+// Accepts any Aerospike policy type (BasePolicy, WritePolicy, BatchPolicy, QueryPolicy) as they all
+// embed BasePolicy which contains TotalTimeout.
+func (c *Client) acquirePermit(policy any) aerospike.Error {
+	return acquireSemaphore(c.connSemaphore, extractTimeout(policy))
 }
 
 // releasePermit releases a permit back to the connection semaphore.

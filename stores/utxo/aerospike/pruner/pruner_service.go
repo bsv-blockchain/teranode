@@ -404,6 +404,11 @@ func (s *Service) getConnectionQueueSize() int {
 // validateConnectionPoolSettings validates that pruner concurrency settings won't exceed
 // the Aerospike connection pool. If they would, automatically adjusts chunkGroupLimit
 // to prevent connection pool exhaustion and logs a WARNING.
+//
+// After auto-adjustment the (possibly reduced) pruner budget is registered with the
+// shared uaerospike client so other long-running query consumers (unmined iterator,
+// consistency scanner) can be summed against the pool and produce a single WARN log
+// when the total over-subscribes ConnectionQueueSize × ConnectionPoolWarningThreshold.
 func (s *Service) validateConnectionPoolSettings() {
 	// Get Aerospike ConnectionQueueSize from client
 	connectionQueueSize := s.getConnectionQueueSize()
@@ -430,12 +435,39 @@ func (s *Service) validateConnectionPoolSettings() {
 			s.chunkGroupLimit, adjusted,
 		)
 		s.chunkGroupLimit = adjusted
+		maxPrunerConnections = (numWorkers * s.chunkGroupLimit) + numWorkers
 	} else {
 		s.logger.Infof(
 			"Pruner connection pool validation passed. Max pruner connections: %d, "+
 				"ConnectionQueueSize: %d (%.1f%% utilization)",
 			maxPrunerConnections, connectionQueueSize,
 			float64(maxPrunerConnections)/float64(connectionQueueSize)*100,
+		)
+	}
+
+	s.registerConnectionBudget("pruner", maxPrunerConnections)
+}
+
+// registerConnectionBudget declares this service's expected max concurrent connection
+// use on the shared uaerospike client and logs a WARN if the cumulative budget across
+// all registered services exceeds ConnectionQueueSize × ConnectionPoolWarningThreshold.
+// The pruner's own auto-adjust above keeps the pruner under threshold in isolation;
+// this log fires when other services (unmined iterator, consistency scanner) push the
+// shared total over the line.
+func (s *Service) registerConnectionBudget(service string, budget int) {
+	if s.client == nil {
+		return
+	}
+	report := s.client.RegisterConnectionBudget(service, budget, s.connectionPoolWarningThreshold)
+	if report.Exceeded {
+		s.logger.Warnf(
+			"Aerospike connection budget exceeded: %d/%d declared (%.1f%% of pool, threshold %.1f%%, recommended max %d). "+
+				"Breakdown by service: %v. "+
+				"Increase ConnectionQueueSize or reduce per-service concurrency to avoid pool starvation.",
+			report.TotalBudget, report.PoolSize,
+			float64(report.TotalBudget)/float64(report.PoolSize)*100,
+			report.Threshold*100,
+			report.Recommended, report.Breakdown,
 		)
 	}
 }

@@ -73,6 +73,10 @@ func launchConsistencyScan(store *Store, numPartitionQueries int, workerFunc fun
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
+	// Declare this scan's connection use so the shared client can sum across services
+	// and warn when configured concurrency over-subscribes the pool.
+	store.registerScanBudget("consistencyScan", numPartitionQueries)
+
 	workerCtx, cancel := context.WithCancel(context.Background())
 
 	it := &consistencyScanIterator{

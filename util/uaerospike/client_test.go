@@ -1,6 +1,7 @@
 package uaerospike
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -535,6 +536,179 @@ func TestClient_AcquirePermitTimeout(t *testing.T) {
 		// Release for cleanup
 		client.releasePermit()
 	})
+}
+
+func TestExtractTimeout(t *testing.T) {
+	t.Run("nil policy", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), extractTimeout(nil))
+	})
+
+	t.Run("BasePolicy with timeout", func(t *testing.T) {
+		p := &aerospike.BasePolicy{TotalTimeout: 5 * time.Second}
+		assert.Equal(t, 5*time.Second, extractTimeout(p))
+	})
+
+	t.Run("WritePolicy with timeout", func(t *testing.T) {
+		p := aerospike.NewWritePolicy(0, 0)
+		p.TotalTimeout = 3 * time.Second
+		assert.Equal(t, 3*time.Second, extractTimeout(p))
+	})
+
+	t.Run("BatchPolicy with timeout", func(t *testing.T) {
+		p := aerospike.NewBatchPolicy()
+		p.TotalTimeout = 2 * time.Second
+		assert.Equal(t, 2*time.Second, extractTimeout(p))
+	})
+
+	t.Run("QueryPolicy with timeout", func(t *testing.T) {
+		p := aerospike.NewQueryPolicy()
+		p.TotalTimeout = 10 * time.Second
+		assert.Equal(t, 10*time.Second, extractTimeout(p))
+	})
+
+	t.Run("unknown policy type", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), extractTimeout("not-a-policy"))
+	})
+}
+
+func TestClient_QuerySemaphoreTimeoutHelper(t *testing.T) {
+	// Verifies the shared acquireSemaphore helper applies the same fractional-timeout
+	// rule whether the caller passes a QueryPolicy or any other policy type.
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{} // pre-fill so acquire must wait
+
+	policy := aerospike.NewQueryPolicy()
+	policy.TotalTimeout = 1000 * time.Millisecond
+
+	start := time.Now()
+	err := acquireSemaphore(sem, extractTimeout(policy))
+	elapsed := time.Since(start)
+
+	assert.Error(t, err)
+	assert.True(t, elapsed >= minSemaphoreTimeout && elapsed < 200*time.Millisecond,
+		"Expected timeout around %v, got %v", minSemaphoreTimeout, elapsed)
+}
+
+func TestRegisterConnectionBudget(t *testing.T) {
+	t.Run("under threshold reports not exceeded", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 128),
+			stats:         NewClientStats(),
+			budgets:       make(map[string]int),
+		}
+
+		report := client.RegisterConnectionBudget("pruner", 60, 0.7)
+
+		assert.Equal(t, 60, report.TotalBudget)
+		assert.Equal(t, 128, report.PoolSize)
+		assert.InDelta(t, 0.7, report.Threshold, 0.0001)
+		assert.Equal(t, 89, report.Recommended) // int(0.7 * 128)
+		assert.False(t, report.Exceeded)
+		assert.Equal(t, map[string]int{"pruner": 60}, report.Breakdown)
+	})
+
+	t.Run("sum across services triggers exceeded", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 128),
+			stats:         NewClientStats(),
+			budgets:       make(map[string]int),
+		}
+
+		client.RegisterConnectionBudget("pruner", 60, 0.7)
+		report := client.RegisterConnectionBudget("unminedIterator", 40, 0.7)
+
+		assert.Equal(t, 100, report.TotalBudget)
+		assert.True(t, report.Exceeded, "100 > recommended 89")
+		assert.Equal(t, map[string]int{"pruner": 60, "unminedIterator": 40}, report.Breakdown)
+	})
+
+	t.Run("zero or negative budget removes registration", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 128),
+			stats:         NewClientStats(),
+			budgets:       make(map[string]int),
+		}
+
+		client.RegisterConnectionBudget("pruner", 60, 0.7)
+		report := client.RegisterConnectionBudget("pruner", 0, 0.7)
+		assert.Equal(t, 0, report.TotalBudget)
+		assert.Empty(t, report.Breakdown)
+	})
+
+	t.Run("re-registering replaces prior value", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 128),
+			stats:         NewClientStats(),
+			budgets:       make(map[string]int),
+		}
+
+		client.RegisterConnectionBudget("pruner", 60, 0.7)
+		report := client.RegisterConnectionBudget("pruner", 30, 0.7)
+
+		assert.Equal(t, 30, report.TotalBudget)
+		assert.Equal(t, map[string]int{"pruner": 30}, report.Breakdown)
+	})
+
+	t.Run("returned breakdown is a snapshot caller can mutate", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 128),
+			stats:         NewClientStats(),
+			budgets:       make(map[string]int),
+		}
+
+		report := client.RegisterConnectionBudget("pruner", 60, 0.7)
+		report.Breakdown["unrelated"] = 9999 // must not pollute internal state
+
+		assert.Equal(t, 60, client.ConnectionBudget(0.7).TotalBudget)
+		assert.Equal(t, map[string]int{"pruner": 60}, client.ConnectionBudget(0.7).Breakdown)
+	})
+}
+
+func TestConnectionBudget_NoRegistrations(t *testing.T) {
+	client := &Client{
+		connSemaphore: make(chan struct{}, 64),
+		stats:         NewClientStats(),
+		budgets:       make(map[string]int),
+	}
+
+	report := client.ConnectionBudget(0.7)
+	assert.Equal(t, 0, report.TotalBudget)
+	assert.Equal(t, 64, report.PoolSize)
+	assert.Equal(t, 44, report.Recommended) // int(0.7 * 64)
+	assert.False(t, report.Exceeded)
+	assert.Empty(t, report.Breakdown)
+}
+
+// TestRegisterConnectionBudget_Concurrent verifies the registry is safe under
+// concurrent registration from multiple services -- the final total reflects
+// every registered budget exactly once.
+func TestRegisterConnectionBudget_Concurrent(t *testing.T) {
+	client := &Client{
+		connSemaphore: make(chan struct{}, 128),
+		stats:         NewClientStats(),
+		budgets:       make(map[string]int),
+	}
+
+	const services = 16
+	const perService = 8
+	start := make(chan struct{})
+	done := make(chan struct{}, services)
+	for i := 0; i < services; i++ {
+		name := "service-" + strconv.Itoa(i)
+		go func() {
+			<-start
+			client.RegisterConnectionBudget(name, perService, 0.7)
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	for i := 0; i < services; i++ {
+		<-done
+	}
+
+	final := client.ConnectionBudget(0.7)
+	assert.Equal(t, services*perService, final.TotalBudget)
+	assert.Len(t, final.Breakdown, services)
 }
 
 // Test mock functionality separately

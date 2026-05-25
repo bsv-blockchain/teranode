@@ -147,6 +147,10 @@ func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prun
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
+	// Declare this scan's connection use so the shared client can sum across services
+	// and warn when configured concurrency over-subscribes the pool.
+	store.registerScanBudget("unminedIterator", numPartitionQueries)
+
 	policy := util.GetAerospikeQueryPolicy(store.settings)
 	policy.IncludeBinData = true
 	policy.RecordQueueSize = 512
