@@ -649,6 +649,20 @@ func TestGetBlockAssemblyTxsCoverage(t *testing.T) {
 	})
 }
 
+func TestGetBlockAssemblyTxsReturnsWhenContextCancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	resp, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // TestRetryFunctionsCoverage tests the retry-related functions coverage
 func TestRetryFunctionsCoverage(t *testing.T) {
 	server, _, subtree, _ := setup(t)

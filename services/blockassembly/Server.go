@@ -1900,9 +1900,20 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 	)
 	defer deferFn()
 
-	txHashes := ba.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	txHashes := ba.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
+	if txHashes == nil && ctx.Err() != nil {
+		return nil, errors.WrapGRPC(ctx.Err())
+	}
+
 	txHashesStrings := make([]string, 0, len(txHashes))
-	for _, hash := range txHashes {
+	for i, hash := range txHashes {
+		if i%1024 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, errors.WrapGRPC(ctx.Err())
+			default:
+			}
+		}
 		txHashesStrings = append(txHashesStrings, hash.String())
 	}
 

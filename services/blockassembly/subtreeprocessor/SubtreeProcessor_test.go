@@ -74,6 +74,47 @@ func assertStateUnchanged(t *testing.T, stp *SubtreeProcessor, originalState Sub
 		"%s: currentTxMap length should be unchanged after error", testName)
 }
 
+func TestGetTransactionHashesReturnsOnContextCancellationBeforeRequestIsServed(t *testing.T) {
+	stp := &SubtreeProcessor{
+		getTransactionHashesChan: make(chan chan []chainhash.Hash),
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	hashes := stp.GetTransactionHashes(ctx)
+
+	require.Nil(t, hashes)
+	require.Less(t, time.Since(start), time.Second)
+}
+
+func TestGetTransactionHashesDoesNotBlockProcessorAfterCallerCancellation(t *testing.T) {
+	stp := &SubtreeProcessor{
+		getTransactionHashesChan: make(chan chan []chainhash.Hash),
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	processorDone := make(chan struct{})
+	go func() {
+		response := <-stp.getTransactionHashesChan
+		<-ctx.Done()
+		response <- []chainhash.Hash{{1, 2, 3}}
+		close(processorDone)
+	}()
+
+	hashes := stp.GetTransactionHashes(ctx)
+	require.Nil(t, hashes)
+
+	select {
+	case <-processorDone:
+	case <-time.After(time.Second):
+		t.Fatal("processor send blocked after caller context cancellation")
+	}
+}
+
 var (
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")

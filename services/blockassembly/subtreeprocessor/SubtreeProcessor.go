@@ -1695,12 +1695,21 @@ func (stp *SubtreeProcessor) GetSubtreeHashes(ctx context.Context) []chainhash.H
 	}
 }
 
-func (stp *SubtreeProcessor) GetTransactionHashes() []chainhash.Hash {
-	response := make(chan []chainhash.Hash)
+func (stp *SubtreeProcessor) GetTransactionHashes(ctx context.Context) []chainhash.Hash {
+	response := make(chan []chainhash.Hash, 1)
 
-	stp.getTransactionHashesChan <- response
+	select {
+	case stp.getTransactionHashesChan <- response:
+	case <-ctx.Done():
+		return nil
+	}
 
-	return <-response
+	select {
+	case r := <-response:
+		return r
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 // GetUtxoStore returns the UTXO store instance.
