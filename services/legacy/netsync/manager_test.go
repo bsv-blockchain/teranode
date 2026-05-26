@@ -32,6 +32,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -815,4 +816,39 @@ func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
 		// No violations, sync peer should still be set
 		assert.Equal(t, sp, sm.loadSyncPeer())
 	})
+}
+
+// TestHandleNewPeerMsg_NilFSMState exercises the path where the blockchain
+// client returns (nil, err) from GetFSMCurrentState — common during transient
+// gRPC failures or service restarts. The pre-fix code dereferenced the nil
+// pointer and panicked. The fix must guard the dereference and still register
+// the peer.
+func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return((*blockchain2.FSMStateType)(nil), errors.NewServiceError("transient gRPC error"))
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	smPeer := &peer.Peer{}
+
+	defer func() {
+		if r := recover(); r != nil {
+			require.Failf(t, "handleNewPeerMsg panicked", "panic: %v", r)
+		}
+	}()
+
+	sm.handleNewPeerMsg(smPeer)
+
+	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
+	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
 }

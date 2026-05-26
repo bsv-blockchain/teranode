@@ -16,7 +16,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -418,6 +420,73 @@ func TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, hashes, leafCount)
+}
+
+// TestGetSubtreeTxHashes_LocalFile is a regression guard for the dual file-type
+// lookup. If the subtree is already on disk under FileTypeSubtree (the
+// "already validated" marker — written by quickValidationMode, block assembly,
+// or block persister), getSubtreeTxHashes must use it instead of falling back
+// to an HTTP fetch. This is important for legacy catch-up where baseURL has
+// no scheme and the HTTP request would fail outright.
+func TestGetSubtreeTxHashes_LocalFile(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	cases := []struct {
+		name     string
+		fileType fileformat.FileType
+	}{
+		{"FileTypeSubtreeToCheck", fileformat.FileTypeSubtreeToCheck},
+		{"FileTypeSubtree", fileformat.FileTypeSubtree},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+			require.NoError(t, err)
+
+			h1 := chainhash.HashH([]byte("local-tx-1"))
+			h2 := chainhash.HashH([]byte("local-tx-2"))
+			h3 := chainhash.HashH([]byte("local-tx-3"))
+			h4 := chainhash.HashH([]byte("local-tx-4"))
+			require.NoError(t, subtree.AddNode(h1, 1, 100))
+			require.NoError(t, subtree.AddNode(h2, 1, 100))
+			require.NoError(t, subtree.AddNode(h3, 1, 100))
+			require.NoError(t, subtree.AddNode(h4, 1, 100))
+
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+
+			server := &Server{
+				logger:                       ulogger.TestLogger{},
+				settings:                     tSettings,
+				subtreeStore:                 memory.New(),
+				invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+				invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+			}
+			defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+			require.NoError(t, server.subtreeStore.Set(context.Background(), subtreeHash[:], tc.fileType, subtreeBytes))
+
+			// Activate httpmock with no responders so any unintended HTTP fallback
+			// fails fast and deterministically instead of attempting a real network
+			// call (which would hang for up to the default 60s client timeout).
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// Bound the test with a short context timeout as a second line of
+			// defence — if the implementation regresses past httpmock somehow,
+			// this fails fast rather than blocking the suite.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			stat := gocore.NewStat("test")
+			hashes, err := server.getSubtreeTxHashes(ctx, stat, &subtreeHash, testPeerURL)
+
+			require.NoError(t, err)
+			require.Equal(t, []chainhash.Hash{h1, h2, h3, h4}, hashes)
+		})
+	}
 }
 
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly

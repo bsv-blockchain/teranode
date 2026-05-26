@@ -389,6 +389,8 @@ services:
       - ../data/coinbase1:/app/data
 
   block-generator-2:
+    profiles:
+      - with-coinbase
     image: curlimages/curl:latest
     container_name: block-generator-2
     depends_on:
@@ -442,6 +444,8 @@ services:
       - ../data/coinbase2:/app/data
 
   block-generator-3:
+    profiles:
+      - with-coinbase
     image: curlimages/curl:latest
     container_name: block-generator-3
     depends_on:
@@ -526,6 +530,8 @@ services:
       # - ../data/txblaster.log:/app/data/txblaster.log
 
   blaster-tui-1:
+    # profiles:
+    #   - with-coinbase
     <<: *teranode-coinbase-base
     container_name: blaster-tui-1
     depends_on:

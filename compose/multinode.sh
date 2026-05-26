@@ -6,6 +6,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEN_DIR="$SCRIPT_DIR/generated"
 COMPOSE_FILE="$GEN_DIR/docker-compose-multinode.yml"
 
+# Chaos primitives run iptables/tc inside the target container's netns via a
+# privileged sidecar. Works on Linux and macOS (no host nsenter/sudo needed).
+NETSHOOT_IMAGE="${NETSHOOT_IMAGE:-nicolaka/netshoot:v0.13}"
+
 usage() {
   cat <<'EOF'
 Usage: compose/multinode.sh <command> [args]
@@ -95,7 +99,7 @@ cmd_up() {
   echo ""
   echo "dashboards:"
   for f in "$GEN_DIR"/open-dashboards.sh; do
-    [[ -x "$f" ]] && grep -oP 'http://localhost:\d+' "$f" | while read -r url; do
+    [[ -x "$f" ]] && grep -oE 'http://localhost:[0-9]+' "$f" | while read -r url; do
       echo "  $url"
     done
   done
@@ -171,7 +175,7 @@ cmd_status() {
   echo "Infrastructure:$infra_lines"
   echo ""
 
-  # Build node lines outside the herestring loop so curl/nsenter work
+  # Build node lines outside the herestring loop so curl and docker sidecar spawns work
   local node_lines=""
   local node_count=${#node_indices[@]}
   local nodes_ok=0
@@ -192,14 +196,17 @@ cmd_status() {
       nodes_ok=$((nodes_ok + 1))
       local ctr
       ctr=$(container_name "$idx")
-      local drop_rules
-      drop_rules=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
-      local has_netem
-      has_netem=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -c netem || true)
-      if [[ "$drop_rules" -gt 0 ]]; then chaos_tag+=" ISOLATED"; fi
-      if [[ "$has_netem" -gt 0 ]]; then
-        local delay
-        delay=$(nsenter_tc "$ctr" qdisc show dev eth0 2>/dev/null | grep -oP '\d+\.\d+ms|\d+ms' | head -1)
+      # One sidecar per node: emit DROP count on line 1, qdisc info on line 2.
+      local chaos_info drop_rules qdisc_line delay
+      chaos_info=$(netns_sh "$ctr" '
+        iptables -L INPUT --line-numbers 2>/dev/null | grep -c DROP || echo 0
+        tc qdisc show dev eth0 2>/dev/null
+      ' 2>/dev/null || true)
+      drop_rules=$(echo "$chaos_info" | sed -n '1p')
+      qdisc_line=$(echo "$chaos_info" | sed -n '2,$p')
+      if [[ "${drop_rules:-0}" -gt 0 ]]; then chaos_tag+=" ISOLATED"; fi
+      if echo "$qdisc_line" | grep -q netem; then
+        delay=$(echo "$qdisc_line" | grep -oE '[0-9]+(\.[0-9]+)?ms' | head -1)
         chaos_tag+=" SLOW(${delay})"
       fi
       local height
@@ -264,12 +271,27 @@ cmd_chaos() {
   esac
 }
 
-nsenter_iptables() {
+# Run a single iptables command inside the target container's netns.
+netns_iptables() {
   local ctr="$1"
   shift
-  local pid
-  pid=$(docker inspect --format '{{.State.Pid}}' "$ctr")
-  sudo nsenter -t "$pid" -n iptables "$@"
+  docker run --rm \
+    --net="container:${ctr}" \
+    --cap-add=NET_ADMIN \
+    --entrypoint iptables \
+    "$NETSHOOT_IMAGE" "$@"
+}
+
+# Run a batched shell script inside the target container's netns. Used to
+# avoid spawning one sidecar per iptables/tc invocation.
+netns_sh() {
+  local ctr="$1"
+  local script="$2"
+  docker run --rm \
+    --net="container:${ctr}" \
+    --cap-add=NET_ADMIN \
+    --entrypoint sh \
+    "$NETSHOOT_IMAGE" -c "$script"
 }
 
 chaos_isolate() {
@@ -277,16 +299,24 @@ chaos_isolate() {
   local ctr
   ctr=$(container_name "$node")
 
+  local script=""
   local blocked=0
   for other in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]' | grep -v "^${ctr}$"); do
     local ip
     ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$other" 2>/dev/null)
     if [[ -n "$ip" ]]; then
-      nsenter_iptables "$ctr" -A INPUT -s "$ip" -j DROP
-      nsenter_iptables "$ctr" -A OUTPUT -d "$ip" -j DROP
+      script+="iptables -A INPUT -s ${ip} -j DROP; "
+      script+="iptables -A OUTPUT -d ${ip} -j DROP; "
       blocked=$((blocked + 1))
     fi
   done
+
+  if [[ $blocked -eq 0 ]]; then
+    echo "teranode$node has no peers to isolate from"
+    return
+  fi
+
+  netns_sh "$ctr" "$script"
   echo "teranode$node is isolated from $blocked peer(s) (RPC still accessible)"
 }
 
@@ -295,7 +325,7 @@ chaos_heal() {
     local ctr
     ctr=$(container_name "$1")
     echo "restoring teranode$1 peer traffic..."
-    nsenter_iptables "$ctr" -F 2>/dev/null || true
+    netns_iptables "$ctr" -F 2>/dev/null || true
     echo "teranode$1 healed"
     return
   fi
@@ -303,9 +333,9 @@ chaos_heal() {
   local healed=0
   for ctr in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]'); do
     local count
-    count=$(nsenter_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
+    count=$(netns_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
     if [[ "$count" -gt 0 ]]; then
-      nsenter_iptables "$ctr" -F
+      netns_iptables "$ctr" -F
       echo "  healed $ctr ($count rules cleared)"
       healed=$((healed + 1))
     fi
@@ -347,12 +377,15 @@ chaos_unpause() {
   echo "teranode$node is unfrozen"
 }
 
-nsenter_tc() {
+# Run a single tc command inside the target container's netns.
+netns_tc() {
   local ctr="$1"
   shift
-  local pid
-  pid=$(docker inspect --format '{{.State.Pid}}' "$ctr")
-  sudo nsenter -t "$pid" -n tc "$@"
+  docker run --rm \
+    --net="container:${ctr}" \
+    --cap-add=NET_ADMIN \
+    --entrypoint tc \
+    "$NETSHOOT_IMAGE" "$@"
 }
 
 chaos_slow() {
@@ -361,12 +394,12 @@ chaos_slow() {
   local ctr
   ctr=$(container_name "$node")
   echo "adding ${ms}ms latency to teranode$node..."
-  if ! nsenter_tc "$ctr" qdisc add dev eth0 root netem delay "${ms}ms" 2>/dev/null; then
-    nsenter_tc "$ctr" qdisc change dev eth0 root netem delay "${ms}ms" 2>/dev/null \
-      && echo "updated latency to ${ms}ms on teranode$node" \
-      || { echo "error: failed to set latency (is iproute2 installed on host?)" >&2; return 1; }
-  else
+  # Try add first; if a qdisc is already set, fall back to change.
+  if netns_sh "$ctr" "tc qdisc add dev eth0 root netem delay ${ms}ms 2>/dev/null || tc qdisc change dev eth0 root netem delay ${ms}ms"; then
     echo "teranode$node now has ${ms}ms added latency"
+  else
+    echo "error: failed to set latency on teranode$node" >&2
+    return 1
   fi
 }
 
@@ -375,7 +408,7 @@ chaos_unslow() {
   local ctr
   ctr=$(container_name "$node")
   echo "removing latency from teranode$node..."
-  nsenter_tc "$ctr" qdisc del dev eth0 root 2>/dev/null || true
+  netns_tc "$ctr" qdisc del dev eth0 root 2>/dev/null || true
   echo "teranode$node latency restored to normal"
 }
 
@@ -469,8 +502,9 @@ cmd_blast() {
   fi
 
   # Pre-flight: make sure the binary isn't a stale build that predates the
-  # multinode-compatible CLI flags.
-  if ! "$blaster_bin" -h 2>&1 | grep -q -- '-propagation-addr'; then
+  # multinode-compatible CLI flags. Use || true so Go's -h exit(2) doesn't
+  # poison the pipeline exit code under set -o pipefail.
+  if ! { "$blaster_bin" -h 2>&1 || true; } | grep -q -- '-propagation-addr'; then
     echo "error: $blaster_bin looks stale (no -propagation-addr flag)." >&2
     echo "rebuild it: '$0 blast --build'" >&2
     exit 1
