@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,6 +342,47 @@ func TestSign(t *testing.T) {
 }
 
 // TestAccessLogMiddleware tests the accessLogMiddleware function
+// captureLogger records Errorf calls so tests can assert on what was logged.
+// Other methods are no-ops. Only used by the customHTTPErrorHandler test.
+type captureLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *captureLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+// TestCustomHTTPErrorHandler_DoesNotLogQueryString — H5 fix in the access log
+// also has to apply to the error path; query strings on 4xx/5xx are precisely
+// the values you don't want in logs (auth tokens in URLs, search terms, etc.).
+func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
+	logger := &captureLogger{}
+	handler := customHTTPErrorHandler(logger)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/v1/search")
+
+	handler(echo.NewHTTPError(http.StatusBadRequest, "boom"), c)
+
+	require.Len(t, logger.errors, 1)
+	logged := logger.errors[0]
+	require.NotContains(t, logged, "SECRET_QUERY_STRING",
+		"query-string value must not appear in error logs")
+	require.NotContains(t, logged, "DEADBEEF",
+		"query-string token must not appear in error logs")
+	require.NotContains(t, logged, "?",
+		"raw RequestURI (path?query) must not be logged; use the route pattern instead")
+	require.Contains(t, logged, "/api/v1/search",
+		"route pattern (without query) should still be logged for diagnostics")
+}
+
 func TestAccessLogMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 

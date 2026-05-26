@@ -668,8 +668,10 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 			}
 		}
 
-		// Log the error with context
-		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Request().RequestURI, code, err)
+		// Log the error with the route pattern (c.Path()) rather than the
+		// raw RequestURI. Error paths are precisely where query-string values
+		// (tokens, search terms, etc.) should not leak into logs.
+		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Path(), code, err)
 
 		// Send JSON response if not already sent
 		if !c.Response().Committed {
