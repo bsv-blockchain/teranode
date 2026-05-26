@@ -490,10 +490,27 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		blockHeight = blockState.Height + 1
 	}
 
-	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
-	// This is an exception for transactions before the media block time was used
-	if blockHeight > v.settings.ChainCfgParams.CSVHeight {
+	// Reject coinbase first, matching bitcoin-sv CheckRegularTransaction
+	// (src/validation.cpp:601-603) which short-circuits before any contextual
+	// (finality / MTP) check.
+	if tx.IsCoinbase() {
+		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
+		span.RecordError(err)
 
+		return nil, err
+	}
+
+	// Policy / next-tip finality always runs against tip MTP, matching bitcoin-sv's
+	// TxnValidation: StandardNonFinalVerifyFlags (src/policy/policy.h) sets
+	// LOCKTIME_MEDIAN_TIME_PAST unconditionally, so the policy comparison is tip MTP
+	// in all eras — no Genesis / CSV gating, no fallback to GetAdjustedTime().
+	//
+	// For block-validation (consensus) finality, the comparison time differs per CSV
+	// era (pre-CSV: candidate block header time; post-CSV: candidate-parent MTP).
+	// Neither is threaded through this path yet, so the consensus side keeps the
+	// existing CSVHeight gate as a placeholder until that plumbing lands.
+	runFinality := !validationOptions.SkipPolicyChecks || blockHeight > v.settings.ChainCfgParams.CSVHeight
+	if runFinality {
 		utxoStoreMedianBlockTime := blockState.MedianTime
 		if utxoStoreMedianBlockTime == 0 {
 			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
@@ -509,13 +526,6 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			return nil, err
 		}
-	}
-
-	if tx.IsCoinbase() {
-		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
-		span.RecordError(err)
-
-		return nil, err
 	}
 
 	var utxoHeights []uint32

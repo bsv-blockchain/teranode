@@ -164,6 +164,11 @@ func TestValidate_ValidTransaction(t *testing.T) {
 
 		assert.Len(t, txMeta.BlockIDs, 0)
 
+		err = utxoStore.SetBlockHeight(123)
+		require.NoError(t, err)
+		err = utxoStore.SetMedianBlockTime(1700000000)
+		require.NoError(t, err)
+
 		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 		require.NoError(t, err)
 
@@ -1243,6 +1248,8 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 
 	err = utxoStore.SetBlockHeight(2)
 	require.NoError(t, err)
+	err = utxoStore.SetMedianBlockTime(1700000000)
+	require.NoError(t, err)
 
 	opts := &Options{AddTXToBlockAssembly: true}
 
@@ -1303,6 +1310,8 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	opts := &Options{AddTXToBlockAssembly: true}
 
 	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
+	require.NoError(t, err)
+	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
@@ -1769,6 +1778,8 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 		Return(true, nil).Times(1)
 
 	err = realStore.SetBlockHeight(2)
+	require.NoError(t, err)
+	err = realStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
 	opts := &Options{AddTXToBlockAssembly: true}
