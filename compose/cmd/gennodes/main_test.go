@@ -268,4 +268,3 @@ func mustMatchCount(t *testing.T, s string, re *regexp.Regexp, want int) {
 		t.Errorf("regex %q: want %d matches, got %d", re.String(), want, got)
 	}
 }
-
