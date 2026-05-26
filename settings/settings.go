@@ -200,8 +200,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPRateLimit:                getInt("asset_httpRateLimit", 1024, alternativeContext...),
 			HTTPHeavyRateLimit:           getInt("asset_httpHeavyRateLimit", 10, alternativeContext...),
 			HTTPPeerRateMultiplier:       getInt("asset_httpPeerRateMultiplier", 5, alternativeContext...),
+			HTTPMinerRateLimit:           getInt("asset_httpMinerRateLimit", 0, alternativeContext...),
 			HTTPBodyLimit:                getString("asset_httpBodyLimit", "100MB", alternativeContext...),
 			TrustedProxyCIDRs:            getString("asset_trustedProxyCIDRs", "", alternativeContext...),
+			PeerAuthAllowlist:            getString("asset_peerAuthAllowlist", "", alternativeContext...),
 			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
