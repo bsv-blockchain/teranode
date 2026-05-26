@@ -6,6 +6,7 @@ This file implements the GoBDK transaction validation adapter.
 package validator
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -135,6 +136,37 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	se.SetRequireStandard(po.RequireStandard)
 	se.SetPermitBareMultisig(po.PermitBareMultisig)
 
+	// Convert MinMiningTxFee from float BSV/kB to integer satoshis/kB.
+	// math.Round (not truncation) because IEEE-754 decimal representations can
+	// drop one satoshi otherwise — e.g. 0.00000250 stores as 0.0000024999…,
+	// truncating yields 249 instead of 250.
+	//
+	// panic() not l.Fatalf() so the stop guarantee doesn't depend on the logger
+	// implementation — TestLogger.Fatalf only logs, leaving an invalid policy
+	// silently in effect under unit tests.
+	if po.MinMiningTxFee < 0 {
+		panic(errors.NewConfigurationError("invalid minminingtxfee=%f: must not be negative", po.MinMiningTxFee))
+	}
+
+	satoshisPerKB := int64(math.Round(po.MinMiningTxFee * 1e8))
+	if err := se.SetMinMiningTxFee(satoshisPerKB); err != nil {
+		panic(errors.NewConfigurationError("invalid minminingtxfee=%f (=%d sat/kB)", po.MinMiningTxFee, satoshisPerKB, err))
+	}
+
+	if err := se.SetMinConsolidationFactor(int64(po.MinConsolidationFactor)); err != nil {
+		panic(errors.NewConfigurationError("invalid minconsolidationfactor=%d", po.MinConsolidationFactor, err))
+	}
+
+	if err := se.SetMaxConsolidationInputScriptSize(int64(po.MaxConsolidationInputScriptSize)); err != nil {
+		panic(errors.NewConfigurationError("invalid maxconsolidationinputscriptsize=%d", po.MaxConsolidationInputScriptSize, err))
+	}
+
+	if err := se.SetMinConfConsolidationInput(int64(po.MinConfConsolidationInput)); err != nil {
+		panic(errors.NewConfigurationError("invalid minconfconsolidationinput=%d", po.MinConfConsolidationInput, err))
+	}
+
+	se.SetAcceptNonStdConsolidationInput(po.AcceptNonStdConsolidationInput)
+
 	return &scriptVerifierGoBDK{
 		logger: l,
 		policy: po,
@@ -213,6 +245,9 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 		switch dosErr.Code() {
 		case bdkscript.DOS_ERR_NOT_STANDARD, bdkscript.DOS_ERR_SIGOPS_POLICY, bdkscript.DOS_ERR_NOT_FREE_CONSOLIDATION:
 			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		case bdkscript.DOS_ERR_INSUFFICIENT_FEE:
+			policyErr := errors.NewTxPolicyError("transaction fee is too low", errVerify)
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {

@@ -215,6 +215,7 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 		{code: bdkscript.DOS_ERR_UNCONFIRMED_INPUT_IN_BLOCK},
 		{code: bdkscript.DOS_ERR_INPUT_VALUES_OUT_OF_RANGE},
 		{code: bdkscript.DOS_ERR_INPUTS_BELOW_OUTPUTS},
+		{code: bdkscript.DOS_ERR_INSUFFICIENT_FEE, wantPolicy: true},
 		{code: bdkscript.DoSErrorCode(999)},
 	}
 
@@ -227,6 +228,11 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 			})
 		}
 	}
+
+	// InsufficientFee carries a recognizable surface so downstream callers
+	// (e.g. RPC reject-reason mapping) can identify the policy-floor rejection.
+	feeErr := verifier.mapBDKValidationError(bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE), false)
+	assert.Contains(t, feeErr.Error(), "transaction fee is too low")
 }
 
 func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
