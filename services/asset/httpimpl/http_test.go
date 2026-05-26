@@ -342,6 +342,55 @@ func TestSign(t *testing.T) {
 }
 
 // TestAccessLogMiddleware tests the accessLogMiddleware function
+// TestNew_TrustedProxyCIDRsFailsClosed — the M2 fail-closed semantics: when
+// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed, New()
+// must return an error rather than silently falling back to "trust loopback +
+// RFC1918". Mixed valid/invalid input also fails because partial application
+// almost always indicates a typo.
+func TestNew_TrustedProxyCIDRsFailsClosed(t *testing.T) {
+	mkSettings := func(cidrs string) *settings.Settings {
+		return &settings.Settings{
+			Asset: settings.AssetSettings{
+				APIPrefix:         "/api/v1",
+				TrustedProxyCIDRs: cidrs,
+			},
+			Dashboard:         settings.DashboardSettings{Enabled: false},
+			SecurityLevelHTTP: 0,
+		}
+	}
+
+	mkRepo := func() *repository.Repository {
+		repo := new(MockRepository)
+		repo.On("BlockchainClient").Return(&blockchain.Mock{})
+		repo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+		return &repository.Repository{}
+	}
+
+	t.Run("all entries invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("not-a-cidr|also-not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "all-invalid CIDR list must fail New()")
+		require.Contains(t, err.Error(), "asset_trustedProxyCIDRs",
+			"error must name the offending setting so operators know what to fix")
+	})
+
+	t.Run("mixed valid + invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "mixed valid/invalid CIDR list must fail New() rather than silently applying only the valid subset")
+	})
+
+	t.Run("all entries valid → no error", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|192.168.0.0/16"), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+
+	t.Run("empty setting → no error (uses Echo defaults)", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings(""), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+}
+
 // captureLogger records Errorf calls so tests can assert on what was logged.
 // Other methods are no-ops. Only used by the customHTTPErrorHandler test.
 type captureLogger struct {

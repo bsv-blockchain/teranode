@@ -155,6 +155,74 @@ func TestTieredRateLimiter_DisabledWhenZero(t *testing.T) {
 	}
 }
 
+// TestTieredRateLimiter_AuthFallbackUsesDefaultRate — defensive fallback for
+// the "authenticated tier with no peer_id" path. This shouldn't happen in
+// practice (the auth middleware always sets peer_id alongside the tier), but
+// if a wiring bug ever drops peer_id we want to land in the *unverified*
+// bucket at defaultRate — not at minerRate or peerRate. Otherwise an
+// unauthenticated request could grab an elevated bucket simply because some
+// upstream middleware set peer_tier without setting peer_id.
+func TestTieredRateLimiter_AuthFallbackUsesDefaultRate(t *testing.T) {
+	// defaultRate=1, minerRate=50 — if the fallback wrongly uses minerRate,
+	// many requests will succeed; with the correct defaultRate fallback the
+	// second request gets rate-limited.
+	rl := newTieredRateLimiter(1, 1, 50, "test")
+
+	e := echo.New()
+	// Tier set but peer_id deliberately missing.
+	e.Use(setTierMiddleware(tierMiner, ""))
+	e.Use(rl.Middleware())
+	e.GET("/test", func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, httptest.NewRequest(http.MethodGet, "/test", nil))
+	require.Equal(t, http.StatusOK, rec1.Code, "first request should pass at defaultRate=1")
+
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/test", nil))
+	require.Equal(t, http.StatusTooManyRequests, rec2.Code,
+		"second request must be limited at defaultRate; if it succeeds the fallback is wrongly using minerRate")
+}
+
+// TestTieredRateLimiter_AuthFallbackNormalisesIPv6 — the auth-tier fallback
+// path (peer_id missing) must use the same IPv6 /64 normalisation as the
+// default-tier path. Otherwise two /128 addresses in the same /64 get
+// independent buckets via this seam, partially undoing H2.
+func TestTieredRateLimiter_AuthFallbackNormalisesIPv6(t *testing.T) {
+	rl := newTieredRateLimiter(1, 1, 0, "test")
+
+	exhaust := func(remote string) (firstOK, secondOK bool) {
+		e := echo.New()
+		// Use Echo's XFF extractor so RealIP returns the X-Forwarded-For value.
+		e.IPExtractor = echo.ExtractIPFromXFFHeader()
+		e.Use(setTierMiddleware(tierPeer, "")) // tierPeer with no peer_id → fallback path
+		e.Use(rl.Middleware())
+		e.GET("/test", func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+
+		req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req1.Header.Set("X-Forwarded-For", remote)
+		rec1 := httptest.NewRecorder()
+		e.ServeHTTP(rec1, req1)
+
+		req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req2.Header.Set("X-Forwarded-For", remote)
+		rec2 := httptest.NewRecorder()
+		e.ServeHTTP(rec2, req2)
+
+		return rec1.Code == http.StatusOK, rec2.Code == http.StatusOK
+	}
+
+	// First /128 — exhausts its bucket.
+	ok1, ok2 := exhaust("2001:db8:abcd:1234::1")
+	require.True(t, ok1)
+	require.False(t, ok2, "second request to the same /128 should be limited")
+
+	// Different /128 in the same /64 — must share the bucket (already exhausted).
+	ok1Same64, _ := exhaust("2001:db8:abcd:1234:ffff:ffff:ffff:fffe")
+	require.False(t, ok1Same64,
+		"different /128 in the same /64 must share the bucket; if it gets a fresh OK the fallback isn't normalising IPv6")
+}
+
 // TestUnverifiedKey_IPv6Normalisation — two distinct /128 addresses inside
 // the same /64 must collapse to a single bucket key.
 func TestUnverifiedKey_IPv6Normalisation(t *testing.T) {

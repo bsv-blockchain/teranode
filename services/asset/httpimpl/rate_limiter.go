@@ -107,33 +107,33 @@ func (rl *tieredRateLimiter) Middleware() echo.MiddlewareFunc {
 }
 
 // limiterFor returns the rate.Limiter bucket the request should be charged
-// against, or nil if the request is exempt. The tier determines bucket
-// selection; authenticated tiers fall back to the unverified IP-keyed bucket
-// when peer_id is missing (defensive — should not happen in practice).
+// against, or nil if the request is exempt.
+//
+// Selection rules:
+//   - tierMiner with minerRate > 0 and peer_id present → per-peer minerRate.
+//   - tierMiner with minerRate <= 0                    → exempt (nil).
+//   - tierPeer with peer_id present                    → per-peer at defaultRate × peerMultiplier.
+//   - everything else (including authenticated tiers with peer_id missing) →
+//     the *unverified* path: IP-keyed at defaultRate, with the same /64
+//     normalisation. Treating "tier set but peer_id missing" as unverified
+//     guarantees a wiring bug can never silently grant the elevated rate.
 func (rl *tieredRateLimiter) limiterFor(c echo.Context) *rate.Limiter {
 	tier, _ := c.Get("peer_tier").(peerTier)
-	switch tier {
-	case tierMiner:
-		if rl.minerRate <= 0 {
-			return nil
-		}
-		return rl.authBucket(c, &rl.minerLimiters, rl.minerRate)
-	case tierPeer:
-		return rl.authBucket(c, &rl.peerLimiters, rl.defaultRate*rl.peerMultiplier)
-	default:
-		return rl.unverifiedBucket(unverifiedKey(c.RealIP()), rl.defaultRate)
-	}
-}
-
-// authBucket returns the per-peer-ID bucket for an authenticated tier. When
-// peer_id is missing (e.g. middleware wiring bug), falls back to an IP-keyed
-// unverified bucket at the same rate rather than granting unconditional access.
-func (rl *tieredRateLimiter) authBucket(c echo.Context, m *sync.Map, ratePerSec int) *rate.Limiter {
 	peerID, _ := c.Get("peer_id").(string)
-	if peerID == "" {
-		return rl.unverifiedBucket(c.RealIP(), ratePerSec)
+
+	if tier == tierMiner && rl.minerRate <= 0 {
+		return nil
 	}
-	return rl.peerBucket(m, peerID, ratePerSec)
+
+	if peerID != "" {
+		switch tier {
+		case tierMiner:
+			return rl.peerBucket(&rl.minerLimiters, peerID, rl.minerRate)
+		case tierPeer:
+			return rl.peerBucket(&rl.peerLimiters, peerID, rl.defaultRate*rl.peerMultiplier)
+		}
+	}
+	return rl.unverifiedBucket(unverifiedKey(c.RealIP()), rl.defaultRate)
 }
 
 // allowAtBucket consumes one token from the given limiter and returns the next
