@@ -313,13 +313,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
 
-	for index, input := range tx.Inputs {
-		// Teranode is stricter than svnode here: it rejects any all-zero previous
-		// txid, not only the canonical null prevout. Keep this pre-existing
-		// behaviour until the T14 parity decision is made.
-		if input.PreviousTxIDStr() == coinbaseTxID {
-			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
-		}
+	for _, input := range tx.Inputs {
+		// Null-prevout rejection is done in BDK
+		// which replicates bitcoin-sv CheckRegularTransaction's bad-txns-prevout-null
+		// check with the correct prevout.IsNull() semantics.
 
 		// Check accumulated previous utxo size if maxcoinsviewcachesize is enabled
 		// See BSV Node CCoinsViewCache::Shard::HaveInputsLimited
