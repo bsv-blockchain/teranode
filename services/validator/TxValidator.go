@@ -241,9 +241,11 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 			}
 
 			// Time is in 512-second units (2^9 seconds)
-			// Add the relative time offset to the UTXO's MTP
+			// Add the relative time offset to the UTXO's MTP, minus 1
+			// (matching Bitcoin Core: nMinTime = nCoinTime + (sequence << granularity) - 1,
+			// so the tx is valid starting from blockMTP >= nCoinTime + (sequence << granularity)).
 			utxoMTP := int64(utxoMTPs[i])
-			nTxTime := utxoMTP + (int64(sequenceMasked) << SequenceLockTimeGranularity)
+			nTxTime := utxoMTP + (int64(sequenceMasked) << SequenceLockTimeGranularity) - 1
 
 			// Update minimum time if this input requires a later time
 			if nTxTime > minTime {
