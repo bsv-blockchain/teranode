@@ -7595,7 +7595,7 @@
 <tr>
 <td>ConnectionQueueSize</td>
 <td>int</td>
-<td>256</td>
+<td>128</td>
 <td>Connection queue size</td>
 </tr>
 <tr>
@@ -7716,7 +7716,7 @@
 </span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>aerospike_port.docker.teranode3 = 3300
 </span></code></pre></div>
 <h3 id="complete-utxo-store-with-aerospike">Complete UTXO Store with Aerospike<a class="headerlink" href="#complete-utxo-store-with-aerospike" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&amp;WarmUp=32&amp;ConnectionQueueSize=256&amp;MinConnectionsPerNode=8&amp;externalStore=file://${DATADIR}/${clientName}/external
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&amp;WarmUp=32&amp;ConnectionQueueSize=128&amp;MinConnectionsPerNode=8&amp;externalStore=file://${DATADIR}/${clientName}/external
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>aerospike_host = aerospike-cluster
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>aerospike_port = 3000
