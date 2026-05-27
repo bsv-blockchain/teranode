@@ -136,6 +136,8 @@ compose/multinode.sh logs 2-validator
 
 Resource note: a 3-node split stack runs ~32 containers (3 × 9 teranode services + infra). 16 GB RAM is comfortable; smaller hosts may struggle.
 
+> **Always `down` before switching topology.** Split-mode commands (`chaos kill <node> <svc>`, `logs N-svc`, the per-node service tally in `status`) detect split vs all-in-one by checking whether the monolithic `teranodeN-multinode` container exists. Running `up <N> -allinone=0` over a stack that was previously brought up with the default `-allinone=1` (or vice versa) can leave stale containers around and confuse mode detection. Run `compose/multinode.sh down` first whenever you flip `-allinone`.
+
 ### Skipping services at startup (`--skip`)
 
 To bring a node up *without* a given service from the start (instead of killing it post-up), pass `--skip N:svc` to `up`. The flag is repeatable and only valid with `-allinone=0`.
