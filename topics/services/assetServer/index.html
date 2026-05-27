@@ -3650,6 +3650,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="7.2.5.1 Deployment: Upstream Rate Limiting Required">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-process-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-process rate limiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-authentication-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer authentication protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7844,6 +7872,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="7.2.5.1 Deployment: Upstream Rate Limiting Required">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-process-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-process rate limiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-authentication-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer authentication protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -8879,7 +8935,8 @@
 <p>Trade-off: these unauthenticated GET endpoints can emit hundreds of MB per request uncompressed, which is a bandwidth amplification surface if abused. The asset service mitigates with:</p>
 <ul>
 <li>the ban-list middleware;</li>
-<li>per-method concurrency semaphores (<code>asset_concurrency_get_subtree_data</code>, <code>asset_concurrency_get_subtree_data_reader</code>, <code>asset_concurrency_get_subtree_transactions</code>, <code>asset_subtreeDataStreamingConcurrency</code>) — bounded by default (<code>2 / 4 / 2 / 2</code>).</li>
+<li>per-method concurrency semaphores (<code>asset_concurrency_get_subtree_data</code>, <code>asset_concurrency_get_subtree_data_reader</code>, <code>asset_concurrency_get_subtree_transactions</code>, <code>asset_subtreeDataStreamingConcurrency</code>) — bounded by default (<code>2 / 4 / 2 / 2</code>);</li>
+<li>a tiered in-process rate limiter (see below).</li>
 </ul>
 <p>These mitigations are <strong>not</strong> sufficient on their own for public-facing deployments. Operators MUST front the asset service with a reverse proxy (nginx, HAProxy, Envoy, CloudFront, Cloudflare, etc.) configured to enforce:</p>
 <ol>
@@ -8887,7 +8944,28 @@
 <li><strong>Per-IP concurrent connection limits</strong> (e.g. nginx <code>limit_conn_zone</code>).</li>
 <li><strong>An ACL</strong> restricting these endpoints to known peers/clients when public exposure is not required.</li>
 </ol>
-<p>Per-IP rate limiting inside the asset service itself is a planned defense-in-depth follow-up but is not currently implemented.</p>
+<h5 id="in-process-rate-limiting">In-process rate limiting<a class="headerlink" href="#in-process-rate-limiting" title="Permanent link">&para;</a></h5>
+<p>The asset service enforces a tiered rate limit as defense in depth (it does <strong>not</strong> replace the reverse-proxy layer above). Three tiers, in increasing trust:</p>
+<ul>
+<li><strong>Unverified</strong> — requests with no peer signature, or with a signature that fails any verification step. Bucketed by source IP (IPv6 normalised to <code>/64</code> so a single allocation can't be split into millions of buckets). Held in a bounded LRU (capacity 50,000 entries) so an attacker rotating IPv6 addresses can't grow the table without limit. Rate: <code>asset_httpRateLimit</code> req/s, default <code>1024</code>.</li>
+<li><strong>Peer</strong> — requests with a valid Ed25519 signature, where the peer ID is listed in <code>asset_peerAuthAllowlist</code>. Bucketed by libp2p peer ID (not IP), so two authenticated peers behind one NAT or CDN egress get independent buckets. Rate: <code>asset_httpRateLimit × asset_httpPeerRateMultiplier</code> req/s, default <code>1024 × 5 = 5120</code>.</li>
+<li><strong>Miner</strong> — authenticated peers whose <code>BlocksReceived &gt; 0</code> and <code>ReputationScore ≥ asset_peerMinerReputationThreshold</code> (default <code>50.0</code>), and who are in <code>asset_peerAuthAllowlist</code>. Either <strong>fully exempt</strong> (default, <code>asset_httpMinerRateLimit = 0</code>) or bucketed per peer ID at <code>asset_httpMinerRateLimit</code> req/s when set. Setting an explicit cap is recommended as defense in depth.</li>
+</ul>
+<p>Heavy endpoints (<code>/subtree*</code>, <code>/blocks/:hash</code>, <code>/block/:hash</code>, <code>/block_legacy/:hash</code>, <code>/rest/block/:hash.bin</code>, and <code>POST /subtree/:hash/txs</code>) carry an additional, stricter limiter at <code>asset_httpHeavyRateLimit</code> req/s (default <code>10</code>). The global and heavy limiters stack — a request must pass both.</p>
+<p><strong>Allowlist is opt-in.</strong> When <code>asset_peerAuthAllowlist</code> is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as <code>tierUnverified</code> for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.</p>
+<h5 id="peer-authentication-protocol">Peer authentication protocol<a class="headerlink" href="#peer-authentication-protocol" title="Permanent link">&para;</a></h5>
+<p>Clients sign each outbound request with their libp2p Ed25519 private key. The signature covers:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>v2:&lt;unix_ts&gt;:&lt;host&gt;:&lt;method&gt;:&lt;request_uri&gt;:&lt;sha256_body_hex&gt;
+</span></code></pre></div>
+<p>Headers required on every signed request:</p>
+<ul>
+<li><code>X-Peer-PubKey</code> — hex-encoded Ed25519 public key</li>
+<li><code>X-Peer-Timestamp</code> — Unix seconds; must be within ±10s of the verifier's clock</li>
+<li><code>X-Peer-Body-Digest</code> — lowercase hex SHA-256 of the request body; the verifier recomputes the digest from the actual bytes and rejects on mismatch</li>
+<li><code>X-Peer-Signature</code> — hex-encoded Ed25519 signature over the canonical payload</li>
+</ul>
+<p>The verifier additionally maintains a bounded in-memory replay cache of <code>(pubkey, signature)</code> pairs (capacity 100,000, TTL 15s) so a captured signature cannot be re-used within the freshness window. Operators MUST keep clocks within ±5s of UTC (NTP); persistent drift will be visible in the <code>teranode_asset_http_peer_auth_result_total{result="expired"}</code> Prometheus counter.</p>
+<p>See <code>docs/references/settings/services/asset_settings.md</code> for the full list of rate-limit and auth settings.</p>
 <h4 id="726-environment-variables">7.2.6 Environment Variables<a class="headerlink" href="#726-environment-variables" title="Permanent link">&para;</a></h4>
 <p><strong>Standard Environment Variables:</strong></p>
 <ul>
@@ -8954,17 +9032,17 @@
 </tbody>
 </table>
 <p><strong>Example Dependency Configuration:</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
 </span></code></pre></div>
 <h4 id="728-environment-variable-examples">7.2.8 Environment Variable Examples<a class="headerlink" href="#728-environment-variable-examples" title="Permanent link">&para;</a></h4>
 <p>All configuration options can be set using environment variables with the prefix <code>TERANODE_</code>. For example:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
 </span></code></pre></div>
 <h3 id="73-configuration-examples">7.3 Configuration Examples<a class="headerlink" href="#73-configuration-examples" title="Permanent link">&para;</a></h3>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/services/asset_settings/">asset Server Settings Reference</a>.</p>

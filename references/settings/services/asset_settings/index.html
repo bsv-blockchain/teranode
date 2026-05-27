@@ -5808,6 +5808,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#http-rate-limit-and-peer-authentication-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Rate Limit and Peer Authentication Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6806,6 +6817,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#http-rate-limit-and-peer-authentication-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Rate Limit and Peer Authentication Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7247,6 +7269,83 @@
 <li><code>-1</code> = Dynamic limit based on runtime.NumCPU()</li>
 <li><code>&gt;0</code> = Exact concurrency limit</li>
 </ul>
+<h2 id="http-rate-limit-and-peer-authentication-settings">HTTP Rate Limit and Peer Authentication Settings<a class="headerlink" href="#http-rate-limit-and-peer-authentication-settings" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTPRateLimit</td>
+<td>int</td>
+<td>1024</td>
+<td>asset_httpRateLimit</td>
+<td>Per-IP req/s for unverified clients (0 disables)</td>
+</tr>
+<tr>
+<td>HTTPHeavyRateLimit</td>
+<td>int</td>
+<td>10</td>
+<td>asset_httpHeavyRateLimit</td>
+<td>Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs)</td>
+</tr>
+<tr>
+<td>HTTPPeerRateMultiplier</td>
+<td>int</td>
+<td>5</td>
+<td>asset_httpPeerRateMultiplier</td>
+<td>Authenticated peers get base × this rate</td>
+</tr>
+<tr>
+<td>HTTPMinerRateLimit</td>
+<td>int</td>
+<td>0</td>
+<td>asset_httpMinerRateLimit</td>
+<td>Per-peer req/s cap for miner tier; 0 = fully exempt</td>
+</tr>
+<tr>
+<td>HTTPBodyLimit</td>
+<td>string</td>
+<td>"100MB"</td>
+<td>asset_httpBodyLimit</td>
+<td>Max request body size (Echo BodyLimit, returns 413)</td>
+</tr>
+<tr>
+<td>TrustedProxyCIDRs</td>
+<td>string</td>
+<td>""</td>
+<td>asset_trustedProxyCIDRs</td>
+<td>Pipe-separated CIDRs trusted for X-Forwarded-For extraction (fails Init if non-empty but unparseable)</td>
+</tr>
+<tr>
+<td>PeerAuthAllowlist</td>
+<td>string</td>
+<td>""</td>
+<td>asset_peerAuthAllowlist</td>
+<td>Pipe-separated libp2p peer IDs eligible for tier elevation; empty = no peer is elevated</td>
+</tr>
+<tr>
+<td>PeerMinerReputationThreshold</td>
+<td>float64</td>
+<td>50.0</td>
+<td>asset_peerMinerReputationThreshold</td>
+<td>Min reputation score for tierMiner classification</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Rate-limit tiers:</strong></p>
+<ul>
+<li><strong>Unverified</strong> (no signature or signature fails verification): bucketed by source IP, IPv6 normalised to <code>/64</code>. Held in a bounded LRU (50k entries) so an attacker rotating addresses cannot grow the map without limit.</li>
+<li><strong>Peer</strong> (valid signature + peer ID in allowlist + not classified as miner): bucketed by libp2p peer ID at <code>HTTPRateLimit × HTTPPeerRateMultiplier</code>.</li>
+<li><strong>Miner</strong> (valid signature + peer ID in allowlist + <code>BlocksReceived &gt; 0</code> + <code>ReputationScore ≥ PeerMinerReputationThreshold</code>): fully exempt if <code>HTTPMinerRateLimit = 0</code>, otherwise bucketed by peer ID at <code>HTTPMinerRateLimit</code>.</li>
+</ul>
+<p>When <code>PeerAuthAllowlist</code> is empty (the default), signatures are still verified (replay cache + body digest + ±10s freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as unverified for rate-limit purposes. This is the safe opt-in default; operators must explicitly list trusted peers.</p>
 <h2 id="global-settings">Global Settings<a class="headerlink" href="#global-settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

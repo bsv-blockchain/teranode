@@ -2,622 +2,622 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/MARKDOWN_VALIDATION_GUIDE/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/P2P_NAT_TRAVERSAL/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/p2p-libp2p-review/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/p2p-silent-mode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/state-machine.diagram/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/utxo-safe-deletion/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/addingNewProtobufServices/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/automatedTestingHowTo/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/bugReporting/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/chain-integrity-testing/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/configuringGrpcLogging/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/developerSetup/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/developersHowToTeranodeCLI/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/diagnose/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/forkAndPullRequestGuidelines/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/generatingProtobuf/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/howToRemoteDebugTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/locallyRunningServices/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/makefile/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/runningTests/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/submitting_transactions/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToAerospikeTuning/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToBackup/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToCPUMiner/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToInteractWithAssetServer/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToInteractWithFSM/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToInteractWithRPCServer/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToTeranodeCLI/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersHowToUseListenMode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/minersManagingDiskSpace/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/systemRequirements/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToConfigureTheNode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToInstallation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToResetTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToStopStartDockerTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToSyncTheNode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersHowToTroubleshooting/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersSecurityBestPractices/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/docker/minersUpdatingTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToConfigureTheNode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToInstallation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToResetTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToSyncTheNode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToTroubleshooting/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersSecurityBestPractices/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersUpdatingTeranode/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/misc/BIP-239/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/codingConventions/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/errorHandling/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/gitCommitSigningSetupGuide/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/glossary/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/kafkaMessageFormat/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/licenseInformation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/networkConsensusRules/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/projectStructure/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/prometheusMetrics/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/teranodeDaemonReference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/testingTechnicalReference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/thirdPartySoftwareRequirements/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/alertProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/assetProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/blockassemblyProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/blockchainProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/blockvalidationProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/legacyPeerProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/p2pProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/propagationProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/prunerProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/subtreevalidationProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/protobuf_docs/validatorProto/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/alert_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/asset_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/blockassembly_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/blockchain_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/blockpersister_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/blockvalidation_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/legacy_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/p2p_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/propagation_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/pruner_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/rpc_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/subtreevalidation_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/utxopersister_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/services/validator_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/global_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/kafka_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/policy_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/alert_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/asset_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/blockassembly_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/blockchain_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/blockpersister_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/blockvalidation_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/coinbase_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/faucet_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/legacy_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/p2p_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/propagation_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/pruner_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/rpc_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/subtreevalidation_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/utxopersister_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/validator_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/stores/aerospike_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/stores/blob_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/stores/utxo_settings/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/stores/blob_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/stores/utxo_reference/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/staging/TeranodePOC/AWS-POC-Setup/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/staging/github-workflows/GitHub-Workflows/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/staging/operations/ClusterManagementAndOperations/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/staging/operations/applicationYamlDocumentation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/staging/operations/k8Shortcuts/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/dashboard/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/functionalRequirementTests/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/technologyStack/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/teranodeIntro/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/transactionLifecycle/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/tui_tools/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/understandingTheTestingFramework/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/architecture/stateManagement/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/architecture/teranode-architecture-brief/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/architecture/teranode-microservices-overview/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/architecture/teranode-overall-system-design/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/architecture/understandingDoubleSpends/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/commands/seeder/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/datamodel/block_data_model/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/datamodel/block_header_data_model/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/datamodel/subtree_data_model/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/datamodel/transaction_data_model/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/datamodel/utxo_data_model/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/features/peer_registry_reputation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/features/two_phase_commit/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/features/utxo_lock_records/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/kafka/kafka/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/alert/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/assetServer/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/blockAssembly/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/blockPersister/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/blockValidation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/blockchain/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/legacy/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/p2p/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/propagation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/pruner/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/rpc/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/subtreeValidation/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/utxoPersister/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/validator/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/stores/blob/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/stores/utxo/</loc>
-         <lastmod>2026-05-26</lastmod>
+         <lastmod>2026-05-27</lastmod>
     </url>
 </urlset>
