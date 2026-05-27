@@ -539,19 +539,53 @@ Clients can receive real-time updates on the following channels:
 
 #### Message Format
 
-Messages are published in JSON format with event-specific structure. Example block notification:
+The endpoint speaks the bidirectional Centrifuge protocol. Clients open the
+session by sending a connect command and receive replies / pushes in
+Centrifuge envelopes.
+
+Client → server (connect command):
+
+```json
+{ "id": 1, "connect": {} }
+```
+
+Server → client (connect command reply):
 
 ```json
 {
-  "hash": "0000000000000000...",
-  "height": 800000,
-  "header": {...},
-  "coinbaseTx": "...",
-  "subtrees": [...],
-  "baseUrl": "http://localhost:8090/api/v1",
-  "miner": "Miner Name"
+  "id": 1,
+  "connect": {
+    "client": "<uuid>",
+    "subs": { "ping": {}, "block": {}, "subtree": {}, "mining_on": {}, "node_status": {} },
+    "ping": 25,
+    "session": "<session-id>"
+  }
 }
 ```
+
+Channel publications are wrapped in a push envelope; the event-specific
+payload lives at `push.pub.data`:
+
+```json
+{
+  "push": {
+    "channel": "block",
+    "pub": {
+      "data": {
+        "hash": "0000000000000000...",
+        "height": 800000,
+        "header": {...},
+        "coinbaseTx": "...",
+        "subtrees": [...],
+        "baseUrl": "http://localhost:8090/api/v1",
+        "miner": "Miner Name"
+      }
+    }
+  }
+}
+```
+
+Any centrifuge-compatible client (`centrifuge-go`, `centrifuge-js`, `centrifuge-python`) connects against this endpoint without custom framing.
 
 #### Connection Behavior
 

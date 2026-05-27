@@ -25,9 +25,9 @@
             numFailures = 0;
             console.log("websocket: connection open");
             console.log(e);
-            // This is required to trigger connect on server side since server expects
-            // initial connect request from a WebSocket unidirectional client.
-            ws.send(JSON.stringify({}));
+            // Centrifuge bidirectional connect command. Server's OnConnecting
+            // handler auto-subscribes us to the standard channels.
+            ws.send(JSON.stringify({ id: 1, connect: {} }));
           };
 
           ws.onerror = function(e) {
@@ -62,6 +62,8 @@
           }
           //drawText("--> " + rawData);
           const data = JSON.parse(rawData);
+          // Command-reply envelopes carry the result as a sibling of the
+          // command id; the connect-reply is the only one we issue.
           if (data.connect) {
             clientID = data.connect.client;
             let subscriptions = [];
@@ -74,19 +76,27 @@
               }
             }
             drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
-          } else if (data.disconnect) {
+            return;
+          }
+          // Everything server-initiated is wrapped in a push envelope.
+          const push = data.push;
+          if (!push) {
+            drawText("😟 unsupported frame " + JSON.stringify(data));
+            return;
+          }
+          if (push.disconnect) {
             clientID = null;
             drawText("🔴 disconnected from a server");
-            const code = data.disconnect.code;
+            const code = push.disconnect.code;
             reconnect = !((code >= 3500 && code < 4000) || (code >= 4500 && code < 5000));
-          } else if (data.unsubscribe) {
-            drawText("🔓 unsubscribed from a channel " + data.channel);
-          } else if (data.subscribe) {
-            drawText("🔒 subscribed to a channel " + data.channel);
-          } else if (data.pub) {
-            drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.pub, null, 2));
+          } else if (push.unsubscribe) {
+            drawText("🔓 unsubscribed from a channel " + push.channel);
+          } else if (push.subscribe) {
+            drawText("🔒 subscribed to a channel " + push.channel);
+          } else if (push.pub) {
+            drawText("✨ new data from a channel " + push.channel + ": " + JSON.stringify(push.pub, null, 2));
           } else {
-            drawText("😟 unsupported push type " + JSON.stringify(data));
+            drawText("😟 unsupported push type " + JSON.stringify(push));
           }
         }
 

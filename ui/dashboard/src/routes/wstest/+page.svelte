@@ -3,42 +3,45 @@
   import { Button, TextInput } from '$lib/components'
   import Card from '$internal/components/card/index.svelte'
   import Typo from '$internal/components/typo/index.svelte'
-  
+
   let wsUrl = 'ws://localhost:9906/p2p-ws'
   let socket: WebSocket | null = null
   let connected = false
   let messages: any[] = []
   let firstNodeStatus: any = null
   let connectionLog: string[] = []
-  
+
   function addLog(msg: string) {
     connectionLog = [...connectionLog, `[${new Date().toISOString()}] ${msg}`]
   }
-  
+
   function connect() {
     if (socket) {
       socket.close()
     }
-    
+
     messages = []
     firstNodeStatus = null
     connectionLog = []
-    
+
     addLog(`Connecting to ${wsUrl}...`)
-    
+
     try {
       socket = new WebSocket(wsUrl)
-      
+
       socket.onopen = () => {
         connected = true
         addLog('WebSocket connected')
         addLog('Sending initial connect message...')
-        socket!.send(JSON.stringify({}))
+        // Send a centrifuge bidirectional connect command. The /p2p-ws
+        // endpoint ignores it (it streams raw frames); the asset
+        // /connection/websocket endpoint requires it.
+        socket!.send(JSON.stringify({ id: 1, connect: {} }))
       }
-      
+
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data)
-        
+
         // Check if this is the connect response
         if (data.connect) {
           addLog(`Received connect response: client=${data.connect.client}`)
@@ -47,46 +50,51 @@
           }
           return
         }
-        
+
+        // Two shapes are possible depending on the endpoint:
+        //   - /p2p-ws:                  raw payload at the top level
+        //   - /connection/websocket:    centrifuge push envelope at data.push.pub.data
+        const pubData = data?.push?.pub?.data
+        const payload = pubData ?? data
+        const wrapped = !!pubData
+
         // Check if this is a node_status message
-        if (data.type === 'node_status' || data?.pub?.data?.type === 'node_status') {
-          const nodeData = data?.pub?.data || data
-          
+        if (payload?.type === 'node_status') {
           // Capture the first node_status
           if (!firstNodeStatus) {
-            firstNodeStatus = nodeData
+            firstNodeStatus = payload
             addLog(`FIRST NODE_STATUS RECEIVED:`)
-            addLog(`  peer_id: ${nodeData.peer_id}`)
-            addLog(`  base_url: ${nodeData.base_url}`)
-            addLog(`  client_name: ${nodeData.client_name || '(not set)'}`)
-            addLog(`  fsm_state: ${nodeData.fsm_state}`)
-            addLog(`  is wrapped: ${!!data?.pub?.data}`)
+            addLog(`  peer_id: ${payload.peer_id}`)
+            addLog(`  base_url: ${payload.base_url}`)
+            addLog(`  client_name: ${payload.client_name || '(not set)'}`)
+            addLog(`  fsm_state: ${payload.fsm_state}`)
+            addLog(`  is wrapped: ${wrapped}`)
           }
-          
+
           messages = [...messages, {
             time: new Date().toISOString(),
-            type: nodeData.type,
-            peer_id: nodeData.peer_id,
-            client_name: nodeData.client_name,
-            wrapped: !!data?.pub?.data,
-            raw: nodeData
+            type: payload.type,
+            peer_id: payload.peer_id,
+            client_name: payload.client_name,
+            wrapped,
+            raw: payload
           }]
         } else {
           // Other message types
-          const msgType = data?.pub?.data?.type || data.type || 'unknown'
+          const msgType = payload?.type || 'unknown'
           messages = [...messages, {
             time: new Date().toISOString(),
             type: msgType,
-            wrapped: !!data?.pub?.data,
-            raw: data?.pub?.data || data
+            wrapped,
+            raw: payload
           }]
         }
       }
-      
+
       socket.onerror = (error) => {
         addLog(`WebSocket error: ${error}`)
       }
-      
+
       socket.onclose = () => {
         connected = false
         addLog('WebSocket disconnected')
@@ -96,14 +104,14 @@
       addLog(`Failed to connect: ${error}`)
     }
   }
-  
+
   function disconnect() {
     if (socket) {
       socket.close()
       socket = null
     }
   }
-  
+
   onMount(() => {
     return () => {
       if (socket) {
@@ -118,7 +126,7 @@
     <div slot="title">
       <Typo variant="title" size="h4" value="WebSocket Test Tool" />
     </div>
-    
+
     <div class="controls">
       <TextInput
         name="wsUrl"
@@ -126,18 +134,18 @@
         bind:value={wsUrl}
         disabled={connected}
       />
-      
+
       {#if !connected}
         <Button on:click={connect} variant="primary">Connect</Button>
       {:else}
         <Button on:click={disconnect} variant="danger">Disconnect</Button>
       {/if}
-      
+
       <div class="status">
         Status: <span class:connected>{connected ? 'Connected' : 'Disconnected'}</span>
       </div>
     </div>
-    
+
     {#if firstNodeStatus}
       <div class="first-node-panel">
         <h3>First Node Status Received</h3>
@@ -161,7 +169,7 @@
         </div>
       </div>
     {/if}
-    
+
     <div class="log-section">
       <h3>Connection Log</h3>
       <div class="log">
@@ -170,7 +178,7 @@
         {/each}
       </div>
     </div>
-    
+
     <div class="messages-section">
       <h3>Messages ({messages.length})</h3>
       <div class="messages">
@@ -208,30 +216,30 @@
     max-width: 1200px;
     margin: 0 auto;
   }
-  
+
   .controls {
     display: flex;
     gap: 20px;
     align-items: flex-end;
     margin-bottom: 20px;
   }
-  
+
   .status {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 14px;
   }
-  
+
   .status span {
     font-weight: bold;
     color: #ff4444;
   }
-  
+
   .status span.connected {
     color: #44ff44;
   }
-  
+
   .first-node-panel {
     background: rgba(74, 158, 255, 0.1);
     border: 1px solid var(--link-default-enabled-color);
@@ -244,18 +252,18 @@
     margin: 0 0 12px 0;
     color: var(--link-default-enabled-color);
   }
-  
+
   .first-node-info {
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  
+
   .info-row {
     display: flex;
     gap: 12px;
   }
-  
+
   .info-row .label {
     font-weight: bold;
     min-width: 120px;
