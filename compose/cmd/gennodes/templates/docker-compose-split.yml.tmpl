@@ -155,6 +155,11 @@ services:
 {{- range $mount := $svc.DataMounts }}
       - ../../data/multinode/teranode{{ $node.Index }}/{{ $mount }}:/app/data/{{ $mount }}
 {{- end }}
+    # Host port = HostBase + (container - 8000). All split-service container
+    # ports must be >= 8000; a sub-8000 port would map to a wrong or negative
+    # host port and collide across nodes. Lowest listener today is 8000
+    # (HEALTH_CHECK_PORT) so the invariant holds — preserve it when adding
+    # new entries to buildSplitServices in compose/cmd/gennodes/main.go.
     ports:
 {{- range $port := $svc.HostPorts }}
       - "{{ add $node.HostBase (sub $port 8000) }}:{{ $port }}"
