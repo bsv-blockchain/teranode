@@ -271,6 +271,17 @@ network-chaos-test:
 	@mkdir -p /tmp/teranode-test-results
 	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
 
+# Split-per-service variant of the network-chaos suite. Brings up its own
+# -allinone=0 stack (~32 containers) so per-service chaos verbs are available.
+# Kept separate from network-chaos-test because the two stacks cannot coexist
+# and the split topology takes materially longer to start.
+.PHONY: network-chaos-test-split
+network-chaos-test-split:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode_split && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=40m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-split-results.txt
+
 .PHONY: nightly-tests
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
