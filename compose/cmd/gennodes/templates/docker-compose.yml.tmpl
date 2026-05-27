@@ -77,6 +77,13 @@ services:
     networks:
       - teranode-network
     command: --config-file /etc/aerospike.conf
+    # aerospike.conf requests proto-fd-max=15000; without this override the
+    # container inherits docker's 1024 default and aerospike aborts at
+    # startup with "system file descriptors not enough".
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "{{ .AerospikeServicePort }}:{{ .AerospikeServicePort }}"
     expose:
