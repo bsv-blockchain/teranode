@@ -8613,17 +8613,43 @@
 </li>
 </ul>
 <h4 id="message-format">Message Format<a class="headerlink" href="#message-format" title="Permanent link">&para;</a></h4>
-<p>Messages are published in JSON format with event-specific structure. Example block notification:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0000000000000000...&quot;</span><span class="p">,</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">800000</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;header&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">},</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;coinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;subtrees&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">],</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;baseUrl&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8090/api/v1&quot;</span><span class="p">,</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;miner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Miner Name&quot;</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+<p>The endpoint speaks the bidirectional Centrifuge protocol. Clients open the
+session by sending a connect command and receive replies / pushes in
+Centrifuge envelopes.</p>
+<p>Client → server (connect command):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;connect&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
+<p>Server → client (connect command reply):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;connect&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&quot;client&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;uuid&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">&quot;subs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ping&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nt">&quot;block&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nt">&quot;subtree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nt">&quot;mining_on&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nt">&quot;node_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">&quot;ping&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">25</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">&quot;session&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;session-id&gt;&quot;</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Channel publications are wrapped in a push envelope; the event-specific
+payload lives at <code>push.pub.data</code>:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;push&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;channel&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block&quot;</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;pub&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0000000000000000...&quot;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">800000</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">        </span><span class="nt">&quot;header&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">},</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">        </span><span class="nt">&quot;coinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">        </span><span class="nt">&quot;subtrees&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">],</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">        </span><span class="nt">&quot;baseUrl&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8090/api/v1&quot;</span><span class="p">,</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">        </span><span class="nt">&quot;miner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Miner Name&quot;</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Any centrifuge-compatible client (<code>centrifuge-go</code>, <code>centrifuge-js</code>, <code>centrifuge-python</code>) connects against this endpoint without custom framing.</p>
 <h4 id="connection-behavior">Connection Behavior<a class="headerlink" href="#connection-behavior" title="Permanent link">&para;</a></h4>
 <ul>
 <li><strong>Readiness Requirement</strong>: WebSocket connections are rejected with HTTP 503 if the asset service hasn't cached the current node status</li>
@@ -8665,60 +8691,60 @@
 </li>
 </ol>
 <h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files<a class="headerlink" href="#6-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./services/asset
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── Server.go                  # Server logic for the Asset Service.
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>├── Server_test.go             # Tests for the server functionality.
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>├── asset_api
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│   ├── asset_api.pb.go        # Generated protobuf code for the asset API.
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│   └── asset_api.proto        # Protobuf definitions for the asset API.
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>├── centrifuge_impl            # Implementation using Centrifuge for real-time updates.
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│   ├── centrifuge.go          # Core Centrifuge implementation.
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│   ├── client
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>│   │   ├── client.go          # Client-side implementation for Centrifuge.
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>│   │   └── index.html         # HTML template for client-side rendering.
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>│   └── websocket.go           # WebSocket implementation for real-time communication.
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>├── httpimpl                   # HTTP implementation of the asset service.
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>│   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>│   ├── GetBlock.go            # Logic to retrieve a specific block.
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>│   ├── GetBlockForks.go       # Logic to retrieve information about block forks.
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>│   ├── GetBlockGraphData.go   # Logic to retrieve block graph data.
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>│   ├── GetBlockHeader.go      # Logic to retrieve a block header.
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>│   ├── GetBlockHeaders.go     # Logic to retrieve multiple block headers.
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>│   ├── GetBlockHeadersToCommonAncestor.go # Logic to retrieve headers to common ancestor.
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>│   ├── GetBlockStats.go       # Logic to retrieve block statistics.
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>│   ├── GetBlockSubtrees.go    # Logic to retrieve block subtrees.
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>│   ├── GetBlocks.go           # Logic to retrieve multiple blocks.
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>│   ├── GetLastNBlocks.go      # Logic to retrieve the last N blocks.
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>│   ├── GetLegacyBlock.go      # Logic to retrieve legacy block format.
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>│   ├── GetNBlocks.go          # Logic to retrieve N blocks from a specific point.
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>│   ├── GetSubtree.go          # Logic to retrieve a subtree.
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>│   ├── GetSubtreeTxs.go       # Logic to retrieve transactions in a subtree.
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>│   ├── GetTransaction.go      # Logic to retrieve a specific transaction.
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>│   ├── GetTransactionMeta.go  # Logic to retrieve transaction metadata.
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>│   ├── GetTransactions.go     # Logic to retrieve multiple transactions.
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>│   ├── GetTxMetaByTXID.go     # Logic to retrieve transaction metadata by TXID.
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>│   ├── GetUTXO.go             # Logic to retrieve UTXO data.
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>│   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
-</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>│   ├── Readmode.go            # Manages read-only mode settings.
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>│   ├── Search.go              # Implements search functionality.
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>│   ├── block_handler.go       # Handles block validation operations.
-</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>│   ├── blockHeaderResponse.go # Formats block header responses.
-</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a>│   ├── fsm_handler.go         # Handles FSM state and event operations.
-</span><span id="__span-3-40"><a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a>│   ├── helpers.go             # Helper functions for HTTP implementation.
-</span><span id="__span-3-41"><a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a>│   ├── http.go                # Core HTTP implementation.
-</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a>│   ├── metrics.go             # HTTP-specific metrics.
-</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a>│   ├── sendError.go           # Utility for sending error responses.
-</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a>│   └── *_test.go files        # Various test files for each component.
-</span><span id="__span-3-45"><a id="__codelineno-3-45" name="__codelineno-3-45" href="#__codelineno-3-45"></a>└── repository                 # Repository layer managing data interactions.
-</span><span id="__span-3-46"><a id="__codelineno-3-46" name="__codelineno-3-46" href="#__codelineno-3-46"></a>    ├── GetLegacyBlock.go      # Repository logic for retrieving legacy blocks.
-</span><span id="__span-3-47"><a id="__codelineno-3-47" name="__codelineno-3-47" href="#__codelineno-3-47"></a>    ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
-</span><span id="__span-3-48"><a id="__codelineno-3-48" name="__codelineno-3-48" href="#__codelineno-3-48"></a>    ├── repository.go          # Core repository implementation.
-</span><span id="__span-3-49"><a id="__codelineno-3-49" name="__codelineno-3-49" href="#__codelineno-3-49"></a>    └── repository_test.go     # Tests for the repository implementation.
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./services/asset
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>├── Server.go                  # Server logic for the Asset Service.
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>├── Server_test.go             # Tests for the server functionality.
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>├── asset_api
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>│   ├── asset_api.pb.go        # Generated protobuf code for the asset API.
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>│   └── asset_api.proto        # Protobuf definitions for the asset API.
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>├── centrifuge_impl            # Implementation using Centrifuge for real-time updates.
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── centrifuge.go          # Core Centrifuge implementation.
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   ├── client
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>│   │   ├── client.go          # Client-side implementation for Centrifuge.
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>│   │   └── index.html         # HTML template for client-side rendering.
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>│   └── websocket.go           # WebSocket implementation for real-time communication.
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>├── httpimpl                   # HTTP implementation of the asset service.
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>│   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   ├── GetBlock.go            # Logic to retrieve a specific block.
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   ├── GetBlockForks.go       # Logic to retrieve information about block forks.
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   ├── GetBlockGraphData.go   # Logic to retrieve block graph data.
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── GetBlockHeader.go      # Logic to retrieve a block header.
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   ├── GetBlockHeaders.go     # Logic to retrieve multiple block headers.
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   ├── GetBlockHeadersToCommonAncestor.go # Logic to retrieve headers to common ancestor.
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── GetBlockStats.go       # Logic to retrieve block statistics.
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── GetBlockSubtrees.go    # Logic to retrieve block subtrees.
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── GetBlocks.go           # Logic to retrieve multiple blocks.
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   ├── GetLastNBlocks.go      # Logic to retrieve the last N blocks.
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>│   ├── GetLegacyBlock.go      # Logic to retrieve legacy block format.
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   ├── GetNBlocks.go          # Logic to retrieve N blocks from a specific point.
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>│   ├── GetSubtree.go          # Logic to retrieve a subtree.
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>│   ├── GetSubtreeTxs.go       # Logic to retrieve transactions in a subtree.
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   ├── GetTransaction.go      # Logic to retrieve a specific transaction.
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>│   ├── GetTransactionMeta.go  # Logic to retrieve transaction metadata.
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>│   ├── GetTransactions.go     # Logic to retrieve multiple transactions.
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>│   ├── GetTxMetaByTXID.go     # Logic to retrieve transaction metadata by TXID.
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>│   ├── GetUTXO.go             # Logic to retrieve UTXO data.
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>│   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>│   ├── Readmode.go            # Manages read-only mode settings.
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>│   ├── Search.go              # Implements search functionality.
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>│   ├── block_handler.go       # Handles block validation operations.
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>│   ├── blockHeaderResponse.go # Formats block header responses.
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>│   ├── fsm_handler.go         # Handles FSM state and event operations.
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>│   ├── helpers.go             # Helper functions for HTTP implementation.
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>│   ├── http.go                # Core HTTP implementation.
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>│   ├── metrics.go             # HTTP-specific metrics.
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>│   ├── sendError.go           # Utility for sending error responses.
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a>│   └── *_test.go files        # Various test files for each component.
+</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a>└── repository                 # Repository layer managing data interactions.
+</span><span id="__span-5-46"><a id="__codelineno-5-46" name="__codelineno-5-46" href="#__codelineno-5-46"></a>    ├── GetLegacyBlock.go      # Repository logic for retrieving legacy blocks.
+</span><span id="__span-5-47"><a id="__codelineno-5-47" name="__codelineno-5-47" href="#__codelineno-5-47"></a>    ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
+</span><span id="__span-5-48"><a id="__codelineno-5-48" name="__codelineno-5-48" href="#__codelineno-5-48"></a>    ├── repository.go          # Core repository implementation.
+</span><span id="__span-5-49"><a id="__codelineno-5-49" name="__codelineno-5-49" href="#__codelineno-5-49"></a>    └── repository_test.go     # Tests for the repository implementation.
 </span></code></pre></div>
 <h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
 <h3 id="71-how-to-run">7.1 How to run<a class="headerlink" href="#71-how-to-run" title="Permanent link">&para;</a></h3>
 <p>To run the Asset Server locally, you can execute the following command:</p>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-asset<span class="o">=</span><span class="m">1</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-asset<span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running the Asset Server locally.</p>
 <h3 id="72-configuration-options-settings-flags">7.2 Configuration Options (Settings Flags)<a class="headerlink" href="#72-configuration-options-settings-flags" title="Permanent link">&para;</a></h3>
@@ -8915,20 +8941,20 @@
 </ul>
 <h4 id="725-error-conditions-and-validation">7.2.5 Error Conditions and Validation<a class="headerlink" href="#725-error-conditions-and-validation" title="Permanent link">&para;</a></h4>
 <p><strong>Configuration Errors from Code:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Error: &quot;no asset_httpListenAddress setting found&quot;
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Cause: Missing or empty asset_httpListenAddress setting
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Error: &quot;no asset_httpListenAddress setting found&quot;
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>Cause: Missing or empty asset_httpListenAddress setting
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Error: &quot;asset_httpAddress not found in config&quot;
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>Cause: Missing asset_httpAddress when Centrifuge is enabled
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Error: &quot;asset_httpAddress not found in config&quot;
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Cause: Missing asset_httpAddress when Centrifuge is enabled
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Error: &quot;asset_httpAddress is not a valid URL&quot;
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>Cause: Invalid URL format in asset_httpAddress setting
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Error: &quot;asset_httpAddress is not a valid URL&quot;
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Cause: Invalid URL format in asset_httpAddress setting
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Error: &quot;server_certFile is required for HTTPS&quot;
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Cause: Missing server_certFile when securityLevelHTTP is non-zero
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Error: &quot;server_certFile is required for HTTPS&quot;
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>Cause: Missing server_certFile when securityLevelHTTP is non-zero
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Error: &quot;server_keyFile is required for HTTPS&quot;
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Cause: Missing server_keyFile when securityLevelHTTP is non-zero
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Error: &quot;server_keyFile is required for HTTPS&quot;
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 </span></code></pre></div>
 <h4 id="7251-deployment-upstream-rate-limiting-required">7.2.5.1 Deployment: Upstream Rate Limiting Required<a class="headerlink" href="#7251-deployment-upstream-rate-limiting-required" title="Permanent link">&para;</a></h4>
 <p>The subtree HTTP endpoints — <code>/subtree/:hash</code> (binary/hex), <code>/subtree/:hash/txs</code> (binary/hex), and <code>/subtree_data/:hash</code> — stream large payloads and <strong>deliberately skip gzip compression</strong>. Gzip on these endpoints would force the response to be fully buffered server-side and yield negligible compression on near-incompressible hash/transaction bytes. Streaming without compression preserves the memory-bound design of the asset service.</p>
@@ -8955,7 +8981,7 @@
 <p><strong>Allowlist is opt-in.</strong> When <code>asset_peerAuthAllowlist</code> is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as <code>tierUnverified</code> for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.</p>
 <h5 id="peer-authentication-protocol">Peer authentication protocol<a class="headerlink" href="#peer-authentication-protocol" title="Permanent link">&para;</a></h5>
 <p>Clients sign each outbound request with their libp2p Ed25519 private key. The signature covers:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>v2:&lt;unix_ts&gt;:&lt;host&gt;:&lt;method&gt;:&lt;request_uri&gt;:&lt;sha256_body_hex&gt;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>v2:&lt;unix_ts&gt;:&lt;host&gt;:&lt;method&gt;:&lt;request_uri&gt;:&lt;sha256_body_hex&gt;
 </span></code></pre></div>
 <p>Headers required on every signed request:</p>
 <ul>
@@ -9032,17 +9058,17 @@
 </tbody>
 </table>
 <p><strong>Example Dependency Configuration:</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">utxostore</span><span class="o">=</span>aerospike://localhost:3000/test?set<span class="o">=</span>utxo
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nv">txstore</span><span class="o">=</span>blob://localhost:8080/tx
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nv">subtreestore</span><span class="o">=</span>blob://localhost:8080/subtree
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="nv">block_persisterStore</span><span class="o">=</span>blob://localhost:8080/blocks
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="nv">blockchain_grpcAddress</span><span class="o">=</span>localhost:8082
 </span></code></pre></div>
 <h4 id="728-environment-variable-examples">7.2.8 Environment Variable Examples<a class="headerlink" href="#728-environment-variable-examples" title="Permanent link">&para;</a></h4>
 <p>All configuration options can be set using environment variables with the prefix <code>TERANODE_</code>. For example:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_ASSET_HTTPLISTENADDRESS</span><span class="o">=</span>:8090
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SECURITYLEVELHTTP</span><span class="o">=</span><span class="m">1</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_SERVER_CERTFILE</span><span class="o">=</span>/path/to/cert.pem
 </span></code></pre></div>
 <h3 id="73-configuration-examples">7.3 Configuration Examples<a class="headerlink" href="#73-configuration-examples" title="Permanent link">&para;</a></h3>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/services/asset_settings/">asset Server Settings Reference</a>.</p>
