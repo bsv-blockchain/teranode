@@ -665,7 +665,7 @@ chaos_unpause() {
       docker unpause "$ctr" 2>/dev/null || true
       unpaused=$((unpaused + 1))
     done < <(node_service_containers "$node")
-    echo "teranode$node is unfrozen"
+    echo "teranode$node is unfrozen ($unpaused service container(s) unpaused)"
     return
   fi
   local ctr
