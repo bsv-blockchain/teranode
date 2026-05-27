@@ -32,7 +32,7 @@ func (h *HTTP) handleMiningCandidateLegacyBlock(c echo.Context) error {
 
 	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetMiningCandidateLegacyBlock_http",
 		tracing.WithParentStat(AssetStat),
-		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetMiningCandidateLegacyBlock for %s: %s", c.Request().RemoteAddr, idStr),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetMiningCandidateLegacyBlock for %s: %s", c.RealIP(), idStr),
 	)
 	defer deferFn()
 

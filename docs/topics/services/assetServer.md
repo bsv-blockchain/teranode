@@ -841,7 +841,8 @@ The subtree HTTP endpoints — `/subtree/:hash` (binary/hex), `/subtree/:hash/tx
 Trade-off: these unauthenticated GET endpoints can emit hundreds of MB per request uncompressed, which is a bandwidth amplification surface if abused. The asset service mitigates with:
 
 - the ban-list middleware;
-- per-method concurrency semaphores (`asset_concurrency_get_subtree_data`, `asset_concurrency_get_subtree_data_reader`, `asset_concurrency_get_subtree_transactions`, `asset_subtreeDataStreamingConcurrency`) — bounded by default (`2 / 4 / 2 / 2`).
+- per-method concurrency semaphores (`asset_concurrency_get_subtree_data`, `asset_concurrency_get_subtree_data_reader`, `asset_concurrency_get_subtree_transactions`, `asset_subtreeDataStreamingConcurrency`) — bounded by default (`2 / 4 / 2 / 2`);
+- a tiered in-process rate limiter (see below).
 
 These mitigations are **not** sufficient on their own for public-facing deployments. Operators MUST front the asset service with a reverse proxy (nginx, HAProxy, Envoy, CloudFront, Cloudflare, etc.) configured to enforce:
 
@@ -849,7 +850,36 @@ These mitigations are **not** sufficient on their own for public-facing deployme
 2. **Per-IP concurrent connection limits** (e.g. nginx `limit_conn_zone`).
 3. **An ACL** restricting these endpoints to known peers/clients when public exposure is not required.
 
-Per-IP rate limiting inside the asset service itself is a planned defense-in-depth follow-up but is not currently implemented.
+##### In-process rate limiting
+
+The asset service enforces a tiered rate limit as defense in depth (it does **not** replace the reverse-proxy layer above). Three tiers, in increasing trust:
+
+- **Unverified** — requests with no peer signature, or with a signature that fails any verification step. Bucketed by source IP (IPv6 normalised to `/64` so a single allocation can't be split into millions of buckets). Held in a bounded LRU (capacity 50,000 entries) so an attacker rotating IPv6 addresses can't grow the table without limit. Rate: `asset_httpRateLimit` req/s, default `1024`.
+- **Peer** — requests with a valid Ed25519 signature, where the peer ID is listed in `asset_peerAuthAllowlist`. Bucketed by libp2p peer ID (not IP), so two authenticated peers behind one NAT or CDN egress get independent buckets. Rate: `asset_httpRateLimit × asset_httpPeerRateMultiplier` req/s, default `1024 × 5 = 5120`.
+- **Miner** — authenticated peers whose `BlocksReceived > 0` and `ReputationScore ≥ asset_peerMinerReputationThreshold` (default `50.0`), and who are in `asset_peerAuthAllowlist`. Either **fully exempt** (default, `asset_httpMinerRateLimit = 0`) or bucketed per peer ID at `asset_httpMinerRateLimit` req/s when set. Setting an explicit cap is recommended as defense in depth.
+
+Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, and `POST /subtree/:hash/txs`) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
+
+**Allowlist is opt-in.** When `asset_peerAuthAllowlist` is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as `tierUnverified` for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.
+
+##### Peer authentication protocol
+
+Clients sign each outbound request with their libp2p Ed25519 private key. The signature covers:
+
+```text
+v2:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+```
+
+Headers required on every signed request:
+
+- `X-Peer-PubKey` — hex-encoded Ed25519 public key
+- `X-Peer-Timestamp` — Unix seconds; must be within ±10s of the verifier's clock
+- `X-Peer-Body-Digest` — lowercase hex SHA-256 of the request body; the verifier recomputes the digest from the actual bytes and rejects on mismatch
+- `X-Peer-Signature` — hex-encoded Ed25519 signature over the canonical payload
+
+The verifier additionally maintains a bounded in-memory replay cache of `(pubkey, signature)` pairs (capacity 100,000, TTL 15s) so a captured signature cannot be re-used within the freshness window. Operators MUST keep clocks within ±5s of UTC (NTP); persistent drift will be visible in the `teranode_asset_http_peer_auth_result_total{result="expired"}` Prometheus counter.
+
+See `docs/references/settings/services/asset_settings.md` for the full list of rate-limit and auth settings.
 
 #### 7.2.6 Environment Variables
 

@@ -129,7 +129,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 			setName = "txmeta"
 		}
 
-		h.logger.Debugf("[Asset_http] GetUTXOsByTXID in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
+		h.logger.Debugf("[Asset_http] GetTxMetaByTxID in %s for %s: %s", mode, c.RealIP(), c.Param("hash"))
 
 		hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 		if err != nil {

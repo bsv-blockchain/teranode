@@ -47,6 +47,25 @@ var (
 
 	// prometheusAssetHTTPProxyPropagationTx tracks proxied transaction submissions
 	prometheusAssetHTTPProxyPropagationTx *prometheus.CounterVec
+
+	// prometheusAssetHTTPRequestDuration tracks HTTP request duration by route
+	prometheusAssetHTTPRequestDuration *prometheus.HistogramVec
+
+	// prometheusAssetHTTPResponseSize tracks HTTP response sizes by route
+	prometheusAssetHTTPResponseSize *prometheus.HistogramVec
+
+	// prometheusAssetHTTPRateLimited counts rate-limited requests by scope (global/heavy)
+	prometheusAssetHTTPRateLimited *prometheus.CounterVec
+
+	// prometheusAssetHTTPPeerAuthResult counts the outcome of peer-auth attempts.
+	// Labels: "ok" | "expired" | "bad_sig" | "bad_digest" | "replay" | "unknown_key" | "not_allowlisted".
+	// Operators watch the non-ok rates to spot clock drift, key rotation, or
+	// flooding attacks; absence of "ok" counts after deploy means no signed
+	// peers are reaching the middleware.
+	prometheusAssetHTTPPeerAuthResult *prometheus.CounterVec
+
+	// prometheusAssetHTTPInFlight tracks in-flight HTTP requests
+	prometheusAssetHTTPInFlight prometheus.Gauge
 )
 
 // prometheusMetricsInitOnce ensures metrics are initialized exactly once
@@ -241,6 +260,57 @@ func _initPrometheusMetrics() {
 		[]string{
 			"function",  // function tracking the operation
 			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHTTPRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_request_duration_seconds",
+			Help:      "HTTP request duration in seconds",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	prometheusAssetHTTPResponseSize = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_response_size_bytes",
+			Help:      "HTTP response size in bytes",
+			Buckets:   prometheus.ExponentialBuckets(256, 4, 10), // 256B to ~64MB
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	prometheusAssetHTTPRateLimited = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_rate_limited_total",
+			Help:      "Number of rate-limited HTTP requests",
+		},
+		[]string{"scope"}, // "global" or "heavy" — identifies which rate limiter triggered
+	)
+
+	prometheusAssetHTTPPeerAuthResult = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_peer_auth_result_total",
+			Help:      "Outcome of peer-auth attempts on the asset HTTP API",
+		},
+		[]string{"result"}, // ok | expired | bad_sig | bad_digest | replay | unknown_key | not_allowlisted
+	)
+
+	prometheusAssetHTTPInFlight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_in_flight_requests",
+			Help:      "Number of currently in-flight HTTP requests",
 		},
 	)
 }

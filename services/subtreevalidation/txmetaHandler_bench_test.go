@@ -73,7 +73,7 @@ func buildBenchMessage(b *testing.B, entriesPerMessage int, payloadSize int) *ka
 		buf[off+1] = byte(i / 256)
 		off += 32
 
-		buf[off] = txmetaActionADD
+		buf[off] = txmetacache.WireActionADD
 		off++
 
 		binary.LittleEndian.PutUint32(buf[off:], uint32(payloadSize))
@@ -94,8 +94,8 @@ func buildBenchMessageV2(b *testing.B, entriesPerMessage int, payloadSize int) *
 	total := 8 + entriesPerMessage*entrySize
 	buf := make([]byte, total)
 
-	buf[0] = txmetaWireV2Magic
-	buf[1] = txmetaWireV2Version
+	buf[0] = txmetacache.WireV2Magic
+	buf[1] = txmetacache.WireV2Version
 	// buf[2:4] reserved
 	binary.LittleEndian.PutUint32(buf[4:], uint32(entriesPerMessage))
 	off := 8
@@ -113,7 +113,7 @@ func buildBenchMessageV2(b *testing.B, entriesPerMessage int, payloadSize int) *
 		buf[off+1] = byte(i / 256)
 		off += 32
 
-		buf[off] = txmetaActionADD
+		buf[off] = txmetacache.WireActionADD
 		off++
 
 		binary.LittleEndian.PutUint32(buf[off:], uint32(payloadSize))

@@ -62,21 +62,12 @@ const (
 	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
 	// Genesis upgrade.
 	DustLimit = uint64(1)
-
-	// txmetaActionADD represents the ADD action for txmeta batch messages
-	txmetaActionADD = byte(0)
-	// txmetaActionDELETE represents the DELETE action for txmeta batch messages
-	txmetaActionDELETE = byte(1)
-
-	// txmetaWireV2Magic is the first byte of a v2-format txmeta Kafka message.
-	// v1 messages start with the low byte of a uint32 entry count, which can
-	// never be 0xFF for any realistic batch size — see the receiver in
-	// services/subtreevalidation/txmetaHandler.go for the symmetric check.
-	txmetaWireV2Magic = byte(0xFF)
-	// txmetaWireV2Version identifies the v2 sub-version. Bump if the per-entry
-	// or header layout changes; the receiver rejects unknown sub-versions.
-	txmetaWireV2Version = byte(0x02)
 )
+
+// Txmeta Kafka wire-format constants live in stores/txmetacache (see wire.go
+// in that package). They are imported here as the single source of truth
+// shared between the producer (this package) and all consumers
+// (services/subtreevalidation, services/legacy/netsync, ...).
 
 // txmetaBatchItem represents an item to be batched for TxMeta Kafka messages.
 type txmetaBatchItem struct {
@@ -1055,9 +1046,9 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 
 		// Write action (1 byte)
 		if item.isDelete {
-			buf[offset] = txmetaActionDELETE
+			buf[offset] = txmetacache.WireActionDELETE
 		} else {
-			buf[offset] = txmetaActionADD
+			buf[offset] = txmetacache.WireActionADD
 		}
 		offset++
 
@@ -1114,8 +1105,8 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 	}
 
 	buf := make([]byte, size)
-	buf[0] = txmetaWireV2Magic
-	buf[1] = txmetaWireV2Version
+	buf[0] = txmetacache.WireV2Magic
+	buf[1] = txmetacache.WireV2Version
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
@@ -1125,12 +1116,12 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 		copy(buf[off:], it.item.hash[:])
 		off += 32
 		if it.item.isDelete {
-			buf[off] = txmetaActionDELETE
+			buf[off] = txmetacache.WireActionDELETE
 			off++
 			binary.LittleEndian.PutUint32(buf[off:], 0)
 			off += 4
 		} else {
-			buf[off] = txmetaActionADD
+			buf[off] = txmetacache.WireActionADD
 			off++
 			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
 			off += 4

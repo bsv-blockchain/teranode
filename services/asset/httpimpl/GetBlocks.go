@@ -132,7 +132,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 
 	fromHeight := latestBlockHeight - uint32(offset)
 
-	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.Request().RemoteAddr, offset, limit, fromHeight)
+	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.RealIP(), offset, limit, fromHeight)
 
 	blocks, err := h.repository.GetLastNBlocks(ctx, int64(limit), includeOrphans, fromHeight)
 	if err != nil {

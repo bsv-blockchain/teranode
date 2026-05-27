@@ -63,16 +63,15 @@ This document provides comprehensive information about the message formats used 
     - [Error Cases](#error-cases)
 - [Transaction Metadata Message Format](#transaction-metadata-message-format)
     - [TxMeta Topic](#txmeta-topic)
-    - [Message Structure](#message-structure)
-    - [Field Specifications](#field-specifications)
-        - [txHash](#txhash)
-        - [action](#action)
-        - [content](#content)
-    - [Transaction Metadata](#transaction-metadata)
-    - [Example](#example)
+    - [Wire Format](#wire-format)
+        - [v1 (legacy)](#v1-legacy)
+        - [v2 (partition-aware)](#v2-partition-aware)
+    - [Wire-Format Detection (Receiver Side)](#wire-format-detection-receiver-side)
+    - [Action Values](#action-values)
+    - [Content Payload](#content-payload)
     - [Code Examples](#code-examples)
-        - [Sending Messages](#sending-messages)
-        - [Receiving Messages](#receiving-messages)
+        - [Producing Messages](#producing-messages)
+        - [Consuming Messages](#consuming-messages)
     - [Error Cases](#error-cases)
 - [Rejected Transaction Message Format](#rejected-transaction-message-format)
     - [Rejected Transaction Topic](#rejected-transaction-topic)
@@ -750,178 +749,137 @@ func handleTxValidationMessage(msg *kafka.Message) error {
 
 `kafka_txmetaConfig` is the Kafka topic used for broadcasting transaction metadata for validated transactions. This topic allows the Validator to either add new transaction metadata or request deletion of previously shared metadata.
 
-### Message Structure
+Unlike the other Teranode Kafka topics, the txmeta topic does **not** use protobuf. Each Kafka record carries a custom, length-prefixed binary batch of many entries so the producer can amortise the per-record overhead at high transaction rates (the throughput target is well into the millions of transactions per second). The wire-format constants are defined once in [`stores/txmetacache/wire.go`](../../stores/txmetacache/wire.go) and imported by the producer (`services/validator`) and every consumer (`services/subtreevalidation`, `services/legacy/netsync`).
 
-The transaction metadata message is defined in protobuf as `KafkaTxMetaTopicMessage`:
+### Wire Format
 
-```protobuf
-enum KafkaTxMetaActionType {
-  ADD = 0;    // Add or update transaction metadata
-  DELETE = 1; // Delete transaction metadata
-}
+Two batch formats coexist on the topic, distinguished at the receiver by a multi-byte signature at the start of the record. The producer chooses the format based on the `validator_txmeta_wireFormat` setting (`v1` by default; `v2` for partition-aligned writes).
 
-message KafkaTxMetaTopicMessage {
-  string txHash = 1;                // Transaction hash (as hex string)
-  KafkaTxMetaActionType action = 2; // Action type (add or delete)
-  bytes content = 3;                // Serialized transaction metadata (only used for ADD)
-}
+#### v1 (legacy)
+
+```text
++--------+-------+--------+----------+---------+
+| count  | hash  | action | contLen  | content |
+| u32 LE | 32 B  | 1 B    | u32 LE   | N B     |
++--------+-------+--------+----------+---------+
+\__hdr__/ \________ per-entry ___________ ... /
 ```
 
-### Field Specifications
+Header (4 bytes): little-endian `uint32` entry count.
+Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · `contLen` bytes content (0 bytes for `DELETE`).
 
-#### txHash
+#### v2 (partition-aware)
 
-- Type: string
-- Description: Hexadecimal string representation of the transaction hash
-- Required: Yes
+```text
++-------+--------+----------+--------+--------+-------+--------+---------+---------+
+| magic | versn  | reserved | count  | xxhash | hash  | action | contLen | content |
+| 0xFF  | 0x02   | 2 B = 0  | u32 LE | u64 LE | 32 B  | 1 B    | u32 LE  | N B     |
++-------+--------+----------+--------+--------+-------+--------+---------+---------+
+\__________________ 8-byte header _______________/  \________ per-entry ____________ ... /
+```
 
-#### action
+v2 adds an 8-byte fixed-prefix header followed by entries that carry the pre-computed `xxhash(tx hash)` on the wire. Receivers can use the wire-side xxhash to skip rehashing for cache writes; partition routing is also aligned with the xxhash so that per-partition consumer goroutines touch disjoint cache buckets.
 
-- Type: KafkaTxMetaActionType (enum)
-- Description: Specifies whether to add/update metadata (ADD) or delete metadata (DELETE)
-- Required: Yes
-- Values:
+### Wire-Format Detection (Receiver Side)
 
-    - ADD (0): Add or update transaction metadata
-    - DELETE (1): Delete transaction metadata
+A receiver cannot rely on the magic byte alone: a v1 message with entry count `255`, `511`, `767`, ... has a little-endian low byte of `0xFF`, identical to the v2 magic byte. For count `767` the first four bytes of the v1 message are exactly `[0xFF, 0x02, 0x00, 0x00]`, aliasing the full v2 header signature.
 
-#### content
+To avoid misclassifying these v1 messages, every consumer follows the same detection rule:
 
-- Type: bytes
-- Description: Serialized transaction metadata
-- Required: Only when action is ADD; should be empty when action is DELETE
-- Content: Serialized transaction metadata that includes transaction details, transaction input outpoints (TxInpoints), block IDs, fees, and other relevant information
+1. Verify all four header bytes: `data[0] == 0xFF`, `data[1] == 0x02`, `data[2] == 0`, `data[3] == 0`.
+2. Read the candidate v2 entry count from `data[4:8]`.
+3. Check plausibility: `candidateCount * minV2EntrySize ≤ len(data) - 8` (where `minV2EntrySize = 45` bytes = xxhash + hash + action + contentLen).
+4. **Only if all three pass**, parse as v2.
+5. **Otherwise**, fall through to v1 parsing — the message is *never* dropped just because its first byte happens to be `0xFF`.
 
-### Transaction Metadata
+A symmetric plausibility check on the v1 path (`entries * minV1EntrySize ≤ len(data) - 4`, where `minV1EntrySize = 37`) bounds the receiver's pool-buffer allocation against a malformed wire-side count.
 
-The content field contains serialized transaction metadata, which typically includes:
+### Action Values
 
-- Complete transaction content
-- Transaction input outpoints (TxInpoints) - containing parent transaction hashes and output indices
-- Block heights where the transaction appears
-- Transaction fee
+The 1-byte action enum is defined in `stores/txmetacache/wire.go`:
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `WireActionADD` | `0x00` | Add or replace cached metadata for the given tx hash. `content` carries the serialized `meta.Data`. |
+| `WireActionDELETE` | `0x01` | Remove the entry for the given tx hash from the cache. `contLen` is `0` and no content follows. |
+
+### Content Payload
+
+For `ADD` entries, `content` is the serialized `meta.Data` for the transaction — produced by `(*meta.Data).MetaBytes()` and parsed by `meta.NewMetaDataFromBytes`. It includes:
+
+- Complete transaction bytes (extended format)
+- Transaction input outpoints (parent tx hashes + output indices)
+- Block IDs the transaction has been mined into
+- Transaction fee (satoshis)
 - Size in bytes
-- Flags (e.g., whether it's a coinbase transaction)
+- Coinbase flag
 - Lock time
-
-### Example
-
-Here's a JSON representation of an ADD message (for illustration purposes only; actual messages are protobuf-encoded):
-
-```json
-{
-  "txHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-  "action": 0,  // ADD
-  "content": "<binary data - serialized transaction metadata>"
-}
-```
-
-Here's a JSON representation of a DELETE message:
-
-```json
-{
-  "txHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-  "action": 1,  // DELETE
-  "content": ""  // Empty for DELETE operations
-}
-```
 
 ### Code Examples
 
-#### Sending Messages
+#### Producing Messages
+
+The producer is `services/validator/Validator.go` — see `serializeTxMetaBatch` (v1) and `serializeTxMetaBatchV2` (v2). The wire-format constants come from the shared package:
 
 ```go
-// Example 1: Send ADD transaction metadata message
-txHash := tx.TxID().String() // returns hex string representation
-metadataContent := serializeMetadata(metadata) // serialize transaction metadata
+import "github.com/bsv-blockchain/teranode/stores/txmetacache"
 
-// Create a new protobuf message for adding metadata
-addMessage := &kafkamessage.KafkaTxMetaTopicMessage{
-    TxHash: txHash,
-    Action: kafkamessage.KafkaTxMetaActionType_ADD,
-    Content: metadataContent,
+// v1 entry: hash, action, content length, content
+buf := make([]byte, 4)
+binary.LittleEndian.PutUint32(buf, uint32(len(entries)))
+for _, e := range entries {
+    buf = append(buf, e.hash[:]...)
+    if e.isDelete {
+        buf = append(buf, txmetacache.WireActionDELETE, 0, 0, 0, 0)
+    } else {
+        buf = append(buf, txmetacache.WireActionADD)
+        lenBuf := make([]byte, 4)
+        binary.LittleEndian.PutUint32(lenBuf, uint32(len(e.metaBytes)))
+        buf = append(buf, lenBuf...)
+        buf = append(buf, e.metaBytes...)
+    }
 }
-
-// Serialize to protobuf format
-addData, err := proto.Marshal(addMessage)
-if err != nil {
-    return fmt.Errorf("failed to serialize ADD metadata message: %w", err)
-}
-
-// Send to Kafka
-producer.Publish(&kafka.Message{
-    Value: addData,
-})
-
-// Example 2: Send DELETE transaction metadata message
-txHash := tx.TxID().String() // returns hex string representation
-
-// Create a new protobuf message for deleting metadata
-deleteMessage := &kafkamessage.KafkaTxMetaTopicMessage{
-    TxHash: txHash,
-    Action: kafkamessage.KafkaTxMetaActionType_DELETE,
-    // Content is empty for DELETE operations
-}
-
-// Serialize to protobuf format
-deleteData, err := proto.Marshal(deleteMessage)
-if err != nil {
-    return fmt.Errorf("failed to serialize DELETE metadata message: %w", err)
-}
-
-// Send to Kafka
-producer.Publish(&kafka.Message{
-    Value: deleteData,
-})
 ```
 
-#### Receiving Messages
+#### Consuming Messages
+
+Receivers detect the format and dispatch accordingly. See `services/subtreevalidation/txmetaHandler.go` and `services/legacy/netsync/manager.go` for the canonical implementations:
 
 ```go
-// Handle incoming transaction metadata message
-func handleTxMetaMessage(msg *kafka.Message) error {
-    if msg == nil {
-        return nil
-    }
+import "github.com/bsv-blockchain/teranode/stores/txmetacache"
 
-    // Deserialize from protobuf format
-    txMetaMessage := &kafkamessage.KafkaTxMetaTopicMessage{}
-    if err := proto.Unmarshal(msg.Value, txMetaMessage); err != nil {
-        return fmt.Errorf("failed to deserialize transaction metadata message: %w", err)
-    }
+// Speculative v2 detection — full signature + entry-count plausibility.
+isV2 := false
+var entries uint32
+var offset int
 
-    // Extract transaction hash
-    txHashStr := txMetaMessage.TxHash
-
-    // Convert hex string to chainhash.Hash
-    txHash, err := chainhash.NewHashFromStr(txHashStr)
-    if err != nil {
-        return fmt.Errorf("invalid transaction hash: %w", err)
-    }
-
-    // Process based on action type
-    switch txMetaMessage.Action {
-    case kafkamessage.KafkaTxMetaActionType_ADD:
-        // Handle ADD operation
-        metadata := deserializeMetadata(txMetaMessage.Content)
-        return handleAddMetadata(txHash, metadata)
-
-    case kafkamessage.KafkaTxMetaActionType_DELETE:
-        // Handle DELETE operation
-        return handleDeleteMetadata(txHash)
-
-    default:
-        return fmt.Errorf("unknown action type: %d", txMetaMessage.Action)
+if len(data) >= txmetacache.WireV2HeaderLen &&
+    data[0] == txmetacache.WireV2Magic &&
+    data[1] == txmetacache.WireV2Version &&
+    data[2] == 0 && data[3] == 0 {
+    candidate := binary.LittleEndian.Uint32(data[4:])
+    remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+    if uint64(candidate)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+        entries, offset, isV2 = candidate, txmetacache.WireV2HeaderLen, true
     }
 }
+
+if !isV2 {
+    entries = binary.LittleEndian.Uint32(data[:4])
+    offset = 4
+}
+
+// ... iterate entries, reading [xxhash (v2 only)][hash][action][contLen][content]
 ```
 
 ### Error Cases
 
-- Invalid message format: Message cannot be unmarshaled to KafkaTxMetaTopicMessage
-- Empty or invalid transaction hash: Hash is not a valid hexadecimal string
-- Unknown action type: Action is not a recognized KafkaTxMetaActionType enum value
-- Missing content for ADD: Content field is empty when Action is ADD
+- **Truncated header**: buffer shorter than the minimum header (4 bytes for v1, 8 bytes for v2). Logged + acked.
+- **Truncated entry**: per-entry header or content runs off the end of the buffer. Logged + acked at the truncation point; preceding entries are still processed.
+- **Implausible entry count**: wire-side count exceeds what the buffer can hold at the minimum entry size. Logged + acked; nothing is dispatched. Protects the pool buffer from oversized pre-allocation.
+- **Unknown action byte** (not `0x00` or `0x01`): the entry is logged and skipped; remaining entries continue to be processed.
+
+In all of the above the message is acknowledged (`return nil`) rather than re-delivered — a single corrupt message must not stall the topic.
 
 ---
 

@@ -1351,7 +1351,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				assert.Equal(t, byte(32), hash[31])
 
 				action := data[36]
-				assert.Equal(t, txmetaActionADD, action)
+				assert.Equal(t, txmetacache.WireActionADD, action)
 
 				contentLen := binary.LittleEndian.Uint32(data[37:41])
 				assert.Equal(t, uint32(12), contentLen)
@@ -1376,7 +1376,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				assert.Equal(t, uint32(1), count)
 
 				action := data[36]
-				assert.Equal(t, txmetaActionDELETE, action)
+				assert.Equal(t, txmetacache.WireActionDELETE, action)
 
 				contentLen := binary.LittleEndian.Uint32(data[37:41])
 				assert.Equal(t, uint32(0), contentLen)
@@ -1408,7 +1408,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				// offset 4: hash (32), then action (1), then length (4), then content (3)
 				offset := 4
 				assert.Equal(t, byte(1), data[offset], "first entry hash[0]")
-				assert.Equal(t, txmetaActionADD, data[offset+32], "first entry action")
+				assert.Equal(t, txmetacache.WireActionADD, data[offset+32], "first entry action")
 				len1 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(3), len1, "first entry content length")
 				assert.Equal(t, "one", string(data[offset+37:offset+40]), "first entry content")
@@ -1416,14 +1416,14 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				// Second entry: DELETE (starts at offset 4 + 32 + 1 + 4 + 3 = 44)
 				offset = 44
 				assert.Equal(t, byte(2), data[offset], "second entry hash[0]")
-				assert.Equal(t, txmetaActionDELETE, data[offset+32], "second entry action")
+				assert.Equal(t, txmetacache.WireActionDELETE, data[offset+32], "second entry action")
 				len2 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(0), len2, "second entry content length")
 
 				// Third entry: ADD with "three" (starts at offset 44 + 32 + 1 + 4 + 0 = 81)
 				offset = 81
 				assert.Equal(t, byte(3), data[offset], "third entry hash[0]")
-				assert.Equal(t, txmetaActionADD, data[offset+32], "third entry action")
+				assert.Equal(t, txmetacache.WireActionADD, data[offset+32], "third entry action")
 				len3 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(5), len3, "third entry content length")
 				assert.Equal(t, "three", string(data[offset+37:offset+42]), "third entry content")
@@ -1483,10 +1483,10 @@ func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
 		// Verify against original batch
 		assert.Equal(t, batch[i].hash[:], parsedHash[:], "hash mismatch at entry %d", i)
 		if batch[i].isDelete {
-			assert.Equal(t, txmetaActionDELETE, action, "action mismatch at entry %d", i)
+			assert.Equal(t, txmetacache.WireActionDELETE, action, "action mismatch at entry %d", i)
 			assert.Equal(t, uint32(0), contentLen, "delete should have 0 content length")
 		} else {
-			assert.Equal(t, txmetaActionADD, action, "action mismatch at entry %d", i)
+			assert.Equal(t, txmetacache.WireActionADD, action, "action mismatch at entry %d", i)
 			assert.Equal(t, batch[i].metaBytes, content, "content mismatch at entry %d", i)
 		}
 	}
@@ -1520,7 +1520,7 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 	off += 8
 	assert.Equal(t, h1[:], data[off:off+32], "entry 1 hash")
 	off += 32
-	assert.Equal(t, txmetaActionADD, data[off], "entry 1 action")
+	assert.Equal(t, txmetacache.WireActionADD, data[off], "entry 1 action")
 	off++
 	assert.Equal(t, uint32(6), binary.LittleEndian.Uint32(data[off:]), "entry 1 content length")
 	off += 4
@@ -1532,7 +1532,7 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 	off += 8
 	assert.Equal(t, h2[:], data[off:off+32], "entry 2 hash")
 	off += 32
-	assert.Equal(t, txmetaActionDELETE, data[off], "entry 2 action")
+	assert.Equal(t, txmetacache.WireActionDELETE, data[off], "entry 2 action")
 	off++
 	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(data[off:]), "entry 2 content length (DELETE => 0)")
 	off += 4
