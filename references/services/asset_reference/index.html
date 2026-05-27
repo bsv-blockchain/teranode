@@ -9304,6 +9304,22 @@
 <li>Returns: UTXO data array (JSON)</li>
 </ul>
 </li>
+<li>
+<p><strong>POST <code>/api/v1/utxos</code></strong> (and <code>/api/v1/utxos/hex</code>, <code>/api/v1/utxos/json</code>)</p>
+<ul>
+<li>Purpose: Bulk UTXO spend-status lookup. Avoids per-record HTTP overhead and the redundant transaction fetch that would otherwise be paid per <code>GET /api/v1/utxo/:hash</code> request.</li>
+<li>Request body (identical for all three routes): concatenated 36-byte records, each <code>[32 bytes txid][4 bytes vout LE]</code>. Body length must be a multiple of 36.</li>
+<li>Response formats:<ul>
+<li><strong><code>POST /api/v1/utxos</code></strong> — Binary. Concatenated fixed-length 48-byte records in input order, each <code>[8 bytes status LE][4 bytes lockTime LE][4 bytes spendingVin LE][32 bytes spendingTxID]</code>. Unspent UTXOs have the trailing 36 bytes zero-filled; not-found records report status <code>utxo.Status_NOT_FOUND</code>. Clients can index by <code>i*48</code>.</li>
+<li><strong><code>POST /api/v1/utxos/hex</code></strong> — Lowercase hex-encoding of the binary response. Same record layout once decoded.</li>
+<li><strong><code>POST /api/v1/utxos/json</code></strong> — JSON array of <code>utxo.SpendResponse</code> objects in input order, e.g. <code>[{"status":1,"spendingData":{"txId":"...","vin":0},"lockTime":1234567}, ...]</code>. Use this when client tooling prefers JSON; for highest throughput, prefer the binary route.</li>
+</ul>
+</li>
+<li>Limits: body size capped by the global <code>asset_httpBodyLimit</code> setting (default 100MB, ≈2.9M records per request). The endpoint is also gated by the heavy-route tiered rate limiter (<code>asset_rateLimit_heavy_*</code>), shared with <code>POST /api/v1/subtree/:hash/txs</code> and other fan-out endpoints.</li>
+<li>Error responses: <code>400</code> (body length not a multiple of 36), <code>413</code> (body exceeds the cap), <code>429</code> (rate-limited), <code>500</code> (transport, store failure, or recovered per-record panic).</li>
+<li>Known gap: the <code>lockTime</code> field in the response carries different semantics by backend (SQL: coinbase maturity height; Aerospike: the transaction's <code>nLockTime</code>). Pre-existing in <code>GET /api/v1/utxo</code>; surfaced more visibly here. Treat <code>lockTime == 0</code> as "not coinbase / unlocked" until the divergence is reconciled in a follow-up.</li>
+</ul>
+</li>
 </ul>
 <h3 id="subtree-endpoints">Subtree Endpoints<a class="headerlink" href="#subtree-endpoints" title="Permanent link">&para;</a></h3>
 <ul>
