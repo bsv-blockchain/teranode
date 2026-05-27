@@ -179,6 +179,12 @@ type splitService struct {
 // The `external` subdir is the aerospike-client side overflow for
 // large UTXO records (set in utxostore URL: externalStore=file://…/external).
 // Any service that opens utxoStore needs it mounted.
+//
+// Port constraint: HostPorts / ExposePorts entries must be >= 8000. The
+// split compose template computes host port as HostBase + (container - 8000);
+// a sub-8000 container port would map to a wrong (or negative) host port
+// and silently collide across nodes. Today the floor is 8000 (HEALTH_CHECK_PORT)
+// and all listeners sit above it, so the assumption holds.
 func buildSplitServices() []splitService {
 	return []splitService{
 		{
