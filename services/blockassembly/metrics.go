@@ -43,6 +43,7 @@ var (
 	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
 	prometheusBlockAssemblerReorg                       prometheus.Counter
+	prometheusBlockAssemblerCatchUp                     prometheus.Counter
 	prometheusBlockAssemblerReorgDuration               prometheus.Histogram
 	prometheusBlockAssemblerGetReorgBlocksDuration      prometheus.Histogram
 	prometheusBlockAssemblerUpdateBestBlock             prometheus.Histogram
@@ -212,6 +213,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "reorg",
 			Help:      "Number of reorgs in block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerCatchUp = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "catchup",
+			Help:      "Number of forward-only catch-ups (moveBack=0) handled in block assembler",
 		},
 	)
 

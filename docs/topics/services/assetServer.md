@@ -834,6 +834,23 @@ Error: "server_keyFile is required for HTTPS"
 Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 ```
 
+#### 7.2.5.1 Deployment: Upstream Rate Limiting Required
+
+The subtree HTTP endpoints — `/subtree/:hash` (binary/hex), `/subtree/:hash/txs` (binary/hex), and `/subtree_data/:hash` — stream large payloads and **deliberately skip gzip compression**. Gzip on these endpoints would force the response to be fully buffered server-side and yield negligible compression on near-incompressible hash/transaction bytes. Streaming without compression preserves the memory-bound design of the asset service.
+
+Trade-off: these unauthenticated GET endpoints can emit hundreds of MB per request uncompressed, which is a bandwidth amplification surface if abused. The asset service mitigates with:
+
+- the ban-list middleware;
+- per-method concurrency semaphores (`asset_concurrency_get_subtree_data`, `asset_concurrency_get_subtree_data_reader`, `asset_concurrency_get_subtree_transactions`, `asset_subtreeDataStreamingConcurrency`) — bounded by default (`2 / 4 / 2 / 2`).
+
+These mitigations are **not** sufficient on their own for public-facing deployments. Operators MUST front the asset service with a reverse proxy (nginx, HAProxy, Envoy, CloudFront, Cloudflare, etc.) configured to enforce:
+
+1. **Per-IP request rate limiting** on the `/subtree*` paths (e.g. nginx `limit_req_zone` keyed by `$binary_remote_addr`).
+2. **Per-IP concurrent connection limits** (e.g. nginx `limit_conn_zone`).
+3. **An ACL** restricting these endpoints to known peers/clients when public exposure is not required.
+
+Per-IP rate limiting inside the asset service itself is a planned defense-in-depth follow-up but is not currently implemented.
+
 #### 7.2.6 Environment Variables
 
 **Standard Environment Variables:**

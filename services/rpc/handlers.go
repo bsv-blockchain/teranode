@@ -228,6 +228,13 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, indexUint32)
 	if err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCBlockNotFound,
+				Message: "Block not found",
+			}
+		}
+
 		return nil, err
 	}
 

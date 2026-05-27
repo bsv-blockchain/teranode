@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1376,6 +1377,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		,conflicting
 		,locked
 		,unmined_since
+		,inserted_at
 		FROM transactions
 		WHERE hash = $1
 	`
@@ -1388,9 +1390,13 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		lockTime          uint32
 		spendingDataBytes []byte
 		unminedSince      sql.NullInt64
+		// inserted_at is TIMESTAMPTZ on postgres but TEXT on sqlite (see schema
+		// in transactions table init). Postgres driver returns time.Time;
+		// sqlite returns string. Scan into interface{} and branch on type.
+		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1406,6 +1412,12 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
 	}
+
+	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
+	// Always populate so callers like selectCountersForDemotedTx have it without
+	// having to add fields.CreatedAt to every Get callsite that already passes
+	// other field selectors.
+	data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 	tx := bt.Tx{
 		Version:  version,
@@ -1606,6 +1618,64 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 	return false
 }
 
+// parseInsertedAtMillis converts the inserted_at column value into Unix
+// milliseconds. Postgres' driver returns time.Time; the sqlite driver
+// returns a string (the layout depends on whether DEFAULT CURRENT_TIMESTAMP
+// produced a "YYYY-MM-DD HH:MM:SS[.fff]" form). Returns 0 when the value is
+// nil, an unrecognised type, or unparseable — callers treat 0 as "no
+// CreatedAt hint available" (see isOlderCounter's missing-timestamp branch).
+func parseInsertedAtMillis(v any) int64 {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case time.Time:
+		return t.UnixMilli()
+	case []byte:
+		return parseInsertedAtMillis(string(t))
+	case string:
+		// Sqlite CURRENT_TIMESTAMP emits SQL-style "YYYY-MM-DD HH:MM:SS" by
+		// default; tolerate fractional seconds and trailing 'Z' for safety.
+		layouts := []string{
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+			time.RFC3339Nano,
+			time.RFC3339,
+		}
+
+		for _, l := range layouts {
+			if ts, err := time.Parse(l, t); err == nil {
+				return ts.UnixMilli()
+			}
+		}
+
+		return 0
+	default:
+		return 0
+	}
+}
+
+// handleSpendPanic processes a recovered value from Spend's deferred recover
+// and propagates it as an error. Without this, a panic during Spend would be
+// logged but the caller would observe (nil, nil) — a silent failure that can
+// mask UTXO state corruption.
+//
+// Uses ERR_UNKNOWN rather than ERR_PROCESSING so the block-validation retry
+// classifier (services/blockvalidation/BlockValidation.go) does not treat a
+// recovered panic as a transient infrastructure error and retry indefinitely
+// against a broken path.
+func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
+	if recovered == nil {
+		return
+	}
+
+	prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
+	logger.Errorf("ERROR panic in sql Spend: %v\n%s", recovered, debug.Stack())
+
+	if *err == nil {
+		*err = errors.NewUnknownError("panic in Spend: %v", recovered)
+	}
+}
+
 // Spend marks UTXOs as spent by updating their spending transaction ID.
 // It performs several validations:
 //   - Checks if the UTXO exists
@@ -1617,22 +1687,19 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 //
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) (spends []*utxo.Spend, err error) {
+	defer func() {
+		handleSpendPanic(recover(), &err, s.logger)
+	}()
+
 	if blockHeight == 0 {
 		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
 	}
 
-	defer func() {
-		if recoverErr := recover(); recoverErr != nil {
-			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in sql Spend: %v", recoverErr)
-		}
-	}()
-
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
-	spends, err := utxo.GetSpends(tx)
+	spends, err = utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -1669,6 +1736,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
+			// Per-worker panic recovery. The parent's defer only catches panics in the
+			// parent goroutine — errgroup propagates errors but does not recover panics
+			// inside g.Go bodies, so without this a worker panic would crash the process.
+			defer func() {
+				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
+			}()
+
 			errCh := make(chan error, 1)
 			s.spendBatcher.PutCtx(ctx, &batchSpend{
 				spend:             spend,
@@ -1823,6 +1897,21 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+		func(item *batchSpend) *utxo.Spend {
+			if item == nil {
+				return nil
+			}
+			return item.spend
+		},
+		func(item *batchSpend, err error) {
+			item.errCh <- err
+		},
+	)
+	if len(batch) == 0 {
+		return
+	}
+
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		retryable := s.trySendSpendBatch(batch)
@@ -2739,6 +2828,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		_ = txn.Rollback()
 	}()
 
+	// Match-on-spending_data is the safety guarantee: we only clear spending_data
+	// when the caller's expected value matches what's stored. This prevents a stale
+	// or wrong Spend record from silently wiping the legitimate spend.
+	// SpendingData is mandatory: every production caller derives spends from
+	// Spend()/SetConflicting()/GetSpends(), all of which populate it.
 	q1 := `
 		UPDATE outputs
 		SET spending_data = NULL
@@ -2746,7 +2840,25 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			SELECT id FROM transactions WHERE hash = $1
 		)
 		AND idx = $2
+		AND spending_data = $3
 		RETURNING transaction_id
+	`
+
+	// qFindTxID runs after q1 returns 0 rows. Unspend is idempotent: if the output
+	// row exists but our caller doesn't own the spend (stored data is NULL or
+	// belongs to someone else), we no-op on spending_data but still need the
+	// transaction_id to apply the locked/DAH housekeeping below — callers like
+	// ProcessConflicting rely on the parent transaction's locked state being
+	// updated regardless of whether the spend was the loser's. Only a missing
+	// row is a real error (NotFound). Mirrors stores/utxo/aerospike/teranode.lua
+	// where the unspend UDF returns STATUS_OK with no bin mutation for the same
+	// non-owning cases.
+	qFindTxID := `
+		SELECT transaction_id FROM outputs
+		WHERE transaction_id IN (
+			SELECT id FROM transactions WHERE hash = $1
+		)
+		AND idx = $2
 	`
 
 	locked := false
@@ -2771,15 +2883,28 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				continue
 			}
 
+			if spend.SpendingData == nil {
+				return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
+			}
+
 			var transactionID int
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout, spend.SpendingData.Bytes()).Scan(&transactionID)
 			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+				if !errors.Is(err, sql.ErrNoRows) {
+					return err
 				}
 
-				return err
+				// q1 declined to clear — caller isn't the spend's current owner.
+				// Look up the transaction_id directly so the housekeeping below
+				// still runs; the only real error here is a missing row.
+				if err = txn.QueryRowContext(ctx, qFindTxID, spend.TxID[:], spend.Vout).Scan(&transactionID); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					}
+
+					return err
+				}
 			}
 
 			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
@@ -2955,6 +3080,19 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		existingHashes[h] = true
 	}
 	rows.Close()
+
+	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
+	// !UnsetMined every submitted hash MUST exist in the transactions table.
+	// A missing hash means the tx was never persisted (or was pruned) — mirrors
+	// the Aerospike KEY_NOT_FOUND handling so all backends fail closed identically.
+	// UnsetMined tolerates missing rows (the tx is already gone).
+	if !minedBlockInfo.UnsetMined && len(existingHashes) != len(hashes) {
+		for _, h := range hashes {
+			if !existingHashes[*h] {
+				return nil, errors.NewTxNotFoundError("transaction not found: %s", h.String())
+			}
+		}
+	}
 
 	if len(existingHashes) == 0 {
 		if err = txn.Commit(); err != nil {
@@ -3300,7 +3438,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since FROM transactions WHERE hash IN ` + inClause
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -3316,10 +3454,11 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		var (
 			hashBytes    []byte
 			unminedSince sql.NullInt64
+			insertedAt   any
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince); err != nil {
+		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -3332,6 +3471,8 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 				row.data.UnminedSince = uint32(unminedSince.Int64)
 			}
 		}
+
+		row.data.CreatedAt = parseInsertedAtMillis(insertedAt)
 
 		idToTx[row.id] = row
 		hashToTx[row.hash] = row

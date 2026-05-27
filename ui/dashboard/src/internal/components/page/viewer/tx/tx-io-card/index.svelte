@@ -228,19 +228,19 @@
     row-gap: 10px;
 
     /* border-top: 1px solid rgba(255, 255, 255, 0.08); */
-    /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */
+    /* border-bottom: 1px solid rgba(0, 0, 0, 0.08); */
   }
   .io.collapse {
     grid-template-columns: 1fr;
   }
   .col:first-child {
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid var(--app-border-color);
     padding-right: 10px;
   }
   .io.collapse .col:first-child {
     border-right: none;
     padding: 0 0 20px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .col {
@@ -254,7 +254,7 @@
     align-items: center;
     justify-content: space-between;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 17px;
@@ -267,7 +267,7 @@
   }
 
   .title .total {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     text-align: right;
     font-family: Satoshi;
@@ -289,7 +289,7 @@
     align-items: flex-start;
     padding: 0 24px;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
 
     font-family: Satoshi;
     font-size: 15px;
@@ -340,7 +340,7 @@
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--app-overlay-color);
   }
 
   .type-badge.p2pkh {
@@ -370,7 +370,7 @@
 
   .type-desc {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .amount {
@@ -380,8 +380,8 @@
 
   .view-toggle {
     background: none;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.66);
+    border: 1px solid var(--app-border-color);
+    color: var(--comp-label-color);
     padding: 4px 12px;
     border-radius: 4px;
     font-size: 12px;
@@ -391,20 +391,20 @@
   }
 
   .view-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.88);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .script-asm,
   .script-hex {
     font-family: 'Courier New', monospace;
     font-size: 12px;
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--app-bg-color);
     padding: 8px;
     border-radius: 4px;
     word-break: break-all;
     margin-top: 8px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
   }
 
   .op-return-data {
@@ -421,7 +421,7 @@
   }
 
   .output-ref {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     margin-left: 2px;
   }
 
@@ -443,7 +443,7 @@
   }
 
   .address-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-weight: 500;
   }
 

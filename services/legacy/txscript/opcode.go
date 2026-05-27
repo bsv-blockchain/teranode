@@ -1500,7 +1500,7 @@ func opcodeNum2bin(op *parsedOpcode, vm *Engine) error {
 
 	if size > MaxScriptElementSize {
 		return scriptError(ErrNumberTooBig,
-			fmt.Sprintf("n is larger than the max of %d", defaultScriptNumLen))
+			fmt.Sprintf("n is larger than the max of %d", MaxScriptElementSize))
 	}
 
 	// encode a as a script num so that we we take the bytes it
@@ -1583,14 +1583,17 @@ func opcodeSize(op *parsedOpcode, vm *Engine) error {
 //
 // Stack transformation: a -> ~a
 func opcodeInvert(op *parsedOpcode, vm *Engine) error {
-	ba, err := vm.dstack.PeekByteArray(0)
+	ba, err := vm.dstack.PopByteArray()
 	if err != nil {
 		return err
 	}
 
+	out := make([]byte, len(ba))
 	for i := range ba {
-		ba[i] = ba[i] ^ 0xFF
+		out[i] = ba[i] ^ 0xFF
 	}
+
+	vm.dstack.PushByteArray(out)
 
 	return nil
 }

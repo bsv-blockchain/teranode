@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -52,27 +53,35 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 	childHash := chainhash.HashH([]byte("child-of-conflicting-parent"))
 	otherHash := chainhash.HashH([]byte("unrelated-tx"))
 
+	mkInpoints := func(parent chainhash.Hash) *subtreepkg.TxInpoints {
+		in := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, in.PreviousTxIDAdd(&parent))
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in})
+		require.NoError(t, err)
+
+		return &ti
+	}
+
 	childNode := subtreepkg.Node{Hash: childHash, Fee: 1, SizeInBytes: 250}
-	childInpoints := &subtreepkg.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{parentHash},
-		Idxs:           [][]uint32{{0}},
-	}
+	childInpoints := mkInpoints(parentHash)
 	otherNode := subtreepkg.Node{Hash: otherHash, Fee: 2, SizeInBytes: 220}
-	otherInpoints := &subtreepkg.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{chainhash.HashH([]byte("unrelated-parent"))},
-		Idxs:           [][]uint32{{0}},
-	}
+	otherInpoints := mkInpoints(chainhash.HashH([]byte("unrelated-parent")))
+
+	// Set the drain clock 1ms ahead of the enqueue clock so the
+	// per-drain cutoff (validFromMillis = drainClock at window=0) admits
+	// the enqueued batch. This is deterministic — no wall-clock waits —
+	// and lets the test exercise the conflicting-parent rejection path
+	// directly.
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	drainAt := enqueueAt.Add(1 * time.Millisecond)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: drainAt}
 
 	stp.queue.enqueueBatch(
 		[]subtreepkg.Node{childNode, otherNode},
 		[]*subtreepkg.TxInpoints{childInpoints, otherInpoints},
 	)
-
-	// dequeueDuringBlockMovement holds back batches enqueued at-or-after
-	// (now - DoubleSpendWindow). Default window is 0, so it holds batches
-	// with time == now. A short sleep moves batch.time strictly into the
-	// past so the drain releases it.
-	time.Sleep(5 * time.Millisecond)
 
 	conflictingHashes := map[chainhash.Hash]struct{}{
 		parentHash: {},
@@ -93,6 +102,76 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 	_, marked := conflictingHashes[childHash]
 	assert.True(t, marked, "rejected child must be added to the transient set "+
 		"so its own descendants are caught later in the same drain")
+}
+
+// TestDequeueDuringBlockMovement_DrainCutoffAtClockNow pins, at the real
+// call site, that dequeueDuringBlockMovement holds back batches enqueued
+// in the same millisecond as the drain — even with DoubleSpendWindow=0.
+//
+// The drain's validFromMillis is always set (clock.Now() when
+// DoubleSpendWindow=0, clock.Now()-DoubleSpendWindow otherwise) so the
+// queue filter at queue.go:96 (`batch.time >= validFromMillis -> hold`)
+// uses the drain clock as the cutoff. This bounds the drain to batches
+// that already existed before the drain started, preventing the loop
+// from chasing fresh ingest produced by AddTxBatchColumnar — the
+// behaviour that previously stalled the scaling-2 pod inside
+// moveForwardBlock.
+//
+// The Start-loop default-case dequeue still uses its own zero-guard
+// (SubtreeProcessor.go:807-813) and is NOT affected by this test.
+//
+// The "+1ms" subtest exercises the complementary case where the
+// SubtreeProcessor clock has advanced past the enqueue clock; the
+// batch passes the cutoff and drains.
+func TestDequeueDuringBlockMovement_DrainCutoffAtClockNow(t *testing.T) {
+	t.Run("same_millisecond_batch_held_back", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow,
+			"default window is 0; cutoff-at-now is the property being asserted")
+
+		fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		stp.clock = fixedClock{t: fixed}
+		stp.queue.clock = fixedClock{t: fixed}
+
+		txHash := chainhash.HashH([]byte("zero-window-same-ms"))
+		stp.queue.enqueueBatch(
+			[]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}},
+			[]*subtreepkg.TxInpoints{{}},
+		)
+		require.Equal(t, int64(1), stp.queue.length())
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(1), stp.queue.length(),
+			"same-ms batch must be held back: validFromMillis == batch.time")
+		require.NotContains(t, collectSubtreeHashes(stp), txHash,
+			"held-back batch must not appear in chainedSubtrees / currentSubtree")
+	})
+
+	t.Run("control_one_ms_advance_drains_the_batch", func(t *testing.T) {
+		stp := newTestProcessorNoStart(t)
+		require.Zero(t, stp.settings.BlockAssembly.DoubleSpendWindow)
+
+		enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+		drainAt := enqueueAt.Add(1 * time.Millisecond)
+
+		stp.queue.clock = fixedClock{t: enqueueAt}
+		stp.clock = fixedClock{t: drainAt}
+
+		txHash := chainhash.HashH([]byte("zero-window-advance"))
+		stp.queue.enqueueBatch(
+			[]subtreepkg.Node{{Hash: txHash, Fee: 1, SizeInBytes: 220}},
+			[]*subtreepkg.TxInpoints{{}},
+		)
+		require.Equal(t, int64(1), stp.queue.length())
+
+		require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+		require.Equal(t, int64(0), stp.queue.length(),
+			"1ms advance must let the batch drain")
+		assert.Contains(t, collectSubtreeHashes(stp), txHash,
+			"drained batch must be admitted into the subtree")
+	})
 }
 
 // newTestProcessorNoStart builds a SubtreeProcessor without starting the

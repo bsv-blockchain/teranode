@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -2017,6 +2019,166 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 	})
 }
 
+// gatedStreamingBodyGB is an io.ReadCloser that returns a body in two halves: the first
+// half is yielded immediately, the second half blocks on `release` and respects `ctx`
+// cancellation. Used by TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight
+// to emulate an upstream that is mid-stream when a sibling failure triggers errgroup
+// cancellation — letting the test prove whether the in-flight body gets cancelled or
+// runs to completion.
+type gatedStreamingBodyGB struct {
+	ctx      context.Context
+	release  <-chan struct{}
+	first    []byte
+	second   []byte
+	deadline time.Time
+	sent     int
+}
+
+func (g *gatedStreamingBodyGB) Read(p []byte) (int, error) {
+	if g.sent < len(g.first) {
+		n := copy(p, g.first[g.sent:])
+		g.sent += n
+		return n, nil
+	}
+	if g.sent == len(g.first) {
+		// Wait for the sibling failure to be signalled.
+		select {
+		case <-g.release:
+		case <-g.ctx.Done():
+			return 0, g.ctx.Err()
+		case <-time.After(time.Until(g.deadline)):
+			return 0, errors.NewProcessingError("gatedStreamingBodyGB: gate never released")
+		}
+		// After the gate opens, give the errgroup time to actually propagate
+		// cancellation through req.Context(). Pre-fix req.Context() == gCtx so this
+		// observes the cancellation; post-fix req.Context() is detached so this
+		// times out and we proceed to deliver the second half.
+		propagationDeadline := time.Now().Add(200 * time.Millisecond)
+		for time.Now().Before(propagationDeadline) {
+			if err := g.ctx.Err(); err != nil {
+				return 0, err
+			}
+			runtime.Gosched()
+			time.Sleep(time.Millisecond)
+		}
+	}
+	offset := g.sent - len(g.first)
+	if offset >= len(g.second) {
+		return 0, io.EOF
+	}
+	n := copy(p, g.second[offset:])
+	g.sent += n
+	return n, nil
+}
+
+func (g *gatedStreamingBodyGB) Close() error { return nil }
+
+// TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight is the get_blocks.go
+// twin of TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight in subtreevalidation.
+// fetchSubtreeDataForBlock fans out per-subtree fetches under an errgroup; pre-fix, when
+// one subtree's /subtree_data failed, gCtx cancellation truncated every other in-flight
+// HTTP body and discarded the on-demand creation the peer had already begun. Post-fix,
+// the subtree_data fetch + parse + store runs on a ctx detached from errgroup
+// cancellation so successful streams complete and write their files locally.
+func TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	logger := ulogger.TestLogger{}
+	subtreeStore := memory.New()
+	srvSettings := test.CreateBaseTestSettings(t)
+	server := &Server{
+		logger:       logger,
+		subtreeStore: subtreeStore,
+		settings:     srvSettings,
+	}
+
+	baseURL := "http://test-peer:8080"
+	ctx := context.Background()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 6)
+
+	// Two distinct valid subtrees, each (coinbase, tx) so their root hashes are
+	// computed and the parse/hash check inside NewSubtreeDataFromReader succeeds.
+	buildSubtree := func(tx0 *bt.Tx) (*subtreepkg.Subtree, *subtreepkg.Data) {
+		s, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, s.AddCoinbaseNode())
+		require.NoError(t, s.AddNode(*tx0.TxIDChainHash(), 1, 11))
+		sd := subtreepkg.NewSubtreeData(s)
+		// SubtreeData also stores the coinbase tx slot (here we use txs[0] as
+		// a placeholder coinbase substitute since the test only checks bytes).
+		require.NoError(t, sd.AddTx(txs[0], 0))
+		require.NoError(t, sd.AddTx(tx0, 1))
+		return s, sd
+	}
+
+	subtreeA, subtreeDataA := buildSubtree(txs[1])
+	subtreeB, _ := buildSubtree(txs[2])
+
+	subtreeDataABytes, err := subtreeDataA.Serialize()
+	require.NoError(t, err)
+
+	// Pre-stage subtreeToCheck files so fetchAndStoreSubtree skips its /subtree HTTP
+	// fetch — the regression is solely about the subtree_data path.
+	subtreeASer, err := subtreeA.Serialize()
+	require.NoError(t, err)
+	subtreeBSer, err := subtreeB.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtreeA.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeASer))
+	require.NoError(t, subtreeStore.Set(ctx, subtreeB.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBSer))
+
+	bFailed := make(chan struct{})
+
+	// B fails immediately with a non-503 (503 would be retried). bFailed signals that
+	// the errgroup will cancel gCtx imminently.
+	httpmock.RegisterResponder("GET",
+		fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeB.RootHash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			close(bFailed)
+			return httpmock.NewStringResponse(http.StatusInternalServerError, "boom"), nil
+		})
+
+	// A streams its body: first half immediate, second half gated on B's failure. The
+	// gated read honours req.Context() — pre-fix the request's ctx is gCtx (cancelled
+	// by B's failure) so the body is truncated; post-fix the request's ctx is detached
+	// from errgroup cancellation so the body completes.
+	httpmock.RegisterResponder("GET",
+		fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeA.RootHash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			body := &gatedStreamingBodyGB{
+				ctx:      req.Context(),
+				release:  bFailed,
+				first:    subtreeDataABytes[:len(subtreeDataABytes)/2],
+				second:   subtreeDataABytes[len(subtreeDataABytes)/2:],
+				deadline: time.Now().Add(2 * time.Second),
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     http.Header{},
+			}, nil
+		})
+
+	block := &model.Block{
+		Height:   1,
+		Subtrees: []*chainhash.Hash{subtreeA.RootHash(), subtreeB.RootHash()},
+	}
+
+	// Overall call MUST fail because B failed — that is correct.
+	_, err = server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+	require.Error(t, err)
+
+	// Regression: with the fix, A's body completed and was written to disk despite the
+	// sibling failure. Pre-fix this assertion fails — gCtx propagation truncated A's
+	// body, NewSubtreeDataFromReader returned an error, and the file was never stored.
+	require.Eventually(t, func() bool {
+		exists, existsErr := subtreeStore.Exists(ctx, subtreeA.RootHash()[:], fileformat.FileTypeSubtreeData)
+		return existsErr == nil && exists
+	}, 2*time.Second, 20*time.Millisecond,
+		"subtreeA's FileTypeSubtreeData must be stored even after sibling B's failure cancelled the batch")
+}
+
 // TestFetchAndStoreSubtreeAndSubtreeData tests the fetchAndStoreSubtreeAndSubtreeData function comprehensively
 func TestFetchAndStoreSubtreeData(t *testing.T) {
 	baseURL := "http://test-peer:8080"
@@ -2282,7 +2444,8 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	server := &Server{
-		logger: logger,
+		logger:   logger,
+		settings: test.CreateBaseTestSettings(t),
 	}
 
 	baseURL := "http://test-peer:8080"
@@ -2357,6 +2520,72 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 				strings.Contains(err.Error(), "failed to fetch subtree"),
 			"Expected error to contain context cancellation or fetch failure, got: %s", err.Error())
 	})
+}
+
+// TestFetchSubtreeFromPeer_OversizedBody verifies that fetchSubtreeFromPeer refuses to allocate
+// a peer-supplied response body larger than SubtreeValidation.MaxIncomingSubtreeBytes.
+// Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
+func TestFetchSubtreeFromPeer_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap so the test response is cheap to produce
+
+	server := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
+	baseURL := "http://test-peer:8080"
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	data, err := server.fetchSubtreeFromPeer(context.Background(), &subtreeHash, "test-peer-id", baseURL)
+
+	require.Error(t, err)
+	require.Nil(t, data)
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
+// TestFetchSubtreeFromPeer_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// PR #772 originally bounded incoming peer responses by the local
+// BlockAssembly.MaximumMerkleItemsPerSubtree, which broke catchup on docker/test profiles
+// whose assembly cap is smaller than the network's real subtree size. After the fix, the
+// bound is governed by SubtreeValidation.MaxIncomingSubtreeBytes only, so a small local
+// assembly cap no longer rejects legitimate peer responses.
+func TestFetchSubtreeFromPeer_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Mimic the docker quickstart profile: small local assembly cap (32k items * 32 bytes
+	// = 1 MiB) paired with the generous receive-side cap from the default config.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024 // 128 MiB (default)
+
+	server := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+	}
+
+	subtreeHash := chainhash.HashH([]byte("test-large-peer-subtree"))
+	baseURL := "http://test-peer:8080"
+
+	// Response larger than the local assembly cap (1 MiB) but well under the receive cap.
+	largeBody := bytes.Repeat([]byte{0xcd}, 2*1024*1024) // 2 MiB
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, largeBody))
+
+	data, err := server.fetchSubtreeFromPeer(context.Background(), &subtreeHash, "test-peer-id", baseURL)
+
+	require.NoError(t, err)
+	require.Len(t, data, len(largeBody))
 }
 
 // TestFetchSubtreeDataFromPeer tests the fetchSubtreeDataFromPeer function comprehensively
@@ -2929,6 +3158,45 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		}
 
 		// Fetch the subtree (should load from store, not network)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// Regression guard for the dual file-type lookup: if the subtree has
+	// already been promoted to FileTypeSubtree (e.g. by an earlier validation
+	// pass) and the to-check file no longer exists, fetchAndStoreSubtree must
+	// still load it from the store rather than fall back to a peer fetch.
+	t.Run("SubtreeAlreadyExists_AsFileTypeSubtree", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		hash1 := chainhash.DoubleHashH([]byte("tx1"))
+		hash2 := chainhash.DoubleHashH([]byte("tx2"))
+		hash3 := chainhash.DoubleHashH([]byte("tx3"))
+		hash4 := chainhash.DoubleHashH([]byte("tx4"))
+
+		require.NoError(t, subtree.AddNode(hash1, 100, 250))
+		require.NoError(t, subtree.AddNode(hash2, 200, 350))
+		require.NoError(t, subtree.AddNode(hash3, 150, 300))
+		require.NoError(t, subtree.AddNode(hash4, 180, 400))
+
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+
+		subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+
+		// Pre-store under the "already validated" marker only.
+		err = suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes)
+		require.NoError(t, err)
+
+		testBlock := &model.Block{Height: 100}
+
+		// Should succeed with no HTTP mock registered: load from store, not network.
 		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)

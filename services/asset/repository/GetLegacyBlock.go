@@ -77,7 +77,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 		if len(block.Subtrees) == 0 {
 			// Write the coinbase tx
-			if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+			if _, err = block.CoinbaseTx.WriteTo(w); err != nil {
 				_ = w.CloseWithError(io.ErrClosedPipe)
 				_ = r.CloseWithError(err)
 
@@ -96,11 +96,14 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		)
 
 		// Write the coinbase first before processing subtrees
-		if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+		if _, err = block.CoinbaseTx.WriteTo(w); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
 			return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
 		}
+
+		arena := getAssetArena()
+		defer putAssetArena(arena)
 
 		for subtreeIdx, subtreeHash := range block.Subtrees {
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -121,8 +124,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				for {
 					tx := &bt.Tx{}
 
-					// this will read the transaction into the tx object
-					if _, err = tx.ReadFrom(bufferedReader); err != nil {
+					if _, err = tx.ReadFromWithArena(bufferedReader, arena); err != nil {
 						if err == io.EOF {
 							break
 						}
@@ -133,16 +135,23 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					// Skip if this is the coinbase transaction
 					// Include the subtreeIdx check to avoid needing to do string comparison every iteration
 					if subtreeIdx == 0 && tx.IsCoinbase() {
+						// Reset the arena so a coinbase-only iteration doesn't leak slab space.
+						arena.Reset()
 						continue
 					}
 
 					// Write the normal transaction bytes to the writer
-					if _, err = w.Write(tx.Bytes()); err != nil {
+					if _, err = tx.WriteTo(w); err != nil {
 						_ = w.CloseWithError(io.ErrClosedPipe)
 						_ = r.CloseWithError(err)
 
 						return errors.NewProcessingError("error writing transaction to writer: %s", err)
 					}
+
+					// tx.WriteTo finished serialising the tx to w; the arena-backed scripts
+					// are no longer needed. Reset rewinds the cursor so the next tx reuses
+					// the same slab.
+					arena.Reset()
 				}
 
 				// close the subtree data reader after processing all transactions
@@ -223,14 +232,14 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 }
 
 // writeTransactionsViaSubtreeStoreStreaming writes transactions from a subtree to a pipe writer in chunks
-// to minimize memory usage. This method processes transactions in configurable chunk sizes rather than
-// loading all transaction metadata into memory at once.
+// to minimize memory usage. This method streams subtree node records from storage and keeps only a bounded
+// number of transaction chunks in flight.
 //
 // This method is designed to handle large subtrees (1M+ transactions) efficiently by:
-// 1. Loading only the lightweight subtree structure (transaction hashes)
-// 2. Processing transactions in chunks (default: 10K per chunk)
-// 3. Fetching each chunk from Aerospike/store and immediately writing to pipe
-// 4. Releasing chunk memory before processing the next chunk
+// 1. Reading only one chunk of subtree node hashes at a time
+// 2. Fetching chunks from Aerospike/store with bounded concurrency
+// 3. Writing completed chunks in subtree order
+// 4. Releasing chunk memory as soon as the chunk is written
 //
 // This approach maintains constant memory usage (~5MB per chunk) regardless of subtree size,
 // compared to the original method which would use ~500MB for 1M transactions.
@@ -245,141 +254,84 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 //   - error: Any error encountered during processing
 func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Context, w io.Writer, block *model.Block,
 	subtreeHash *chainhash.Hash) error {
-	// 1. Load subtree structure (lightweight - just hashes and tree structure)
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.GetSubtreeTxIDsReader(ctx, subtreeHash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming] error getting subtree %s from store", subtreeHash.String(), err)
-		}
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming] error getting subtree %s from store", subtreeHash.String(), err)
 	}
 
 	defer func() {
 		_ = subtreeReader.Close()
 	}()
 
-	subtree := subtreepkg.Subtree{}
-
-	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
-		return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming] error deserializing subtree", err)
+	bufferedReader := bufio.NewReaderSize(subtreeReader, subtreeStreamBufferSize)
+	header, err := readSubtreeStreamHeader(bufferedReader)
+	if err != nil {
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming] error reading subtree header", err)
 	}
 
-	totalTxs := len(subtree.Nodes)
+	totalTxs, err := safeconversion.Uint64ToInt(header.numLeaves)
+	if err != nil {
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming] error converting subtree node count", err)
+	}
+	if totalTxs == 0 {
+		return nil
+	}
+
 	chunkSize := repo.settings.Asset.SubtreeDataStreamingChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 10000
+	}
+
 	concurrency := repo.settings.Asset.SubtreeDataStreamingConcurrency
 	if concurrency <= 0 {
 		concurrency = 4
 	}
 
-	// 2. Calculate number of chunks
-	numChunks := (totalTxs + chunkSize - 1) / chunkSize
-	if numChunks == 0 {
-		return nil
-	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// 3. Create buffered results channel for fan-in
-	resultsChan := make(chan chunkResult, numChunks)
+	resultsChan := make(chan chunkResult, concurrency)
+	g, gCtx := errgroup.WithContext(streamCtx)
+	g.Go(func() error {
+		defer close(resultsChan)
+		return repo.scheduleSubtreeChunkFetches(gCtx, bufferedReader, subtreeHash, totalTxs, chunkSize, concurrency, resultsChan)
+	})
 
-	// 4. Launch chunk fetch goroutines with limited concurrency
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
-
-	for chunkIdx := 0; chunkIdx < numChunks; chunkIdx++ {
-		chunkIdx := chunkIdx // capture for goroutine
-		offset := chunkIdx * chunkSize
-
-		g.Go(func() error {
-			// Check for context cancellation
-			select {
-			case <-gCtx.Done():
-				return gCtx.Err()
-			default:
-			}
-
-			// Calculate chunk boundaries
-			end := offset + chunkSize
-			if end > totalTxs {
-				end = totalTxs
-			}
-			currentChunkSize := end - offset
-
-			// Extract chunk of transaction hashes from subtree
-			chunkHashes := make([]chainhash.Hash, currentChunkSize)
-			for i := 0; i < currentChunkSize; i++ {
-				chunkHashes[i] = subtree.Nodes[offset+i].Hash
-			}
-
-			// Allocate memory for chunk only
-			chunkMetaSlice := make([]*meta.Data, currentChunkSize)
-
-			// Fetch chunk from store
-			missed, fetchErr := repo.getTxs(gCtx, chunkHashes, chunkMetaSlice)
-			if fetchErr != nil {
-				resultsChan <- chunkResult{chunkIdx: chunkIdx, err: errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for chunk at offset %d", subtreeHash.String(), offset, fetchErr)}
-				return fetchErr
-			}
-
-			if missed > 0 {
-				// Log which transactions are missing in this chunk
-				ctxLogger := repo.logger.WithTraceContext(gCtx)
-				for i := 0; i < currentChunkSize; i++ {
-					if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
-						continue
-					}
-					if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
-						ctxLogger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
-					}
-				}
-				missErr := errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get %d of %d tx meta from store in chunk at offset %d", subtreeHash.String(), missed, currentChunkSize, offset)
-				resultsChan <- chunkResult{chunkIdx: chunkIdx, err: missErr}
-				return missErr
-			}
-
-			// Send successful result
-			resultsChan <- chunkResult{
-				chunkIdx:       chunkIdx,
-				chunkOffset:    offset,
-				chunkHashes:    chunkHashes,
-				chunkMetaSlice: chunkMetaSlice,
-			}
-			return nil
-		})
-	}
-
-	// 5. Close results channel when all fetches complete
-	go func() {
-		_ = g.Wait()
-		close(resultsChan)
-	}()
-
-	// 6. Ordered consumer: collect results and write in chunk order (0, 1, 2, ...)
 	pending := make(map[int]chunkResult)
 	nextChunk := 0
 
+	// Defensive cap on out-of-order chunks held in memory. With the current scheduler
+	// this should never exceed `concurrency`, but a future change to the scheduler could
+	// silently grow it. Aborting beats OOM. 2x leaves headroom for transient races.
+	pendingCap := 2 * concurrency
+
 	for result := range resultsChan {
-		// Check for fetch error
 		if result.err != nil {
-			// Drain remaining results and return error
-			for range resultsChan {
-			}
+			cancel()
+			drainChunkResults(resultsChan)
+			_ = g.Wait()
 			return result.err
 		}
 
 		pending[result.chunkIdx] = result
+		if len(pending) > pendingCap {
+			cancel()
+			drainChunkResults(resultsChan)
+			_ = g.Wait()
+			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (likely scheduler regression)",
+				subtreeHash.String(), pendingCap)
+		}
 
-		// Drain all consecutive chunks starting from nextChunk
 		for {
 			chunk, ok := pending[nextChunk]
 			if !ok {
 				break
 			}
 
-			// Write this chunk to the pipe
-			if err = repo.writeChunkToWriter(w, block, chunk.chunkHashes, chunk.chunkMetaSlice, chunk.chunkOffset); err != nil {
-				// Drain remaining results and return error
-				for range resultsChan {
-					// do nothing, just drain the channel
-				}
+			if err = repo.writeChunkToWriter(streamCtx, w, block, chunk.chunkHashes, chunk.chunkMetaSlice, chunk.chunkOffset); err != nil {
+				cancel()
+				drainChunkResults(resultsChan)
+				_ = g.Wait()
 				return err
 			}
 
@@ -388,7 +340,6 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 		}
 	}
 
-	// 7. Check for errgroup errors after channel is drained
 	if err = g.Wait(); err != nil {
 		return err
 	}
@@ -396,10 +347,115 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 	return nil
 }
 
+func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtreeReader *bufio.Reader, subtreeHash *chainhash.Hash,
+	totalTxs, chunkSize, concurrency int, resultsChan chan<- chunkResult) error {
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	g, gCtx := errgroup.WithContext(fetchCtx)
+	util.SafeSetLimit(g, concurrency)
+
+	var readErr error
+	for chunkIdx, offset := 0, 0; offset < totalTxs; chunkIdx, offset = chunkIdx+1, offset+chunkSize {
+		if readErr = gCtx.Err(); readErr != nil {
+			cancel()
+			break
+		}
+
+		currentChunkSize := min(chunkSize, totalTxs-offset)
+		chunkHashes, err := readSubtreeHashChunk(gCtx, subtreeReader, currentChunkSize)
+		if err != nil {
+			readErr = err
+			cancel()
+			break
+		}
+
+		chunkIdx := chunkIdx
+		offset := offset
+		chunkHashesForWorker := chunkHashes
+		g.Go(func() error {
+			return repo.fetchSubtreeChunk(gCtx, subtreeHash, chunkIdx, offset, chunkHashesForWorker, resultsChan)
+		})
+	}
+
+	waitErr := g.Wait()
+	// When a worker fails, the errgroup cancels gCtx, which makes the next
+	// loop iteration observe context.Canceled and store it in readErr. The
+	// real failure is the worker's error returned by g.Wait(); prefer it so
+	// callers see the cause rather than the cancellation signal it triggered.
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		return waitErr
+	}
+	if readErr != nil {
+		return readErr
+	}
+
+	return waitErr
+}
+
+func (repo *Repository) fetchSubtreeChunk(ctx context.Context, subtreeHash *chainhash.Hash, chunkIdx, offset int,
+	chunkHashes []chainhash.Hash, resultsChan chan<- chunkResult) error {
+	chunkMetaSlice := make([]*meta.Data, len(chunkHashes))
+
+	missed, fetchErr := repo.getTxs(ctx, chunkHashes, chunkMetaSlice)
+	if fetchErr != nil {
+		resultErr := errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for chunk at offset %d", subtreeHash.String(), offset, fetchErr)
+		return sendChunkResult(ctx, resultsChan, chunkResult{chunkIdx: chunkIdx, err: resultErr}, fetchErr)
+	}
+
+	if missed > 0 {
+		ctxLogger := repo.logger.WithTraceContext(ctx)
+		for i := 0; i < len(chunkHashes); i++ {
+			if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
+				continue
+			}
+			if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
+				ctxLogger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
+			}
+		}
+
+		missErr := errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get %d of %d tx meta from store in chunk at offset %d", subtreeHash.String(), missed, len(chunkHashes), offset)
+		return sendChunkResult(ctx, resultsChan, chunkResult{chunkIdx: chunkIdx, err: missErr}, missErr)
+	}
+
+	return sendChunkResult(ctx, resultsChan, chunkResult{
+		chunkIdx:       chunkIdx,
+		chunkOffset:    offset,
+		chunkHashes:    chunkHashes,
+		chunkMetaSlice: chunkMetaSlice,
+	}, nil)
+}
+
+func sendChunkResult(ctx context.Context, resultsChan chan<- chunkResult, result chunkResult, returnErr error) error {
+	select {
+	case resultsChan <- result:
+		return returnErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func drainChunkResults(resultsChan <-chan chunkResult) {
+	for range resultsChan {
+	}
+}
+
 // writeChunkToWriter writes a chunk of transactions to the writer in order.
-func (repo *Repository) writeChunkToWriter(w io.Writer, block *model.Block,
+//
+// The ctx check between writes lets the loop abort promptly when the caller's context is
+// cancelled (e.g. HTTP client disconnect). io.MultiWriter / pipe writes are not ctx-aware
+// on their own, so without this check we'd keep producing tx bytes until the first write
+// happens to land on a closed pipe — meanwhile retaining chunkMetaSlice in heap.
+func (repo *Repository) writeChunkToWriter(ctx context.Context, w io.Writer, block *model.Block,
 	chunkHashes []chainhash.Hash, chunkMetaSlice []*meta.Data, chunkOffset int) error {
+	const ctxCheckEvery = 256
+
 	for i := 0; i < len(chunkHashes); i++ {
+		if i%ctxCheckEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
 			if block != nil {
 				// The coinbase tx is not in the txmeta store, so we add in a special coinbase placeholder tx
@@ -408,7 +464,7 @@ func (repo *Repository) writeChunkToWriter(w io.Writer, block *model.Block,
 				}
 
 				// Write coinbase tx
-				if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+				if _, err := block.CoinbaseTx.WriteTo(w); err != nil {
 					return errors.NewProcessingError("[writeChunkToWriter] error writing coinbase tx", err)
 				}
 			}
@@ -416,7 +472,7 @@ func (repo *Repository) writeChunkToWriter(w io.Writer, block *model.Block,
 		} else {
 			// always write the non-extended normal bytes to the subtree data file !
 			// our peer node should extend the transactions if needed
-			if _, err := w.Write(chunkMetaSlice[i].Tx.Bytes()); err != nil {
+			if _, err := chunkMetaSlice[i].Tx.WriteTo(w); err != nil {
 				return errors.NewProcessingError("[writeChunkToWriter] error writing tx at offset %d", chunkOffset+i, err)
 			}
 		}

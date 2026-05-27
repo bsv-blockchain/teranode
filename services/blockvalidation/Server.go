@@ -524,19 +524,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
 
-	// if our FSM state is CATCHINGBLOCKS, this is probably a remnant of a crash, put the node back in RUNNING state
-	isCatchingBlocks, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateCATCHINGBLOCKS)
-	if err != nil {
-		u.logger.Errorf("[Init] failed to check if FSM currently catching blocks: %v", err)
-	}
-
-	if isCatchingBlocks {
-		u.logger.Infof("[Init] FSM is in CATCHINGBLOCKS state, setting it to RUNNING")
-		if err = u.blockchainClient.Run(ctx, "blockvalidation"); err != nil {
-			return errors.NewServiceError("[Init] failed to set FSM state to RUNNING", err)
-		}
-	}
-
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
 

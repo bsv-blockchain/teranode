@@ -51,6 +51,14 @@ type Options struct {
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
 	SkipTxMetaPublishing bool
+
+	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
+	// When true, the validator skips the BDK ValidateTransaction call (script execution,
+	// sigops, standardness, consensus checks). Intended for legacy catchup
+	// (quickValidationMode) where the block is anchored to a hard-coded checkpoint and
+	// PoW + checkpoint linkage already establish the chain as canonical — re-running
+	// scripts is pure overhead. MUST NOT be set on non-trusted validation paths.
+	SkipScriptValidation bool
 }
 
 // Option defines a function type for setting options
@@ -169,6 +177,14 @@ func WithIgnoreLocked(ignoreLocked bool) Option {
 func WithSkipTxMetaPublishing(skip bool) Option {
 	return func(o *Options) {
 		o.SkipTxMetaPublishing = skip
+	}
+}
+
+// WithSkipScriptValidation creates an option to skip the BDK transaction/script
+// validation step. See Options.SkipScriptValidation for safety constraints.
+func WithSkipScriptValidation(skip bool) Option {
+	return func(o *Options) {
+		o.SkipScriptValidation = skip
 	}
 }
 

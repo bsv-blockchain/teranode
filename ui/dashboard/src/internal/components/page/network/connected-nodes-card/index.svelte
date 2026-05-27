@@ -147,19 +147,19 @@
     padding: 0;
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     cursor: pointer;
     transition: all 0.2s ease;
     border-radius: 4px;
   }
 
   .clear-sort-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.9);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .clear-sort-btn:active {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--app-overlay-strong-color);
   }
 
   .live {
@@ -167,7 +167,7 @@
     align-items: center;
     gap: 4px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 13px;
@@ -185,7 +185,7 @@
     color: #15b241;
   }
   .live-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .title {

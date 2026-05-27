@@ -18,6 +18,11 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+// errAerospikeClientNotInit is the message used when an entry point is
+// reached before the Aerospike client has been initialised. Surfaces in
+// repair tooling and consistency scans; tests assert on the exact text.
+const errAerospikeClientNotInit = "aerospike client not initialized"
+
 // unminedTxIterator implements utxo.UnminedTxIterator for Aerospike
 // It scans all records in the set and yields those that are not mined (i.e., unmined/mempool)
 // Uses multiple workers to read from Aerospike in parallel for improved throughput
@@ -25,6 +30,7 @@ type unminedTxIterator struct {
 	store            *Store
 	prunerMode       bool   // when true, uses pruner-specific bins and filter
 	prunerCutoff     uint32 // cutoff block height for pruner mode
+	conflictingMode  bool   // when true, emits records where conflicting=true regardless of unminedSince
 	err              error
 	done             bool
 	recordset        *as.Recordset
@@ -123,6 +129,12 @@ func getConfigValue(store *Store, configParam string) (string, error) {
 // launchPartitionIterator creates and starts a partition-parallel iterator.
 // Both the block assembly and pruner iterators use this shared setup.
 func launchPartitionIterator(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32) (*unminedTxIterator, error) {
+	return launchPartitionIteratorWithMode(store, numPartitionQueries, prunerMode, prunerCutoff, false)
+}
+
+// launchPartitionIteratorWithMode is the generalised form that supports the
+// conflicting-scan mode used by repair tooling.
+func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32, conflictingMode bool) (*unminedTxIterator, error) {
 	const totalPartitions = 4096 // Aerospike has 4096 partitions
 
 	if numPartitionQueries < 1 {
@@ -148,6 +160,7 @@ func launchPartitionIterator(store *Store, numPartitionQueries int, prunerMode b
 		store:            store,
 		prunerMode:       prunerMode,
 		prunerCutoff:     prunerCutoff,
+		conflictingMode:  conflictingMode,
 		resultChan:       make(chan []*utxo.UnminedTransaction, resultChanSize),
 		errorChan:        make(chan error, numPartitionQueries),
 		cancelWorkers:    cancel,
@@ -182,7 +195,8 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 
 	stmt := as.NewStatement(it.store.namespace, it.store.setName)
 
-	if it.prunerMode {
+	switch {
+	case it.prunerMode:
 		// Pruner mode: tight server-side filter for only old unmined transactions
 		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(it.prunerCutoff))); err != nil {
 			select {
@@ -199,7 +213,23 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.External.String(),
 			fields.Inputs.String(),
 		}
-	} else {
+	case it.conflictingMode:
+		// Conflicting mode: full scan, no server-side index filter. Client-side
+		// filter in processRecordset keeps only conflicting=true records.
+		stmt.BinNames = []string{
+			fields.TxID.String(),
+			fields.Fee.String(),
+			fields.SizeInBytes.String(),
+			fields.CreatedAt.String(),
+			fields.Conflicting.String(),
+			fields.Locked.String(),
+			fields.BlockIDs.String(),
+			fields.UnminedSince.String(),
+			fields.IsCoinbase.String(),
+			fields.External.String(),
+			fields.Inputs.String(),
+		}
+	default:
 		// Non-pruner mode: always apply unmined filter (index-based query)
 		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
 			select {
@@ -356,7 +386,8 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			return true
 		}
 
-		if it.prunerMode {
+		switch {
+		case it.prunerMode:
 			// Pruner mode: skip checks for bins we didn't fetch (createdAt, conflicting, coinbase)
 			// The server-side filter already ensures unminedSince is in [1, cutoff]
 			unminedTx, err := it.processPrunerRecord(ctx, rec.Record.Bins)
@@ -373,7 +404,46 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 					return
 				}
 			}
-		} else {
+			continue
+		case it.conflictingMode:
+			// Conflicting mode: only emit records where conflicting=true.
+			// Skip paginated split records (no createdAt on split records).
+			if rec.Record.Bins[fields.CreatedAt.String()] == nil {
+				continue
+			}
+
+			conflictingVal := rec.Record.Bins[conflictingField]
+			if conflictingVal == nil {
+				continue
+			}
+			conflictingBool, ok := conflictingVal.(bool)
+			if !ok || !conflictingBool {
+				continue
+			}
+
+			// Skip coinbase — coinbases are never conflicting in practice, but defend.
+			if coinbaseBool, ok := rec.Record.Bins[coinbaseField].(bool); ok && coinbaseBool {
+				continue
+			}
+
+			unminedTx, err := it.processRecord(ctx, rec.Record.Bins)
+			if err != nil {
+				select {
+				case it.errorChan <- err:
+				default:
+				}
+				return
+			}
+			if unminedTx != nil {
+				if !bufferTx(unminedTx) {
+					return
+				}
+			}
+			continue
+		}
+
+		{
+			// Default (unmined) mode.
 			// check whether this is a main record (split records are loaded when full is set)
 			// createAt is not set for split records
 			if rec.Record.Bins[fields.CreatedAt.String()] == nil {
@@ -744,7 +814,7 @@ func toUint64(val interface{}) (uint64, error) {
 // Uses the unmined_since index to efficiently query only unmined transactions.
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	return newUnminedTxIterator(s)
@@ -755,7 +825,7 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 // the bins needed by the pruner (txID, unminedSince, external, inputs).
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	if s.client == nil {
-		return nil, errors.NewProcessingError("aerospike client not initialized")
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
 	return newPrunableUnminedTxIterator(s, cutoffBlockHeight)
@@ -773,4 +843,22 @@ func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unmi
 	store.logger.Infof("[newPrunableUnminedTxIterator] Using %d parallel partition queries (cutoff=%d)", numPartitionQueries, cutoffBlockHeight)
 
 	return launchPartitionIterator(store, numPartitionQueries, true, cutoffBlockHeight)
+}
+
+// GetConflictingTxIterator returns an iterator that scans all records and
+// emits those with conflicting=true. Used by repair tooling to purge the
+// losing side of double-spends during a blockchain rewind.
+func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	if s.client == nil {
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
+	}
+
+	numPartitionQueries, err := calculatePartitionQueries(s)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Infof("[GetConflictingTxIterator] Using %d parallel partition queries", numPartitionQueries)
+
+	return launchPartitionIteratorWithMode(s, numPartitionQueries, false, 0, true)
 }

@@ -17,6 +17,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // batchItem represents an item in a transaction batch.
@@ -457,6 +459,18 @@ func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
 
 	_, err = s.client.AddTxBatchColumnar(ctx, columnarReq)
 	if err != nil {
+		// Peer server predates PR #889 and doesn't implement the columnar
+		// RPC. Fall back to the row-oriented path for this call so a
+		// rolling-deploy mismatch doesn't stall tx ingestion. No
+		// connection-level stickiness: each batch re-tries columnar
+		// independently. Costs one wasted RPC per batch against a
+		// persistently-old server; acceptable for the simpler code path.
+		if status.Code(err) == codes.Unimplemented {
+			s.logger.Debugf("[blockassembly] columnar AddTxBatch unimplemented on peer; falling back to row-oriented batch (rolling deploy?): %v", err)
+			s.sendBatchRowOriented(ctx, batch)
+			return
+		}
+
 		s.logger.Errorf("%v", err)
 
 		for _, item := range batch {
@@ -478,15 +492,21 @@ func (s *Client) sendBatchColumnar(ctx context.Context, batch []*batchItem) {
 // and sends them in columnar format. This shifts deserialization work away from the single-machine Server.
 //
 // The columnar format packs all data into contiguous arrays:
-// - txids_packed: All 32-byte TXIDs concatenated
-// - fees: All fees in a single array
-// - sizes: All sizes in a single array
-// - parent_tx_hashes_packed: All parent tx hashes (from TxInpoints) concatenated
-// - parent_tx_offsets: Offset table for parent hashes per transaction
-// - parent_vout_indices: All vout indices flattened
-// - vout_idx_offsets: Offset table for vout indices per parent hash
+//   - txids_packed: All 32-byte TXIDs concatenated
+//   - fees: All fees in a single array
+//   - sizes: All sizes in a single array
+//   - parent_tx_hashes_packed: All parent tx hashes (from TxInpoints) concatenated
+//   - parent_tx_offsets: Offset table for parent hashes per transaction
+//   - vout_idxs_packed: Count-prefixed packed vouts in the exact shape the
+//     server's TxInpoints.voutIdxs stores internally. For each parent, one
+//     uint32 count word followed by that many vout-value words, concatenated
+//     across all transactions.
+//   - vout_idxs_tx_offsets: Per-tx offsets into vout_idxs_packed.
 //
-// This reduces allocations and moves deserialization to distributed Clients.
+// This pushes all TxInpoints layout work to the Client (horizontally scalable
+// validators) so the single-instance block-assembly Server can construct
+// TxInpoints from a per-tx slice with zero allocation
+// (subtree.NewTxInpointsFromPacked).
 func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api.AddTxBatchColumnarRequest, error) {
 	batchSize := len(batch)
 	if batchSize == 0 {
@@ -499,23 +519,22 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 	fees := make([]uint64, batchSize)
 	sizes := make([]uint64, batchSize)
 	parentTxOffsets := make([]uint32, batchSize+1)
+	voutIdxsTxOffsets := make([]uint32, batchSize+1)
 
 	// For variable-length fields, estimate capacity based on typical usage
 	// Estimate: avg 3 parent hashes per tx
 	estimatedParentHashes := batchSize * 3
 	parentTxHashesPacked := make([]byte, 0, estimatedParentHashes*32)
 
-	// Estimate: avg 2 vout indices per parent hash
-	estimatedVoutIndices := estimatedParentHashes * 2
-	parentVoutIndices := make([]uint32, 0, estimatedVoutIndices)
-	voutIdxOffsets := make([]uint32, 1, estimatedParentHashes+1)
+	// Estimate: avg 2 vout indices per parent hash, plus a count word per
+	// parent. Sized as estimatedParentHashes * 3 ≈ count word + 2 values.
+	voutIdxsPacked := make([]uint32, 0, estimatedParentHashes*3)
 
 	// Start with offset 0
 	parentTxOffsets[0] = 0
-	voutIdxOffsets[0] = 0
+	voutIdxsTxOffsets[0] = 0
 
 	currentParentHashCount := uint32(0)
-	currentVoutIdxCount := uint32(0)
 
 	for i, item := range batch {
 		req := item.req
@@ -544,15 +563,20 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		}
 		parentTxOffsets[i+1] = currentParentHashCount
 
-		// Pack vout indices (2D array flattened)
-		// Avoid extra allocations by using Idxs directly
+		// Pack vouts in count-prefixed layout, one parent at a time. The
+		// resulting slice is byte-identical to TxInpoints.voutIdxs on the
+		// Server side, so it can be aliased directly with no decoding.
 		for j := range parentHashes {
-			// Idxs is [][]uint32, where Idxs[j] contains the vout indices for parentHashes[j]
-			vouts := txInpoints.Idxs[j]
-			parentVoutIndices = append(parentVoutIndices, vouts...)
-			currentVoutIdxCount += uint32(len(vouts))
-			voutIdxOffsets = append(voutIdxOffsets, currentVoutIdxCount)
+			vouts, err := txInpoints.GetParentVoutsAtIndex(j)
+			if err != nil {
+				return nil, errors.NewInvalidArgumentError("failed to read vouts at parent %d of tx %d: %v", j, i, err)
+			}
+
+			voutIdxsPacked = append(voutIdxsPacked, uint32(len(vouts)))
+			voutIdxsPacked = append(voutIdxsPacked, vouts...)
 		}
+
+		voutIdxsTxOffsets[i+1] = uint32(len(voutIdxsPacked))
 	}
 
 	return &blockassembly_api.AddTxBatchColumnarRequest{
@@ -561,8 +585,8 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		Sizes:                sizes,
 		ParentTxHashesPacked: parentTxHashesPacked,
 		ParentTxOffsets:      parentTxOffsets,
-		ParentVoutIndices:    parentVoutIndices,
-		VoutIdxOffsets:       voutIdxOffsets,
+		VoutIdxsPacked:       voutIdxsPacked,
+		VoutIdxsTxOffsets:    voutIdxsTxOffsets,
 	}, nil
 }
 

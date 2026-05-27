@@ -71,6 +71,12 @@ var (
 
 	blockQueueSkipCount prometheus.Histogram
 	blockQueueWaitTime  prometheus.Histogram
+
+	// setMinedChan retry tracking. Per-blockhash label deliberately accepts the
+	// cardinality cost: an alert on a single block hitting the retry ceiling is
+	// the primary signal that historical-corrupt state requires manual repair.
+	prometheusBlockValidationSetMinedRetries *prometheus.CounterVec
+	prometheusBlockValidationSetMinedDrops   *prometheus.CounterVec
 )
 
 var (
@@ -208,6 +214,26 @@ func _initPrometheusMetrics() {
 			Name:      "subtree_exists_cache",
 			Help:      "Number of subtrees in the subtree exists cache",
 		},
+	)
+
+	prometheusBlockValidationSetMinedRetries = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "setmined_retry_total",
+			Help:      "Number of setTxMined retries per block hash. Alert when this approaches the retry ceiling (typically 10): the block likely has historical-corrupt state and needs manual repair.",
+		},
+		[]string{"blockhash"},
+	)
+
+	prometheusBlockValidationSetMinedDrops = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "setmined_drops_total",
+			Help:      "Number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention.",
+		},
+		[]string{"blockhash"},
 	)
 
 	// Initialize catchup operation metrics

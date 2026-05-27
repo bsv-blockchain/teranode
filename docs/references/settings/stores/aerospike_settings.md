@@ -129,26 +129,26 @@ utxostore = aerospike://${aerospike_host}:${aerospike_port}/namespace?set=utxo&p
 
 **UTXO Store URL Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| set | string | "utxo" | Aerospike set name |
-| WarmUp | int | 0 | Warm-up connection count |
-| ConnectionQueueSize | int | 256 | Connection queue size |
-| LimitConnectionsToQueueSize | bool | false | Limit connections to queue size |
-| MinConnectionsPerNode | int | 0 | Minimum connections per node |
-| externalStore | string | "" | External transaction cache store URL |
+| Parameter                   | Type   | Default | Description                          |
+|-----------------------------|--------|---------|--------------------------------------|
+| set                         | string | "utxo"  | Aerospike set name                   |
+| WarmUp                      | int    | 0       | Warm-up connection count             |
+| ConnectionQueueSize         | int    | 128     | Connection queue size                |
+| LimitConnectionsToQueueSize | bool   | false   | Limit connections to queue size      |
+| MinConnectionsPerNode       | int    | 0       | Minimum connections per node         |
+| externalStore               | string | ""      | External transaction cache store URL |
 
 ## Validation Rules
 
-| Setting | Validation | Impact | When Checked |
-|---------|------------|--------|-------------|
-| Host | Must be valid hostname/IP | Connection failure if invalid | During store initialization |
-| Port | Must be valid port number (1-65535) | Connection failure if invalid | During store initialization |
-| BatchPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| ReadPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| WritePolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| QueryPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| StatsRefreshDuration | Must be positive duration | Statistics update frequency | During store initialization |
+| Setting              | Validation                                 | Impact                        | When Checked                |
+|----------------------|--------------------------------------------|-------------------------------|-----------------------------|
+| Host                 | Must be valid hostname/IP                  | Connection failure if invalid | During store initialization |
+| Port                 | Must be valid port number (1-65535)        | Connection failure if invalid | During store initialization |
+| BatchPolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| ReadPolicyURL        | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| WritePolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| QueryPolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| StatsRefreshDuration | Must be positive duration                  | Statistics update frequency   | During store initialization |
 
 ## Configuration Examples
 
@@ -211,7 +211,7 @@ aerospike_port.docker.teranode3 = 3300
 ### Complete UTXO Store with Aerospike
 
 ```text
-utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&WarmUp=32&ConnectionQueueSize=256&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/${clientName}/external
+utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&WarmUp=32&ConnectionQueueSize=128&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/${clientName}/external
 
 aerospike_host = aerospike-cluster
 aerospike_port = 3000

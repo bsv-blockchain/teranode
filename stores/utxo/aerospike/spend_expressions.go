@@ -167,12 +167,17 @@ func (s *Store) buildSpendFilterExpression(
 		),
 	)
 
-	// Check spendableIn for this specific offset
-	// Note: Aerospike expressions have limited map access capabilities.
-	// We check if the spendableIn bin exists but cannot easily check specific map values.
-	// The actual spendableIn validation will be done at the Lua level or by reading the map.
-	// For the expression-based approach, we accept that this check is less strict than Lua.
-	// Alternative: Skip the operation if spendableIn exists (conservative approach)
+	// Conservative guard: filter out any record that has UtxoSpendableIn set.
+	//
+	// Aerospike filter expressions cannot inspect specific map values, so we cannot
+	// compare currentBlockHeight against spendableIn[offset] here — only check
+	// whether the map exists at all. This is strictly stricter than the SQL store
+	// and the Lua UDF, both of which compare per-offset.
+	//
+	// The guard stays in place as defense-in-depth: a record that needs the
+	// per-offset comparison must never reach ListSetOp through the expression
+	// path. Filter-outs caused by this guard are retried through the Lua UDF in
+	// processSpendBatchResultsExpressions, which evaluates the boundary correctly.
 	filterConditions = append(filterConditions,
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoSpendableIn.String())),
 	)
@@ -341,6 +346,14 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 }
 
 // processSpendBatchResultsExpressions processes the results from expression-based spend operations.
+//
+// FILTERED_OUT records are not failed in place. The expression filter contains a
+// conservative guard that rejects every record with UtxoSpendableIn set, regardless
+// of the per-offset spendable-height value. SQL and the Lua UDF compare per-offset
+// (the freeze window is closed at start, open at stop), so the expression path is
+// strictly stricter and would otherwise reject valid spends. To restore parity we
+// collect FILTERED_OUT records and re-issue them through the Lua UDF, which can
+// inspect the map value and apply the correct boundary check.
 func (s *Store) processSpendBatchResultsExpressions(
 	ctx context.Context,
 	batchRecords []aerospike.BatchRecordIfc,
@@ -363,6 +376,10 @@ func (s *Store) processSpendBatchResultsExpressions(
 		DAH  uint32
 	}, 0)
 
+	// Records filtered out by the expression — retried through Lua before sending
+	// any response on their errCh, so each caller still sees exactly one result.
+	var retryThroughLua []*batchSpend
+
 	for idx, batchRecord := range batchRecords {
 		bItem, ok := spendIndex[idx]
 		if !ok {
@@ -382,10 +399,13 @@ func (s *Store) processSpendBatchResultsExpressions(
 				}
 
 				if aErr.ResultCode == types.FILTERED_OUT {
-					// Spend was filtered out - could be already spent, conflicting, locked, etc.
-					// Return a generic error since we can't distinguish the exact reason
-					bItem.errCh <- errors.NewUtxoError("spend validation failed for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout)
-					errCount++
+					// The expression can't disambiguate which filter clause rejected
+					// the record. Retry every FILTERED_OUT through Lua so spends
+					// blocked solely by the conservative UtxoSpendableIn guard get
+					// a correct decision, while genuine rejections (already-spent,
+					// conflicting, locked, frozen-until-X) still surface the right
+					// classified error from the Lua UDF.
+					retryThroughLua = append(retryThroughLua, bItem)
 					continue
 				}
 			}
@@ -488,7 +508,22 @@ func (s *Store) processSpendBatchResultsExpressions(
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {
-		s.logger.Debugf("[SPEND_BATCH_EXP] batch %d of %d spends completed in %v (ok=%d, err=%d)",
-			batchID, len(spendIndex), time.Since(start), okCount, errCount)
+		s.logger.Debugf("[SPEND_BATCH_EXP] batch %d of %d spends (ok=%d, err=%d, lua_retry=%d) completed in %v",
+			batchID, len(spendIndex), okCount, errCount, len(retryThroughLua), time.Since(start))
+	}
+
+	// Dispatch FILTERED_OUT records to the Lua UDF for a correct decision. The Lua
+	// path checks UtxoSpendableIn per-offset and returns the precise rejection
+	// reason for records that genuinely cannot be spent. Each item still has a
+	// pending errCh receive — Lua sends exactly one response on it.
+	//
+	// This is a single additional batched Lua call per expression batch — its
+	// cost is independent of how many records were filtered out, but it is only
+	// paid when at least one record needed re-evaluation.
+	if len(retryThroughLua) > 0 {
+		prometheusUtxoSpendExpressionLuaRetry.Inc()
+		prometheusUtxoSpendExpressionLuaRetryN.Add(float64(len(retryThroughLua)))
+
+		s.executeLuaSpendBatch(retryThroughLua)
 	}
 }

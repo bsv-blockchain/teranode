@@ -210,7 +210,12 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 	var err error
 
 	if storeURL.Scheme == "sqlitememory" {
-		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
+		// `_pragma=foreign_keys=on` ensures every connection from the pool
+		// enforces FKs. Without it, FK enforcement is per-connection state
+		// that only applies to whichever connection happened to run a
+		// `PRAGMA foreign_keys = ON` call — other pooled connections start
+		// with FKs OFF (SQLite default) and silently allow violations.
+		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma=foreign_keys=on", random.String(16))
 	} else {
 		folder := tSettings.DataFolder
 		dbName := storeURL.Path[1:]
@@ -228,7 +233,8 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */
-		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL", filename)
+		// See sqlitememory branch for rationale on `foreign_keys=on`.
+		filename = fmt.Sprintf("%s?cache=shared&_pragma=busy_timeout=5000&_pragma=journal_mode=WAL&_pragma=foreign_keys=on", filename)
 	}
 
 	logger.Infof("Using sqlite DB: %s", filename)
@@ -240,10 +246,11 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 		return nil, errors.NewServiceError("failed to open sqlite DB", err)
 	}
 
-	if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
-		_ = db.Close()
-		return nil, errors.NewServiceError("could not enable foreign keys support", err)
-	}
+	// foreign_keys is set per-connection via the `_pragma=foreign_keys=on`
+	// DSN parameter above. A post-open `db.Exec("PRAGMA foreign_keys = ON")`
+	// would only affect a single pooled connection — other connections from
+	// the pool would silently start with FKs OFF (the SQLite default),
+	// causing constraint violations to be missed.
 
 	if _, err = db.Exec(`PRAGMA locking_mode = SHARED;`); err != nil {
 		_ = db.Close()

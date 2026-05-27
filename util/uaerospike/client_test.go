@@ -1,6 +1,7 @@
 package uaerospike
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClient_Put(t *testing.T) {
@@ -198,6 +200,98 @@ func TestGetConnectionQueueSize(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestBuildConnSemaphore(t *testing.T) {
+	tests := []struct {
+		name        string
+		queueSize   int
+		multiplier  float64
+		expectNil   bool
+		expectedCap int
+	}{
+		{name: "default multiplier preserves queue size", queueSize: 128, multiplier: 1.0, expectNil: false, expectedCap: 128},
+		{name: "zero multiplier disables semaphore", queueSize: 128, multiplier: 0, expectNil: true},
+		{name: "negative multiplier disables semaphore", queueSize: 128, multiplier: -1, expectNil: true},
+		{name: "fractional multiplier scales down with rounding", queueSize: 128, multiplier: 0.5, expectNil: false, expectedCap: 64},
+		{name: "fractional multiplier rounds half up", queueSize: 5, multiplier: 0.5, expectNil: false, expectedCap: 3},
+		{name: "double multiplier scales up", queueSize: 128, multiplier: 2.0, expectNil: false, expectedCap: 256},
+		{name: "tiny positive multiplier clamps to 1", queueSize: 128, multiplier: 0.001, expectNil: false, expectedCap: 1},
+		{name: "large multiplier passes through", queueSize: 256, multiplier: 8.0, expectNil: false, expectedCap: 2048},
+		{name: "NaN multiplier disables semaphore", queueSize: 128, multiplier: math.NaN(), expectNil: true},
+		{name: "positive infinity clamps to max", queueSize: 128, multiplier: math.Inf(1), expectNil: false, expectedCap: maxSemaphoreCapacity},
+		{name: "absurdly large multiplier clamps to max", queueSize: 128, multiplier: 1.0e10, expectNil: false, expectedCap: maxSemaphoreCapacity},
+		{name: "multiplier landing exactly at max passes through", queueSize: 1, multiplier: float64(maxSemaphoreCapacity), expectNil: false, expectedCap: maxSemaphoreCapacity},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := buildConnSemaphore(tt.queueSize, tt.multiplier)
+			if tt.expectNil {
+				assert.Nil(t, ch, "expected nil channel when multiplier <= 0")
+				return
+			}
+
+			require.NotNil(t, ch)
+			assert.Equal(t, tt.expectedCap, cap(ch))
+		})
+	}
+}
+
+// TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp verifies that constructing
+// a Client with WithSemaphoreMultiplier(0) leaves the semaphore unset and that
+// acquirePermit / releasePermit are no-ops — i.e. arbitrary numbers of
+// concurrent callers can proceed without parking on the semaphore.
+func TestWithSemaphoreMultiplier_DisableMakesAcquireNoOp(t *testing.T) {
+	c := &Client{
+		Client:        nil,
+		connSemaphore: buildConnSemaphore(128, 0),
+		connQueueSize: 128,
+	}
+	assert.Nil(t, c.connSemaphore)
+	assert.Equal(t, 128, c.GetConnectionQueueSize(),
+		"disabled semaphore must fall back to the underlying connection-queue size so external heuristics (e.g. pruner) keep a non-zero pool capacity")
+
+	// Acquire many "permits" in sequence — none of these should block or
+	// panic because the semaphore is disabled.
+	for i := 0; i < 1000; i++ {
+		err := c.acquirePermit(nil)
+		require.Nil(t, err)
+		c.releasePermit()
+	}
+}
+
+// TestGetConnectionQueueSize_FallsBackWhenDisabled exercises the
+// GetConnectionQueueSize fallback path directly: when the semaphore is nil,
+// the underlying connection-queue size must be reported.
+func TestGetConnectionQueueSize_FallsBackWhenDisabled(t *testing.T) {
+	t.Run("disabled semaphore reports underlying queue size", func(t *testing.T) {
+		c := &Client{connSemaphore: nil, connQueueSize: 256}
+		assert.Equal(t, 256, c.GetConnectionQueueSize())
+	})
+
+	t.Run("active semaphore reports its capacity", func(t *testing.T) {
+		c := &Client{connSemaphore: make(chan struct{}, 64), connQueueSize: 256}
+		assert.Equal(t, 64, c.GetConnectionQueueSize(),
+			"when the semaphore is active, its capacity is the binding throttle")
+	})
+}
+
+// TestWithSemaphoreMultiplier_Scaling verifies the option overrides the
+// default 1.0 multiplier when applied via newClientConfig.
+func TestWithSemaphoreMultiplier_Scaling(t *testing.T) {
+	cfg := newClientConfig([]ClientOption{WithSemaphoreMultiplier(4.0)})
+	assert.InDelta(t, 4.0, cfg.semaphoreMultiplier, 0)
+
+	cfg = newClientConfig(nil)
+	assert.InDelta(t, defaultSemaphoreMultiplier, cfg.semaphoreMultiplier, 0)
+
+	cfg = newClientConfig([]ClientOption{WithSemaphoreMultiplier(0)})
+	assert.InDelta(t, 0.0, cfg.semaphoreMultiplier, 0)
+
+	// nil option entries are tolerated.
+	cfg = newClientConfig([]ClientOption{nil, WithSemaphoreMultiplier(0.25), nil})
+	assert.InDelta(t, 0.25, cfg.semaphoreMultiplier, 0)
 }
 
 func TestClient_ConcurrentOperations(t *testing.T) {

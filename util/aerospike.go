@@ -54,6 +54,17 @@ var querySleepMultiplier float64
 var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
 var aerospikePrometheusHistograms = *safemap.New[string, prometheus.Histogram]()
 
+// aerospikeCounterLast tracks the last reported cumulative value per counter key.
+// Aerospike's Stats() returns cumulative-since-process-start values, so we must
+// emit deltas to Prometheus counters (which use Add) rather than re-adding the
+// whole cumulative each refresh.
+var aerospikeCounterLast = *safemap.New[string, float64]()
+
+// aerospikeHistogramLastBuckets tracks the last cumulative bucket counts per
+// histogram key. Replaying the full cumulative count on every refresh was the
+// previous behaviour and pegged ~40% of legacy CPU during sync.
+var aerospikeHistogramLastBuckets = *safemap.New[string, []uint64]()
+
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
 }
@@ -104,7 +115,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
 		}
 
-		logger.Infof("[Aerospike] readPolicy url %s", readPolicyURL)
+		logger.Infof("[Aerospike] readPolicy url %s", redactURL(readPolicyURL))
 
 		var err error
 
@@ -143,7 +154,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_writePolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] writePolicy url %s", writePolicyURL)
+		logger.Infof("[Aerospike] writePolicy url %s", redactURL(writePolicyURL))
 
 		writeMaxRetries, err = getQueryInt(writePolicyURL, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
 		if err != nil {
@@ -181,7 +192,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_batchPolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyURL)
+		logger.Infof("[Aerospike] batchPolicy url %s", redactURL(batchPolicyURL))
 
 		batchTotalTimeout, err = getQueryDuration(batchPolicyURL, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 		if err != nil {
@@ -228,7 +239,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			querySleepBetweenRetries = aerospike.NewQueryPolicy().SleepBetweenRetries
 			querySleepMultiplier = aerospike.NewQueryPolicy().SleepMultiplier
 		} else {
-			logger.Infof("[Aerospike] queryPolicy url %s", queryPolicyURL)
+			logger.Infof("[Aerospike] queryPolicy url %s", redactURL(queryPolicyURL))
 
 			queryMaxRetries, err = getQueryInt(queryPolicyURL, "MaxRetries", aerospike.NewQueryPolicy().MaxRetries, logger)
 			if err != nil {
@@ -259,7 +270,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 		// todo optimize read policies
 		// todo optimize write policies
-		logger.Infof("[Aerospike] base/connection policy url %s", url)
+		logger.Infof("[Aerospike] base/connection policy url %s", redactURL(url))
 
 		policy.LimitConnectionsToQueueSize, err = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 		if err != nil {
@@ -353,10 +364,19 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		}
 	}
 
-	logger.Debugf("url %s policy %#v\n", url, policy)
+	logger.Debugf("url %s policy %s\n", redactURL(url), aerospikePolicySummary(policy))
+
+	// Apply the aerospike_semaphore_multiplier setting to the in-process
+	// uaerospike connection-semaphore. 1.0 (default) preserves prior
+	// behavior; 0 disables the semaphore so concurrency is governed only by
+	// the underlying aerospike-client-go connection pool. See
+	// util/uaerospike.WithSemaphoreMultiplier for the precise contract.
+	clientOpts := []uaerospike.ClientOption{
+		uaerospike.WithSemaphoreMultiplier(tSettings.Aerospike.SemaphoreMultiplier),
+	}
 
 	// policy = aerospike.NewClientPolicy()
-	client, err := uaerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHostOpts(policy, hosts, clientOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +398,64 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	initStats(logger, client, tSettings)
 
 	return client, nil
+}
+
+// redactURL returns the URL string with the userinfo password component
+// masked. It does not mutate the input. A nil input returns "<nil>".
+//
+// The placeholder "REDACTED" is intentionally URL-safe; "***" would be
+// percent-encoded as %2A%2A%2A by url.UserPassword because '*' is a
+// reserved character in the userinfo subcomponent (RFC 3986).
+func redactURL(u *url.URL) string {
+	if u == nil {
+		return "<nil>"
+	}
+
+	if u.User == nil {
+		return u.String()
+	}
+
+	if _, hasPwd := u.User.Password(); !hasPwd {
+		return u.String()
+	}
+
+	clone := *u
+	clone.User = url.UserPassword(u.User.Username(), "REDACTED")
+
+	return clone.String()
+}
+
+// aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.
+// The Password field is never printed. The selected fields are the ones useful
+// for diagnosing connection-pool and authentication configuration without
+// revealing secrets; the full ClientPolicy has many more fields not deemed
+// useful enough to log here. Add fields here if a debug session needs them.
+func aerospikePolicySummary(p *aerospike.ClientPolicy) string {
+	if p == nil {
+		return "<nil>"
+	}
+
+	tlsState := "no"
+	if p.TlsConfig != nil {
+		tlsState = "yes"
+	}
+
+	return fmt.Sprintf(
+		"ClientPolicy{User:%q, Password:***, AuthMode:%d, ClusterName:%q, "+
+			"Timeout:%s, IdleTimeout:%s, LoginTimeout:%s, "+
+			"ConnectionQueueSize:%d, MinConnectionsPerNode:%d, "+
+			"MaxErrorRate:%d, ErrorRateWindow:%d, "+
+			"LimitConnectionsToQueueSize:%t, FailIfNotConnected:%t, "+
+			"TendInterval:%s, UseServicesAlternate:%t, RackAware:%t, "+
+			"TLS:%s}",
+		p.User, p.AuthMode, p.ClusterName,
+		p.Timeout, p.IdleTimeout, p.LoginTimeout,
+		p.ConnectionQueueSize, p.MinConnectionsPerNode,
+		p.MaxErrorRate, p.ErrorRateWindow,
+		p.LimitConnectionsToQueueSize, p.FailIfNotConnected,
+		p.TendInterval, p.UseServicesAlternate, p.RackAware,
+		tlsState,
+	)
 }
 
 func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *settings.Settings) {
@@ -409,144 +487,195 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 			stats, err := client.Stats()
 			if err != nil {
 				logger.Errorf("Error getting aerospike stats: %s", err.Error())
+				time.Sleep(aerospikeStatsRefreshInterval)
+
 				continue
 			}
 
-			// stats are: map[string]interface {} of
-			// "server" -> map[string]interface{}
-			// "cluster-aggregated-stats" -> map[string]interface{}
-			// open-connections -> int16
-			for key, stat := range stats {
-				key := nonAlphanumericRegex.ReplaceAllString(key, "_")
-
-				switch s := stat.(type) {
-				case map[string]interface{}:
-					for subKey, subStat := range s {
-						subKey := nonAlphanumericRegex.ReplaceAllString(subKey, "_")
-						prometheusKey := fmt.Sprintf("%s_%s", key, subKey)
-						// create prometheus metric, if not exists
-						if _, ok := aerospikePrometheusMetrics.Get(prometheusKey); !ok {
-							aerospikePrometheusMetrics.Set(prometheusKey, promauto.NewCounter(
-								prometheus.CounterOpts{
-									Namespace: "teranode",
-									Subsystem: "aerospike_client_" + key,
-									Name:      subKey,
-									Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
-								},
-							))
-						}
-
-						switch subStat := subStat.(type) {
-						case int16:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(float64(subStat))
-							}
-						case int:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(float64(subStat))
-							}
-						case int32:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(float64(subStat))
-							}
-						case int64:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(float64(subStat))
-							}
-						case float32:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(float64(subStat))
-							}
-						case float64:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(subStat)
-							}
-						case map[string]interface{}:
-							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								if f, ok := subStat["count"].(float64); ok {
-									counter.Add(f)
-								}
-							}
-
-							if buckets, ok := subStat["buckets"].([]interface{}); ok && len(buckets) == len(aerospikeLatencyBuckets) {
-								histogramKey := "aerospike_client_histogram_" + key + "_" + subKey
-								// create prometheus histogram, if not exists
-								if _, ok := aerospikePrometheusHistograms.Get(histogramKey); !ok {
-									aerospikePrometheusHistograms.Set(histogramKey, promauto.NewHistogram(
-										prometheus.HistogramOpts{
-											Namespace: "teranode",
-											Subsystem: "aerospike_client_histogram_" + key,
-											Name:      subKey,
-											Help:      fmt.Sprintf("Aerospike histogram %s:%s", key, subKey),
-											Buckets:   aerospikeLatencyBuckets,
-										},
-									))
-								}
-
-								histogram, ok := aerospikePrometheusHistograms.Get(histogramKey)
-								if ok {
-									for i, v := range buckets {
-										count, ok := v.(float64)
-										if !ok || count == 0 {
-											continue
-										}
-
-										// For Prometheus, observe the upper bound value 'count' times
-										// For the last bucket, use the last boundary (2^24)
-										var value float64
-
-										if i < len(aerospikeLatencyBuckets)-1 {
-											value = aerospikeLatencyBuckets[i]
-										} else {
-											value = aerospikeLatencyBuckets[len(aerospikeLatencyBuckets)-1]
-										}
-
-										for j := 0; j < int(count); j++ {
-											histogram.Observe(value)
-										}
-									}
-								} else {
-									logger.Warnf("Histogram %s not found", histogramKey)
-								}
-							}
-						default:
-							logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
-						}
-					}
-				default:
-					if _, ok := aerospikePrometheusMetrics.Get(key); !ok {
-						aerospikePrometheusMetrics.Set(key, promauto.NewCounter(
-							prometheus.CounterOpts{
-								Namespace: "teranode",
-								Subsystem: "aerospike_client",
-								Name:      key,
-								Help:      fmt.Sprintf("Aerospike stat %s", key),
-							},
-						))
-					}
-
-					switch i := s.(type) {
-					case int16:
-						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
-							counter.Add(float64(i))
-						}
-					case int:
-						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
-							counter.Add(float64(i))
-						}
-					case float64:
-						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
-							counter.Add(i)
-						}
-					default:
-						logger.Debugf("Unknown type for aerospike stat %s: %T", key, i)
-					}
-				}
-			}
+			processAerospikeStats(logger, stats, aerospikeLatencyBuckets, nonAlphanumericRegex)
 
 			time.Sleep(aerospikeStatsRefreshInterval)
 		}
 	}()
+}
+
+// processAerospikeStats walks a stats map returned by aerospike.Client.Stats() and
+// reflects the values into Prometheus metrics. Aerospike returns cumulative
+// values, so we record deltas against the previous observation rather than
+// re-adding the cumulative value on every refresh — replaying the cumulative
+// count was the previous behaviour and accounted for ~40% of legacy CPU.
+func processAerospikeStats(
+	logger ulogger.Logger,
+	stats map[string]interface{},
+	latencyBuckets []float64,
+	nonAlphanumericRegex *regexp.Regexp,
+) {
+	// stats are: map[string]interface {} of
+	// "server" -> map[string]interface{}
+	// "cluster-aggregated-stats" -> map[string]interface{}
+	// open-connections -> int16
+	for key, stat := range stats {
+		key := nonAlphanumericRegex.ReplaceAllString(key, "_")
+
+		switch s := stat.(type) {
+		case map[string]interface{}:
+			for subKey, subStat := range s {
+				subKey := nonAlphanumericRegex.ReplaceAllString(subKey, "_")
+				prometheusKey := fmt.Sprintf("%s_%s", key, subKey)
+				// create prometheus metric, if not exists
+				if _, ok := aerospikePrometheusMetrics.Get(prometheusKey); !ok {
+					aerospikePrometheusMetrics.Set(prometheusKey, promauto.NewCounter(
+						prometheus.CounterOpts{
+							Namespace: "teranode",
+							Subsystem: "aerospike_client_" + key,
+							Name:      subKey,
+							Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
+						},
+					))
+				}
+
+				switch subStat := subStat.(type) {
+				case int16:
+					addCounterDelta(prometheusKey, float64(subStat))
+				case int:
+					addCounterDelta(prometheusKey, float64(subStat))
+				case int32:
+					addCounterDelta(prometheusKey, float64(subStat))
+				case int64:
+					addCounterDelta(prometheusKey, float64(subStat))
+				case float32:
+					addCounterDelta(prometheusKey, float64(subStat))
+				case float64:
+					addCounterDelta(prometheusKey, subStat)
+				case map[string]interface{}:
+					if f, ok := subStat["count"].(float64); ok {
+						addCounterDelta(prometheusKey, f)
+					}
+
+					if buckets, ok := subStat["buckets"].([]interface{}); ok && len(buckets) == len(latencyBuckets) {
+						histogramKey := "aerospike_client_histogram_" + key + "_" + subKey
+						// create prometheus histogram, if not exists
+						if _, ok := aerospikePrometheusHistograms.Get(histogramKey); !ok {
+							aerospikePrometheusHistograms.Set(histogramKey, promauto.NewHistogram(
+								prometheus.HistogramOpts{
+									Namespace: "teranode",
+									Subsystem: "aerospike_client_histogram_" + key,
+									Name:      subKey,
+									Help:      fmt.Sprintf("Aerospike histogram %s:%s", key, subKey),
+									Buckets:   latencyBuckets,
+								},
+							))
+						}
+
+						histogram, ok := aerospikePrometheusHistograms.Get(histogramKey)
+						if !ok {
+							logger.Warnf("Histogram %s not found", histogramKey)
+							continue
+						}
+
+						observeHistogramDelta(histogram, histogramKey, buckets, latencyBuckets)
+					}
+				default:
+					logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
+				}
+			}
+		default:
+			if _, ok := aerospikePrometheusMetrics.Get(key); !ok {
+				aerospikePrometheusMetrics.Set(key, promauto.NewCounter(
+					prometheus.CounterOpts{
+						Namespace: "teranode",
+						Subsystem: "aerospike_client",
+						Name:      key,
+						Help:      fmt.Sprintf("Aerospike stat %s", key),
+					},
+				))
+			}
+
+			switch i := s.(type) {
+			case int16:
+				addCounterDelta(key, float64(i))
+			case int:
+				addCounterDelta(key, float64(i))
+			case float64:
+				addCounterDelta(key, i)
+			default:
+				logger.Debugf("Unknown type for aerospike stat %s: %T", key, i)
+			}
+		}
+	}
+}
+
+// addCounterDelta records the delta between the current cumulative value and
+// the previously recorded value to the Prometheus counter identified by key.
+// A drop in cumulative value (e.g. client restart) is treated as the new value
+// being the delta.
+func addCounterDelta(key string, cur float64) {
+	counter, ok := aerospikePrometheusMetrics.Get(key)
+	if !ok {
+		return
+	}
+
+	prev, _ := aerospikeCounterLast.Get(key)
+
+	delta := cur - prev
+	if delta < 0 {
+		delta = cur
+	}
+
+	aerospikeCounterLast.Set(key, cur)
+
+	if delta > 0 {
+		counter.Add(delta)
+	}
+}
+
+// observeHistogramDelta records, per bucket, the delta between the current
+// cumulative bucket count and the previously recorded count. Each delta is
+// translated into that-many Histogram.Observe calls at the bucket's upper
+// bound so the resulting Prometheus histogram matches the Aerospike one. The
+// previous implementation replayed the entire cumulative count every refresh,
+// which was the dominant CPU consumer in the legacy service.
+func observeHistogramDelta(histogram prometheus.Histogram, key string, buckets []interface{}, latencyBuckets []float64) {
+	last, _ := aerospikeHistogramLastBuckets.Get(key)
+	if len(last) != len(latencyBuckets) {
+		last = make([]uint64, len(latencyBuckets))
+	}
+
+	for i, v := range buckets {
+		count, ok := v.(float64)
+		if !ok {
+			continue
+		}
+
+		cur := uint64(count)
+
+		var delta uint64
+		if cur >= last[i] {
+			delta = cur - last[i]
+		} else {
+			// counters reset (e.g. client restart): treat the new value as the delta.
+			delta = cur
+		}
+
+		last[i] = cur
+
+		if delta == 0 {
+			continue
+		}
+
+		var value float64
+		if i < len(latencyBuckets)-1 {
+			value = latencyBuckets[i]
+		} else {
+			value = latencyBuckets[len(latencyBuckets)-1]
+		}
+
+		for j := uint64(0); j < delta; j++ {
+			histogram.Observe(value)
+		}
+	}
+
+	aerospikeHistogramLastBuckets.Set(key, last)
 }
 
 func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Logger) (bool, error) {

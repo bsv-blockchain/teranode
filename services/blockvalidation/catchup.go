@@ -229,10 +229,9 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Early exit if no new blocks to process
+	// Early exit if no new blocks to process.
 	if len(catchupCtx.blockHeaders) == 0 {
-		u.logger.Infof("[catchup][%s] no new blocks to fetch - already synced", blockUpTo.Hash().String())
-		return nil
+		return u.handleNoNewHeaders(ctx, blockUpTo)
 	}
 
 	// Step 7: Build header chain cache for validation
@@ -263,6 +262,30 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// Report successful catchup to P2P service
 	u.reportCatchupSuccess(ctx, catchupCtx.peerID, time.Since(catchupCtx.startTime))
 
+	return nil
+}
+
+// handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
+// A peer on a dead or shorter fork can legitimately return zero new headers even when
+// blockUpTo is unknown to us. Returning nil unconditionally would make the outer
+// peer-selection loop treat this as success and stop trying other peers, leaving the
+// node unable to sync past the announced block. Only treat it as "already synced"
+// when blockUpTo is known locally (present in our blocks table); otherwise surface
+// an error so the caller moves on to the next peer.
+//
+// Note: this uses GetBlockExists, which is a local-existence check — it returns true
+// for blocks on the main chain as well as for known off-chain (stale) blocks. That is
+// intentional here: if we already have the announced block in any form, we have at
+// least caught up to (or past) it and there is no value in asking another peer for it.
+func (u *Server) handleNoNewHeaders(ctx context.Context, blockUpTo *model.Block) error {
+	exists, err := u.blockchainClient.GetBlockExists(ctx, blockUpTo.Hash())
+	if err != nil {
+		return errors.NewProcessingError("[catchup][%s] peer returned no new headers and block existence check failed", blockUpTo.Hash().String(), err)
+	}
+	if !exists {
+		return errors.NewProcessingError("[catchup][%s] peer returned no new headers but target block is not known locally - peer may be on a dead fork", blockUpTo.Hash().String())
+	}
+	u.logger.Infof("[catchup][%s] no new blocks to fetch - target block already known locally", blockUpTo.Hash().String())
 	return nil
 }
 
@@ -516,6 +539,12 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 3: Validating fork depth against coinbase maturity", catchupCtx.blockUpTo.Hash().String())
 
+	// Reject only when fork depth strictly exceeds CoinbaseMaturity. A reorg of depth d
+	// invalidates a coinbase at height G iff G >= H - d + 1; for that coinbase to have
+	// been spent in the old chain we need G + CoinbaseMaturity <= H, which has a solution
+	// only when d > CoinbaseMaturity. So d == CoinbaseMaturity is safe (no matured
+	// coinbase in the reorged range can yet have been spent), and `>` is the correct
+	// operator here, not `>=`. See issue #4592.
 	if catchupCtx.forkDepth > uint32(u.settings.ChainCfgParams.CoinbaseMaturity) {
 		u.logger.Errorf("[catchup][%s] fork depth (%d blocks) exceeds coinbase maturity (%d blocks)", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
 
@@ -679,7 +708,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 //   - error: If checkpoint verification fails (hash mismatch)
 func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
 	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
+	highestCheckpointHeight := blockchain.HighestCheckpointHeight(catchupCtx.checkpoints)
 	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
 
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
@@ -1143,21 +1172,6 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
-}
-
-// getHighestCheckpointHeight returns the height of the highest checkpoint
-func getHighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	if len(checkpoints) == 0 {
-		return 0
-	}
-
-	var highestHeight uint32
-	for _, checkpoint := range checkpoints {
-		if uint32(checkpoint.Height) > highestHeight {
-			highestHeight = uint32(checkpoint.Height)
-		}
-	}
-	return highestHeight
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint

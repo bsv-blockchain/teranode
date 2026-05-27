@@ -69,10 +69,12 @@ var (
 	prometheusUtxoMapDelete prometheus.Counter
 	prometheusUtxoMapErrors *prometheus.CounterVec
 
-	prometheusUtxoCreateBatch     prometheus.Histogram
-	prometheusUtxoCreateBatchSize prometheus.Histogram
-	prometheusUtxoSpendBatch      prometheus.Histogram
-	prometheusUtxoSpendBatchSize  prometheus.Histogram
+	prometheusUtxoCreateBatch              prometheus.Histogram
+	prometheusUtxoCreateBatchSize          prometheus.Histogram
+	prometheusUtxoSpendBatch               prometheus.Histogram
+	prometheusUtxoSpendBatchSize           prometheus.Histogram
+	prometheusUtxoSpendExpressionLuaRetry  prometheus.Counter
+	prometheusUtxoSpendExpressionLuaRetryN prometheus.Counter
 
 	prometheusTxMetaAerospikeMapGet                   prometheus.Counter
 	prometheusUtxostoreCreate                         prometheus.Counter
@@ -296,6 +298,24 @@ func _initPrometheusMetrics() {
 			Name:      "utxo_spend_batch_size",
 			Help:      "Size of utxo spend batch",
 			Buckets:   util.MetricsBucketsSizeSmall,
+		},
+	)
+
+	prometheusUtxoSpendExpressionLuaRetry = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_expression_lua_retry",
+			Help:      "Number of expression spend batches that triggered a retry through Lua because at least one record was filtered out (typically by the conservative utxoSpendableIn guard).",
+		},
+	)
+
+	prometheusUtxoSpendExpressionLuaRetryN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_expression_lua_retry_records",
+			Help:      "Number of individual records re-dispatched through Lua after being FILTERED_OUT by the expression path.",
 		},
 	)
 

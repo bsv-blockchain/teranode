@@ -401,17 +401,19 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 
 	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	// Check if we already have the subtree
-	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	// Check if we already have the subtree, under either FileTypeSubtreeToCheck
+	// (peer-fetched, pending validation) or FileTypeSubtree (already validated).
+	// See findLocalSubtreeFile for why both must be consulted.
+	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
 	if err != nil {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Error checking subtree existence for %s: %v", subtreeHash.String(), err)
+		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
 	}
 
-	if subtreeExists {
+	if localExists {
 		u.logger.Debugf("[catchup:fetchAndStoreSubtree] Subtree already exists for %s, loading from store", subtreeHash.String())
 
-		// Load existing subtree from store
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+		// Load existing subtree from store under whichever file type was found
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], localFileType)
 		if err != nil {
 			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}
@@ -506,6 +508,19 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		u.logger.Debugf("[catchup:fetchAndStoreSubtreeData] SubtreeData already exists for %s, skipping fetch", subtreeHash.String())
 		return nil
 	}
+
+	// Detach from sibling cancellation: this function is called from a per-subtree
+	// goroutine inside fetchSubtreeDataForBlock's errgroup. Using gCtx for the HTTP
+	// fetch + parse + store means a single sibling failure cancels every in-flight
+	// subtree_data download in the batch — and each cancellation closes the upstream
+	// connection, causing the peer to abort its on-demand creation (storer.Abort) and
+	// throw away Aerospike work that was already paid for. Detaching here lets each
+	// fetch run to completion (or hit its own http_streaming_timeout) so the peer can
+	// finish writing its subtreeData file. The existence check above still respects
+	// the original ctx, so a pre-cancelled call still exits early.
+	//
+	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
+	ctx = context.WithoutCancel(ctx)
 
 	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL)
 	if err != nil {
@@ -640,8 +655,10 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 		}
 	}
 
-	// All peers failed
-	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s, last error: %v", subtreeHash.String(), lastErr)
+	// All peers failed. errors.NewServiceError extracts the trailing error param as
+	// the wrapped error, so a "%v" placeholder for lastErr would render as
+	// %!v(MISSING). The wrapped error is preserved in the chain.
+	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
@@ -656,8 +673,14 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] fetching subtree from %s", url)
 
+	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
+	// streams more than this is malicious — fail fast rather than ReadAll into memory.
+	// This must be independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which
+	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
+	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
 	// Use the existing HTTP utility to fetch subtree
-	subtreeBytes, err := util.DoHTTPRequest(ctx, url)
+	subtreeBytes, err := util.DoHTTPRequestBounded(ctx, url, maxSubtreeBytes)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] failed to fetch subtree from %s", url, err)
 	}
@@ -711,8 +734,10 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 
-	// Use the existing HTTP utility to fetch subtree data
-	subtreeDataReader, err := util.DoHTTPRequestBodyReader(ctx, url)
+	// Retry on 503 — peer's asset service may reject under admission control while it
+	// generates the file on-demand from Aerospike. The retry loop honors the peer's
+	// Retry-After header.
+	subtreeDataReader, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] failed to fetch subtree data from %s", url, err)
 	}

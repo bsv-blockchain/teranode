@@ -278,8 +278,8 @@ The Legacy Service converts standard BSV blocks (which don't have subtrees) into
     - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
 
 4. **Validation:**
-    - In legacy sync mode, a quick validation is performed assuming blocks are valid
-    - In normal mode, more thorough validation is performed via the Teranode validation services
+    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (LEGACYSYNCING or CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
+    - For blocks above the highest checkpoint, more thorough validation is performed via the Teranode validation services.
 
 5. **Storage:**
     - The subtree, its data, and metadata are stored in the Subtree Store
