@@ -210,11 +210,11 @@ func buildSplitServices() []splitService {
 		{
 			Name:                "subtreevalidation",
 			EntrypointFlags:     []string{"-subtreevalidation=1"},
-			HostPorts:           []int{8089},
-			ExposePorts:         []int{8089},
+			HostPorts:           []int{8086},
+			ExposePorts:         []int{8086},
 			DependsOnBlockchain: true,
 			DataMounts:          []string{"txstore", "subtreestore", "subtree_quorum", "external"},
-			HealthcheckPort:     8089,
+			HealthcheckPort:     8086,
 		},
 		{
 			Name:                "validator",

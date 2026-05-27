@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -127,12 +128,17 @@ func TestGenSplitTopology(t *testing.T) {
 	}
 
 	// Per-node split settings: each node gets the full set of gRPC and
-	// HTTP address overrides routing to sibling DNS names.
+	// HTTP address overrides routing to sibling DNS names. Variable names
+	// are the canonical ones declared in settings.conf — see
+	// assertSplitOverridesRefValidPortVars for the cross-check that catches
+	// drift between this template and settings.conf's variable definitions.
 	for nodeIdx := 1; nodeIdx <= 3; nodeIdx++ {
 		nodeStr := strconv.Itoa(nodeIdx)
 		for _, want := range []string{
 			"blockchain_grpcAddress.docker.teranode" + nodeStr + "             = teranode" + nodeStr + "-blockchain:${BLOCKCHAIN_GRPC_PORT}",
-			"blockassembly_grpcAddress.docker.teranode" + nodeStr + "          = teranode" + nodeStr + "-blockassembly:${BLOCKASSEMBLY_GRPC_PORT}",
+			"blockassembly_grpcAddress.docker.teranode" + nodeStr + "          = teranode" + nodeStr + "-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}",
+			"blockvalidation_grpcAddress.docker.teranode" + nodeStr + "        = teranode" + nodeStr + "-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}",
+			"subtreevalidation_grpcAddress.docker.teranode" + nodeStr + "      = teranode" + nodeStr + "-subtreevalidation:${SUBTREE_VALIDATION_GRPC_PORT}",
 			"validator_grpcAddress.docker.teranode" + nodeStr + "              = teranode" + nodeStr + "-validator:${VALIDATOR_GRPC_PORT}",
 			"propagation_grpcAddresses.docker.teranode" + nodeStr + "          = teranode" + nodeStr + "-propagation:${PROPAGATION_GRPC_PORT}",
 			"p2p_grpcAddress.docker.teranode" + nodeStr + "                    = teranode" + nodeStr + "-p2p:${P2P_GRPC_PORT}",
@@ -142,6 +148,9 @@ func TestGenSplitTopology(t *testing.T) {
 			}
 		}
 	}
+
+	assertSplitOverridesRefValidPortVars(t, settings)
+	assertSplitServicePortsMatchSettings(t)
 
 	// Host port arithmetic: validator on host 20081/22081/24081, etc.
 	// Spot-check node 2's blockassembly: HostBase=22000, port 8085 -> 22085.
@@ -168,7 +177,7 @@ func assertHealthchecks(t *testing.T, compose string) {
 		"blockchain":        8087,
 		"blockassembly":     8085,
 		"blockvalidation":   8088,
-		"subtreevalidation": 8089,
+		"subtreevalidation": 8086,
 		"validator":         8081,
 		"propagation":       8084,
 		"p2p":               9904,
@@ -266,5 +275,130 @@ func mustMatchCount(t *testing.T, s string, re *regexp.Regexp, want int) {
 	got := len(re.FindAllString(s, -1))
 	if got != want {
 		t.Errorf("regex %q: want %d matches, got %d", re.String(), want, got)
+	}
+}
+
+// readSettingsConf reads the repo's canonical settings.conf, walking up from
+// this test file until it finds it. The path is resolved at runtime rather
+// than hard-coded so the test still works under `go test` from any cwd.
+func readSettingsConf(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
+	dir := filepath.Dir(file)
+	for {
+		p := filepath.Join(dir, "settings.conf")
+		if b, err := os.ReadFile(p); err == nil {
+			return string(b)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("settings.conf not found walking up from %s", file)
+		}
+		dir = parent
+	}
+}
+
+// settingsPortVars parses the canonical settings.conf for top-level shell-style
+// port variable definitions (e.g. "BLOCK_ASSEMBLY_GRPC_PORT = 8085") and
+// returns name -> port. These are the *only* variable names a generated
+// split settings file may legitimately reference; anything else is a typo
+// that would render at runtime as an unexpanded "${SOMETHING}" literal.
+func settingsPortVars(t *testing.T) map[string]int {
+	t.Helper()
+	src := readSettingsConf(t)
+	re := regexp.MustCompile(`(?m)^([A-Z][A-Z0-9_]*_PORT)\s*=\s*(\d+)\s*$`)
+	out := map[string]int{}
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		port, err := strconv.Atoi(m[2])
+		if err != nil {
+			t.Fatalf("settings.conf: %s has non-numeric port %q", m[1], m[2])
+		}
+		out[m[1]] = port
+	}
+	if len(out) == 0 {
+		t.Fatalf("settings.conf: no *_PORT variables found")
+	}
+	return out
+}
+
+// assertSplitOverridesRefValidPortVars walks the generated split settings
+// file looking for ${VAR_NAME} references and fails if any of them is not a
+// real top-level *_PORT variable in settings.conf. This catches the class
+// of bug where the template emits a typoed name (e.g. BLOCKASSEMBLY_GRPC_PORT
+// instead of the canonical BLOCK_ASSEMBLY_GRPC_PORT) — docker compose would
+// leave such references unexpanded and the resulting dial address would be
+// "container-name:" with no port, which fails confusingly at runtime.
+func assertSplitOverridesRefValidPortVars(t *testing.T, generatedSettings string) {
+	t.Helper()
+	known := settingsPortVars(t)
+	// Restrict to *_PORT references so unrelated ${clientName} etc. are ignored.
+	re := regexp.MustCompile(`\$\{([A-Z][A-Z0-9_]*_PORT)\}`)
+	seen := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(generatedSettings, -1) {
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if _, ok := known[name]; !ok {
+			t.Errorf("generated split settings reference ${%s}, which is not defined in settings.conf — typo in templates/settings.conf.tmpl?", name)
+		}
+	}
+}
+
+// assertSplitServicePortsMatchSettings pins each split service's listener
+// port against the canonical *_PORT value in settings.conf. This catches the
+// case where buildSplitServices() ships a port number that disagrees with
+// the value the rest of the binary uses (e.g. subtreevalidation on 8089
+// when SUBTREE_VALIDATION_GRPC_PORT = 8086) — the container would listen on
+// one port while every dialler from settings.conf would target the other.
+func assertSplitServicePortsMatchSettings(t *testing.T) {
+	t.Helper()
+	ports := settingsPortVars(t)
+	// Each split service's PRIMARY listener port must match the *_PORT var
+	// that dialler settings reference. Keep this map explicit (rather than
+	// trying to derive var-names from service-names) because the mapping is
+	// not 1:1 (asset uses ASSET_HTTP_PORT, p2p uses P2P_GRPC_PORT not the
+	// libp2p TCP port, core has no canonical *_PORT and is skipped).
+	canonical := map[string]string{
+		"blockchain":        "BLOCKCHAIN_GRPC_PORT",
+		"blockassembly":     "BLOCK_ASSEMBLY_GRPC_PORT",
+		"blockvalidation":   "BLOCK_VALIDATION_GRPC_PORT",
+		"subtreevalidation": "SUBTREE_VALIDATION_GRPC_PORT",
+		"validator":         "VALIDATOR_GRPC_PORT",
+		"propagation":       "PROPAGATION_GRPC_PORT",
+		"p2p":               "P2P_GRPC_PORT",
+		"asset":             "ASSET_HTTP_PORT",
+	}
+	for _, svc := range buildSplitServices() {
+		want, hasCanonical := canonical[svc.Name]
+		if !hasCanonical {
+			continue // core sidecar has no single canonical port
+		}
+		expected, ok := ports[want]
+		if !ok {
+			t.Errorf("settings.conf is missing %s, but split service %q depends on it", want, svc.Name)
+			continue
+		}
+		if svc.HealthcheckPort != expected {
+			t.Errorf("split service %q HealthcheckPort=%d disagrees with settings.conf %s=%d",
+				svc.Name, svc.HealthcheckPort, want, expected)
+		}
+		// The service's exposed-port set must contain the canonical port;
+		// otherwise siblings dialling settings.conf addresses won't connect.
+		exposed := false
+		for _, p := range svc.ExposePorts {
+			if p == expected {
+				exposed = true
+				break
+			}
+		}
+		if !exposed {
+			t.Errorf("split service %q does not expose canonical port %d (from %s); ExposePorts=%v",
+				svc.Name, expected, want, svc.ExposePorts)
+		}
 	}
 }

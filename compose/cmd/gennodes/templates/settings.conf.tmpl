@@ -25,9 +25,9 @@ p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
 # instead of the all-in-one default ({{ "${clientName}" }}:port) which would
 # resolve to the node-level container that doesn't exist in split mode.
 blockchain_grpcAddress.docker.teranode{{ .Index }}             = teranode{{ .Index }}-blockchain:${BLOCKCHAIN_GRPC_PORT}
-blockassembly_grpcAddress.docker.teranode{{ .Index }}          = teranode{{ .Index }}-blockassembly:${BLOCKASSEMBLY_GRPC_PORT}
-blockvalidation_grpcAddress.docker.teranode{{ .Index }}        = teranode{{ .Index }}-blockvalidation:${BLOCKVALIDATION_GRPC_PORT}
-subtreevalidation_grpcAddress.docker.teranode{{ .Index }}      = teranode{{ .Index }}-subtreevalidation:${SUBTREEVALIDATION_GRPC_PORT}
+blockassembly_grpcAddress.docker.teranode{{ .Index }}          = teranode{{ .Index }}-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}
+blockvalidation_grpcAddress.docker.teranode{{ .Index }}        = teranode{{ .Index }}-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}
+subtreevalidation_grpcAddress.docker.teranode{{ .Index }}      = teranode{{ .Index }}-subtreevalidation:${SUBTREE_VALIDATION_GRPC_PORT}
 validator_grpcAddress.docker.teranode{{ .Index }}              = teranode{{ .Index }}-validator:${VALIDATOR_GRPC_PORT}
 propagation_grpcAddresses.docker.teranode{{ .Index }}          = teranode{{ .Index }}-propagation:${PROPAGATION_GRPC_PORT}
 propagation_httpAddresses.docker.teranode{{ .Index }}          = http://teranode{{ .Index }}-propagation:${PROPAGATION_HTTP_PORT}
