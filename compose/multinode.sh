@@ -86,6 +86,24 @@ require_stack() {
   fi
 }
 
+# Canonical list of split-mode services. Must track buildSplitServices() in
+# compose/cmd/gennodes/main.go. Used by --skip validation at 'up' time and by
+# the chaos kill/start/pause/unpause service-arg validation so a typo like
+# 'valdiator' surfaces a friendly error instead of a raw docker/compose one.
+KNOWN_SPLIT_SERVICES=" blockchain blockassembly blockvalidation subtreevalidation validator propagation p2p asset core "
+
+# assert_known_service exits 2 with a friendly error if $1 is not one of the
+# split-mode service names. $2 is a short label used in the error message
+# (e.g. "chaos kill", "--skip") so the user knows which arg was rejected.
+assert_known_service() {
+  local svc="$1"
+  local ctx="$2"
+  if [[ "$KNOWN_SPLIT_SERVICES" != *" $svc "* ]]; then
+    echo "error: $ctx: unknown service '$svc' (valid:$KNOWN_SPLIT_SERVICES)" >&2
+    exit 2
+  fi
+}
+
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
 }
@@ -133,7 +151,6 @@ cmd_up() {
       echo "error: --skip requires -allinone=0; there's no per-service granularity in all-in-one mode" >&2
       exit 2
     fi
-    local known_svcs=" blockchain blockassembly blockvalidation subtreevalidation validator propagation p2p asset core "
     for spec in "${skip_specs[@]}"; do
       if [[ ! "$spec" =~ ^([0-9]+):([a-z0-9]+)$ ]]; then
         echo "error: --skip must be N:service (e.g. --skip 2:blockassembly), got '$spec'" >&2
@@ -145,10 +162,7 @@ cmd_up() {
         echo "error: --skip node '$skip_n' out of range 1..$n" >&2
         exit 2
       fi
-      if [[ "$known_svcs" != *" $skip_svc "* ]]; then
-        echo "error: --skip unknown service '$skip_svc' (valid:$known_svcs)" >&2
-        exit 2
-      fi
+      assert_known_service "$skip_svc" "--skip"
       if [[ "$skip_svc" == "blockchain" ]]; then
         # Every other split service on the same node has
         # depends_on: teranodeN-blockchain {condition: service_healthy},
@@ -551,6 +565,7 @@ chaos_kill() {
   local node="${1:?usage: chaos kill <node> [service]}"
   local svc="${2:-}"
   if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos kill"
     local target="teranode${node}-${svc}"
     echo "stopping $target..."
     compose stop "$target"
@@ -577,6 +592,7 @@ chaos_start() {
   local node="${1:?usage: chaos start <node> [service]}"
   local svc="${2:-}"
   if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos start"
     local target="teranode${node}-${svc}"
     echo "starting $target..."
     # 'compose up -d' (rather than 'compose start') so this also works when
@@ -607,6 +623,7 @@ chaos_pause() {
   local node="${1:?usage: chaos pause <node> [service]}"
   local svc="${2:-}"
   if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos pause"
     local ctr="teranode${node}-${svc}-multinode"
     echo "pausing $ctr (simulating freeze)..."
     docker pause "$ctr"
@@ -634,6 +651,7 @@ chaos_unpause() {
   local node="${1:?usage: chaos unpause <node> [service]}"
   local svc="${2:-}"
   if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos unpause"
     local ctr="teranode${node}-${svc}-multinode"
     echo "unpausing $ctr..."
     docker unpause "$ctr"
