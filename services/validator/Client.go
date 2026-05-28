@@ -223,6 +223,23 @@ func candidateBlockTimePtr(opts *Options) *uint32 {
 	return &opts.CandidateBlockTime
 }
 
+// candidateParentMedianTimePtr mirrors candidateBlockTimePtr for the
+// post-CSV consensus path. Returns &opts.CandidateParentMedianTime directly
+// when non-zero so the wire write is no-copy. The nil-when-zero branch is
+// reserved for callers that genuinely have no parent context — e.g. the
+// peer-facing CheckSubtree handler. Block-validation callers (legacy/netsync,
+// subtreevalidation/check_block_subtrees) populate the field unconditionally
+// on the post-CSV consensus path so the validator does not soft-fall to its
+// own asynchronously-updated blockState.MedianTime, which can drift under
+// reorg / tip-advance during long block validations.
+func candidateParentMedianTimePtr(opts *Options) *uint32 {
+	if opts.CandidateParentMedianTime == 0 {
+		return nil
+	}
+
+	return &opts.CandidateParentMedianTime
+}
+
 // buildValidateTxRequest constructs the gRPC ValidateTransactionRequest from
 // raw transaction bytes, block height, and validation options. Shared by the
 // client's non-batch / batch send paths AND by the server's HTTP /tx, /txs
@@ -230,14 +247,15 @@ func candidateBlockTimePtr(opts *Options) *uint32 {
 // representation cannot diverge between any caller.
 func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Options) *validator_api.ValidateTransactionRequest {
 	return &validator_api.ValidateTransactionRequest{
-		TransactionData:      transactionData,
-		BlockHeight:          blockHeight,
-		SkipUtxoCreation:     &opts.SkipUtxoCreation,
-		AddTxToBlockAssembly: &opts.AddTXToBlockAssembly,
-		SkipPolicyChecks:     &opts.SkipPolicyChecks,
-		CreateConflicting:    &opts.CreateConflicting,
-		SkipTxmetaPublishing: &opts.SkipTxMetaPublishing,
-		CandidateBlockTime:   candidateBlockTimePtr(opts),
+		TransactionData:           transactionData,
+		BlockHeight:               blockHeight,
+		SkipUtxoCreation:          &opts.SkipUtxoCreation,
+		AddTxToBlockAssembly:      &opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:          &opts.SkipPolicyChecks,
+		CreateConflicting:         &opts.CreateConflicting,
+		SkipTxmetaPublishing:      &opts.SkipTxMetaPublishing,
+		CandidateBlockTime:        candidateBlockTimePtr(opts),
+		CandidateParentMedianTime: candidateParentMedianTimePtr(opts),
 	}
 }
 
@@ -271,6 +289,10 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.CandidateBlockTime > 0 {
 		queryParams.Add("candidateBlockTime", fmt.Sprintf("%d", opts.CandidateBlockTime))
+	}
+
+	if opts.CandidateParentMedianTime > 0 {
+		queryParams.Add("candidateParentMedianTime", fmt.Sprintf("%d", opts.CandidateParentMedianTime))
 	}
 
 	if blockHeight > 0 {
@@ -429,8 +451,10 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 		// Create options from the request. Reuses the same projection the
 		// server uses so the HTTP fallback cannot silently drop fields that the
 		// gRPC request carried — historically this site missed SkipTxMetaPublishing
-		// (which legacy catchup relies on to avoid extra Kafka work) and
-		// CandidateBlockTime (which pre-CSV block validation needs).
+		// (which legacy catchup relies on to avoid extra Kafka work),
+		// CandidateBlockTime (which pre-CSV block validation needs), and
+		// CandidateParentMedianTime (which post-CSV fork / historical block
+		// validation needs).
 		options := optionsFromValidateRequest(txReq)
 
 		// Try HTTP fallback for this individual transaction

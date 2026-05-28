@@ -139,12 +139,13 @@ func TestExtractValidationParams_ZeroWhenAbsent(t *testing.T) {
 // — including CandidateBlockTime.
 func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 	src := &Options{
-		SkipUtxoCreation:     true,
-		AddTXToBlockAssembly: false,
-		SkipPolicyChecks:     true,
-		CreateConflicting:    true,
-		SkipTxMetaPublishing: true,
-		CandidateBlockTime:   1700000000,
+		SkipUtxoCreation:          true,
+		AddTXToBlockAssembly:      false,
+		SkipPolicyChecks:          true,
+		CreateConflicting:         true,
+		SkipTxMetaPublishing:      true,
+		CandidateBlockTime:        1700000000,
+		CandidateParentMedianTime: 1699999000,
 	}
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
@@ -156,6 +157,7 @@ func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 	require.Equal(t, src.CreateConflicting, got.CreateConflicting)
 	require.Equal(t, src.SkipTxMetaPublishing, got.SkipTxMetaPublishing)
 	require.Equal(t, src.CandidateBlockTime, got.CandidateBlockTime)
+	require.Equal(t, src.CandidateParentMedianTime, got.CandidateParentMedianTime)
 }
 
 // TestOptionsFromValidateRequest_OmittedFieldsStayZero pins that omitted
@@ -167,9 +169,11 @@ func TestOptionsFromValidateRequest_OmittedFieldsStayZero(t *testing.T) {
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
 	require.Nil(t, req.CandidateBlockTime)
+	require.Nil(t, req.CandidateParentMedianTime)
 
 	got := optionsFromValidateRequest(req)
 	require.Equal(t, uint32(0), got.CandidateBlockTime)
+	require.Equal(t, uint32(0), got.CandidateParentMedianTime)
 }
 
 // TestHTTPHandlerPath_CandidateBlockTime_EndToEnd mirrors what the /tx HTTP

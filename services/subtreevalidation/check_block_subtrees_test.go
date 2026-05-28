@@ -1509,7 +1509,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -1533,7 +1533,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -1560,7 +1560,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.Error(t, err)
 	})
 
@@ -1585,7 +1585,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// sequential revalidation pass can re-run the failed subtrees in
 		// block order and resolve cross-subtree parent dependencies. The tx
 		// is still recorded in the orphanage.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 
 		// Verify transaction was added to orphanage for the caller to retry
@@ -1616,7 +1616,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// Missing-parent errors are deferred to the sequential revalidation
 		// pass. The orphanage is skipped because FSM isn't RUNNING, but the
 		// caller still gets a chance to retry.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 
 		// Verify transaction was NOT added to orphanage (blockchain not running)
@@ -1648,7 +1648,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// The orphanage is skipped (conservative when we can't confirm running
 		// state) but the caller's sequential revalidation pass still gets a
 		// chance to retry.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 
 		// Verify transaction was NOT added to orphanage (blockchain client error)
@@ -1664,7 +1664,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1699,7 +1699,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -1732,7 +1732,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
 		require.Error(t, err)
 	})
 }

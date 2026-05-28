@@ -136,14 +136,15 @@ type ValidateTransactionRequest struct {
 	TransactionData []byte                 `protobuf:"bytes,1,opt,name=transaction_data,json=transactionData,proto3" json:"transaction_data,omitempty"` // Raw transaction data to validate
 	BlockHeight     uint32                 `protobuf:"varint,2,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`            // Block height for validation context
 	// validation options
-	SkipUtxoCreation     *bool   `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                 // Skip UTXO creation for validation
-	AddTxToBlockAssembly *bool   `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"` // Add transaction to block assembly
-	SkipPolicyChecks     *bool   `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                 // Skip policy checks
-	CreateConflicting    *bool   `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                // Create conflicting transaction
-	SkipTxmetaPublishing *bool   `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`     // Skip publishing txmeta to Kafka
-	CandidateBlockTime   *uint32 `protobuf:"varint,8,opt,name=candidate_block_time,json=candidateBlockTime,proto3,oneof" json:"candidate_block_time,omitempty"`           // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	SkipUtxoCreation          *bool   `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                              // Skip UTXO creation for validation
+	AddTxToBlockAssembly      *bool   `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"`              // Add transaction to block assembly
+	SkipPolicyChecks          *bool   `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                              // Skip policy checks
+	CreateConflicting         *bool   `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                             // Create conflicting transaction
+	SkipTxmetaPublishing      *bool   `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`                  // Skip publishing txmeta to Kafka
+	CandidateBlockTime        *uint32 `protobuf:"varint,8,opt,name=candidate_block_time,json=candidateBlockTime,proto3,oneof" json:"candidate_block_time,omitempty"`                        // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
+	CandidateParentMedianTime *uint32 `protobuf:"varint,9,opt,name=candidate_parent_median_time,json=candidateParentMedianTime,proto3,oneof" json:"candidate_parent_median_time,omitempty"` // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. Block-validation callers MUST populate this field on every post-CSV request — including mainline ingest — because the server's blockState.MedianTime fallback is updated asynchronously and can race with tip advance / reorg. Senders omit only when they have no parent-chain context (peer-facing CheckSubtree handler), accepting a small correctness risk in exchange for graceful degradation on that path.
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ValidateTransactionRequest) Reset() {
@@ -228,6 +229,13 @@ func (x *ValidateTransactionRequest) GetSkipTxmetaPublishing() bool {
 func (x *ValidateTransactionRequest) GetCandidateBlockTime() uint32 {
 	if x != nil && x.CandidateBlockTime != nil {
 		return *x.CandidateBlockTime
+	}
+	return 0
+}
+
+func (x *ValidateTransactionRequest) GetCandidateParentMedianTime() uint32 {
+	if x != nil && x.CandidateParentMedianTime != nil {
+		return *x.CandidateParentMedianTime
 	}
 	return 0
 }
@@ -511,7 +519,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xc9\x04\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xb0\x05\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -520,13 +528,15 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x12skip_policy_checks\x18\x05 \x01(\bH\x02R\x10skipPolicyChecks\x88\x01\x01\x122\n" +
 	"\x12create_conflicting\x18\x06 \x01(\bH\x03R\x11createConflicting\x88\x01\x01\x129\n" +
 	"\x16skip_txmeta_publishing\x18\a \x01(\bH\x04R\x14skipTxmetaPublishing\x88\x01\x01\x125\n" +
-	"\x14candidate_block_time\x18\b \x01(\rH\x05R\x12candidateBlockTime\x88\x01\x01B\x15\n" +
+	"\x14candidate_block_time\x18\b \x01(\rH\x05R\x12candidateBlockTime\x88\x01\x01\x12D\n" +
+	"\x1ccandidate_parent_median_time\x18\t \x01(\rH\x06R\x19candidateParentMedianTime\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
 	"\x19_add_tx_to_block_assemblyB\x15\n" +
 	"\x13_skip_policy_checksB\x15\n" +
 	"\x13_create_conflictingB\x19\n" +
 	"\x17_skip_txmeta_publishingB\x17\n" +
-	"\x15_candidate_block_time\"{\n" +
+	"\x15_candidate_block_timeB\x1f\n" +
+	"\x1d_candidate_parent_median_time\"{\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +
 	"\x04txid\x18\x02 \x01(\fR\x04txid\x12\x16\n" +

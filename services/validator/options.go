@@ -68,6 +68,39 @@ type Options struct {
 	// Policy mode and post-CSV consensus do not read this field — leaving it at
 	// zero in those contexts is harmless.
 	CandidateBlockTime uint32
+
+	// CandidateParentMedianTime carries the equivalent of bitcoin-sv's
+	// pindexPrev->GetMedianTimePast() for the candidate block being validated.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight,
+	// matching bitcoin-sv's BIP113 activation at ContextualCheckBlock
+	// (src/validation.cpp:6001), where post-activation finality is checked
+	// against the parent's MTP rather than the candidate block's own timestamp.
+	//
+	// Soft-fall: when left at zero on the consensus path,
+	// selectFinalityComparisonTime falls back to blockState.MedianTime (tip
+	// MTP). This fallback exists only for callers that cannot compute the
+	// parent-chain MTP for the candidate (e.g. peer-facing CheckSubtree which
+	// receives no block header context). Block-validation callers that DO
+	// have the parent hash must always populate this field — even on the
+	// mainline ingest path. The validator reads blockState.MedianTime later
+	// than the caller, and the utxo store updates that field asynchronously
+	// from blockchain notifications, so a tip advance / reorg between the
+	// two reads would swap the comparison time source under load.
+	//
+	// Sourcing on the caller side: bitcoin-sv's pindexPrev->GetMedianTimePast()
+	// for a candidate at height H is the median of timestamps at heights
+	// [H-11, H-1] — i.e. the parent block's own timestamp AND its 10 previous
+	// ancestors along the parent's actual chain (the bitcoin-sv routine
+	// iterates `this` then `pprev` 10 times). Teranode's height-based MTP
+	// lookups (GetMedianTimePastForHeights, GetMedianTimePastRange) are
+	// restricted to the current main chain — wrong for a side-chain
+	// candidate. The correct primitive is
+	// blockchainClient.GetBlockHeaders(parentHash, 11), whose SQL fallback
+	// recursively walks parent_id when the start hash is off main chain;
+	// callers then take the median of the 11 returned headers' timestamps
+	// (see services/legacy/netsync and services/subtreevalidation for the
+	// reference implementations).
+	CandidateParentMedianTime uint32
 }
 
 // Option defines a function type for setting options
@@ -221,6 +254,31 @@ func WithParentMetadata(metadata map[chainhash.Hash]*ParentTxMetadata) Option {
 func WithCandidateBlockTime(timestamp uint32) Option {
 	return func(o *Options) {
 		o.CandidateBlockTime = timestamp
+	}
+}
+
+// WithCandidateParentMedianTime creates an option carrying the candidate
+// block's parent-chain MTP (the equivalent of bitcoin-sv's
+// pindexPrev->GetMedianTimePast()). Required by block-validation callers when
+// validating post-CSV blocks, including the steady-state mainline ingest
+// path: the validator must not fall back to its own blockState.MedianTime
+// during validation because the utxo store updates that field asynchronously
+// from blockchain notifications and a tip advance / reorg between the
+// caller's snapshot and the validator's read would silently swap the
+// comparison time source. See Options.CandidateParentMedianTime.
+//
+// Parameters:
+//   - mtp: The candidate-parent-chain MTP computed at the caller — i.e. the
+//     median of timestamps at [H-11, H-1] following the parent's actual
+//     chain (use blockchainClient.GetBlockHeaders(parentHash, 11) which has
+//     a fork-aware fallback, then take the median of the returned headers'
+//     timestamps).
+//
+// Returns:
+//   - Option: Function that sets the candidateParentMedianTime option
+func WithCandidateParentMedianTime(mtp uint32) Option {
+	return func(o *Options) {
+		o.CandidateParentMedianTime = mtp
 	}
 }
 

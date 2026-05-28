@@ -297,26 +297,30 @@ func (v *Validator) GetBlockState() utxo.BlockState {
 // against, plus a flag indicating that finality should be skipped entirely
 // for this combination of context.
 //
-//   Policy mode (!SkipPolicyChecks): tip MTP in all eras. Matches bitcoin-sv's
-//   TxnValidation calling StandardNonFinalVerifyFlags (src/policy/policy.h),
-//   which unconditionally sets LOCKTIME_MEDIAN_TIME_PAST — no Genesis / CSV
-//   gating, no GetAdjustedTime() fallback.
+//	Policy mode (!SkipPolicyChecks): tip MTP in all eras. Matches bitcoin-sv's
+//	TxnValidation calling StandardNonFinalVerifyFlags (src/policy/policy.h),
+//	which unconditionally sets LOCKTIME_MEDIAN_TIME_PAST — no Genesis / CSV
+//	gating, no GetAdjustedTime() fallback.
 //
-//   Consensus mode (SkipPolicyChecks=true):
-//   - blockHeight < CSVHeight  → candidate block header time, supplied by the
-//     caller via Options.CandidateBlockTime. Matches bitcoin-sv
-//     ContextualCheckBlock at src/validation.cpp:6020-6022, which uses
-//     block.GetBlockTime() for pre-CSV blocks. When the caller does not
-//     supply a value (zero), this returns skipFinality=true rather than
-//     fabricating one — block-context callers that haven't migrated yet
-//     keep their previous skip-finality behaviour, no regression.
-//   - blockHeight == CSVHeight → skipFinality=true. BIP113 activates at this
-//     height in bitcoin-sv; the comparison there is candidate-parent MTP,
-//     which requires plumbing not in place yet. Skipping preserves prior
-//     behaviour at the boundary rather than silently using the wrong source.
-//   - blockHeight > CSVHeight  → tip MTP. svnode actually uses
-//     candidate-parent MTP here; tip MTP is a placeholder until the
-//     candidate-parent MTP plumbing lands.
+//	Consensus mode (SkipPolicyChecks=true):
+//	- blockHeight < CSVHeight  → candidate block header time, supplied by the
+//	  caller via Options.CandidateBlockTime. Matches bitcoin-sv
+//	  ContextualCheckBlock at src/validation.cpp:6020-6022, which uses
+//	  block.GetBlockTime() for pre-CSV blocks. When the caller does not
+//	  supply a value (zero), this returns skipFinality=true rather than
+//	  fabricating one — block-context callers that haven't migrated yet
+//	  keep their previous skip-finality behaviour, no regression.
+//	- blockHeight >= CSVHeight → candidate-parent MTP (equivalent to
+//	  bitcoin-sv's pindexPrev->GetMedianTimePast() at src/validation.cpp:6001
+//	  once BIP113 activates), supplied by the caller via
+//	  Options.CandidateParentMedianTime. Block-validation callers must always
+//	  populate this field — including on the mainline ingest path — because
+//	  blockState.MedianTime is updated asynchronously from blockchain
+//	  notifications, so a tip advance / reorg between the caller's snapshot
+//	  and the validator's read would silently swap the comparison time
+//	  source. The blockState.MedianTime fallback below remains for callers
+//	  that have no parent-chain context at all (peer-facing CheckSubtree),
+//	  but is no longer used by the mainline block-validation flows.
 func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight uint32, blockState utxo.BlockState) (comparisonTime uint32, skipFinality bool, err error) {
 	switch {
 	case !opts.SkipPolicyChecks:
@@ -331,9 +335,21 @@ func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight u
 		}
 
 		return opts.CandidateBlockTime, false, nil
-	case blockHeight == csvHeight:
-		return 0, true, nil
 	default:
+		// blockHeight >= csvHeight: use the caller-supplied candidate-parent MTP.
+		// Block-validation callers must always populate this field (legacy/netsync,
+		// subtreevalidation/check_block_subtrees) — the tip-MTP fallback below is
+		// reserved for callers that have no parent-chain context at all (the
+		// peer-facing CheckSubtree handler). The fallback accepts a small
+		// correctness risk on those paths because blockState.MedianTime is
+		// updated asynchronously from blockchain notifications and can drift
+		// under tip advance / reorg during validation — see the documentation
+		// at services/subtreevalidation/Server.go::CheckSubtree for the
+		// rationale of accepting that risk in exchange for graceful degradation.
+		if opts.CandidateParentMedianTime != 0 {
+			return opts.CandidateParentMedianTime, false, nil
+		}
+
 		if blockState.MedianTime == 0 {
 			return 0, false, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, blockState.MedianTime)
 		}

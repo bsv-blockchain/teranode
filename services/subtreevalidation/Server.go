@@ -742,16 +742,22 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		}
 
 		// CheckSubtree responds to peer subtree-validation requests. The candidate
-		// block's header isn't carried in the request and may not exist in our
-		// local store yet, so Options.CandidateBlockTime is intentionally not
-		// populated here — the validator skips pre-CSV consensus finality when
-		// CandidateBlockTime is unset. In practice this is reached only by
-		// peer-supplied subtrees for blocks whose height is below the relevant
-		// CSV activation height of the configured network, which on mainnet
-		// (CSVHeight 419328) means historical replay only. The mainline
-		// block-validation path in subtreevalidation/check_block_subtrees.go
-		// does populate the field, so the same block is fully checked when
-		// validated end-to-end through that path.
+		// block's header isn't carried in the request and the candidate parent
+		// may not exist in our local store yet, so neither
+		// Options.CandidateBlockTime (pre-CSV finality source) nor
+		// Options.CandidateParentMedianTime (post-CSV finality source) is
+		// populated here. The validator soft-falls in both eras:
+		//   - pre-CSV: skips consensus finality (no value to compare against),
+		//   - post-CSV: falls back to tip MTP via blockState.MedianTime.
+		// The post-CSV fall-back to tip MTP accepts a small correctness risk
+		// (blockState.MedianTime is asynchronously updated from blockchain
+		// notifications, so a tip advance during validation can drift the
+		// comparison time source) in exchange for graceful degradation rather
+		// than refusing to validate when there is no block header context.
+		// In practice this peer-supplied path is reached only as a fallback
+		// when the mainline subtreevalidation/check_block_subtrees.go path
+		// — which does always populate both fields per their CSV era — has
+		// not already validated the same block end-to-end.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
@@ -793,8 +799,10 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// Call the ValidateSubtreeInternal method
-	// Options.CandidateBlockTime intentionally not populated — see the
-	// CheckSubtree legacy branch above for the rationale.
+	// Options.CandidateBlockTime and Options.CandidateParentMedianTime
+	// intentionally not populated — see the CheckSubtree legacy branch
+	// above for the rationale (no block header / parent context in the
+	// peer-facing request).
 	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,

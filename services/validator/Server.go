@@ -468,6 +468,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) *
 		opts.CandidateBlockTime = *req.CandidateBlockTime
 	}
 
+	if req.CandidateParentMedianTime != nil {
+		opts.CandidateParentMedianTime = *req.CandidateParentMedianTime
+	}
+
 	return opts
 }
 
@@ -739,6 +743,12 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 		}
 	}
 
+	if candidateParentMedianTimeStr := c.QueryParam("candidateParentMedianTime"); candidateParentMedianTimeStr != "" {
+		if v, err := strconv.ParseUint(candidateParentMedianTimeStr, 10, 32); err == nil {
+			options.CandidateParentMedianTime = uint32(v)
+		}
+	}
+
 	return blockHeight, options
 }
 
@@ -775,8 +785,9 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		blockHeight, options := extractValidationParams(c)
 
 		// Use the shared request builder so the HTTP /tx path cannot drop fields
-		// that the gRPC client put in the query string (e.g. candidateBlockTime,
-		// which the HTTP fallback path depends on for pre-CSV block validation).
+		// that the gRPC client put in the query string (e.g. candidateBlockTime
+		// for pre-CSV block validation, candidateParentMedianTime for post-CSV
+		// fork / historical block validation).
 		req := buildValidateTxRequest(body, blockHeight, options)
 
 		// Process the transaction and return appropriate response
