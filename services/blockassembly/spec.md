@@ -1,6 +1,6 @@
 # Spec: services/blockassembly
 
-**Status:** Draft — restructured per reviewer feedback; awaiting final human approval
+**Status:** Draft — restructured per reviewer feedback; cross-checked against implementation 2026-05-27 (state model, `AddTx` guard, and gap line-references corrected); awaiting final human approval
 **Last generated:** 2026-05-01
 **Sources consulted:** package doc comments at the top of `Server.go` and `Interface.go`; `BENCHMARK.md`; `docs/topics/services/blockAssembly.md` (the canonical topic doc); RPC and message comments in `blockassembly_api/blockassembly_api.proto`; test function names across `*_test.go` for behavior signals; deep-dive reads of `Server.go`, `BlockAssembler.go`, `subtreeprocessor/SubtreeProcessor.go`, `subtreeprocessor/queue.go`, `mining/mine.go`, `mining/BuildBlockHeader.go`, `cmd/checkblockassembly`, `cmd/resetblockassembly`, `services/pruner/worker.go`, `settings/blockassembly_settings.go`, the pinned `go-subtree v1.2.0` library; chain-config defaults for `GenerateSupported` from `go-chaincfg`.
 **Requirement-ID prefix:** `BA`
@@ -241,7 +241,7 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 
 **BA-OBSERVABILITY-001.** The service SHALL expose `GetBlockAssemblyState` returning at minimum: `BlockAssemblyState` (string); `SubtreeProcessorState` (string); `CurrentHeight` (uint32); `CurrentHash` (bytes); `QueueCount` (int64); `SubtreeCount` (uint32); `SubtreeSize` (uint32); `TxCount` (uint64); `RemoveMapCount` (uint32); list of current subtree hashes.
 
-**BA-OBSERVABILITY-002.** `BlockAssemblyState` SHALL take values from a fixed enumeration: `"starting"`, `"running"`, `"resetting"`, `"reorging"`, `"moving_up"`, `"blockchain_subscription"`, `"idle"`.
+**BA-OBSERVABILITY-002.** `BlockAssemblyState` SHALL take values from a fixed enumeration: `"starting"`, `"running"`, `"resetting"`, `"reorging"`, `"movingUp"`, `"blockchainSubscription"`, `"reconciling"`. The value `"idle"` is reserved for the planned Idle state and is not yet implemented (see GAP-BA-001). The strings are **camelCase** (`"movingUp"`, `"blockchainSubscription"`), matching the implementation's `StateStrings` map in `BlockAssembler.go`; consumers MUST match these literals exactly. There is no `"loading_unmined"` value — unmined-loading is tracked by an orthogonal boolean, not an operational state (see [State Machine](#state-machine)).
 
 **BA-OBSERVABILITY-003.** `BlockAssemblyState == "running"` SHALL be reported if and only if all the following hold: unmined-transaction recovery is complete; the service is not mid-reset; the service is not mid-reorg; the service is not currently processing a block notification; the Blockchain service is reachable.
 
@@ -260,6 +260,8 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 ## Public API Contract
 
 The Block Assembly service exposes 18 gRPC operations. Each is governed by the requirement IDs identified in its row.
+
+> **Note on the `Valid states` field.** Rows below list `Running` as the canonical valid state for brevity. Per the matrix in [State Machine](#state-machine), read-only and ingest operations are also accepted in the transient states (`Resetting`/`Reorging`/`MovingUp`/`Reconciling`/`BlockchainSubscription`); only `SubmitMiningSolution`, the reset variants, `GenerateBlocks`, and `CheckBlockAssemblyValidateInputs` are effectively restricted to `Running` (the first two via mid-transition rejection, the latter group via the unmined-loading guard). The per-row `Valid states` field is a summary; the matrix is authoritative (BA-STATE-001).
 
 ### `HealthGRPC`
 
@@ -283,7 +285,7 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | **Valid states** | `Running` |
 | **Request validation** | Txid is 32 bytes; transaction inpoints deserialize successfully |
 | **Success effect** | Transaction is enqueued for inclusion in future candidates |
-| **Error responses** | `service is idle - blockchain unreachable` if in `Idle`; `service not ready - unmined transactions are still being loaded` during recovery; invalid-argument on malformed payload |
+| **Error responses** | invalid-argument on malformed payload (txid ≠ 32 bytes, or inpoints fail to deserialize). `AddTx` is NOT subject to the unmined-loading guard or any operational-state gate — it enqueues unconditionally per BA-INGEST-005. (Idle rejection `service is idle - blockchain unreachable` is the target contract per BA-DEPENDENCY-003 but is not yet implemented — GAP-BA-001.) |
 | **Idempotency** | Yes (BA-INGEST-006) |
 | **Concurrency** | Safe; enqueue is lock-free |
 | **Persistence** | None at this layer; transaction is held in the assembly queue |
@@ -517,50 +519,68 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 
 ## State Machine
 
-The service progresses through distinct operational states. The machine is the basis for the per-state × per-operation matrix below.
+The service's observable condition is the product of **two orthogonal axes**, not a single FSM:
+
+1. **Operational state** — the `State` enum reported by `GetBlockAssemblyState`, whose values are fixed by BA-OBSERVABILITY-002.
+2. **Unmined-loading guard** — a boolean (`unminedTransactionsLoading`) that runs independently of the operational state and is *not* itself a state (see below).
+
+### Operational-state machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> LoadingUnmined: subscribed to chain notifications,<br/>internal channels initialized
-    LoadingUnmined --> Running: all unmined transactions re-added
-    LoadingUnmined --> Idle: Blockchain unreachable<br/>during startup
-    Running --> Resetting: reset operation invoked
-    Running --> Resetting: deep reorg detected<br/>— depth > maturity AND height > 1000
+    Starting --> Running: startup recovery complete<br/>(unminedTransactionsLoading → false)
+    Running --> Resetting: reset invoked, or deep reorg<br/>(depth > maturity AND height > 1000)
     Running --> Reorging: competing chain detected
     Running --> MovingUp: linear extension detected
-    Resetting --> Running: state realigned
-    Reorging --> Running: reorg complete
-    MovingUp --> Running: move-forward complete
-    Running --> Idle: persistent Blockchain failure
-    Reorging --> Idle: persistent Blockchain failure
-    MovingUp --> Idle: persistent Blockchain failure
-    Resetting --> Idle: persistent Blockchain failure
-    Idle --> Running: Blockchain reachable<br/>and tip reconciled
+    Running --> Reconciling: tip reconciliation<br/>(startup / missed notifications)
+    Running --> BlockchainSubscription: processing a block notification
+    Resetting --> Running
+    Reorging --> Running
+    MovingUp --> Running
+    Reconciling --> Running
+    BlockchainSubscription --> Running
+    Running --> Idle: persistent Blockchain failure<br/>(planned — GAP-BA-001)
+    Idle --> Running: Blockchain reachable and tip reconciled<br/>(planned)
 ```
+
+### Unmined-loading guard
+
+Independent of the operational state, the boolean `unminedTransactionsLoading` is `true` from process start until startup recovery (BA-STARTUP-001) completes. While it is `true`, the following operations are rejected with `service not ready - unmined transactions are still being loaded`, in **any** operational state:
+
+- `SubmitMiningSolution`
+- `ResetBlockAssembly`, `ResetBlockAssemblyFully`, `ResetBlockAssemblyValidateInputs`
+- `CheckBlockAssemblyValidateInputs`
+- `GenerateBlocks`
+
+The `AddTx`-class operations and `RemoveTx` are **NOT** subject to this guard; they enqueue unconditionally per BA-INGEST-005. The guard is an orthogonal axis, not an operational state — there is no `"loading_unmined"` value in BA-OBSERVABILITY-002.
 
 ### Per-state × per-operation matrix
 
-| Operation | Starting | LoadingUnmined | Running | Resetting | Reorging | MovingUp | Idle |
-|---|---|---|---|---|---|---|---|
-| `HealthGRPC` | accept | accept | accept | accept | accept | accept | accept |
-| `GetBlockAssemblyState` | accept | accept | accept | accept | accept | accept | accept |
-| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | reject (not ready) | reject (not ready) | accept (enqueue) | accept (enqueue) | accept (enqueue) | accept (enqueue) | reject (idle) |
-| `RemoveTx` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `GetMiningCandidate` | reject (not ready) | reject (not ready) | accept | accept (stale data) | accept (stale data) | accept (stale data) | reject (idle) |
-| `GetCurrentDifficulty` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `SubmitMiningSolution` | reject (not ready) | reject (not ready) | accept | reject (resetting) | reject (reorging) | reject (moving) | reject (idle) |
-| `ResetBlockAssembly` (any variant) | reject (not ready) | reject (not ready) | accept | reject (already resetting) | reject | reject | reject (idle) |
-| `CheckBlockAssemblyValidateInputs` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `CheckBlockAssembly` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
-| `GenerateBlocks` | reject (not ready) | reject (not ready) | accept (if `GenerateSupported`) | reject | reject | reject | reject (idle) |
-| `GetBlockAssemblyBlockCandidate` | reject | reject | accept | accept | accept | accept | reject (idle) |
-| `GetBlockAssemblyTxs` | reject | reject | accept | accept | accept | accept | reject (idle) |
-| `GetCandidateBlock` | reject | reject | accept | accept | accept | accept | reject (idle) |
+| Operation | Running | Transient¹ | Idle² |
+|---|---|---|---|
+| `HealthGRPC` | accept | accept | accept |
+| `GetBlockAssemblyState` | accept | accept | accept |
+| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | accept (enqueue) | accept (enqueue) | reject (idle) |
+| `RemoveTx` | accept | accept | reject (idle) |
+| `GetMiningCandidate` | accept | accept (stale / empty template) | reject (idle) |
+| `GetCurrentDifficulty` | accept | accept | reject (idle) |
+| `SubmitMiningSolution` | accept | reject (busy: mid-transition) | reject (idle) |
+| `ResetBlockAssembly` (any variant) | accept | reject (busy) | reject (idle) |
+| `CheckBlockAssemblyValidateInputs` | accept | accept | reject (idle) |
+| `CheckBlockAssembly` | accept | accept | reject (idle) |
+| `GenerateBlocks` | accept (if `GenerateSupported`) | reject (busy) | reject (idle) |
+| `GetBlockAssemblyBlockCandidate` | accept | accept | reject (idle) |
+| `GetBlockAssemblyTxs` | accept | accept | reject (idle) |
+| `GetCandidateBlock` | accept | accept | reject (idle) |
+
+¹ **Transient** = {`Resetting`, `Reorging`, `MovingUp`, `Reconciling`, `BlockchainSubscription`}. These share identical per-operation behavior. The placement of `Reconciling` and `BlockchainSubscription` here is *inferred* from their role as transient reconciliation states (see Open Question 7); only `Resetting`/`Reorging`/`MovingUp` are verified per-operation. During `Starting`, the unmined-loading guard governs the guarded operations; all other operations behave as their `Running` row but MAY return empty or early results until the first tip is established (e.g. `GetMiningCandidate` returns an empty block template while a block notification is being processed).
+
+² **Idle** does not yet exist in the implementation (GAP-BA-001); this column states the target contract.
 
 **BA-STATE-001.** The state machine SHALL conform to the per-operation matrix above. Implementation MUST NOT add or remove cells without spec amendment.
 
-**BA-STATE-002.** Transitions out of `Resetting`, `Reorging`, `MovingUp`, and `Idle` MUST always end at `Running` (or remain in `Idle` while the Blockchain dependency is still failing). The operational state MUST NOT be permanently wedged in any transient state.
+**BA-STATE-002.** Transitions out of `Resetting`, `Reorging`, `MovingUp`, `Reconciling`, `BlockchainSubscription`, and (when implemented) `Idle` MUST always end at `Running` (or remain in `Idle` while the Blockchain dependency is still failing). The operational state MUST NOT be permanently wedged in any transient state.
 
 ---
 
@@ -600,7 +620,7 @@ stateDiagram-v2
 
 **AC-BA-REORG-006.1.** Given a competing chain arrives with a depth from common ancestor of 150 blocks at current chain height of 5000 (coinbase maturity threshold = 100), then the service MUST perform a full reset and MUST NOT execute move-back / move-forward in place.
 
-**AC-BA-STARTUP-003.1.** Given the service is in `LoadingUnmined`, when `SubmitMiningSolution` is invoked, then the response MUST be a gRPC error containing the literal text `service not ready - unmined transactions are still being loaded`.
+**AC-BA-STARTUP-003.1.** Given startup recovery is in progress (`unminedTransactionsLoading == true`), when `SubmitMiningSolution` is invoked, then the response MUST be a gRPC error containing the literal text `service not ready - unmined transactions are still being loaded`.
 
 **AC-BA-STARTUP-004.1.** Given the UTXO store returns an error when the service requests its unmined-tx iterator on startup, then the service MUST NOT transition to `Running` and MUST report a startup failure.
 
@@ -772,7 +792,7 @@ The following items are **defects** — places where the current implementation 
 
 **GAP-BA-001.** Idle state and persistent-failure detection.
 *Affects:* BA-DEPENDENCY-002 through BA-DEPENDENCY-006, BA-OBSERVABILITY-002, BA-OBSERVABILITY-003.
-The current implementation does not have an `Idle` state in its FSM. Blockchain-call failures (`SendNotification`, `GetBestBlockHeader`, etc.) are logged and either swallowed or returned to the caller; there is no mechanism to count failures within a window or transition the service to Idle. The `BlockAssemblyState` enumeration consumed by the Pruner does not include `"idle"`.
+The current implementation does not have an `Idle` state in its FSM. Blockchain-call failures (`SendNotification`, `GetBestBlockHeader`, etc.) are logged and either swallowed or returned to the caller; there is no mechanism to count failures within a window or transition the service to Idle. The `BlockAssemblyState` enumeration consumed by the Pruner does not include `"idle"`. (Cross-checked 2026-05-27 against `BlockAssembler.go` `StateStrings`: the actual states are `starting`, `running`, `resetting`, `blockchainSubscription`, `reorging`, `movingUp`, `reconciling` — no `idle`. The existing `blockassembly_idle_sleep_duration` setting is **unrelated**: it controls the subtree-processor worker's empty-queue sleep at `SubtreeProcessor.go:914`, not an FSM Idle state — do not conflate the two.)
 *Work required:* introduce an `Idle` state; add a failure counter with a configurable window; route Blockchain-call failures through the state-transition path; ensure `GetBlockAssemblyState` reports `"idle"` when in that state; ensure all state-mutating operations reject from `Idle`; expose new settings `BlockchainFailureThreshold`, `BlockchainFailureWindow`, `BlockchainProbeInterval` per BA-CONFIG-006.
 
 **GAP-BA-002.** Config-load-time validation of subtree-size settings.
@@ -782,7 +802,7 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 
 **GAP-BA-003.** Anti-creep threshold derived from `MinimumMerkleItemsPerSubtree`.
 *Affects:* BA-SUBTREE-024.
-The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
+The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1853` (`if avgNodesPerSubtree < 50`). The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
 
 ---
@@ -797,3 +817,4 @@ These are unresolved design questions, distinct from Conformance Gaps.
 4. The `BA-CANDIDATE-008` "exactly one mining process per node" assumption is critical to the safety of `BA-CANDIDATE-005` (DeleteAll on success). Should there be a config option or runtime guard to enforce/detect multiple mining-process connections, or is the documented assumption sufficient?
 5. The default values in `BA-CONFIG-006` (failure threshold = 3, window = 30 s, probe = 5 s) are conservative starting points proposed by the spec author. They need validation against operational requirements before final adoption.
 6. The `BA-NFR-002` mining-candidate latency target (p99 ≤ 5 ms) is a starting figure that has not been measured in the current implementation. It needs validation.
+7. The per-operation behavior of the `Reconciling` and `BlockchainSubscription` transient states is asserted (from their role as transient reconciliation states) to match `Resetting`/`Reorging`/`MovingUp` in the state matrix, but has not been verified per-operation in code. Targeted tests should confirm — in particular — that `SubmitMiningSolution` and the reset variants reject while in these states, and that `GetMiningCandidate` returns an empty template (per `BlockAssembler.go:1096`) rather than a stale one.
