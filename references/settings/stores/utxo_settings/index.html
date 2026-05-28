@@ -6296,6 +6296,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#spend-circuit-breaker-trigger-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spend Circuit Breaker Trigger Set
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6795,6 +6806,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#spend-circuit-breaker-trigger-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spend Circuit Breaker Trigger Set
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7131,7 +7153,7 @@
 <td>int</td>
 <td>10</td>
 <td>utxostore_spendCircuitBreakerFailureCount</td>
-<td>Circuit breaker failure threshold</td>
+<td>Circuit breaker failure threshold (infrastructure-level errors only — see "Spend Circuit Breaker Trigger Set" below)</td>
 </tr>
 <tr>
 <td>SpendCircuitBreakerCooldown</td>
@@ -7373,6 +7395,16 @@
 </tr>
 </tbody>
 </table>
+<h2 id="spend-circuit-breaker-trigger-set">Spend Circuit Breaker Trigger Set<a class="headerlink" href="#spend-circuit-breaker-trigger-set" title="Permanent link">&para;</a></h2>
+<p>The spend circuit breaker counts only <strong>infrastructure-level</strong> aerospike errors toward <code>SpendCircuitBreakerFailureCount</code>. Data-state errors (e.g. <code>KEY_NOT_FOUND_ERROR</code> for a missing parent during catch-up sync, <code>FILTERED_OUT</code> for a Lua business-rule rejection) are handled by the orphanage and per-record error paths and never increment the failure counter.</p>
+<p>Counted as infrastructure failure:</p>
+<ul>
+<li><code>TIMEOUT</code>, <code>NETWORK_ERROR</code>, <code>NO_RESPONSE</code>, <code>MAX_RETRIES_EXCEEDED</code>, <code>MAX_ERROR_RATE</code></li>
+<li><code>NO_AVAILABLE_CONNECTIONS_TO_NODE</code>, <code>SERVER_NOT_AVAILABLE</code>, <code>INVALID_NODE_ERROR</code>, <code>PARTITION_UNAVAILABLE</code></li>
+<li><code>SERVER_MEM_ERROR</code>, <code>SERVER_ERROR</code>, <code>DEVICE_OVERLOAD</code>, <code>BATCH_FAILED</code>, <code>GRPC_ERROR</code></li>
+<li>stdlib <code>context.DeadlineExceeded</code>; <code>net.Error</code> with <code>Timeout() == true</code></li>
+</ul>
+<p>Anything else — including unknown / non-aerospike errors — is treated as non-infrastructure. The bias is intentional: a false trip during IBD stalls sync (issue #953), while a missed infrastructure signal is recoverable by the higher-level <code>SpendWaitTimeout</code> and health checks.</p>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="block-height-retention">Block Height Retention<a class="headerlink" href="#block-height-retention" title="Permanent link">&para;</a></h3>
 <ul>
