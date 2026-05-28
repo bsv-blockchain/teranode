@@ -77,10 +77,10 @@ func TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic(t *testing.T) {
 	// (matching the layout CreateUTXOSet writes: current block hash +
 	// 4-byte height + previous block hash). memory.Set prepends the
 	// fileformat magic, so we only provide post-header bytes.
-	var body []byte
-	body = append(body, previousBlockHash[:]...)
 	var heightBuf [4]byte
 	binary.LittleEndian.PutUint32(heightBuf[:], 42)
+	body := make([]byte, 0, len(previousBlockHash)+len(heightBuf)+len(grandparentHash))
+	body = append(body, previousBlockHash[:]...)
 	body = append(body, heightBuf[:]...)
 	body = append(body, grandparentHash[:]...)
 	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))
@@ -122,10 +122,10 @@ func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
 	// File stored under key=previousBlockHash but whose stored
 	// "current block hash" metadata is something else — simulates
 	// corruption or a mis-keyed file.
-	var body []byte
-	body = append(body, wrongStoredHash[:]...)
 	var heightBuf [4]byte
 	binary.LittleEndian.PutUint32(heightBuf[:], 42)
+	body := make([]byte, 0, len(wrongStoredHash)+len(heightBuf)+len(grandparentHash))
+	body = append(body, wrongStoredHash[:]...)
 	body = append(body, heightBuf[:]...)
 	body = append(body, grandparentHash[:]...)
 	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))

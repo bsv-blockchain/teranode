@@ -614,15 +614,13 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			return errors.NewStorageError("previous utxo-set block hash mismatch: want %s got %s",
 				c.firstPreviousBlockHash.String(), storedCurrentBlockHash.String())
 		}
-		var (
-			storedBlockHeight       uint32
-			storedPreviousBlockHash chainhash.Hash
-		)
-		if err := binary.Read(previousUTXOSetReader, binary.LittleEndian, &storedBlockHeight); err != nil {
-			return errors.NewStorageError("error reading previous utxo-set block height", err)
-		}
-		if _, err := io.ReadFull(previousUTXOSetReader, storedPreviousBlockHash[:]); err != nil {
-			return errors.NewStorageError("error reading previous utxo-set previous block hash", err)
+		// Skip the remaining 36 bytes of per-file metadata (4-byte height
+		// + 32-byte previous block hash). The new set being written
+		// doesn't natively carry the previous set's stored height /
+		// grandparent hash to compare against, so consuming rather than
+		// parsing avoids dead variables.
+		if _, err := io.CopyN(io.Discard, previousUTXOSetReader, 36); err != nil {
+			return errors.NewStorageError("error skipping previous utxo-set header trailer", err)
 		}
 
 	OUTER:
