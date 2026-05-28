@@ -144,6 +144,14 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return err
 	}
 
+	// Legacy catchup below the highest hard-coded checkpoint sets this: PoW +
+	// checkpoint linkage already establish the chain as canonical, so re-running
+	// scripts is pure overhead. The caller is responsible for ensuring the block
+	// is actually trusted (see SyncManager.quickValidationAllowed).
+	if validationOptions.SkipScriptValidation {
+		return nil
+	}
+
 	// Fee enforcement (including the consolidation-fee exemption) is performed by
 	// BDK's ValidateTransaction in policy mode. Setters pushed at startup carry
 	// MinMiningTxFee plus the four consolidation-policy values into BDK.
