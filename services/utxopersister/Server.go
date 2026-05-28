@@ -656,15 +656,18 @@ func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error 
 		store:     s.blockStore,
 	}
 
+	// GetUTXOSetReader -> store.GetIoReader already validates the fileformat
+	// header (8-byte magic + matching FileType) before returning the reader,
+	// so a successful open is sufficient evidence that the UTXO set file
+	// exists and has a valid header. Calling fileformat.ReadHeader here
+	// would consume the *next* 8 bytes of the body — which are the first
+	// bytes of the block hash field — and reliably fail with "unknown
+	// magic: [...]", taking the whole core sidecar down via ServiceManager.
 	r, err := us.GetUTXOSetReader(hash)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-
-	if _, err := fileformat.ReadHeader(r); err != nil {
-		return err
-	}
 
 	return nil
 }
