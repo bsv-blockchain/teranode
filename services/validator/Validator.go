@@ -293,6 +293,55 @@ func (v *Validator) GetBlockState() utxo.BlockState {
 	return v.utxoStore.GetBlockState()
 }
 
+// selectFinalityComparisonTime returns the time value to compare nLockTime
+// against, plus a flag indicating that finality should be skipped entirely
+// for this combination of context.
+//
+//   Policy mode (!SkipPolicyChecks): tip MTP in all eras. Matches bitcoin-sv's
+//   TxnValidation calling StandardNonFinalVerifyFlags (src/policy/policy.h),
+//   which unconditionally sets LOCKTIME_MEDIAN_TIME_PAST — no Genesis / CSV
+//   gating, no GetAdjustedTime() fallback.
+//
+//   Consensus mode (SkipPolicyChecks=true):
+//   - blockHeight < CSVHeight  → candidate block header time, supplied by the
+//     caller via Options.CandidateBlockTime. Matches bitcoin-sv
+//     ContextualCheckBlock at src/validation.cpp:6020-6022, which uses
+//     block.GetBlockTime() for pre-CSV blocks. When the caller does not
+//     supply a value (zero), this returns skipFinality=true rather than
+//     fabricating one — block-context callers that haven't migrated yet
+//     keep their previous skip-finality behaviour, no regression.
+//   - blockHeight == CSVHeight → skipFinality=true. BIP113 activates at this
+//     height in bitcoin-sv; the comparison there is candidate-parent MTP,
+//     which requires plumbing not in place yet. Skipping preserves prior
+//     behaviour at the boundary rather than silently using the wrong source.
+//   - blockHeight > CSVHeight  → tip MTP. svnode actually uses
+//     candidate-parent MTP here; tip MTP is a placeholder until the
+//     candidate-parent MTP plumbing lands.
+func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight uint32, blockState utxo.BlockState) (comparisonTime uint32, skipFinality bool, err error) {
+	switch {
+	case !opts.SkipPolicyChecks:
+		if blockState.MedianTime == 0 {
+			return 0, false, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, blockState.MedianTime)
+		}
+
+		return blockState.MedianTime, false, nil
+	case blockHeight < csvHeight:
+		if opts.CandidateBlockTime == 0 {
+			return 0, true, nil
+		}
+
+		return opts.CandidateBlockTime, false, nil
+	case blockHeight == csvHeight:
+		return 0, true, nil
+	default:
+		if blockState.MedianTime == 0 {
+			return 0, false, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, blockState.MedianTime)
+		}
+
+		return blockState.MedianTime, false, nil
+	}
+}
+
 // Validate performs comprehensive validation of a transaction.
 // It checks transaction finality, validates inputs and outputs, updates the UTXO set,
 // and optionally adds the transaction to block assembly.
@@ -500,27 +549,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	// Policy / next-tip finality always runs against tip MTP, matching bitcoin-sv's
-	// TxnValidation: StandardNonFinalVerifyFlags (src/policy/policy.h) sets
-	// LOCKTIME_MEDIAN_TIME_PAST unconditionally, so the policy comparison is tip MTP
-	// in all eras — no Genesis / CSV gating, no fallback to GetAdjustedTime().
-	//
-	// For block-validation (consensus) finality, the comparison time differs per CSV
-	// era (pre-CSV: candidate block header time; post-CSV: candidate-parent MTP).
-	// Neither is threaded through this path yet, so the consensus side keeps the
-	// existing CSVHeight gate as a placeholder until that plumbing lands.
-	runFinality := !validationOptions.SkipPolicyChecks || blockHeight > v.settings.ChainCfgParams.CSVHeight
-	if runFinality {
-		utxoStoreMedianBlockTime := blockState.MedianTime
-		if utxoStoreMedianBlockTime == 0 {
-			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
-			span.RecordError(err)
+	comparisonTime, skipFinality, finalityErr := selectFinalityComparisonTime(validationOptions, blockHeight, uint32(v.settings.ChainCfgParams.CSVHeight), blockState)
+	if finalityErr != nil {
+		err = finalityErr
+		span.RecordError(err)
 
-			return nil, err
-		}
+		return nil, err
+	}
 
+	if !skipFinality {
 		// this function should be moved into go-bt
-		if err = util.IsTransactionFinal(tx, blockHeight, utxoStoreMedianBlockTime); err != nil {
+		if err = util.IsTransactionFinal(tx, blockHeight, comparisonTime); err != nil {
 			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 			span.RecordError(err)
 

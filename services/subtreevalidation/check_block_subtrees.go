@@ -57,6 +57,15 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
 	}
 
+	// Candidate block header timestamp for pre-CSV consensus finality. The
+	// validator only consumes it when blockHeight < CSVHeight; leaving it zero
+	// on the steady-state post-CSV path keeps it absent from the validator
+	// gRPC request wire (the helper omits the optional proto field when zero).
+	var candidateBlockTime uint32
+	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateBlockTime = block.Header.Timestamp
+	}
+
 	// Extract PeerID from request for tracking
 	peerID := request.PeerId
 
@@ -393,7 +402,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 		// Process transactions for this batch
 		if batchTxCount > 0 {
-			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, blockIds); err != nil {
+			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, blockIds); err != nil {
 				// Release arenas before returning — txs won't be consumed further.
 				for i := range batchArenas {
 					if batchArenas[i] != nil {
@@ -446,6 +455,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
+			validator.WithCandidateBlockTime(candidateBlockTime),
 		)
 	}
 
@@ -739,7 +749,7 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 
 // processTransactionsInLevels processes all transactions from all subtrees using level-based validation
 // This ensures transactions are processed in dependency order while maximizing parallelism
-func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) error {
+func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, blockIds map[uint32]bool) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsInLevels",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processTransactionsInLevels] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -825,6 +835,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
 	}
 
 	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)

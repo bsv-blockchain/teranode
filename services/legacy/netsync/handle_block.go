@@ -656,7 +656,18 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 		return err
 	}
 
-	if err = sm.PreValidateTransactions(ctx, txMap, *block.Hash(), blockHeightUint32); err != nil {
+	// Candidate block header timestamp is only consumed by pre-CSV consensus
+	// finality. Skip the conversion (and the resulting per-request wire bytes
+	// the field would add) for post-CSV blocks, which is the steady-state path.
+	var candidateBlockTime uint32
+	if blockHeightUint32 < uint32(sm.chainParams.CSVHeight) {
+		candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = sm.PreValidateTransactions(ctx, txMap, *block.Hash(), blockHeightUint32, candidateBlockTime); err != nil {
 		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to pre-validate transactions", err)
 	}
 
@@ -798,7 +809,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 // PreValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
 func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
-	blockHash chainhash.Hash, blockHeight uint32) (err error) {
+	blockHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "PreValidateTransactions",
 		tracing.WithLogMessage(sm.logger, "[PreValidateTransactions] called for block %s / height %d", blockHash, blockHeight),
 		tracing.WithHistogram(prometheusLegacyNetsyncPreValidateTransactions),
@@ -886,6 +897,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					// hard-coded checkpoint. PoW + checkpoint linkage establish the chain
 					// as canonical, so re-running BDK scripts is pure overhead.
 					validator.WithSkipScriptValidation(true),
+					validator.WithCandidateBlockTime(candidateBlockTime),
 				); validateErr != nil {
 					// ErrTxConflicting is expected during legacy catchup when the UTXO store
 					// has stale spending data. The block is confirmed, so its transactions
@@ -973,6 +985,18 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
+	// Candidate block header timestamp for pre-CSV consensus finality
+	// (Options.CandidateBlockTime). Only computed when this block sits below
+	// the CSV activation height — post-CSV the validator ignores the value,
+	// and leaving it at zero keeps it absent from the per-request wire.
+	var candidateBlockTime uint32
+	if blockHeight, hErr := safeconversion.Int32ToUint32(block.Height()); hErr == nil && blockHeight < uint32(sm.chainParams.CSVHeight) {
+		candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
+		if err != nil {
+			return err
+		}
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.NewProcessingError("recovered in validateTransactions: %v", r, err)
@@ -1012,7 +1036,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 				timeStart = time.Now()
 
-				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true)); validateErr != nil {
+				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithCandidateBlockTime(candidateBlockTime)); validateErr != nil {
 					classifyAndCountPrewarmError(sm.logger, validateErr)
 				}
 
@@ -1040,7 +1064,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 					}
 
 					// send to validation, but only if the parent is not in the same block
-					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true)); validateErr != nil {
+					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithCandidateBlockTime(candidateBlockTime)); validateErr != nil {
 						classifyAndCountPrewarmError(sm.logger, validateErr)
 					}
 

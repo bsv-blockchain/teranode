@@ -59,6 +59,15 @@ type Options struct {
 	// PoW + checkpoint linkage already establish the chain as canonical — re-running
 	// scripts is pure overhead. MUST NOT be set on non-trusted validation paths.
 	SkipScriptValidation bool
+
+	// CandidateBlockTime carries the candidate block's own header timestamp
+	// (block.Header.Timestamp) for block-validation finality on pre-CSV blocks.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight < CSVHeight, which
+	// matches bitcoin-sv's ContextualCheckBlock comparing nLockTime against the
+	// candidate block header time (src/validation.cpp:6020-6022) before CSV.
+	// Policy mode and post-CSV consensus do not read this field — leaving it at
+	// zero in those contexts is harmless.
+	CandidateBlockTime uint32
 }
 
 // Option defines a function type for setting options
@@ -197,6 +206,21 @@ func WithSkipScriptValidation(skip bool) Option {
 func WithParentMetadata(metadata map[chainhash.Hash]*ParentTxMetadata) Option {
 	return func(o *Options) {
 		o.ParentMetadata = metadata
+	}
+}
+
+// WithCandidateBlockTime creates an option carrying the candidate block's
+// own header timestamp. Required by block-validation callers when validating
+// pre-CSV blocks; ignored in other contexts. See Options.CandidateBlockTime.
+//
+// Parameters:
+//   - timestamp: The candidate block's Header.Timestamp value
+//
+// Returns:
+//   - Option: Function that sets the candidateBlockTime option
+func WithCandidateBlockTime(timestamp uint32) Option {
+	return func(o *Options) {
+		o.CandidateBlockTime = timestamp
 	}
 }
 

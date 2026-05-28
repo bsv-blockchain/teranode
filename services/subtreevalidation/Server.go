@@ -741,6 +741,17 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			AllowFailFast: false,
 		}
 
+		// CheckSubtree responds to peer subtree-validation requests. The candidate
+		// block's header isn't carried in the request and may not exist in our
+		// local store yet, so Options.CandidateBlockTime is intentionally not
+		// populated here — the validator skips pre-CSV consensus finality when
+		// CandidateBlockTime is unset. In practice this is reached only by
+		// peer-supplied subtrees for blocks whose height is below the relevant
+		// CSV activation height of the configured network, which on mainnet
+		// (CSVHeight 419328) means historical replay only. The mainline
+		// block-validation path in subtreevalidation/check_block_subtrees.go
+		// does populate the field, so the same block is fully checked when
+		// validated end-to-end through that path.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
@@ -782,6 +793,8 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// Call the ValidateSubtreeInternal method
+	// Options.CandidateBlockTime intentionally not populated — see the
+	// CheckSubtree legacy branch above for the rationale.
 	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,

@@ -435,6 +435,42 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	return response, errors.WrapGRPC(err)
 }
 
+// optionsFromValidateRequest projects a gRPC ValidateTransactionRequest's
+// optional flag fields into the in-process Options struct. Defined as a
+// package-level helper so the projection logic is independently testable —
+// pins the round-trip from the validator client's request build through to
+// the server-side option mapping, preventing the field-by-field mapping from
+// silently drifting between sides.
+func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) *Options {
+	opts := NewDefaultOptions()
+
+	if req.SkipUtxoCreation != nil {
+		opts.SkipUtxoCreation = *req.SkipUtxoCreation
+	}
+
+	if req.AddTxToBlockAssembly != nil {
+		opts.AddTXToBlockAssembly = *req.AddTxToBlockAssembly
+	}
+
+	if req.SkipPolicyChecks != nil {
+		opts.SkipPolicyChecks = *req.SkipPolicyChecks
+	}
+
+	if req.CreateConflicting != nil {
+		opts.CreateConflicting = *req.CreateConflicting
+	}
+
+	if req.SkipTxmetaPublishing != nil {
+		opts.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
+	}
+
+	if req.CandidateBlockTime != nil {
+		opts.CandidateBlockTime = *req.CandidateBlockTime
+	}
+
+	return opts
+}
+
 // validateTransaction performs the internal validation logic for a single transaction.
 // This method handles the core transaction validation workflow, including performance
 // monitoring, transaction parsing, and interaction with the validator component.
@@ -469,26 +505,7 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 	// set the tx hash, so it doesn't have to be recalculated
 	tx.SetTxHash(tx.TxIDChainHash())
 
-	validationOptions := NewDefaultOptions()
-	if req.SkipUtxoCreation != nil {
-		validationOptions.SkipUtxoCreation = *req.SkipUtxoCreation
-	}
-
-	if req.AddTxToBlockAssembly != nil {
-		validationOptions.AddTXToBlockAssembly = *req.AddTxToBlockAssembly
-	}
-
-	if req.SkipPolicyChecks != nil {
-		validationOptions.SkipPolicyChecks = *req.SkipPolicyChecks
-	}
-
-	if req.CreateConflicting != nil {
-		validationOptions.CreateConflicting = *req.CreateConflicting
-	}
-
-	if req.SkipTxmetaPublishing != nil {
-		validationOptions.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
-	}
+	validationOptions := optionsFromValidateRequest(req)
 
 	// Pre-warm the MTP store for BIP68 validation before running transaction validation.
 	// EnsureMTPLoaded is a no-op when BIP68 is not yet active for this blockHeight.
@@ -711,6 +728,17 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 		options.CreateConflicting = boolVal
 	}
 
+	if skipTxMetaPublishingStr := c.QueryParam("skipTxMetaPublishing"); skipTxMetaPublishingStr != "" {
+		boolVal := skipTxMetaPublishingStr == trueString || skipTxMetaPublishingStr == "1"
+		options.SkipTxMetaPublishing = boolVal
+	}
+
+	if candidateBlockTimeStr := c.QueryParam("candidateBlockTime"); candidateBlockTimeStr != "" {
+		if v, err := strconv.ParseUint(candidateBlockTimeStr, 10, 32); err == nil {
+			options.CandidateBlockTime = uint32(v)
+		}
+	}
+
 	return blockHeight, options
 }
 
@@ -746,15 +774,10 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		// Extract validation parameters from query string
 		blockHeight, options := extractValidationParams(c)
 
-		// Create the request with transaction data and parameters
-		req := &validator_api.ValidateTransactionRequest{
-			TransactionData:      body,
-			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &options.SkipUtxoCreation,
-			AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
-			SkipPolicyChecks:     &options.SkipPolicyChecks,
-			CreateConflicting:    &options.CreateConflicting,
-		}
+		// Use the shared request builder so the HTTP /tx path cannot drop fields
+		// that the gRPC client put in the query string (e.g. candidateBlockTime,
+		// which the HTTP fallback path depends on for pre-CSV block validation).
+		req := buildValidateTxRequest(body, blockHeight, options)
 
 		// Process the transaction and return appropriate response
 		response, err := v.validateTransaction(ctx, req)
@@ -814,15 +837,8 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 				return c.String(http.StatusBadRequest, "[handleMultipleTx] Invalid request body: "+err.Error())
 			}
 
-			// Process the transaction
-			req := &validator_api.ValidateTransactionRequest{
-				TransactionData:      tx.SerializeBytes(),
-				BlockHeight:          blockHeight,
-				SkipUtxoCreation:     &options.SkipUtxoCreation,
-				AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
-				SkipPolicyChecks:     &options.SkipPolicyChecks,
-				CreateConflicting:    &options.CreateConflicting,
-			}
+			// Use the shared request builder — same rationale as handleSingleTx.
+			req := buildValidateTxRequest(tx.SerializeBytes(), blockHeight, options)
 
 			response, err := v.validateTransaction(ctx, req)
 			if err != nil {
