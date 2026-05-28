@@ -342,7 +342,7 @@ func TestVerifyLastSet_ExistingValidSet(t *testing.T) {
 	// Write a minimal UTXO set body. memory.Set prepends the fileformat
 	// magic for us, so we only supply the post-header bytes.
 	body := make([]byte, 0, 36)
-	body = append(body, testHash[:]...) // 32 bytes block hash
+	body = append(body, testHash[:]...)         // 32 bytes block hash
 	body = append(body, 0x01, 0x00, 0x00, 0x00) // 4 bytes height
 	require.NoError(t, blockStore.Set(ctx, testHash[:], fileformat.FileTypeUtxoSet, body))
 
