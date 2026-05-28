@@ -77,11 +77,6 @@ func TestValidateUTXOFile_LocalDoesNotDoubleReadMagic(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	result, err := ValidateUTXOFile(ctx, path, ulogger.TestLogger{}, tSettings, false)
 	require.NoError(t, err, "ValidateUTXOFile must not double-read the fileformat magic; a regression here would surface as \"unknown magic: [...]\"")
-	// Explicit regression intent — future divergent failures should
-	// not be confused with the original double-read bug.
-	if err != nil {
-		assert.NotContains(t, err.Error(), "unknown magic")
-	}
 	assert.Equal(t, blockHash.String(), result.BlockHash.String(), "BlockHash parsed from body must match what we wrote")
 	assert.Equal(t, uint32(42), result.BlockHeight)
 	assert.Equal(t, prevHash.String(), result.PreviousHash.String(), "PreviousHash parsed from body must match what we wrote")
