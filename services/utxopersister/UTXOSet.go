@@ -524,6 +524,13 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		return errors.NewStorageError("settings is nil")
 	}
 
+	// Defensive: the caller in Server.processNextBlock now gates on
+	// nil-lastBlockHash, but reject it here too so any future caller
+	// gets a clear error instead of a SIGSEGV from c.lastBlockHash[:].
+	if c.lastBlockHash == nil {
+		return errors.NewStorageError("consolidator has no lastBlockHash (block range was empty or only genesis)")
+	}
+
 	storer, err := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], fileformat.FileTypeUtxoSet)
 	if err != nil {
 		return errors.NewStorageError("error creating utxo-set file", err)

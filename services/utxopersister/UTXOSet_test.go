@@ -15,6 +15,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCreateUTXOSet_NilLastBlockHash pins the defensive check at the entry
+// of CreateUTXOSet: if the consolidator never set lastBlockHash (its loop
+// body bailed early on per-block ErrNotFound from a UTXO file
+// BlockPersister hasn't written yet, or the range contained only the
+// genesis block which the loop skips with `continue`), the previous
+// implementation crashed at `c.lastBlockHash[:]` with SIGSEGV. The
+// function must surface a clear error instead.
+func TestCreateUTXOSet_NilLastBlockHash(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	// blockHash here is only used to initialise the UTXOSet handle;
+	// the bug is in dereferencing c.lastBlockHash, not us.blockHash.
+	someHash := chainhash.HashH([]byte("test-utxoset-blockhash"))
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &someHash)
+	require.NoError(t, err)
+
+	// Construct a consolidator with lastBlockHash == nil — exactly the
+	// state ConsolidateBlockRange leaves it in when no non-genesis
+	// block was successfully processed.
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, nil)
+	require.Nil(t, c.lastBlockHash, "test precondition: consolidator must have nil lastBlockHash")
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.Error(t, err, "CreateUTXOSet must reject a consolidator with nil lastBlockHash instead of dereferencing it")
+	assert.Contains(t, err.Error(), "lastBlockHash", "error message should name the offending field")
+}
+
 var (
 	hash1 = chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 	// hash2 = chainhash.HashH([]byte{0x05, 0x06, 0x07, 0x08, 0x09})

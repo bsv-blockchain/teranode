@@ -475,9 +475,22 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
 	if err := c.ConsolidateBlockRange(ctx, s.lastHeight+1, maxHeight); err != nil {
-		if !errors.Is(err, errors.ErrNotFound) {
-			return 0, nil
+		if errors.Is(err, errors.ErrNotFound) {
+			// BlockPersister hasn't yet written the per-block UTXO files
+			// for this range. Wait for the next trigger; caller treats
+			// ErrNotFound as "no new block to process".
+			return 0, err
 		}
+		return 0, err
+	}
+
+	if c.lastBlockHash == nil {
+		// ConsolidateBlockRange returned successfully but didn't advance
+		// past genesis (range was empty, or contained only the genesis
+		// block which the loop skips). Nothing new to persist; signal
+		// "no new block" so the caller waits for the next trigger
+		// rather than spinning on an empty iteration.
+		return 0, errors.ErrNotFound
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
