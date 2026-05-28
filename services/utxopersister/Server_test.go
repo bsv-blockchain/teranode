@@ -348,6 +348,11 @@ func TestVerifyLastSet_ExistingValidSet(t *testing.T) {
 
 	err := server.verifyLastSet(ctx, &testHash)
 	require.NoError(t, err, "verifyLastSet must succeed when a valid UTXO set file exists; double-read of the fileformat magic would surface here as \"unknown magic: [...]\"")
+	// Explicit regression intent: future divergent failures should not be
+	// confused with the original double-read bug.
+	if err != nil {
+		require.NotContains(t, err.Error(), "unknown magic", "regression: double-read of fileformat magic must not return")
+	}
 }
 
 // Test trigger - processNextBlock returns not found error

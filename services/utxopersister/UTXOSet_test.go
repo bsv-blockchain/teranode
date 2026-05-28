@@ -3,11 +3,13 @@ package utxopersister
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -43,6 +45,102 @@ func TestCreateUTXOSet_NilLastBlockHash(t *testing.T) {
 	err = us.CreateUTXOSet(ctx, c)
 	require.Error(t, err, "CreateUTXOSet must reject a consolidator with nil lastBlockHash instead of dereferencing it")
 	assert.Contains(t, err.Error(), "lastBlockHash", "error message should name the offending field")
+}
+
+// TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic pins that
+// CreateUTXOSet, when reading the previous block's UTXO set, does NOT
+// call fileformat.ReadHeader on a reader the store layer has already
+// advanced past — and consumes the per-file metadata (current block
+// hash + height + previous block hash) before the wrapper loop. Without
+// the fix, this path either crashed with "unknown magic: [...]" (when
+// the store strips the header, which is the production case) or
+// silently misaligned the wrapper reader by 8 bytes and consolidated
+// the wrong UTXOs.
+//
+// Test scenario: a "previous" UTXO set file for hash P is staged in a
+// memory store, containing just the 68-byte header records (current
+// block hash = P, height, parent hash) and zero wrappers — so the
+// OUTER loop hits a clean io.EOF after the metadata. A consolidator
+// pointing at P as the firstPreviousBlockHash should consolidate
+// successfully and produce a new UTXO set for the current block.
+func TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	previousBlockHash := chainhash.HashH([]byte("previous-block-hash-for-double-read-test"))
+	currentBlockHash := chainhash.HashH([]byte("current-block-hash-for-double-read-test"))
+	grandparentHash := chainhash.HashH([]byte("grandparent-block-hash-for-double-read-test"))
+
+	// Stage the previous UTXO set file with just its 68-byte metadata
+	// (matching the layout CreateUTXOSet writes: current block hash +
+	// 4-byte height + previous block hash). memory.Set prepends the
+	// fileformat magic, so we only provide post-header bytes.
+	var body []byte
+	body = append(body, previousBlockHash[:]...)
+	var heightBuf [4]byte
+	binary.LittleEndian.PutUint32(heightBuf[:], 42)
+	body = append(body, heightBuf[:]...)
+	body = append(body, grandparentHash[:]...)
+	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))
+
+	// Consolidator: firstPreviousBlockHash = P drives the read of the
+	// staged file; lastBlockHash/height/previousBlockHash drive the
+	// write of the new file CreateUTXOSet produces.
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+	c.lastBlockHash = &currentBlockHash
+	c.lastBlockHeight = 43
+	c.previousBlockHash = &previousBlockHash
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	require.NoError(t, err)
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.NoError(t, err, "CreateUTXOSet must succeed against a valid previous UTXO set; double-read of the fileformat magic would surface here as \"unknown magic: [...]\" or as misaligned wrapper reads")
+	if err != nil {
+		require.NotContains(t, err.Error(), "unknown magic")
+	}
+}
+
+// TestCreateUTXOSet_PreviousSetWrongBlockHash pins that the post-fix
+// metadata validation rejects a previous UTXO set file whose stored
+// current-block-hash doesn't match what the consolidator expected to
+// open. Catches file/key confusion loudly rather than silently
+// consolidating UTXOs from the wrong ancestor.
+func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	previousBlockHash := chainhash.HashH([]byte("previous-block-mismatch-key"))
+	wrongStoredHash := chainhash.HashH([]byte("wrong-stored-current-hash"))
+	currentBlockHash := chainhash.HashH([]byte("current-block-mismatch-key"))
+	grandparentHash := chainhash.HashH([]byte("grandparent-block-mismatch-key"))
+
+	// File stored under key=previousBlockHash but whose stored
+	// "current block hash" metadata is something else — simulates
+	// corruption or a mis-keyed file.
+	var body []byte
+	body = append(body, wrongStoredHash[:]...)
+	var heightBuf [4]byte
+	binary.LittleEndian.PutUint32(heightBuf[:], 42)
+	body = append(body, heightBuf[:]...)
+	body = append(body, grandparentHash[:]...)
+	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))
+
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+	c.lastBlockHash = &currentBlockHash
+	c.lastBlockHeight = 43
+	c.previousBlockHash = &previousBlockHash
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	require.NoError(t, err)
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.Error(t, err, "CreateUTXOSet must reject a previous UTXO set whose stored block hash doesn't match the expected ancestor")
+	assert.Contains(t, err.Error(), "block hash mismatch")
 }
 
 var (

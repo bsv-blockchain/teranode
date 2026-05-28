@@ -628,26 +628,17 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	)
 }
 
-// verifyLastSet verifies the integrity of the last UTXO set.
-// It checks if the UTXO set for the given hash exists and has valid header and footer.
-// This verification ensures that the UTXO set was completely written and is not corrupted.
-// Returns an error if verification fails.
+// verifyLastSet verifies that a UTXO set file exists and is openable for
+// the given block hash. A successful open via the blob store layer is
+// sufficient evidence that the file is present and (in the file store)
+// has the right fileformat magic + FileType — those checks live in
+// stores/blob/file/file.go validateFileHeader. The memory store advances
+// past the header by size without validating the magic, which is fine
+// because that path is test-only.
 //
-// Parameters:
-// - ctx: Context for controlling the verification operation
-// - hash: Pointer to the block hash for which to verify the UTXO set
-//
-// Returns:
-// - error: Any error encountered during verification, or nil if verification succeeds
-//
-// This method performs several integrity checks on the UTXO set:
-// 1. Verifies that a UTXO set file exists for the given block hash
-// 2. Checks that the header record is valid and matches the expected block hash
-// 3. Ensures that the footer exists and is correctly formatted
-//
-// These checks confirm that the UTXO set for the block was completely written
-// and can be used for subsequent operations. This is crucial for maintaining
-// blockchain state consistency, especially after system restarts.
+// (The previous docstring also promised a footer integrity check that
+// this function never implemented; scope is the existence/openability
+// check only.)
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,
@@ -656,13 +647,12 @@ func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error 
 		store:     s.blockStore,
 	}
 
-	// GetUTXOSetReader -> store.GetIoReader already validates the fileformat
-	// header (8-byte magic + matching FileType) before returning the reader,
-	// so a successful open is sufficient evidence that the UTXO set file
-	// exists and has a valid header. Calling fileformat.ReadHeader here
-	// would consume the *next* 8 bytes of the body — which are the first
-	// bytes of the block hash field — and reliably fail with "unknown
-	// magic: [...]", taking the whole core sidecar down via ServiceManager.
+	// Do NOT call fileformat.ReadHeader on the returned reader: the store
+	// layer has already advanced past the 8-byte magic. Reading it again
+	// would consume the first 8 bytes of the body, which per the layout
+	// written by CreateUTXOSet are the current block hash field — random
+	// bytes that reliably fail as "unknown magic: [...]" and bring the
+	// whole core sidecar down via ServiceManager.
 	r, err := us.GetUTXOSetReader(hash)
 	if err != nil {
 		return err

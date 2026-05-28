@@ -596,13 +596,33 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		defer previousUTXOSetReader.Close()
 
-		previousHeader, err := fileformat.ReadHeader(previousUTXOSetReader)
-		if err != nil {
-			return errors.NewStorageError("error reading previous utxo-set header", err)
+		// store.GetIoReader -> validateFileHeader has already consumed the
+		// 8-byte fileformat magic; reading it again here would consume the
+		// first 8 bytes of the block-hash metadata that follows, then the
+		// OUTER loop's UTXOWrapper reader would be misaligned by 8 bytes.
+		// Consume the per-file header fields written by CreateUTXOSet
+		// (32 bytes current block hash + 4 bytes height + 32 bytes
+		// previous block hash) so the loop below starts at the first
+		// UTXOWrapper record. Validate the stored current-block hash
+		// matches what we expected to open, to catch file/key confusion
+		// loudly rather than silently consolidate the wrong UTXOs.
+		var storedCurrentBlockHash chainhash.Hash
+		if _, err := io.ReadFull(previousUTXOSetReader, storedCurrentBlockHash[:]); err != nil {
+			return errors.NewStorageError("error reading previous utxo-set block hash", err)
 		}
-
-		if previousHeader.FileType() != fileformat.FileTypeUtxoSet {
-			return errors.NewStorageError("previous utxo-set header is not a utxo-set header")
+		if !storedCurrentBlockHash.IsEqual(c.firstPreviousBlockHash) {
+			return errors.NewStorageError("previous utxo-set block hash mismatch: want %s got %s",
+				c.firstPreviousBlockHash.String(), storedCurrentBlockHash.String())
+		}
+		var (
+			storedBlockHeight       uint32
+			storedPreviousBlockHash chainhash.Hash
+		)
+		if err := binary.Read(previousUTXOSetReader, binary.LittleEndian, &storedBlockHeight); err != nil {
+			return errors.NewStorageError("error reading previous utxo-set block height", err)
+		}
+		if _, err := io.ReadFull(previousUTXOSetReader, storedPreviousBlockHash[:]); err != nil {
+			return errors.NewStorageError("error reading previous utxo-set previous block hash", err)
 		}
 
 	OUTER:
