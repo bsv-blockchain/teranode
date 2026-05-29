@@ -7396,7 +7396,7 @@
 </tbody>
 </table>
 <h2 id="spend-circuit-breaker-trigger-set">Spend Circuit Breaker Trigger Set<a class="headerlink" href="#spend-circuit-breaker-trigger-set" title="Permanent link">&para;</a></h2>
-<p>The spend circuit breaker counts only <strong>infrastructure-level</strong> aerospike errors toward <code>SpendCircuitBreakerFailureCount</code>. Data-state errors (e.g. <code>KEY_NOT_FOUND_ERROR</code> for a missing parent during catch-up sync, <code>FILTERED_OUT</code> for a Lua business-rule rejection) are handled by the orphanage and per-record error paths and never increment the failure counter.</p>
+<p>The spend circuit breaker counts only <strong>infrastructure-level</strong> aerospike errors toward <code>SpendCircuitBreakerFailureCount</code>. Data-state errors (e.g. <code>KEY_NOT_FOUND_ERROR</code> for a missing parent during catch-up sync, <code>FILTERED_OUT</code> for a Lua business-rule rejection) are handled by per-record error paths in the calling code — missing parents flow into subtree validation's sequential revalidation pass, and Lua business-rule rejections surface to the caller — and never increment the failure counter.</p>
 <p>Counted as infrastructure failure:</p>
 <ul>
 <li><code>TIMEOUT</code>, <code>NETWORK_ERROR</code>, <code>NO_RESPONSE</code>, <code>MAX_RETRIES_EXCEEDED</code>, <code>MAX_ERROR_RATE</code></li>

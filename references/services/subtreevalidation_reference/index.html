@@ -5456,17 +5456,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#processorphans" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        processOrphans
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#publishinvalidsubtree" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7586,17 +7575,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#processorphans" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        processOrphans
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#publishinvalidsubtree" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7866,22 +7844,19 @@
 </span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a><span class="w">    </span><span class="c1">// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages</span>
 </span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a><span class="w">    </span><span class="nx">invalidSubtreeDeDuplicateMap</span><span class="w"> </span><span class="o">*</span><span class="nx">expiringmap</span><span class="p">.</span><span class="nx">ExpiringMap</span><span class="p">[</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}]</span>
 </span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>
-</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a><span class="w">    </span><span class="c1">// orphanage manages orphaned transactions that are missing their parent transactions</span>
-</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a><span class="w">    </span><span class="nx">orphanage</span><span class="w"> </span><span class="o">*</span><span class="nx">Orphanage</span>
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a><span class="w">    </span><span class="c1">// bestBlockHeader is used to store the current best block header</span>
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a><span class="w">    </span><span class="nx">bestBlockHeader</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeader</span><span class="p">]</span>
 </span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>
-</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="w">    </span><span class="c1">// bestBlockHeader is used to store the current best block header</span>
-</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="w">    </span><span class="nx">bestBlockHeader</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeader</span><span class="p">]</span>
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="w">    </span><span class="c1">// bestBlockHeaderMeta is used to store the current best block header metadata</span>
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="w">    </span><span class="nx">bestBlockHeaderMeta</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeaderMeta</span><span class="p">]</span>
 </span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a>
-</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="w">    </span><span class="c1">// bestBlockHeaderMeta is used to store the current best block header metadata</span>
-</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="w">    </span><span class="nx">bestBlockHeaderMeta</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeaderMeta</span><span class="p">]</span>
+</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="w">    </span><span class="c1">// currentBlockIDsMap is used to store the current block IDs for the current best block height</span>
+</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="w">    </span><span class="nx">currentBlockIDsMap</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">]</span>
 </span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a>
-</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a><span class="w">    </span><span class="c1">// currentBlockIDsMap is used to store the current block IDs for the current best block height</span>
-</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">    </span><span class="nx">currentBlockIDsMap</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">]</span>
-</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a>
-</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="w">    </span><span class="c1">// p2pClient interfaces with the P2P service</span>
-</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a><span class="w">    </span><span class="c1">// Used to report successful subtree fetches to improve peer reputation</span>
-</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a><span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span>
-</span><span id="__span-0-78"><a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a><span class="p">}</span>
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a><span class="w">    </span><span class="c1">// p2pClient interfaces with the P2P service</span>
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">    </span><span class="c1">// Used to report successful subtree fetches to improve peer reputation</span>
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span>
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="validatesubtree">ValidateSubtree<a class="headerlink" href="#validatesubtree" title="Permanent link">&para;</a></h3>
 <p>The <code>ValidateSubtree</code> structure encapsulates all the necessary information required to validate a transaction subtree, providing a clean interface for the validation methods.</p>
@@ -7933,7 +7908,6 @@
 <li><strong>Quorum management</strong>: Initializes singleton quorum manager for distributed locking</li>
 <li><strong>Transaction metadata caching</strong>: Optionally wraps UTXO store with caching layer</li>
 <li><strong>Kafka producer setup</strong>: Configures invalid subtree event publishing if enabled</li>
-<li><strong>Orphanage initialization</strong>: Sets up orphaned transaction storage with configurable timeout</li>
 <li><strong>Blockchain subscription</strong>: Establishes blockchain event listener for block updates</li>
 <li><strong>Best block tracking</strong>: Initializes current blockchain state tracking</li>
 </ul>
@@ -8013,7 +7987,6 @@
 <li><strong>Backward compatibility</strong>: Support for both legacy and current validation paths</li>
 <li><strong>Resource cleanup</strong>: Proper cleanup even in error conditions</li>
 <li><strong>Structured responses</strong>: Appropriate gRPC status codes</li>
-<li><strong>Orphan processing</strong>: Handles orphaned transactions after subtree validation</li>
 </ul>
 <div class="admonition success">
 <p class="admonition-title">Validation Criteria</p>
@@ -8039,7 +8012,6 @@
 <li><strong>Parallel processing</strong>: Validates multiple subtrees concurrently for performance</li>
 <li><strong>Level-based validation</strong>: Processes transactions in dependency order across all subtrees</li>
 <li><strong>Stream processing</strong>: Efficiently processes subtree data directly from HTTP streams</li>
-<li><strong>Orphan handling</strong>: Manages orphaned transactions discovered during validation</li>
 </ul>
 <p><strong>Validation Process:</strong></p>
 <ol>
@@ -8049,7 +8021,6 @@
 <li><strong>Transaction extraction</strong>: Extracts all transactions from all subtrees</li>
 <li><strong>Level-based processing</strong>: Validates transactions in dependency order</li>
 <li><strong>Subtree validation</strong>: Validates individual subtrees after transaction processing</li>
-<li><strong>Orphan processing</strong>: Handles any orphaned transactions found during validation</li>
 </ol>
 <div class="admonition info">
 <p class="admonition-title">Performance Optimization</p>
@@ -8240,19 +8211,8 @@
 <div class="language-go highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">isPrioritySubtreeCheckActive</span><span class="p">(</span><span class="nx">subtreeHash</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span>
 </span></code></pre></div>
 <p>Checks if a priority subtree check is active for the given subtree hash. Priority checks get special handling and resource allocation to ensure critical subtrees are validated promptly.</p>
-<h3 id="processorphans">processOrphans<a class="headerlink" href="#processorphans" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">processOrphans</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">)</span>
-</span></code></pre></div>
-<p>Processes orphaned transactions that were discovered during subtree validation. This method attempts to validate transactions that were previously missing parents, organizing them by dependency level and processing them in parallel where possible.</p>
-<p><strong>Orphan Processing:</strong></p>
-<ul>
-<li><strong>Dependency analysis</strong>: Organizes orphaned transactions by dependency level</li>
-<li><strong>Parallel validation</strong>: Processes independent transactions concurrently</li>
-<li><strong>Automatic cleanup</strong>: Removes successfully validated transactions from the orphanage</li>
-<li><strong>Metrics tracking</strong>: Tracks the number of orphans processed for monitoring</li>
-</ul>
 <h3 id="publishinvalidsubtree">publishInvalidSubtree<a class="headerlink" href="#publishinvalidsubtree" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">publishInvalidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerURL</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">publishInvalidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">,</span><span class="w"> </span><span class="nx">peerURL</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Publishes invalid subtree events to Kafka for system-wide notification. This method helps coordinate the handling of invalid subtrees across the network by notifying other services.</p>
 <p><strong>Features:</strong></p>
@@ -8263,7 +8223,7 @@
 </ul>
 <h2 id="kafka-handlers">Kafka Handlers<a class="headerlink" href="#kafka-handlers" title="Permanent link">&para;</a></h2>
 <h3 id="consumermessagehandler">consumerMessageHandler<a class="headerlink" href="#consumermessagehandler" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">consumerMessageHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">consumerMessageHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
 <p>Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.</p>
 <div class="admonition info">
@@ -8277,16 +8237,16 @@
 </ul>
 </div>
 <h3 id="subtreeshandler">subtreesHandler<a class="headerlink" href="#subtreeshandler" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">subtreesHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">subtreesHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
 <p>Handles incoming subtree messages from Kafka. This method unmarshals the message, extracts the subtree hash and base URL, acquires the appropriate lock, and triggers the validation process. It includes comprehensive error handling and logging for operational visibility.</p>
 <h3 id="txmetahandler">txmetaHandler<a class="headerlink" href="#txmetahandler" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">txmetaHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">txmetaHandler</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
 <p>Handles incoming transaction metadata messages from Kafka. This method processes updates to transaction metadata that might be required for proper subtree validation, ensuring the metadata store remains consistent with the latest transaction state.</p>
 <h2 id="additional-internal-methods">Additional Internal Methods<a class="headerlink" href="#additional-internal-methods" title="Permanent link">&para;</a></h2>
 <h3 id="updatebestblock">updateBestBlock<a class="headerlink" href="#updatebestblock" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">updateBestBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">updateBestBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
 <p>Updates the service's cached best block information by querying the blockchain client. This method maintains current blockchain state for validation operations.</p>
 <p><strong>State Updates:</strong></p>
@@ -8297,7 +8257,7 @@
 <li><strong>Store synchronization</strong>: Updates subtree store's current block height</li>
 </ul>
 <h3 id="blockchainsubscriptionlistener">blockchainSubscriptionListener<a class="headerlink" href="#blockchainsubscriptionlistener" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blockchainSubscriptionListener</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">blockchainSubscriptionListener</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Background goroutine that listens for blockchain events and updates the service's cached blockchain state. This method ensures the service maintains current blockchain information for validation operations.</p>
 <p><strong>Subscription Features:</strong></p>

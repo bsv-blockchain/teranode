@@ -7175,20 +7175,6 @@
 <td>Block height retention adjustment</td>
 </tr>
 <tr>
-<td>OrphanageTimeout</td>
-<td>time.Duration</td>
-<td>15m</td>
-<td>subtreevalidation_orphanageTimeout</td>
-<td>Orphaned transaction timeout</td>
-</tr>
-<tr>
-<td>OrphanageMaxSize</td>
-<td>int</td>
-<td>100000</td>
-<td>subtreevalidation_orphanageMaxSize</td>
-<td><strong>CRITICAL</strong> - Maximum orphanage transactions</td>
-</tr>
-<tr>
 <td>CheckBlockSubtreesConcurrency</td>
 <td>int</td>
 <td>32</td>
@@ -7336,7 +7322,6 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">subtreevalidation_check_block_subtrees_concurrency</span><span class="o">=</span><span class="m">64</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">subtreevalidation_getMissingTransactions</span><span class="o">=</span><span class="m">16</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">subtreevalidation_spendBatcherSize</span><span class="o">=</span><span class="m">2048</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nv">subtreevalidation_orphanageMaxSize</span><span class="o">=</span><span class="m">200000</span>
 </span></code></pre></div>
 <h3 id="cache-configuration">Cache Configuration<a class="headerlink" href="#cache-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">subtreevalidation_txMetaCacheEnabled</span><span class="o">=</span><span class="nb">true</span>

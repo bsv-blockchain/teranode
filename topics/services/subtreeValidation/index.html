@@ -3328,21 +3328,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-orphanage-management" class="md-nav__link">
+  <a href="#27-level-calculation-for-merkle-trees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Orphanage Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#28-level-calculation-for-merkle-trees" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.8. Level Calculation for Merkle Trees
+        2.7. Level Calculation for Merkle Trees
       
     </span>
   </a>
@@ -6912,21 +6901,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-orphanage-management" class="md-nav__link">
+  <a href="#27-level-calculation-for-merkle-trees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Orphanage Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#28-level-calculation-for-merkle-trees" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.8. Level Calculation for Merkle Trees
+        2.7. Level Calculation for Merkle Trees
       
     </span>
   </a>
@@ -7112,8 +7090,7 @@
 <li><a href="#24-validating-the-subtrees">2.4. Validating the Subtrees</a></li>
 <li><a href="#25-subtree-locking-mechanism">2.5. Subtree Locking Mechanism</a></li>
 <li><a href="#26-distributed-pause-mechanism">2.6. Distributed Pause Mechanism</a></li>
-<li><a href="#27-orphanage-management">2.7. Orphanage Management</a></li>
-<li><a href="#28-level-calculation-for-merkle-trees">2.8. Level Calculation for Merkle Trees</a></li>
+<li><a href="#27-level-calculation-for-merkle-trees">2.7. Level Calculation for Merkle Trees</a></li>
 </ul>
 </li>
 <li><a href="#3-grpc-protobuf-definitions">gRPC Protobuf Definitions</a></li>
@@ -7295,33 +7272,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><code>subtree_quorum_path</code>: Path to shared storage for lock files</li>
 <li><code>subtree_quorum_absolute_timeout</code>: Timeout for lock staleness (default: 30 seconds)</li>
 </ul>
-<h3 id="27-orphanage-management">2.7. Orphanage Management<a class="headerlink" href="#27-orphanage-management" title="Permanent link">&para;</a></h3>
-<p>The Subtree Validation service implements an orphanage mechanism to handle transactions that arrive before their parent transactions are available. This is essential for maintaining processing continuity when transactions arrive out of order.</p>
-<p><strong>What are Orphaned Transactions?</strong></p>
-<p>A transaction becomes "orphaned" when:</p>
-<ul>
-<li>It references inputs from parent transactions that are not yet in the UTXO store</li>
-<li>The parent transactions are expected to arrive shortly (e.g., in the same subtree or recent subtrees)</li>
-</ul>
-<p><strong>Orphanage Workflow:</strong></p>
-<ol>
-<li><strong>Detection</strong> — During subtree validation, if a transaction's inputs cannot be found, it's placed in the orphanage</li>
-<li><strong>Tracking</strong> — The orphanage tracks which parent transaction IDs are needed</li>
-<li><strong>Resolution</strong> — When parent transactions are processed, orphaned children are automatically resolved</li>
-<li><strong>Timeout</strong> — Orphaned transactions that remain unresolved after the timeout period are cleaned up</li>
-</ol>
-<p><strong>Configuration:</strong></p>
-<ul>
-<li><code>subtreevalidation_orphanageTimeout</code>: Duration before orphaned transactions are cleaned up (default: 30 seconds)</li>
-</ul>
-<p><strong>Benefits:</strong></p>
-<ul>
-<li>Handles out-of-order transaction arrival gracefully</li>
-<li>Prevents transaction validation failures due to timing issues</li>
-<li>Maintains high throughput during burst traffic</li>
-<li>Automatically recovers when parent transactions arrive</li>
-</ul>
-<h3 id="28-level-calculation-for-merkle-trees">2.8. Level Calculation for Merkle Trees<a class="headerlink" href="#28-level-calculation-for-merkle-trees" title="Permanent link">&para;</a></h3>
+<h3 id="27-level-calculation-for-merkle-trees">2.7. Level Calculation for Merkle Trees<a class="headerlink" href="#27-level-calculation-for-merkle-trees" title="Permanent link">&para;</a></h3>
 <p>The Subtree Validation service performs level calculation to optimize merkle tree processing. This feature improves performance by pre-calculating the hierarchical structure of subtrees.</p>
 <p><strong>What is Level Calculation?</strong></p>
 <p>Each subtree contains transactions organized in a merkle tree structure. Level calculation determines:</p>
