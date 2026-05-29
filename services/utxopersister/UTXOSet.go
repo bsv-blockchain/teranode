@@ -632,7 +632,20 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 				// Read the next 36 bytes...
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
-					if err == io.EOF {
+					// CreateUTXOSet appends a 16-byte footer (txCount +
+					// utxoCount) after the final UTXOWrapper. The wrapper
+					// stream carries no record count, so the reader only
+					// discovers the end when the next txid read either lands
+					// exactly on EOF (io.EOF) or comes up short against that
+					// footer (io.ErrUnexpectedEOF). Treat both as the normal
+					// end of the wrapper stream, mirroring the reader in
+					// cmd/utxovalidator. Without this, every non-genesis
+					// consolidation crashes the service on the footer with
+					// "failed to read txid, expected 32 bytes got 16". A
+					// genuinely truncated final record is indistinguishable
+					// from the footer here — an accepted limitation of the
+					// on-disk format.
+					if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
 						break OUTER
 					}
 

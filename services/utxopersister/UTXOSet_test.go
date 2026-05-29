@@ -143,6 +143,69 @@ func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
 	assert.Contains(t, err.Error(), "block hash mismatch")
 }
 
+// TestCreateUTXOSet_PreviousSetWithFooterTerminatesCleanly pins that the
+// previous-set consolidation read stops at the 16-byte footer (txCount +
+// utxoCount) that CreateUTXOSet writes after the final UTXOWrapper, instead
+// of reading those 16 bytes as the start of another 32-byte txid and
+// crashing the UTXOPersister service with "failed to read txid, expected
+// 32 bytes got 16 -> unexpected EOF".
+//
+// The pre-fix OUTER loop only broke on a clean io.EOF, so it survived
+// TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic (which stages
+// zero wrappers and no footer) but crashed on any real previous set. Every
+// file CreateUTXOSet writes carries the footer, so this is the realistic
+// shape: 68-byte header + one wrapper + 16-byte footer.
+func TestCreateUTXOSet_PreviousSetWithFooterTerminatesCleanly(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	previousBlockHash := chainhash.HashH([]byte("previous-block-hash-for-footer-test"))
+	currentBlockHash := chainhash.HashH([]byte("current-block-hash-for-footer-test"))
+	grandparentHash := chainhash.HashH([]byte("grandparent-block-hash-for-footer-test"))
+	wrapperTxID := chainhash.HashH([]byte("wrapper-txid-for-footer-test"))
+
+	// One real UTXOWrapper, serialized exactly as CreateUTXOSet writes it.
+	wrapper := &UTXOWrapper{
+		TxID:   wrapperTxID,
+		Height: 42,
+		UTXOs:  []*UTXO{{Index: 0, Value: 1000, Script: []byte{0x76, 0xa9, 0x88, 0xac}}},
+	}
+	wrapperBytes := wrapper.Bytes()
+
+	// The 16-byte footer CreateUTXOSet appends after the last wrapper:
+	// txCount then utxoCount, both little-endian uint64.
+	var footer [16]byte
+	binary.LittleEndian.PutUint64(footer[0:8], 1)
+	binary.LittleEndian.PutUint64(footer[8:16], 1)
+
+	var heightBuf [4]byte
+	binary.LittleEndian.PutUint32(heightBuf[:], 42)
+
+	// Layout matches CreateUTXOSet's writer (post-magic): current block hash
+	// (== the key we open under) + height + previous hash, then the
+	// wrappers, then the footer. memory.Set prepends the fileformat magic.
+	body := make([]byte, 0, len(previousBlockHash)+len(heightBuf)+len(grandparentHash)+len(wrapperBytes)+len(footer))
+	body = append(body, previousBlockHash[:]...)
+	body = append(body, heightBuf[:]...)
+	body = append(body, grandparentHash[:]...)
+	body = append(body, wrapperBytes...)
+	body = append(body, footer[:]...)
+	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))
+
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+	c.lastBlockHash = &currentBlockHash
+	c.lastBlockHeight = 43
+	c.previousBlockHash = &previousBlockHash
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	require.NoError(t, err)
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.NoError(t, err, "CreateUTXOSet must terminate the previous-set read at the 16-byte footer; the pre-fix loop crashed here with \"failed to read txid, expected 32 bytes got 16\"")
+}
+
 var (
 	hash1 = chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 	// hash2 = chainhash.HashH([]byte{0x05, 0x06, 0x07, 0x08, 0x09})
