@@ -313,14 +313,13 @@ func (v *Validator) GetBlockState() utxo.BlockState {
 //	- blockHeight >= CSVHeight → candidate-parent MTP (equivalent to
 //	  bitcoin-sv's pindexPrev->GetMedianTimePast() at src/validation.cpp:6001
 //	  once BIP113 activates), supplied by the caller via
-//	  Options.CandidateParentMedianTime. Block-validation callers must always
-//	  populate this field — including on the mainline ingest path — because
-//	  blockState.MedianTime is updated asynchronously from blockchain
-//	  notifications, so a tip advance / reorg between the caller's snapshot
-//	  and the validator's read would silently swap the comparison time
-//	  source. The blockState.MedianTime fallback below remains for callers
-//	  that have no parent-chain context at all (peer-facing CheckSubtree),
-//	  but is no longer used by the mainline block-validation flows.
+//	  Options.CandidateParentMedianTime. All block-validation callers MUST
+//	  populate this field — there is no tip-MTP fallback. Missing values
+//	  return a ProcessingError so a forgotten populate-callsite cannot
+//	  silently degrade to blockState.MedianTime (which is updated
+//	  asynchronously from blockchain notifications and would race with tip
+//	  advance / reorg during validation). The hard-error stance replaces an
+//	  earlier doc-only contract that proved fragile under review.
 func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight uint32, blockState utxo.BlockState) (comparisonTime uint32, skipFinality bool, err error) {
 	switch {
 	case !opts.SkipPolicyChecks:
@@ -337,24 +336,14 @@ func selectFinalityComparisonTime(opts *Options, blockHeight uint32, csvHeight u
 		return opts.CandidateBlockTime, false, nil
 	default:
 		// blockHeight >= csvHeight: use the caller-supplied candidate-parent MTP.
-		// Block-validation callers must always populate this field (legacy/netsync,
-		// subtreevalidation/check_block_subtrees) — the tip-MTP fallback below is
-		// reserved for callers that have no parent-chain context at all (the
-		// peer-facing CheckSubtree handler). The fallback accepts a small
-		// correctness risk on those paths because blockState.MedianTime is
-		// updated asynchronously from blockchain notifications and can drift
-		// under tip advance / reorg during validation — see the documentation
-		// at services/subtreevalidation/Server.go::CheckSubtree for the
-		// rationale of accepting that risk in exchange for graceful degradation.
-		if opts.CandidateParentMedianTime != 0 {
-			return opts.CandidateParentMedianTime, false, nil
+		// No tip-MTP soft-fall — a missing value is a caller-side bug and we
+		// surface it instead of silently picking blockState.MedianTime (which
+		// races with asynchronous tip-advance / reorg updates).
+		if opts.CandidateParentMedianTime == 0 {
+			return 0, false, errors.NewProcessingError("post-CSV consensus path requires Options.CandidateParentMedianTime, got zero (block height: %d, csv height: %d)", blockHeight, csvHeight)
 		}
 
-		if blockState.MedianTime == 0 {
-			return 0, false, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, blockState.MedianTime)
-		}
-
-		return blockState.MedianTime, false, nil
+		return opts.CandidateParentMedianTime, false, nil
 	}
 }
 

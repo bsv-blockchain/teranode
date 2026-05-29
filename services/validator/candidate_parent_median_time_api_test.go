@@ -34,10 +34,12 @@ func TestValidateTransactionRequest_CandidateParentMedianTimeRoundTrip(t *testin
 }
 
 // TestValidateTransactionRequest_CandidateParentMedianTimeOmitted_IsZero pins
-// the soft-fall contract on the receiver side: when the sender does not set
-// the field, the receiver observes nil (which the server maps to 0, which the
-// validator's post-CSV switch arm treats as "no candidate-parent MTP supplied
-// — soft-fall to tip MTP").
+// the wire-level absent-vs-present contract on the receiver side: when the
+// sender does not set the field, the receiver observes nil and the server-side
+// projection (optionsFromValidateRequest) maps that to Options.CandidateParentMedianTime=0.
+// What the validator does with that zero on the post-CSV consensus path is
+// covered by TestSelectFinalityComparisonTime — selectFinalityComparisonTime
+// now returns a ProcessingError on that combination (no tip-MTP soft-fall).
 func TestValidateTransactionRequest_CandidateParentMedianTimeOmitted_IsZero(t *testing.T) {
 	req := &validator_api.ValidateTransactionRequest{
 		TransactionData: []byte{1, 2, 3},
@@ -67,12 +69,12 @@ func TestBuildValidateTxRequest_PopulatesCandidateParentMedianTimeWhenSet(t *tes
 }
 
 // TestBuildValidateTxRequest_OmitsCandidateParentMedianTimeWhenZero pins the
-// wire-side contract: requests that genuinely have no parent context (policy
-// mode; the peer-facing CheckSubtree handler) must leave the proto field
-// absent rather than send a zero-valued optional. Block-validation callers
-// always populate post-CSV, so they never go through this branch — but the
-// nil-when-zero behaviour is still the right wire-economy default for the
-// soft-fall paths that exist.
+// wire-side contract: requests that do not consume the field (policy mode;
+// pre-CSV consensus mode) must leave the proto field absent rather than send
+// a zero-valued optional. Post-CSV consensus requests don't go through this
+// branch — they always populate, and the server-side
+// selectFinalityComparisonTime returns a ProcessingError if the field is
+// missing on that path (no tip-MTP soft-fall).
 func TestBuildValidateTxRequest_OmitsCandidateParentMedianTimeWhenZero(t *testing.T) {
 	opts := &Options{}
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 420000, opts)
@@ -142,8 +144,10 @@ func TestOptionsFromValidateRequest_CandidateParentMedianTimeRoundTrip(t *testin
 // HTTP handler does internally: parse the query string into Options, then
 // build the validator request from those Options. Pins the HTTP-fallback
 // handler path so a future regression dropping CandidateParentMedianTime at
-// either step is caught here, not at runtime in production where post-CSV
-// fork / historical block validation would silently soft-fall to tip MTP.
+// either step is caught here, not at runtime in production — where post-CSV
+// consensus would hit selectFinalityComparisonTime's hard-error path with a
+// less-precise diagnostic than the parse-time warning issued by
+// extractValidationParams.
 func TestHTTPHandlerPath_CandidateParentMedianTime_EndToEnd(t *testing.T) {
 	const wantMTP uint32 = 1699999000
 
@@ -178,9 +182,11 @@ func TestCandidateParentMedianTimePtr_AliasesOptsField(t *testing.T) {
 }
 
 // TestCandidateParentMedianTimePtr_NilWhenZero pins the wire-economy contract:
-// the post-CSV optional proto field stays absent on the wire when the caller
-// has not supplied a value (i.e. the peer-facing CheckSubtree case, the only
-// path that legitimately omits the field).
+// the optional proto field stays absent on the wire when the caller has not
+// supplied a value. Legitimate omission paths after the hard-error stance
+// landed are policy mode and pre-CSV consensus mode — both do not consume the
+// field. Post-CSV consensus requests must populate the field; if they don't,
+// the server's selectFinalityComparisonTime returns a ProcessingError.
 func TestCandidateParentMedianTimePtr_NilWhenZero(t *testing.T) {
 	require.Nil(t, candidateParentMedianTimePtr(&Options{}),
 		"candidateParentMedianTimePtr must return nil when CandidateParentMedianTime is zero")

@@ -708,6 +708,12 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 		height, err := strconv.ParseUint(blockHeightStr, 10, 32)
 		if err == nil {
 			blockHeight = uint32(height)
+		} else {
+			// Silent failure here would degrade pre-CSV finality (CandidateBlockTime
+			// would not be compared against a meaningful height) and skew the era-
+			// selection on the server side. Warn so future regressions on the HTTP
+			// fallback path do not ship silently.
+			c.Logger().Warnf("extractValidationParams: ignoring unparsable blockHeight=%q: %v", blockHeightStr, err)
 		}
 	}
 
@@ -740,12 +746,24 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	if candidateBlockTimeStr := c.QueryParam("candidateBlockTime"); candidateBlockTimeStr != "" {
 		if v, err := strconv.ParseUint(candidateBlockTimeStr, 10, 32); err == nil {
 			options.CandidateBlockTime = uint32(v)
+		} else {
+			// Silent failure here would degrade pre-CSV consensus finality to the
+			// "skip" arm in selectFinalityComparisonTime. Warn so callers (and us)
+			// catch HTTP-side regressions instead of having them ship silently.
+			c.Logger().Warnf("extractValidationParams: ignoring unparsable candidateBlockTime=%q: %v", candidateBlockTimeStr, err)
 		}
 	}
 
 	if candidateParentMedianTimeStr := c.QueryParam("candidateParentMedianTime"); candidateParentMedianTimeStr != "" {
 		if v, err := strconv.ParseUint(candidateParentMedianTimeStr, 10, 32); err == nil {
 			options.CandidateParentMedianTime = uint32(v)
+		} else {
+			// Silent failure here would leave Options.CandidateParentMedianTime
+			// at zero on a post-CSV consensus request, which selectFinalityComparisonTime
+			// now rejects with a ProcessingError. Warn so HTTP-fallback callers
+			// see the parse failure as the root cause instead of chasing the
+			// downstream rejection.
+			c.Logger().Warnf("extractValidationParams: ignoring unparsable candidateParentMedianTime=%q: %v", candidateParentMedianTimeStr, err)
 		}
 	}
 

@@ -657,26 +657,9 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 		return err
 	}
 
-	// Pick the right finality time source for the consensus path. Pre-CSV uses
-	// the candidate block's own header timestamp; post-CSV uses the candidate-
-	// parent MTP. Each field stays zero in the era where it is not consumed,
-	// which keeps the optional proto field absent on the wire (see
-	// candidateBlockTimePtr / candidateParentMedianTimePtr in services/validator).
-	var (
-		candidateBlockTime        uint32
-		candidateParentMedianTime uint32
-	)
-
-	if blockHeightUint32 < uint32(sm.chainParams.CSVHeight) {
-		candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
-		if err != nil {
-			return err
-		}
-	} else {
-		candidateParentMedianTime, err = sm.candidateParentMedianTimeForBlock(ctx, &block.MsgBlock().Header.PrevBlock)
-		if err != nil {
-			return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to compute candidate-parent MTP", err)
-		}
+	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, block, blockHeightUint32)
+	if err != nil {
+		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to select finality time sources", err)
 	}
 
 	if err = sm.PreValidateTransactions(ctx, txMap, *block.Hash(), blockHeightUint32, candidateBlockTime, candidateParentMedianTime); err != nil {
@@ -684,6 +667,40 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 	}
 
 	return nil
+}
+
+// candidateFinalityTimesForBlock picks the validator finality-time options
+// for the given block based on its CSV era. Exactly one return value is
+// non-zero on success:
+//
+//   - Pre-CSV (blockHeight < CSVHeight): returns (block header timestamp, 0).
+//     The validator consumes Options.CandidateBlockTime in this era.
+//   - Post-CSV (blockHeight >= CSVHeight): returns (0, candidate-parent MTP).
+//     The validator consumes Options.CandidateParentMedianTime in this era,
+//     and the parent-chain-walk sourcing rule + chain re-anchor + walk
+//     fallback live inside candidateParentMedianTimeForBlock.
+//
+// The other field stays zero so candidateBlockTimePtr /
+// candidateParentMedianTimePtr in services/validator can drop it from the
+// proto wire. Extracted as a separate method so the era-selection branch
+// can be table-tested at the package level without standing up the full
+// SyncManager pipeline.
+func (sm *SyncManager) candidateFinalityTimesForBlock(ctx context.Context, block *bsvutil.Block, blockHeight uint32) (candidateBlockTime uint32, candidateParentMedianTime uint32, err error) {
+	if blockHeight < uint32(sm.chainParams.CSVHeight) {
+		candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
+		if err != nil {
+			return 0, 0, err
+		}
+
+		return candidateBlockTime, 0, nil
+	}
+
+	candidateParentMedianTime, err = sm.candidateParentMedianTimeForBlock(ctx, &block.MsgBlock().Header.PrevBlock)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return 0, candidateParentMedianTime, nil
 }
 
 // candidateParentMedianTimeForBlock returns the candidate-parent MTP for the
@@ -698,12 +715,13 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 // parent chain — not the main-chain MTP at the same height (which is what a
 // height-based lookup like GetMedianTimePastForHeights would return).
 //
-// The value is computed and returned unconditionally so the validator does
-// not soft-fall to blockState.MedianTime (tip MTP) under reorg / tip-advance
-// races. The previous parent==tip optimisation was unsound: the validator
-// reads blockState.MedianTime later than the caller's tip check, and the
-// utxo store updates that field asynchronously from blockchain notifications,
-// so a tip advance / reorg between the two reads would silently swap the
+// The value is computed and returned unconditionally because the validator's
+// post-CSV consensus path now hard-errors on a missing
+// Options.CandidateParentMedianTime (no tip-MTP soft-fall). The earlier
+// parent==tip optimisation was unsound — the validator reads
+// blockState.MedianTime later than the caller's tip check, and the utxo
+// store updates that field asynchronously from blockchain notifications, so
+// a tip advance / reorg between the two reads would silently swap the
 // comparison time source.
 func (sm *SyncManager) candidateParentMedianTimeForBlock(ctx context.Context, parentHash *chainhash.Hash) (uint32, error) {
 	if parentHash == nil {
@@ -746,7 +764,7 @@ func (sm *SyncManager) candidateParentMedianTimeForBlock(ctx context.Context, pa
 	return mtp, nil
 }
 
-// walkParentChain fetches up to depth block headers starting at startHash and
+// walkParentChain fetches exactly depth block headers starting at startHash and
 // walking backwards via HashPrevBlock. Each hop uses blockchainClient.GetBlockHeader
 // which is keyed by hash in the in-memory cache — so its results are
 // deterministic regardless of which block is canonical at any given height
@@ -756,13 +774,21 @@ func (sm *SyncManager) candidateParentMedianTimeForBlock(ctx context.Context, pa
 // Returned headers are ordered newest-first, matching the contract of
 // blockchainClient.GetBlockHeaders' return order so candidateParentMedianTimeFromHeaders
 // can re-anchor them with the same logic.
+//
+// A nil pointer (cur == nil) or a nil header response (header == nil) is
+// treated as a hard error. Production callers only invoke this when the
+// candidate height is at or above CSVHeight, which is well past the first
+// `depth` blocks of the chain — so we never legitimately walk off the
+// beginning of the chain. Tolerating short returns would silently produce
+// an incomplete MTP on a transient cache miss mid-chain; raising loudly
+// instead forces the caller to surface the underlying issue.
 func (sm *SyncManager) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, error) {
 	headers := make([]*model.BlockHeader, 0, depth)
 	cur := startHash
 
 	for i := uint64(0); i < depth; i++ {
 		if cur == nil {
-			break
+			return nil, errors.NewProcessingError("walkParentChain: nil prev-block link at depth %d (walked off the chain)", i)
 		}
 
 		header, _, err := sm.blockchainClient.GetBlockHeader(ctx, cur)
@@ -771,7 +797,7 @@ func (sm *SyncManager) walkParentChain(ctx context.Context, startHash *chainhash
 		}
 
 		if header == nil {
-			break
+			return nil, errors.NewProcessingError("walkParentChain: nil header at depth %d (hash %s) — possible transient cache miss", i, cur.String())
 		}
 
 		headers = append(headers, header)
@@ -795,10 +821,12 @@ func (sm *SyncManager) walkParentChain(ctx context.Context, startHash *chainhash
 // that the newest returned header equals parentHash and that each consecutive
 // pair is linked via HashPrevBlock → Hash().
 //
-// Empty input and any verification failure surface as a hard error rather than
-// degrading into a soft-fall: silently returning 0 would let the caller leave
-// Options.CandidateParentMedianTime unset, re-introducing the snapshot race
-// against live tip MTP that this whole sourcing change exists to eliminate.
+// Empty input and any verification failure surface as a hard error: silently
+// returning 0 would let the caller pass Options.CandidateParentMedianTime=0
+// to the validator, which now rejects post-CSV consensus requests with a
+// missing parent MTP (no tip-MTP soft-fall) — but the error here gives a
+// more precise diagnostic at the source rather than waiting for the
+// validator's downstream rejection.
 //
 // Mirrors bitcoin-sv's CBlockIndex::GetMedianTimePast() for the median
 // computation itself: sorts the gathered timestamps and returns
@@ -1168,34 +1196,19 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
-	// Pair of finality-time sources for the consensus path. Pre-CSV uses the
-	// candidate block's own header timestamp (Options.CandidateBlockTime);
-	// post-CSV uses the candidate-parent MTP (Options.CandidateParentMedianTime,
-	// i.e. bitcoin-sv's pindexPrev->GetMedianTimePast() at
-	// src/validation.cpp:6001). Each is computed only in its active era so the
-	// optional proto fields stay absent on the wire in the other era. The
-	// post-CSV value is fetched unconditionally — see
-	// candidateParentMedianTimeForBlock for the parent-chain-walk sourcing rule
-	// and the rationale for not relying on the validator's tip-MTP fall-back
-	// (asynchronous tip-MTP updates would race with concurrent reorg / tip
-	// advance during validation).
-	var (
-		candidateBlockTime        uint32
-		candidateParentMedianTime uint32
-	)
+	// Convert block height once and propagate any failure immediately —
+	// silently dropping the candidate finality fields to zero would defeat
+	// the always-populate rule and hand the validator back to the tip-MTP
+	// race that this code is built to avoid. Mirrors the upfront conversion
+	// in ValidateTransactionsLegacyMode.
+	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
+	if err != nil {
+		return err
+	}
 
-	if blockHeightUint32, hErr := safeconversion.Int32ToUint32(block.Height()); hErr == nil {
-		if blockHeightUint32 < uint32(sm.chainParams.CSVHeight) {
-			candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
-			if err != nil {
-				return err
-			}
-		} else {
-			candidateParentMedianTime, err = sm.candidateParentMedianTimeForBlock(ctx, &block.MsgBlock().Header.PrevBlock)
-			if err != nil {
-				return errors.NewProcessingError("[validateTransactions] failed to compute candidate-parent MTP", err)
-			}
-		}
+	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, block, blockHeightUint32)
+	if err != nil {
+		return errors.NewProcessingError("[validateTransactions] failed to select finality time sources", err)
 	}
 
 	defer func() {
@@ -1210,13 +1223,6 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 
 	var timeStart time.Time
-
-	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
-	// can read mtpStore[h] without locking and without making gRPC calls.
-	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-	if err != nil {
-		return err
-	}
 
 	if err = sm.validationClient.EnsureMTPLoaded(ctx, blockHeightUint32); err != nil {
 		return err

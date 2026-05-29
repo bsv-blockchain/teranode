@@ -10,13 +10,10 @@ import (
 // TestSelectFinalityComparisonTime pins the per-context wiring documented in
 // selectFinalityComparisonTime's doc-comment: policy / next-tip uses tip MTP
 // in all eras; pre-CSV consensus uses Options.CandidateBlockTime when supplied
-// and skips otherwise; post-CSV consensus (blockHeight >= CSVHeight) uses
-// Options.CandidateParentMedianTime when supplied. Block-validation callers
-// are required to always populate it; the tip-MTP fall-back below it is
-// reserved for callers with no parent-chain context at all (peer-facing
-// CheckSubtree). The fall-back cases in this table cover that
-// CheckSubtree-like contract — they are NOT a sanctioned path for the
-// mainline block-validation flow.
+// and skips otherwise; post-CSV consensus (blockHeight >= CSVHeight) REQUIRES
+// Options.CandidateParentMedianTime — a missing value is a caller-side bug
+// and returns a ProcessingError. There is no tip-MTP soft-fall (it raced with
+// asynchronous tip-advance / reorg updates and was removed under review).
 func TestSelectFinalityComparisonTime(t *testing.T) {
 	const csvHeight uint32 = 1000
 
@@ -69,17 +66,10 @@ func TestSelectFinalityComparisonTime(t *testing.T) {
 			blockState:  utxo.BlockState{MedianTime: 1700000000},
 			want:        want{skipFinality: true},
 		},
-		// --- At-CSV consensus (BIP113 activation height) ---
-		// CandidateBlockTime is the pre-CSV-only field, so even when it is set
-		// (e.g. caller hasn't migrated) the post-CSV switch arm ignores it and
-		// soft-falls to tip MTP via blockState.MedianTime.
-		{
-			name:        "atCSV_consensus_ignores_pre_csv_field_softfalls_to_tip_mtp",
-			opts:        &Options{SkipPolicyChecks: true, CandidateBlockTime: 1234567890},
-			blockHeight: csvHeight,
-			blockState:  utxo.BlockState{MedianTime: 1700000000},
-			want:        want{comparisonTime: 1700000000, skipFinality: false},
-		},
+		// --- At-CSV / post-CSV consensus: candidate-parent MTP is REQUIRED ---
+		// No tip-MTP soft-fall. A missing value is a caller-side bug and
+		// surfaces as a ProcessingError so the validator never ships against
+		// an asynchronously-updated blockState.MedianTime.
 		{
 			name:        "atCSV_consensus_uses_candidate_parent_median_time_when_supplied",
 			opts:        &Options{SkipPolicyChecks: true, CandidateParentMedianTime: 1699999000},
@@ -87,7 +77,13 @@ func TestSelectFinalityComparisonTime(t *testing.T) {
 			blockState:  utxo.BlockState{MedianTime: 1700000000}, // ignored when parent MTP supplied
 			want:        want{comparisonTime: 1699999000, skipFinality: false},
 		},
-		// --- Post-CSV consensus: candidate-parent MTP preferred, soft-fall to tip MTP ---
+		{
+			name:        "atCSV_consensus_errors_when_candidate_parent_median_time_missing",
+			opts:        &Options{SkipPolicyChecks: true, CandidateBlockTime: 1234567890}, // pre-CSV field is ignored on this arm
+			blockHeight: csvHeight,
+			blockState:  utxo.BlockState{MedianTime: 1700000000}, // soft-fall removed; tip MTP must NOT be used
+			want:        want{err: true},
+		},
 		{
 			name:        "postCSV_consensus_uses_candidate_parent_median_time_when_supplied",
 			opts:        &Options{SkipPolicyChecks: true, CandidateParentMedianTime: 1699999000},
@@ -96,25 +92,25 @@ func TestSelectFinalityComparisonTime(t *testing.T) {
 			want:        want{comparisonTime: 1699999000, skipFinality: false},
 		},
 		{
-			name:        "postCSV_consensus_softfalls_to_tip_mtp_when_parent_mtp_zero",
+			name:        "postCSV_consensus_errors_when_candidate_parent_median_time_missing",
 			opts:        &Options{SkipPolicyChecks: true},
 			blockHeight: csvHeight + 1,
 			blockState:  utxo.BlockState{MedianTime: 1700000000},
-			want:        want{comparisonTime: 1700000000, skipFinality: false},
+			want:        want{err: true},
 		},
 		{
-			name:        "postCSV_consensus_fails_when_both_parent_mtp_and_tip_mtp_zero",
+			name:        "postCSV_consensus_errors_when_candidate_parent_median_time_missing_even_if_tip_mtp_zero",
 			opts:        &Options{SkipPolicyChecks: true},
 			blockHeight: csvHeight + 1,
 			blockState:  utxo.BlockState{MedianTime: 0},
 			want:        want{err: true},
 		},
 		{
-			name:        "postCSV_consensus_pre_csv_field_does_not_affect_post_csv_path",
+			name:        "postCSV_consensus_pre_csv_field_does_not_substitute_for_parent_mtp",
 			opts:        &Options{SkipPolicyChecks: true, CandidateBlockTime: 1234567890},
 			blockHeight: csvHeight + 1,
 			blockState:  utxo.BlockState{MedianTime: 1700000000},
-			want:        want{comparisonTime: 1700000000, skipFinality: false},
+			want:        want{err: true},
 		},
 	}
 

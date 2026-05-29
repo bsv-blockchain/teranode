@@ -225,13 +225,11 @@ func candidateBlockTimePtr(opts *Options) *uint32 {
 
 // candidateParentMedianTimePtr mirrors candidateBlockTimePtr for the
 // post-CSV consensus path. Returns &opts.CandidateParentMedianTime directly
-// when non-zero so the wire write is no-copy. The nil-when-zero branch is
-// reserved for callers that genuinely have no parent context — e.g. the
-// peer-facing CheckSubtree handler. Block-validation callers (legacy/netsync,
-// subtreevalidation/check_block_subtrees) populate the field unconditionally
-// on the post-CSV consensus path so the validator does not soft-fall to its
-// own asynchronously-updated blockState.MedianTime, which can drift under
-// reorg / tip-advance during long block validations.
+// when non-zero so the wire write is no-copy. Returns nil only when the
+// field is genuinely unset — the server-side selectFinalityComparisonTime
+// hard-errors on absent values for post-CSV consensus requests, so the
+// nil-encoded branch exists only for policy-mode and pre-CSV consensus
+// requests (where the field is not consumed).
 func candidateParentMedianTimePtr(opts *Options) *uint32 {
 	if opts.CandidateParentMedianTime == 0 {
 		return nil

@@ -3,10 +3,14 @@ package netsync
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -48,10 +52,11 @@ func makeChain(t *testing.T, n int, timestamps []uint32) []*model.BlockHeader {
 // empty-input case surfaces as a hard error rather than degrading to 0.
 // blockchainClient.GetBlockHeaders returns an empty slice (no error) when the
 // start hash is unknown to the store; if the helper silently returned 0 the
-// validator's post-CSV path would then read the field as "unset" and
-// soft-fall to its asynchronously-updated blockState.MedianTime,
-// re-introducing exactly the tip-MTP snapshot race that the candidate-parent
-// MTP plumbing exists to eliminate.
+// caller would pass Options.CandidateParentMedianTime=0 down to the
+// validator, which now rejects post-CSV consensus requests with a
+// ProcessingError when that field is missing. Erroring at the source gives a
+// precise diagnostic instead of waiting for the validator's downstream
+// rejection.
 func TestCandidateParentMedianTimeFromHeaders_ErrorsOnEmpty(t *testing.T) {
 	parent := &chainhash.Hash{1}
 
@@ -150,6 +155,101 @@ func TestCandidateParentMedianTimeFromHeaders_NilElementErrors(t *testing.T) {
 	hAtMid[5] = nil
 	_, err = candidateParentMedianTimeFromHeaders(parent, hAtMid)
 	require.Error(t, err, "nil header in middle must error")
+}
+
+// TestCandidateFinalityTimesForBlock_EraSelection pins the era-routing branch
+// inside candidateFinalityTimesForBlock — the dispatch the validator relies
+// on to decide whether the post-CSV CandidateParentMedianTime or the pre-CSV
+// CandidateBlockTime is on the outgoing request. Without this test the
+// dispatch was untested (PreValidateTransactions unit tests pass literal
+// 0, 0 for both fields and never exercise the selection itself).
+func TestCandidateFinalityTimesForBlock_EraSelection(t *testing.T) {
+	const csvHeight uint32 = 1000
+
+	const headerTime int64 = 1700000000
+
+	// Helper: build a block at the given height with the given header
+	// timestamp. PrevBlock is left at the zero hash for the pre-CSV path
+	// (which doesn't read it). The post-CSV path needs a real parentHash so
+	// the blockchain mock can answer GetBlockHeaders against it.
+	makeBlock := func(height int32, timestamp int64, prevHash chainhash.Hash) *bsvutil.Block {
+		t.Helper()
+		msg := &wire.MsgBlock{
+			Header: wire.BlockHeader{
+				Version:   1,
+				PrevBlock: prevHash,
+				Timestamp: time.Unix(timestamp, 0),
+			},
+		}
+		b := bsvutil.NewBlock(msg)
+		b.SetHeight(height)
+		return b
+	}
+
+	t.Run("pre-CSV returns block header timestamp, zero parent MTP", func(t *testing.T) {
+		bcMock := &blockchain.Mock{}
+		sm := &SyncManager{
+			logger:           ulogger.TestLogger{},
+			blockchainClient: bcMock,
+			chainParams:      &chaincfg.Params{CSVHeight: csvHeight},
+		}
+
+		block := makeBlock(500, headerTime, chainhash.Hash{})
+
+		got1, got2, err := sm.candidateFinalityTimesForBlock(context.Background(), block, 500)
+		require.NoError(t, err)
+		require.Equal(t, uint32(headerTime), got1, "pre-CSV must return the block header timestamp as candidateBlockTime")
+		require.Equal(t, uint32(0), got2, "pre-CSV must leave candidateParentMedianTime at zero")
+
+		bcMock.AssertNotCalled(t, "GetBlockHeaders")
+		bcMock.AssertNotCalled(t, "GetBlockHeader")
+	})
+
+	t.Run("post-CSV returns zero block-time, populated parent MTP", func(t *testing.T) {
+		// Build the parent chain: 11 headers walking back from parentHash.
+		parentChain := makeChain(t, 11, []uint32{150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50})
+		parentHash := parentChain[0].Hash()
+		// Median of [50..150 step 10] is 100.
+
+		bcMock := &blockchain.Mock{}
+		bcMock.Mock.On("GetBlockHeaders", mock.Anything, parentHash, uint64(blockchain.MedianTimeBlocks)).
+			Return(parentChain, []*model.BlockHeaderMeta{}, nil)
+
+		sm := &SyncManager{
+			logger:           ulogger.TestLogger{},
+			blockchainClient: bcMock,
+			chainParams:      &chaincfg.Params{CSVHeight: csvHeight},
+		}
+
+		block := makeBlock(1500, headerTime, *parentHash)
+
+		got1, got2, err := sm.candidateFinalityTimesForBlock(context.Background(), block, 1500)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), got1, "post-CSV must leave candidateBlockTime at zero so it stays absent on the wire")
+		require.Equal(t, uint32(100), got2, "post-CSV must return the candidate-parent MTP")
+	})
+
+	t.Run("boundary blockHeight == CSVHeight takes the post-CSV branch", func(t *testing.T) {
+		parentChain := makeChain(t, 11, []uint32{150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50})
+		parentHash := parentChain[0].Hash()
+
+		bcMock := &blockchain.Mock{}
+		bcMock.Mock.On("GetBlockHeaders", mock.Anything, parentHash, uint64(blockchain.MedianTimeBlocks)).
+			Return(parentChain, []*model.BlockHeaderMeta{}, nil)
+
+		sm := &SyncManager{
+			logger:           ulogger.TestLogger{},
+			blockchainClient: bcMock,
+			chainParams:      &chaincfg.Params{CSVHeight: csvHeight},
+		}
+
+		block := makeBlock(int32(csvHeight), headerTime, *parentHash)
+
+		got1, got2, err := sm.candidateFinalityTimesForBlock(context.Background(), block, csvHeight)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), got1, "at-CSV boundary follows the post-CSV branch (>= CSVHeight)")
+		require.Equal(t, uint32(100), got2)
+	})
 }
 
 // TestCandidateParentMedianTimeForBlock_WalkFallbackRecoversFromBadBatchedFetch

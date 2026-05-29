@@ -161,9 +161,12 @@ func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 }
 
 // TestOptionsFromValidateRequest_OmittedFieldsStayZero pins that omitted
-// proto fields (policy-mode request where buildValidateTxRequest left
-// CandidateBlockTime nil) project to zero on the server side, triggering
-// the validator's skip-finality soft-fall.
+// proto fields project to zero on the server side. What the validator then
+// does with those zeros depends on the era / mode and is covered by
+// TestSelectFinalityComparisonTime: policy mode uses tip MTP; pre-CSV
+// consensus with CandidateBlockTime=0 returns skipFinality; post-CSV
+// consensus with CandidateParentMedianTime=0 hard-errors (no tip-MTP
+// soft-fall).
 func TestOptionsFromValidateRequest_OmittedFieldsStayZero(t *testing.T) {
 	src := &Options{}
 

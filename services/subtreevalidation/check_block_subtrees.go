@@ -133,12 +133,10 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// median of timestamps at [H-11, H-1] following the parent's actual chain.
 	// We delegate to blockchainClient.GetBlockHeaders which has a fork-aware
 	// SQL fallback (recursive parent_id CTE) — so a side-chain candidate
-	// receives MTP for ITS parent chain, not the main chain at height H. The
-	// value is always populated post-CSV (no "parent==tip → soft-fall"
-	// optimisation): the validator would otherwise resolve the omitted field
-	// against blockState.MedianTime, which is updated asynchronously from
-	// blockchain notifications and can drift under tip-advance / reorg during
-	// validation.
+	// receives MTP for ITS parent chain, not the main chain at height H.
+	// Required on every post-CSV consensus request: the validator hard-errors
+	// when the field is missing, so failing to populate here would surface as
+	// a downstream rejection rather than degrading silently.
 	var candidateParentMedianTime uint32
 	if block.Height >= uint32(u.settings.ChainCfgParams.CSVHeight) {
 		var mtpErr error
@@ -1194,17 +1192,23 @@ func (u *Server) fetchCandidateParentMedianTime(ctx context.Context, parentHash 
 	return mtp, nil
 }
 
-// walkParentChain fetches up to depth block headers starting at startHash and
+// walkParentChain fetches exactly depth block headers starting at startHash and
 // walking backwards via HashPrevBlock. See the equivalent helper in
 // services/legacy/netsync for the rationale — duplicated by design (small,
 // internal, avoids a new shared util package).
+//
+// nil pointers and nil header responses are hard errors: production callers
+// only invoke this at heights at or above CSVHeight, well past the chain's
+// first `depth` blocks, so we never legitimately walk off the beginning.
+// Tolerating short returns would silently produce an incomplete MTP on a
+// transient cache miss; raising loudly forces the caller to surface it.
 func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, error) {
 	headers := make([]*model.BlockHeader, 0, depth)
 	cur := startHash
 
 	for i := uint64(0); i < depth; i++ {
 		if cur == nil {
-			break
+			return nil, errors.NewProcessingError("walkParentChain: nil prev-block link at depth %d (walked off the chain)", i)
 		}
 
 		header, _, err := u.blockchainClient.GetBlockHeader(ctx, cur)
@@ -1213,7 +1217,7 @@ func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash,
 		}
 
 		if header == nil {
-			break
+			return nil, errors.NewProcessingError("walkParentChain: nil header at depth %d (hash %s) — possible transient cache miss", i, cur.String())
 		}
 
 		headers = append(headers, header)
@@ -1241,11 +1245,12 @@ func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash,
 // equals parentHash and that each consecutive pair is linked via
 // HashPrevBlock → Hash().
 //
-// Empty input and any verification failure surface as a hard error rather
-// than degrading into a soft-fall: silently returning 0 would let the caller
-// leave Options.CandidateParentMedianTime unset, re-introducing the snapshot
-// race against live tip MTP that this whole sourcing change exists to
-// eliminate.
+// Empty input and any verification failure surface as a hard error: silently
+// returning 0 would let the caller pass Options.CandidateParentMedianTime=0
+// to the validator, which now rejects post-CSV consensus requests with a
+// missing parent MTP (no tip-MTP soft-fall) — but the error here gives a
+// more precise diagnostic at the source rather than waiting for the
+// validator's downstream rejection.
 func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []*model.BlockHeader) (uint32, error) {
 	if len(headers) == 0 {
 		return 0, errors.NewProcessingError("cannot compute median timestamp from zero headers")

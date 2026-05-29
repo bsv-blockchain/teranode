@@ -76,16 +76,14 @@ type Options struct {
 	// (src/validation.cpp:6001), where post-activation finality is checked
 	// against the parent's MTP rather than the candidate block's own timestamp.
 	//
-	// Soft-fall: when left at zero on the consensus path,
-	// selectFinalityComparisonTime falls back to blockState.MedianTime (tip
-	// MTP). This fallback exists only for callers that cannot compute the
-	// parent-chain MTP for the candidate (e.g. peer-facing CheckSubtree which
-	// receives no block header context). Block-validation callers that DO
-	// have the parent hash must always populate this field — even on the
-	// mainline ingest path. The validator reads blockState.MedianTime later
-	// than the caller, and the utxo store updates that field asynchronously
-	// from blockchain notifications, so a tip advance / reorg between the
-	// two reads would swap the comparison time source under load.
+	// Required field on the consensus path. Block-validation callers MUST
+	// populate this. selectFinalityComparisonTime returns a ProcessingError
+	// when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
+	// is updated asynchronously from blockchain notifications, so a tip
+	// advance / reorg between the caller's snapshot and the validator's read
+	// would silently swap the comparison time source; the hard-error stance
+	// makes a forgotten populate-callsite fail fast at validation time
+	// instead of silently degrading.
 	//
 	// Sourcing on the caller side: bitcoin-sv's pindexPrev->GetMedianTimePast()
 	// for a candidate at height H is the median of timestamps at heights
@@ -259,13 +257,11 @@ func WithCandidateBlockTime(timestamp uint32) Option {
 
 // WithCandidateParentMedianTime creates an option carrying the candidate
 // block's parent-chain MTP (the equivalent of bitcoin-sv's
-// pindexPrev->GetMedianTimePast()). Required by block-validation callers when
-// validating post-CSV blocks, including the steady-state mainline ingest
-// path: the validator must not fall back to its own blockState.MedianTime
-// during validation because the utxo store updates that field asynchronously
-// from blockchain notifications and a tip advance / reorg between the
-// caller's snapshot and the validator's read would silently swap the
-// comparison time source. See Options.CandidateParentMedianTime.
+// pindexPrev->GetMedianTimePast()). Required by block-validation callers on
+// every post-CSV consensus request — selectFinalityComparisonTime returns
+// a ProcessingError when this field is missing on that path (no tip-MTP
+// soft-fall). See Options.CandidateParentMedianTime for the rationale of
+// the hard-error stance.
 //
 // Parameters:
 //   - mtp: The candidate-parent-chain MTP computed at the caller — i.e. the

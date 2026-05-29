@@ -710,6 +710,24 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 	u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
+	// Post-CSV candidate-parent MTP for the validator's consensus-path finality
+	// check (Options.CandidateParentMedianTime). Without this, two peer-priority
+	// handlers processing the same subtree under different tip-MTP snapshots
+	// could diverge on the finality decision. The request carries the previous
+	// block hash, so the candidate-parent MTP is locally derivable here — see
+	// fetchCandidateParentMedianTime for the parent-chain-walk sourcing rule
+	// and the chain re-anchor + walkParentChain fallback that closes the
+	// reorg-race window. Pre-CSV (CandidateBlockTime) still cannot be
+	// populated on this path because the request does not carry the candidate
+	// block's own header timestamp.
+	var candidateParentMedianTime uint32
+	if request.BlockHeight >= uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateParentMedianTime, err = u.fetchCandidateParentMedianTime(ctx, previousBlockHash)
+		if err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] candidate-parent MTP", err)
+		}
+	}
+
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
 		// read from legacy store
@@ -741,27 +759,19 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			AllowFailFast: false,
 		}
 
-		// CheckSubtree responds to peer subtree-validation requests. The candidate
-		// block's header isn't carried in the request and the candidate parent
-		// may not exist in our local store yet, so neither
-		// Options.CandidateBlockTime (pre-CSV finality source) nor
-		// Options.CandidateParentMedianTime (post-CSV finality source) is
-		// populated here. The validator soft-falls in both eras:
-		//   - pre-CSV: skips consensus finality (no value to compare against),
-		//   - post-CSV: falls back to tip MTP via blockState.MedianTime.
-		// The post-CSV fall-back to tip MTP accepts a small correctness risk
-		// (blockState.MedianTime is asynchronously updated from blockchain
-		// notifications, so a tip advance during validation can drift the
-		// comparison time source) in exchange for graceful degradation rather
-		// than refusing to validate when there is no block header context.
-		// In practice this peer-supplied path is reached only as a fallback
-		// when the mainline subtreevalidation/check_block_subtrees.go path
-		// — which does always populate both fields per their CSV era — has
-		// not already validated the same block end-to-end.
+		// CheckSubtree responds to peer subtree-validation requests. The request
+		// does not carry the candidate block's own header timestamp, so
+		// Options.CandidateBlockTime (pre-CSV finality source) stays zero —
+		// the validator skips pre-CSV consensus finality in that case, matching
+		// the prior behaviour. Options.CandidateParentMedianTime (post-CSV) is
+		// populated above from the request's PreviousBlockHash so two
+		// peer-priority handlers processing the same subtree cannot diverge
+		// on tip-MTP snapshots.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
+			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		}
 
 		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
@@ -799,10 +809,10 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// Call the ValidateSubtreeInternal method
-	// Options.CandidateBlockTime and Options.CandidateParentMedianTime
-	// intentionally not populated — see the CheckSubtree legacy branch
-	// above for the rationale (no block header / parent context in the
-	// peer-facing request).
+	// Options.CandidateBlockTime intentionally not populated (no candidate
+	// block header in the peer-facing request); Options.CandidateParentMedianTime
+	// IS populated from the request's PreviousBlockHash — see the legacy
+	// branch above for the rationale.
 	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,
@@ -811,6 +821,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 	); err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}
