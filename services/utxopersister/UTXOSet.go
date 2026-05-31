@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -629,23 +630,37 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
-				// Read the next 36 bytes...
+				// Read the next UTXOWrapper record (txid + encoded
+				// height/coinbase + its UTXOs).
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
 					// CreateUTXOSet appends a 16-byte footer (txCount +
-					// utxoCount) after the final UTXOWrapper. The wrapper
-					// stream carries no record count, so the reader only
-					// discovers the end when the next txid read either lands
-					// exactly on EOF (io.EOF) or comes up short against that
-					// footer (io.ErrUnexpectedEOF). Treat both as the normal
-					// end of the wrapper stream, mirroring the reader in
-					// cmd/utxovalidator. Without this, every non-genesis
-					// consolidation crashes the service on the footer with
-					// "failed to read txid, expected 32 bytes got 16". A
-					// genuinely truncated final record is indistinguishable
-					// from the footer here — an accepted limitation of the
-					// on-disk format.
-					if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
+					// utxoCount) after the final UTXOWrapper. This loop does
+					// not consult that count, so it only learns the records
+					// are exhausted when the next read either lands exactly on
+					// EOF (a bare io.EOF) or short-reads the footer, which
+					// io.ReadFull reports as io.ErrUnexpectedEOF ("unexpected
+					// EOF"). cmd/utxovalidator handles the same footer.
+					//
+					// The short read is matched by substring, not
+					// structurally: errors.New flattens a non-*Error cause to
+					// its message (errors/errors.go:334-336), discarding the
+					// io.ErrUnexpectedEOF sentinel - so errors.Is(err,
+					// io.ErrUnexpectedEOF) would itself reduce to this same
+					// strings.Contains. (And do not fold the io.EOF clause into
+					// errors.Is: "EOF" is a substring of "unexpected EOF", so
+					// it would swallow this footer error too.) A structural fix
+					// - FromReader returning a typed sentinel, and validating
+					// records-read == txCount against the footer - is tracked
+					// as a follow-up.
+					//
+					// Consequence: a genuinely truncated tail is
+					// indistinguishable from the footer and is silently
+					// accepted (pre-existing; same as utxovalidator). Matching
+					// only "unexpected EOF" - not the broader "failed to read
+					// txid" utxovalidator also matches - keeps a real non-EOF
+					// read error loud rather than swallowed.
+					if err == io.EOF || strings.Contains(err.Error(), "unexpected EOF") {
 						break OUTER
 					}
 
