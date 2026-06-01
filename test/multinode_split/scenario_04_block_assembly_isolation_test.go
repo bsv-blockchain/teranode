@@ -36,37 +36,31 @@ import (
 // That visibility is exactly what split-mode chaos buys you, and it's
 // why this kind of scenario lives here.
 //
-// Note: we deliberately do NOT mine a final block on node 3 after the
-// restart. Empirically, a block produced by a freshly-restored
-// blockassembly broadcasts in a form that crashes peers' core sidecar
-// via legacy's "unknown magic" wire-format parser — a separate teranode
-// robustness issue. Catch-up to the survivors' tip is sufficient
-// evidence that the validation pipeline cleared.
+// Note: we stop at catch-up rather than mining a final block on node 3
+// after the restart. The "unknown magic" crash that previously made that
+// step flaky was not a legacy wire-format parser bug as first assumed; it
+// was the utxopersister double-reading the 8-byte fileformat magic when
+// processing a previous UTXO set (the bytes that looked like an unknown
+// magic were chainhash prefixes), fixed in #971/#979. Catch-up to the
+// survivors' tip is sufficient evidence that the validation pipeline
+// cleared, so the conservative shape is kept regardless.
 func TestBlockAssemblyIsolation(t *testing.T) {
-	// Skipped pending two teranode robustness fixes that block this
-	// scenario (and the split-stack TestMain itself) from running reliably:
+	// Previously skipped pending teranode robustness fixes that blocked
+	// this scenario (and the split-stack TestMain itself) from running
+	// reliably. All have since landed:
 	//
-	//  1. utxopersister.CreateUTXOSet (services/utxopersister/UTXOSet.go:527)
-	//     nil-pointer panics during startup when processing the height-1
-	//     probe block: "Processing block <nil> height 0" → SIGSEGV. Brings
-	//     down the core sidecar before the test starts; TestMain reports
-	//     "waitForMesh: probe block ... did not propagate" with heights
-	//     map[N:-1] (RPC unreachable because core exited).
-	//  2. legacy peer-protocol parser returns "unknown magic: [...]"
-	//     when receiving a block from a peer whose blockassembly was
-	//     killed and restarted; ServiceManager treats it as fatal and
-	//     bails the whole core sidecar. The crash hits the peers
-	//     receiving the block, not the miner, so it manifests as RPC
-	//     connection-refused on healthy-looking nodes during the final
-	//     converge wait.
-	//
-	// Once both are fixed, remove this t.Skip — the scenario assertions
-	// below are good. The harness extension (ProvisionSplit,
-	// KillService/StartService, split-aware Reset / dumpNodeLogs,
-	// ulimits on aerospike) is independent of these bugs and ships on
-	// its own.
-	t.Skip("blocked by teranode utxopersister nil-pointer panic and legacy 'unknown magic' crash; re-enable once those land")
-
+	//  1. utxopersister.CreateUTXOSet nil-pointer panic at startup when
+	//     processing the height-1 probe block, which took down the core
+	//     sidecar before the test began — fixed in #969.
+	//  2. the "unknown magic" crash when a peer persisted a block, which was
+	//     utxopersister double-reading the fileformat magic of a previous
+	//     UTXO set (not a legacy wire-format bug as first assumed) — fixed
+	//     in #971/#979.
+	//  3. utxopersister.CreateUTXOSet crashing the core sidecar on the
+	//     16-byte footer (txCount + utxoCount) of a previous UTXO set during
+	//     consolidation — hit here when node 3 persists peer blocks while
+	//     its blockassembly is down. This was the last blocker, surfaced by
+	//     this very scenario and fixed in #985.
 	s := stack()
 	s.Reset(t)
 
