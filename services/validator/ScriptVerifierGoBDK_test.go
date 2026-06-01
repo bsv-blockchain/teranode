@@ -325,3 +325,62 @@ func Test_Uint2Int(t *testing.T) {
 		})
 	}
 }
+
+// BDK-boundary substitution of the unconfirmedParentHeight sentinel into the
+// value BDK expects — MEMPOOL_HEIGHT in consensus mode, the candidate height
+// in policy mode. See the unconfirmedParentHeight constant doc in
+// Validator.go and the substituteUnconfirmedHeights doc in
+// ScriptVerifierGoBDK.go for the contract.
+
+func TestSentinelValuePins(t *testing.T) {
+	// Drift detection: unconfirmedParentHeight is teranode-internal and must
+	// never collide with mempoolHeight (BDK / svnode sentinel from
+	// bitcoin-sv/src/protocol_era.h:14). If either drifts, the substitution
+	// at the BDK boundary breaks silently.
+	require.Equal(t, uint32(0xFFFFFFFF), unconfirmedParentHeight, "teranode internal sentinel drifted")
+	require.Equal(t, uint32(0x7FFFFFFF), mempoolHeight, "BDK / svnode MEMPOOL_HEIGHT drifted")
+	require.NotEqual(t, unconfirmedParentHeight, mempoolHeight, "sentinels must remain distinct so the adapter can translate one to the other")
+}
+
+func TestSubstituteUnconfirmedHeights_NoSentinel_ReturnsInputUnchanged(t *testing.T) {
+	// Common path: no fallback parents — no allocation, same slice header.
+	in := []uint32{100, 200, 300}
+	out := substituteUnconfirmedHeights(in, 500, true)
+	require.Equal(t, in, out)
+	// Slice identity: avoid allocating when there is nothing to substitute.
+	require.Same(t, &in[0], &out[0], "no-sentinel path must reuse the input slice")
+}
+
+func TestSubstituteUnconfirmedHeights_Consensus_SentinelBecomesMempoolHeight(t *testing.T) {
+	// Consensus mode: the sentinel must surface as 0x7FFFFFFF so BDK rejects
+	// with UnconfirmedInputInBlock (bdk/core/txvalidator.cpp:779).
+	in := []uint32{100, unconfirmedParentHeight, 300}
+	out := substituteUnconfirmedHeights(in, 500, true)
+	require.Equal(t, []uint32{100, mempoolHeight, 300}, out)
+	// Original slice must not be mutated — callers may use it after the BDK call.
+	require.Equal(t, []uint32{100, unconfirmedParentHeight, 300}, in)
+}
+
+func TestSubstituteUnconfirmedHeights_Policy_SentinelBecomesBlockHeight(t *testing.T) {
+	// Policy mode: the sentinel must be replaced by the candidate height
+	// (tip+1 in policy mode), matching svnode's GetInputScriptBlockHeight
+	// conversion at bitcoin-sv/src/validation.cpp:2668.
+	const candidate uint32 = 500
+	in := []uint32{100, unconfirmedParentHeight, 300}
+	out := substituteUnconfirmedHeights(in, candidate, false)
+	require.Equal(t, []uint32{100, candidate, 300}, out)
+	require.Equal(t, []uint32{100, unconfirmedParentHeight, 300}, in)
+}
+
+func TestSubstituteUnconfirmedHeights_MultipleSentinels(t *testing.T) {
+	// All sentinel slots translate; non-sentinel slots untouched.
+	in := []uint32{unconfirmedParentHeight, 200, unconfirmedParentHeight}
+	out := substituteUnconfirmedHeights(in, 500, true)
+	require.Equal(t, []uint32{mempoolHeight, 200, mempoolHeight}, out)
+}
+
+func TestSubstituteUnconfirmedHeights_EmptySlice(t *testing.T) {
+	in := []uint32{}
+	out := substituteUnconfirmedHeights(in, 500, true)
+	require.Equal(t, in, out)
+}

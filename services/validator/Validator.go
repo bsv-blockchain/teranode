@@ -62,6 +62,27 @@ const (
 	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
 	// Genesis upgrade.
 	DustLimit = uint64(1)
+
+	// unconfirmedParentHeight is the teranode-internal sentinel written into
+	// utxoHeights when a parent transaction is not present in the UTXO store
+	// with recorded block heights (i.e. the parent UTXO is not yet confirmed).
+	//
+	// Chosen as 0xFFFFFFFF — an impossible block height (no real chain reaches
+	// 4.29 billion blocks) — so it cannot collide with any value produced by
+	// the other two height-population branches (in-block ParentMetadata, which
+	// stamps the candidate height; UTXO-store hit, which uses the real
+	// stored height). The collision matters because in mainline block
+	// validation `blockState.Height + 1` equals the candidate height, making
+	// height-based identification of unconfirmed slots ambiguous.
+	//
+	// It is **distinct** from BDK / svnode's MEMPOOL_HEIGHT = 0x7FFFFFFF on
+	// purpose: that constant is a BDK-adapter concept and lives only inside
+	// ScriptVerifierGoBDK.ValidateTransaction, which translates this sentinel
+	// outward (→ MEMPOOL_HEIGHT in consensus mode so BDK rejects with
+	// bad-txns-unconfirmed-input-in-block; → the candidate block height in
+	// policy mode, matching svnode's GetInputScriptBlockHeight conversion at
+	// bitcoin-sv/src/validation.cpp:2668).
+	unconfirmedParentHeight uint32 = 0xFFFFFFFF
 )
 
 // Txmeta Kafka wire-format constants live in stores/txmetacache (see wire.go
@@ -933,10 +954,15 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	}
 
 	if len(txMeta.BlockHeights) == 0 {
-		// Get atomic block state to ensure consistency
-		blockState := v.utxoStore.GetBlockState()
+		// Parent is in the UTXO store but has no block heights recorded — i.e.
+		// the parent UTXO is not yet confirmed. Mark each slot with the
+		// teranode-internal sentinel so the BDK adapter can translate it at
+		// the boundary: MEMPOOL_HEIGHT in consensus (BDK rejects with
+		// bad-txns-unconfirmed-input-in-block) or the candidate height in
+		// policy mode (matching svnode's GetInputScriptBlockHeight). See
+		// ScriptVerifierGoBDK.ValidateTransaction for the translation.
 		for _, idx := range idxs {
-			utxoHeights[idx] = blockState.Height + 1
+			utxoHeights[idx] = unconfirmedParentHeight
 		}
 	} else {
 		for _, idx := range idxs {
@@ -1409,9 +1435,11 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	// The highest MTP index we guarantee is blockHeight:
 	//   - blockMTPHeight = blockHeight: GetMedianTimePastRange computes stored_mtp(N)
 	//     on the fly for the not-yet-persisted block N from block_time values [N-11, N-1].
-	//   - utxoHeights *may* exceed blockHeight when the chain tip advances during
-	//     validation (unconfirmed parents get blockState.Height+1); validateTransaction
-	//     clamps those lookups to blockMTPHeight.
+	//   - utxoHeights *may* exceed blockHeight: unconfirmed parents are stamped with the
+	//     unconfirmedParentHeight sentinel (0xFFFFFFFF). In consensus mode BDK rejects
+	//     before BIP68 runs; in policy mode BIP68 is gated out — so readMTPsLocked never
+	//     actually sees the sentinel, but its `h >= storeLen` clamp still protects.
+
 	needed := blockHeight
 
 	v.mtpMu.Lock()

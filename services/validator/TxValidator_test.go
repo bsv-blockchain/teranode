@@ -130,6 +130,61 @@ func TestTxValidatorSkipsBDKWhenSkipScriptValidationSet(t *testing.T) {
 	assert.Equal(t, 0, counter.calls, "BDK ValidateTransaction must not be called when SkipScriptValidation is set")
 }
 
+// When SkipScriptValidation bypasses the BDK call, the teranode-side guard
+// must still reject an unconfirmedParentHeight sentinel in consensus mode.
+// Without it, the sentinel would leak into BIP68 / MTP lookups and the tx
+// would be silently accepted, violating the
+// bad-txns-unconfirmed-input-in-block consensus contract.
+
+func TestTxValidator_SkipScriptValidation_RejectsSentinelInConsensus(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	counter := &countingBDKValidator{}
+	txValidator := &TxValidator{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+		bdk:      counter,
+	}
+
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	err := txValidator.ValidateTransaction(aTx, 100, []uint32{99, unconfirmedParentHeight}, validationOptions)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-txns-unconfirmed-input-in-block")
+	require.Equal(t, 0, counter.calls, "BDK must not be called on the SkipScriptValidation path")
+}
+
+func TestTxValidator_SkipScriptValidation_AcceptsSentinelInPolicy(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	counter := &countingBDKValidator{}
+	txValidator := &TxValidator{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+		bdk:      counter,
+	}
+
+	// Policy mode: the sentinel represents an unconfirmed parent and svnode
+	// silently treats it as the next-block height. The skip-script guard must
+	// not reject here — matches svnode's GetInputScriptBlockHeight conversion.
+	validationOptions := &Options{SkipPolicyChecks: false, SkipScriptValidation: true}
+	require.NoError(t, txValidator.ValidateTransaction(aTx, 100, []uint32{99, unconfirmedParentHeight}, validationOptions))
+	require.Equal(t, 0, counter.calls)
+}
+
+func TestTxValidator_SkipScriptValidation_AcceptsConfirmedHeightsInConsensus(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	counter := &countingBDKValidator{}
+	txValidator := &TxValidator{
+		logger:   ulogger.TestLogger{},
+		settings: tSettings,
+		bdk:      counter,
+	}
+
+	// No sentinel in heights — the consensus guard must not false-positive on
+	// confirmed parents.
+	validationOptions := &Options{SkipPolicyChecks: true, SkipScriptValidation: true}
+	require.NoError(t, txValidator.ValidateTransaction(aTx, 100, []uint32{99, 99}, validationOptions))
+	require.Equal(t, 0, counter.calls)
+}
+
 // policy settings tests
 func TestMaxTxSizePolicy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
