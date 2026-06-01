@@ -118,3 +118,31 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		require.Equal(t, uint32(0), tSettings.GetSubtreeValidationBlockHeightRetention())
 	})
 }
+
+// Pin the runtime default for the absurd-fee user-protection ceiling
+// (sendrawtransaction). Without this NewSettings wiring the field would
+// stay at zero, silently disabling the check in production. Default
+// matches bitcoin-sv's DEFAULT_TRANSACTION_MAXFEE = COIN/10 = 10_000_000
+// satoshis (0.1 BSV).
+func TestMaxRawTxFee_DefaultIsNonZero(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Policy)
+	require.Equal(t, uint64(10_000_000), tSettings.Policy.MaxRawTxFee,
+		"runtime default must be 10M sats so the RPC absurd-fee guard fires by default")
+}
+
+// Pin that operators can override the ceiling via the maxrawtxfee env key,
+// and that the override path produces the literal value (not a clamped one).
+func TestMaxRawTxFee_EnvOverride(t *testing.T) {
+	t.Setenv("maxrawtxfee", "25000000")
+	tSettings := NewSettings()
+	require.Equal(t, uint64(25_000_000), tSettings.Policy.MaxRawTxFee)
+}
+
+// Operator opt-out: maxrawtxfee=0 disables the RPC check entirely. The
+// handler shortcuts when MaxRawTxFee == 0, so this also pins that path.
+func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
+	t.Setenv("maxrawtxfee", "0")
+	tSettings := NewSettings()
+	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
