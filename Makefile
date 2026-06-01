@@ -182,10 +182,17 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# Coverage via binary-format coverage (GOCOVERDIR) merged once with `go tool covdata`,
+# instead of `-coverprofile` + `-coverpkg=./...` which emitted a 469MB profile with every
+# block duplicated ~115x (one full-codebase profile per test binary, concatenated not
+# merged) and spent minutes writing it. covdata produces the same coverage, merged + small.
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	@rm -rf $(CURDIR)/coverage.covdata && mkdir -p $(CURDIR)/coverage.covdata
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -covermode=atomic -tags "testtxmetacache" -count=1 -timeout=10m -cover -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort) -args -test.gocoverdir=$(CURDIR)/coverage.covdata
+	go tool covdata textfmt -i=$(CURDIR)/coverage.covdata -o=coverage.out
+	@rm -rf $(CURDIR)/coverage.covdata
 
 # run tests in the test/longtest directory
 .PHONY: longtest

@@ -43,6 +43,7 @@ vite.config.ts.timestamp-*
 *.private_key
 
 coverage.out
+coverage.covdata/
 golangci-lint-report.xml
 sonar_filename_report.json
 
