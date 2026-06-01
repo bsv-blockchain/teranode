@@ -280,7 +280,10 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		subtreeHash *chainhash.Hash
 	)
 
-	block.Subtrees = make([]*chainhash.Hash, 0, block.subtreeLength)
+	// subtreeLength is an untrusted varint from the wire. Cap the speculative
+	// pre-allocation and rely on the append below: a bogus count then errors on
+	// the first missing hash instead of forcing a multi-GB allocation up front.
+	block.Subtrees = make([]*chainhash.Hash, 0, min(block.subtreeLength, 1024))
 
 	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
