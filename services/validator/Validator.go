@@ -1530,9 +1530,36 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		return err
 	}
 
-	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true)
-	// and only when BIP68 is active (blockHeight >= CSVHeight).
-	// Performed after phase 1 so that MTP lookups are skipped for invalid transactions.
+	// Phase 2: BIP68 sequence-lock validation — only for block context
+	// (SkipPolicyChecks == true) and only when BIP68 is active
+	// (blockHeight >= CSVHeight). Performed after phase 1 so that MTP lookups
+	// are skipped for invalid transactions.
+	//
+	// Policy mode (peer-received txs) deliberately does NOT run BIP68 — this
+	// is a stable design decision, not a missing check. Two reasons:
+	//
+	//  1. Post-Genesis, BIP68 short-circuits to no-op anyway. BSV Genesis
+	//     restored the original Bitcoin nSequence semantics (RBF signalling
+	//     only, no relative lock-time enforcement); see the post-Genesis
+	//     early-return in TxValidator.sequenceLocks. Running BIP68 in
+	//     current-mainnet policy mode would do zero observable work.
+	//
+	//  2. Pre-Genesis policy mode is only reachable in regtest / synthetic
+	//     test scenarios. Mainnet IBD validates historical pre-Genesis
+	//     blocks via consensus mode (SkipPolicyChecks=true), which already
+	//     runs BIP68 below — peer-received txs never arrive in a
+	//     pre-Genesis state on a real mainnet node.
+	//
+	// Benefits of confining BIP68 to consensus mode:
+	//  - Keeps the peer-tx admission hot path simple — no MTP plumbing.
+	//  - Keeps the MTP store and EnsureMTPLoaded pre-warming entirely out
+	//    of the policy path; MTP infrastructure exists solely for
+	//    block-validation batching.
+	//  - Per-tx policy-mode MTP lookups (synchronous gRPC / DB I/O per
+	//    peer tx) are avoided. Consensus mode amortises a single
+	//    EnsureMTPLoaded call across an entire block of txs validated
+	//    concurrently; policy mode would have to either pay that cost
+	//    per-tx or keep the MTP cache always warm regardless of need.
 	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
 		return nil
 	}
