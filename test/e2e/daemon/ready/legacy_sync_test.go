@@ -423,6 +423,7 @@ func TestBidirectionalSync(t *testing.T) {
 	const teranodeBlocks = 5
 	var teranodeMinedBlocks []*model.Block
 	for i := 0; i < teranodeBlocks; i++ {
+		// intentional pacing: svnode rejects blocks whose timestamps are too close together
 		time.Sleep(500 * time.Millisecond)
 		block := td.MineAndWait(t, 1)
 		teranodeMinedBlocks = append(teranodeMinedBlocks, block)
@@ -665,6 +666,7 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 
 	var minedBlocks []*model.Block
 	for i := 0; i < teranodeBlocks; i++ {
+		// intentional pacing: svnode rejects blocks whose timestamps are too close together
 		time.Sleep(500 * time.Millisecond)
 		block := td.MineAndWait(t, 1)
 		minedBlocks = append(minedBlocks, block)

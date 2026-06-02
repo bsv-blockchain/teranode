@@ -3,7 +3,7 @@ package aerospike_test
 import (
 	"testing"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"

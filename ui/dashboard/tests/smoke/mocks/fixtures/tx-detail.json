@@ -1,0 +1,11 @@
+{
+  "txid": "0000000000000000000000000000000000000000000000000000000000000aaa",
+  "version": 1,
+  "lockTime": 0,
+  "size": 226,
+  "isCoinbase": false,
+  "vin": [],
+  "vout": [],
+  "inputs": [],
+  "outputs": []
+}

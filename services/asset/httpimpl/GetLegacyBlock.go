@@ -57,7 +57,7 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetLegacyBlock_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetLegacyBlock for %s: %s", c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetLegacyBlock for %s: %s", c.RealIP(), hashStr),
 		)
 
 		defer deferFn()
@@ -113,7 +113,7 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetRestLegacyBlock_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockGetRestLegacyBlockByHash for %s: %s", c.Request().RemoteAddr, resource),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockGetRestLegacyBlockByHash for %s: %s", c.RealIP(), resource),
 		)
 
 		defer deferFn()

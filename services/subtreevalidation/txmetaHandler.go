@@ -10,24 +10,13 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 )
 
-const (
-	// txmetaActionADD represents the ADD action for txmeta batch messages.
-	txmetaActionADD = byte(0)
-	// txmetaActionDELETE represents the DELETE action for txmeta batch messages.
-	txmetaActionDELETE = byte(1)
-
-	// txmetaWireV2Magic marks a v2 txmeta Kafka message. v1 messages start with
-	// the low byte of a uint32 entry count, which can never be 0xFF for any
-	// realistic batch size (it would require >4 billion entries per message).
-	txmetaWireV2Magic = byte(0xFF)
-	// txmetaWireV2Version is the only v2 sub-version defined today. The header
-	// reserves room for additional sub-versions without breaking the magic-byte
-	// detection.
-	txmetaWireV2Version = byte(0x02)
-)
+// Txmeta Kafka wire-format constants live in stores/txmetacache (see wire.go
+// in that package). They are imported here as the single source of truth
+// shared between the producer (services/validator) and all consumers.
 
 // txmetaParseBuffers is the per-Kafka-message scratch space the handler
 // reuses across invocations via txmetaParseBuffersPool. Each parse fills the
@@ -79,27 +68,15 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 
 // txmetaHandler processes a Kafka message of transaction metadata operations.
 //
-// Two wire formats are supported, distinguished by the first byte:
+// Two wire formats are supported, distinguished by a multi-byte signature at
+// the start of the message. See stores/txmetacache/wire.go for the layout
+// definitions and the rationale for the detection rules below.
 //
-//	v1 (legacy)
-//	  [4 bytes]   entry count (uint32 LE)
-//	  per entry:
-//	    [32 bytes] tx hash
-//	    [1 byte]   action (0=ADD, 1=DELETE)
-//	    [4 bytes]  content length (uint32 LE) — 0 for DELETE
-//	    [N bytes]  content
-//
-//	v2 (partition-aware; producer-side rollout pending)
-//	  [1 byte]    magic = 0xFF
-//	  [1 byte]    version = 0x02
-//	  [2 bytes]   reserved
-//	  [4 bytes]   entry count (uint32 LE)
-//	  per entry:
-//	    [8 bytes]  xxhash(tx hash) (uint64 LE)
-//	    [32 bytes] tx hash
-//	    [1 byte]   action
-//	    [4 bytes]  content length
-//	    [N bytes]  content
+// v2 detection requires the full 4-byte header signature (magic + version +
+// 2 reserved zero bytes) AND a plausible entry count for the remaining
+// buffer; otherwise the message is parsed as v1. This avoids
+// misclassifying v1 messages whose entry count happens to begin with 0xFF
+// (counts 255, 511, 767, ...).
 //
 // Dispatch model: all ADDs in the message are collected into one
 // SetCacheMultiSequential call (which is partition-aware — see
@@ -132,28 +109,51 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		isV2    bool
 	)
 
-	if data[0] == txmetaWireV2Magic {
-		if len(data) < 8 {
-			u.logger.Errorf("[txmetaHandler] truncated v2 header (%d bytes)", len(data))
-			return nil
+	// Speculative v2 detection: require the full header signature
+	// (magic + version + reserved bytes) and an entry count that fits in the
+	// remaining buffer at the minimum v2 entry size. Any failure falls
+	// through to v1 — never silently drops a valid v1 message whose entry
+	// count happens to begin with 0xFF (counts 255, 511, 767, ...).
+	if len(data) >= txmetacache.WireV2HeaderLen &&
+		data[0] == txmetacache.WireV2Magic &&
+		data[1] == txmetacache.WireV2Version &&
+		data[2] == 0 && data[3] == 0 {
+		candidateCount := binary.LittleEndian.Uint32(data[4:])
+		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+			entries = candidateCount
+			offset = txmetacache.WireV2HeaderLen
+			isV2 = true
 		}
-		if data[1] != txmetaWireV2Version {
-			u.logger.Errorf("[txmetaHandler] unknown v2 wire version %d", data[1])
-			return nil
-		}
-		// data[2:4] reserved.
-		entries = binary.LittleEndian.Uint32(data[4:])
-		offset = 8
-		isV2 = true
-	} else {
+	}
+
+	if !isV2 {
 		entries = binary.LittleEndian.Uint32(data[:4])
 		offset = 4
 	}
 
-	// Per-entry sizes (excluding content).
-	entryHeaderSize := 32 + 1 + 4
+	// Per-entry sizes (excluding content). The shared constants in
+	// stores/txmetacache encode the same numbers; using them here keeps
+	// the producer and the receiver pinned to one source of truth.
+	entryHeaderSize := txmetacache.WireV1MinEntrySize
 	if isV2 {
-		entryHeaderSize += 8
+		entryHeaderSize = txmetacache.WireV2MinEntrySize
+	}
+
+	// Reject implausibly large entry counts before sizing the pool buffers.
+	// The pool pre-allocates `entries * 32` bytes for keysBuf plus `entries`
+	// slice slots, so an unbounded count read straight from the wire is a
+	// DoS surface. The plausibility bound is the same shape as the v2
+	// detection check: each entry needs at least `entryHeaderSize` bytes
+	// excluding content, so a count larger than the remaining buffer can
+	// fit is malformed. The v2 path is already guarded by the detection-
+	// time check above; the guard here matters for the v1 fallback path.
+	remainingForEntries := uint64(len(data) - offset)
+	maxEntries := remainingForEntries / uint64(entryHeaderSize)
+	if uint64(entries) > maxEntries {
+		u.logger.Errorf("[txmetaHandler] entry count %d exceeds buffer capacity (%d max for %d-byte payload)",
+			entries, maxEntries, remainingForEntries)
+		return nil
 	}
 
 	// Pool-backed scratch. Sized to upper bounds derived from the wire:
@@ -216,7 +216,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		}
 
 		switch action {
-		case txmetaActionADD:
+		case txmetacache.WireActionADD:
 			contentStart := len(bufs.contentBuf)
 			bufs.contentBuf = append(bufs.contentBuf, data[offset:offset+int(contentLen)]...)
 			bufs.keys = append(bufs.keys, bufs.keysBuf[hashStart:hashStart+32])
@@ -224,7 +224,7 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			if isV2 {
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
-		case txmetaActionDELETE:
+		case txmetacache.WireActionDELETE:
 			// chainhash.Hash is a value type — copying into deletes[]
 			// captures by value, so the keysBuf arena can be recycled
 			// without worry.

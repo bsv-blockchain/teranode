@@ -66,8 +66,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	asl "github.com/aerospike/aerospike-client-go/v8/logger"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	asl "github.com/bsv-blockchain/aerospike-client-go/v8/logger"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"

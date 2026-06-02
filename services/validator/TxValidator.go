@@ -24,7 +24,6 @@ import (
 	"math"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -145,12 +144,17 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return err
 	}
 
-	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
-			return err
-		}
+	// Legacy catchup below the highest hard-coded checkpoint sets this: PoW +
+	// checkpoint linkage already establish the chain as canonical, so re-running
+	// scripts is pure overhead. The caller is responsible for ensuring the block
+	// is actually trusted (see SyncManager.quickValidationAllowed).
+	if validationOptions.SkipScriptValidation {
+		return nil
 	}
 
+	// Fee enforcement (including the consolidation-fee exemption) is performed by
+	// BDK's ValidateTransaction in policy mode. Setters pushed at startup carry
+	// MinMiningTxFee plus the four consolidation-policy values into BDK.
 	// SkipPolicyChecks is equivalent to BDK consensus=true.
 	// https://github.com/bsv-blockchain/teranode/issues/2367
 	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
@@ -233,9 +237,11 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 			}
 
 			// Time is in 512-second units (2^9 seconds)
-			// Add the relative time offset to the UTXO's MTP
+			// Add the relative time offset to the UTXO's MTP, minus 1
+			// (matching Bitcoin Core: nMinTime = nCoinTime + (sequence << granularity) - 1,
+			// so the tx is valid starting from blockMTP >= nCoinTime + (sequence << granularity)).
 			utxoMTP := int64(utxoMTPs[i])
-			nTxTime := utxoMTP + (int64(sequenceMasked) << SequenceLockTimeGranularity)
+			nTxTime := utxoMTP + (int64(sequenceMasked) << SequenceLockTimeGranularity) - 1
 
 			// Update minimum time if this input requires a later time
 			if nTxTime > minTime {
@@ -282,21 +288,6 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	return nil
 }
 
-// isUnspendableOutput checks if an output script is unspendable (starts with OP_FALSE OP_RETURN)
-func isUnspendableOutput(script *bscript.Script) bool {
-	if script == nil {
-		return false
-	}
-	// Convert script to bytes
-	scriptBytes := *script
-	// Check if script starts with OP_FALSE (0x00) followed by OP_RETURN (0x6a)
-	if len(scriptBytes) >= 2 && scriptBytes[0] == 0x00 && scriptBytes[1] == 0x6a {
-		return true
-	}
-
-	return false
-}
-
 // checkInputs validates transaction inputs according to consensus rules.
 func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	accumulatedPrevUTXOSize := uint64(0)
@@ -305,13 +296,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
 
-	for index, input := range tx.Inputs {
-		// Teranode is stricter than svnode here: it rejects any all-zero previous
-		// txid, not only the canonical null prevout. Keep this pre-existing
-		// behaviour until the T14 parity decision is made.
-		if input.PreviousTxIDStr() == coinbaseTxID {
-			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
-		}
+	for _, input := range tx.Inputs {
+		// Null-prevout rejection is done in BDK
+		// which replicates bitcoin-sv CheckRegularTransaction's bad-txns-prevout-null
+		// check with the correct prevout.IsNull() semantics.
 
 		// Check accumulated previous utxo size if maxcoinsviewcachesize is enabled
 		// See BSV Node CCoinsViewCache::Shard::HaveInputsLimited
@@ -329,193 +317,4 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 	}
 
 	return nil
-}
-
-// checkFees validates transaction fees according to policy requirements.
-func (tv *TxValidator) checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error {
-	// Check for consolidation transaction with proper UTXO height verification
-	isConsolidation := tv.isConsolidationTx(tx, utxoHeights, blockHeight)
-	if isConsolidation {
-		return nil // We return nil here to say there was no issue with the fees
-	}
-
-	inputSats := tx.TotalInputSatoshis()
-	outputSats := tx.TotalOutputSatoshis()
-
-	if inputSats < outputSats {
-		return errors.NewTxInvalidError("transaction input satoshis is less than output satoshis: %d < %d", inputSats, outputSats)
-	}
-
-	minFeeRateBSVPerKB := tv.settings.Policy.GetMinMiningTxFee() // BSV per kilobyte
-
-	if minFeeRateBSVPerKB == 0 {
-		return nil // no fee policy found, skip fee check
-	}
-
-	actualFeePaid := inputSats - outputSats
-
-	// Convert BSV/kB to satoshis/byte
-	// 1 BSV = 1e8 satoshis
-	// 1 kB = 1000 bytes
-	// So BSV/kB * 1e8 / 1000 = satoshis/byte
-	satoshisPerByte := minFeeRateBSVPerKB * 1e8 / 1000
-
-	// Calculate minimum relay fee based on transaction size
-	txSize := tx.Size()
-	minRequiredFee := uint64(satoshisPerByte * float64(txSize))
-
-	// Ensure minimum 1 satoshi for non-zero sized transactions (matching SV Node)
-	if minRequiredFee == 0 && txSize > 0 && minFeeRateBSVPerKB > 0 {
-		minRequiredFee = 1
-	}
-
-	if actualFeePaid < minRequiredFee {
-		return errors.NewTxInvalidError("transaction fee is too low: %d < %d required", actualFeePaid, minRequiredFee)
-	}
-
-	return nil
-}
-
-// isDustReturnTx checks if a transaction is a dust return transaction.
-// A dust return transaction has a single output with 0 satoshis and an unspendable script
-// (OP_FALSE OP_RETURN pattern). These transactions are used to clean up dust UTXOs.
-//
-// Parameters:
-//   - tx: The transaction to check
-//
-// Returns:
-//   - bool: true if the transaction is a dust return transaction, false otherwise
-func (tv *TxValidator) isDustReturnTx(tx *bt.Tx) bool {
-	if tx == nil {
-		return false
-	}
-
-	// Must have exactly one output
-	if len(tx.Outputs) != 1 {
-		return false
-	}
-
-	output := tx.Outputs[0]
-
-	// Output must have 0 satoshis
-	if output.Satoshis != 0 {
-		return false
-	}
-
-	// Output script must be unspendable (OP_FALSE OP_RETURN)
-	return isUnspendableOutput(output.LockingScript)
-}
-
-// isConsolidationTx checks if a transaction qualifies as a consolidation transaction
-// following Bitcoin rules.
-//
-// Parameters:
-//   - tx: The transaction to check
-//   - utxoHeights: Block heights of the UTXOs being spent (nil for fee checks only)
-//   - currentHeight: Current block height (ignored if utxoHeights is nil)
-//
-// Returns:
-//   - bool: true if the transaction qualifies as a consolidation transaction
-func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, currentHeight uint32) bool {
-	if tx == nil {
-		return false
-	}
-
-	// Coinbase transactions cannot be consolidation transactions
-	if tx.IsCoinbase() {
-		return false
-	}
-
-	// Get policy settings
-	minConsolidationFactor := tv.settings.Policy.GetMinConsolidationFactor()
-	if minConsolidationFactor <= 0 {
-		return false
-	}
-
-	numInputs := len(tx.Inputs)
-	numOutputs := len(tx.Outputs)
-
-	// Check if it's a dust return transaction (special case)
-	isDustReturn := tv.isDustReturnTx(tx)
-
-	// Rule 1: Input/Output Ratio
-	// The number of inputs must be >= minConsolidationFactor × number of outputs
-	if !isDustReturn && numInputs < minConsolidationFactor*numOutputs {
-		return false
-	}
-
-	// Rule 2: Script Size Comparison (Bitcoin rule)
-	// Sum of input scriptPubKey sizes >= minConsolidationFactor × sum of output scriptPubKey sizes
-	if !isDustReturn {
-		// Check if transaction is extended (has PreviousTxScript for all inputs)
-		for _, input := range tx.Inputs {
-			if input.PreviousTxScript == nil {
-				return false
-			}
-		}
-
-		// Calculate total size of scriptPubKeys from UTXOs being spent
-		totalInputScriptPubKeySize := 0
-		for _, input := range tx.Inputs {
-			totalInputScriptPubKeySize += len(*input.PreviousTxScript)
-		}
-
-		// Calculate total size of output scriptPubKeys
-		totalOutputScriptPubKeySize := 0
-		for _, output := range tx.Outputs {
-			if output.LockingScript != nil {
-				totalOutputScriptPubKeySize += len(*output.LockingScript)
-			}
-		}
-
-		// Check the script size ratio
-		if totalInputScriptPubKeySize < minConsolidationFactor*totalOutputScriptPubKeySize {
-			return false
-		}
-	}
-
-	// If no UTXO heights provided, we're done (fee exemption check)
-	if utxoHeights == nil {
-		return true
-	}
-
-	// FULL VALIDATION - Only performed when UTXO heights are provided
-
-	// Get configuration settings
-	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
-	maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
-
-	// Dust return transactions don't require confirmations
-	if isDustReturn {
-		minConf = 0
-	}
-
-	// Check each input
-	for i, input := range tx.Inputs {
-		// Rule 3: Input Maturity
-		// All inputs must have at least minConfConsolidationInput confirmations
-		if minConf > 0 && i < len(utxoHeights) {
-			inputHeight := utxoHeights[i]
-			confirmations := int(currentHeight - inputHeight)
-			if confirmations < minConf {
-				return false
-			}
-		}
-
-		// Rule 4: Input Script Size Limit
-		// Each input's scriptSig must be <= maxConsolidationInputScriptSize bytes
-		if maxInputScriptSize > 0 && input.UnlockingScript != nil {
-			scriptSize := len(*input.UnlockingScript)
-			if scriptSize > maxInputScriptSize {
-				return false
-			}
-		}
-
-		// Rule 5: Standard Script Rule
-		// If acceptNonStdConsolidationInput = 0, all inputs must use standard scripts
-		// This is checked in bdk
-	}
-
-	// Transaction qualifies as a consolidation transaction
-	return true
 }

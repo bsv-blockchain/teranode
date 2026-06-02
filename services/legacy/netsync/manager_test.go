@@ -408,6 +408,62 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 	return msgChan, legacyKafkaInvCh, &sm, smPeer
 }
 
+func TestSendDuringShutdown(t *testing.T) {
+	t.Run("open channel delivers", func(t *testing.T) {
+		ch := make(chan int, 1)
+		require.True(t, sendDuringShutdown(ch, 7))
+		require.Equal(t, 7, <-ch)
+	})
+
+	t.Run("closed channel drops without panic", func(t *testing.T) {
+		ch := make(chan int)
+		close(ch)
+		require.NotPanics(t, func() {
+			require.False(t, sendDuringShutdown(ch, 1))
+		})
+	})
+}
+
+// TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown reproduces the shutdown
+// race that previously crashed the process: inv delivery runs on a peer
+// goroutine (OnInv -> QueueInv) while teardown closes the target channels — the
+// kafka async producer closes legacyKafkaInvCh in its Stop(), and the block
+// handler stops draining msgChan. QueueInv's shutdown-flag check cannot make the
+// subsequent send atomic against that close, so a late inv hit a closed channel
+// and panicked. The send must now drop the inv instead.
+func TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown(t *testing.T) {
+	t.Run("tx inv after legacyKafkaInvCh closed", func(t *testing.T) {
+		_, legacyKafkaInvCh, sm, smPeer := setupQueueInvTests()
+		close(legacyKafkaInvCh)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
+
+	t.Run("block inv after msgChan closed", func(t *testing.T) {
+		msgChan, _, sm, smPeer := setupQueueInvTests()
+		close(msgChan)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeBlock, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
+
+	t.Run("non-kafka path after msgChan closed", func(t *testing.T) {
+		msgChan, _, sm, smPeer := setupQueueInvTests()
+		sm.legacyKafkaInvCh = nil // exercise the else branch
+		close(msgChan)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
+}
+
 // Test blockchain syncing protocol. SyncManager should request, processes, and
 // relay blocks to/from peers.
 // TODO: Test is timing out, needs to be fixed.

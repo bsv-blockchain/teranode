@@ -172,6 +172,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnableSetMinedFilterExpressions: getBool("aerospike_enable_setmined_filter_expressions", false, alternativeContext...),
 			UseSeparateUDFMinedModule:       getBool("aerospike_use_separate_udf_mined_module", false, alternativeContext...),
 			SeparateSpendUDFModuleCount:     getInt("aerospike_separate_udf_spend_module_count", 0, alternativeContext...),
+			SemaphoreMultiplier:             getFloat64("aerospike_semaphore_multiplier", 1.0, alternativeContext...),
 		},
 		Alert: AlertSettings{
 			GenesisKeys:   getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
@@ -194,6 +195,16 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PropagationPublicURL:    getString("asset_propagation_public_url", "", alternativeContext...),
 			PropagationProxyEnabled: getBool("asset_propagation_proxy_enabled", true, alternativeContext...),
 			PropagationProxyAddress: getString("asset_propagation_proxy_address", "http://localhost:8833", alternativeContext...),
+
+			// Rate limiting and access control
+			HTTPRateLimit:                getInt("asset_httpRateLimit", 1024, alternativeContext...),
+			HTTPHeavyRateLimit:           getInt("asset_httpHeavyRateLimit", 10, alternativeContext...),
+			HTTPPeerRateMultiplier:       getInt("asset_httpPeerRateMultiplier", 5, alternativeContext...),
+			HTTPMinerRateLimit:           getInt("asset_httpMinerRateLimit", 0, alternativeContext...),
+			HTTPBodyLimit:                getString("asset_httpBodyLimit", "100MB", alternativeContext...),
+			TrustedProxyCIDRs:            getString("asset_trustedProxyCIDRs", "", alternativeContext...),
+			PeerAuthAllowlist:            getString("asset_peerAuthAllowlist", "", alternativeContext...),
+			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
 			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
@@ -559,8 +570,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PercentageMissingGetFullData:              getFloat64("subtreevalidation_percentageMissingGetFullData", 20, alternativeContext...),
 			BlacklistedBaseURLs:                       blacklistMap,
 			BlockHeightRetentionAdjustment:            getInt32("subtreevalidation_blockHeightRetentionAdjustment", 0, alternativeContext...),
-			OrphanageTimeout:                          getDuration("subtreevalidation_orphanageTimeout", 15*time.Minute, alternativeContext...),
-			OrphanageMaxSize:                          getInt("subtreevalidation_orphanageMaxSize", 100_000, alternativeContext...),
 			CheckBlockSubtreesConcurrency:             getInt("subtreevalidation_check_block_subtrees_concurrency", 32, alternativeContext...),
 			PauseTimeout:                              getDuration("subtreevalidation_pauseTimeout", 5*time.Minute, alternativeContext...),
 			TxBatchSize:                               getInt("subtreevalidation_check_block_subtrees_tx_batch_size", 1048576, alternativeContext...),
@@ -574,6 +583,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ListenAddresses:                  getMultiString("legacy_listen_addresses", "|", []string{}, alternativeContext...),
 			ConnectPeers:                     getMultiString("legacy_connect_peers", "|", []string{}, alternativeContext...),
 			OrphanEvictionDuration:           getDuration("legacy_orphanEvictionDuration", 10*time.Minute, alternativeContext...),
+			MaxOrphanTxs:                     getInt("legacy_maxOrphanTxs", 100, alternativeContext...),
 			StoreBatcherSize:                 getInt("legacy_storeBatcherSize", 1024, alternativeContext...),
 			StoreBatcherConcurrency:          getInt("legacy_storeBatcherConcurrency", 32, alternativeContext...),
 			SpendBatcherSize:                 getInt("legacy_spendBatcherSize", 1024, alternativeContext...),

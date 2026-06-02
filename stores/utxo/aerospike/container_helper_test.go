@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -303,7 +303,7 @@ func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx,
 	txHash := tx.TxIDChainHash()
 	isCoinbase := tx.IsCoinbase()
 
-	binsToStore, err := s.GetBinsToStore(tx, blockHeight, blockIDs, blockHeights, subtreeIdxs, true, txHash, isCoinbase, false, false)
+	binsToStore, err := s.GetBinsToStore(tx, blockHeight, blockIDs, blockHeights, subtreeIdxs, true, txHash, isCoinbase, false, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, binsToStore)
 

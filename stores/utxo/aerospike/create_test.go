@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
@@ -34,7 +34,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
 		require.Error(t, err)
 		require.Nil(t, bins)
 	})
@@ -49,7 +49,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -130,7 +130,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 	})
@@ -148,7 +148,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 

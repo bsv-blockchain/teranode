@@ -38,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -2096,6 +2097,28 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
 }
 
+// sendDuringShutdown delivers v on ch, recovering from the "send on closed
+// channel" panic that races teardown. Inv delivery runs on peer read-loop
+// goroutines (OnInv -> QueueInv), but the channels they target are torn down by
+// a different goroutine during shutdown: the kafka async producer closes
+// legacyKafkaInvCh in its Stop(), and the block handler stops draining msgChan.
+// The shutdown flag check in QueueInv narrows but cannot close that window — a
+// flag check and a channel send are not atomic against a concurrent close — so
+// a late inv would otherwise crash the whole process. Dropping an inv during
+// shutdown is safe: inv is an advisory announcement, re-sent by the peer (or a
+// later session) on the next connection. Returns false if the channel was closed.
+func sendDuringShutdown[T any](ch chan T, v T) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+
+	ch <- v
+
+	return true
+}
+
 // QueueInv adds the passed inv message and peer to the block handling queue.
 func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 	// No channel handling here because peers do not need to block on inv
@@ -2127,7 +2150,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 		if len(invBlockMsg.InvList) > 0 {
 			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
-			sm.msgChan <- &netsyncInvMsg
+			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 		}
 
 		if len(invTxMsg.InvList) > 0 {
@@ -2141,13 +2164,13 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 			// write to Kafka
 			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(value))
-			sm.legacyKafkaInvCh <- &kafka.Message{
+			sendDuringShutdown(sm.legacyKafkaInvCh, &kafka.Message{
 				Value: value,
-			}
+			})
 		}
 	} else {
 		netsyncInvMsg := invMsg{inv: inv, peer: peer}
-		sm.msgChan <- &netsyncInvMsg
+		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 	}
 }
 
@@ -2245,7 +2268,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
@@ -2538,32 +2561,81 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 	}, &sm.settings.Kafka)
 }
 
-const (
-	txmetaActionADD    = byte(0)
-	txmetaActionDELETE = byte(1)
-)
-
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
 // It parses the batch format, deserializes metadata for ADD entries, and announces
 // non-coinbase transactions to peers via the txAnnounceBatcher.
 // Coinbase transactions are intentionally skipped to avoid peer bans.
+//
+// Two wire formats are accepted, distinguished by a multi-byte signature at
+// the start of the message (mirrors services/subtreevalidation/txmetaHandler.go):
+//
+//	v1 (legacy)
+//	  [4 bytes] entry count (uint32 LE)
+//	  per entry: [32 hash][1 action][4 contentLen][N content]
+//
+//	v2 (partition-aware)
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
+//
+// v2 detection requires the full 4-byte header signature AND a plausible
+// entry count for the buffer length, otherwise the message is parsed as v1.
+// This avoids misclassifying v1 messages whose entry count happens to begin
+// with 0xFF (counts 255, 511, 767, ...).
+//
+// The xxhash prefix in v2 is read and discarded — netsync only needs the
+// 32-byte tx hash to announce; partition-aligned cache writes are a
+// subtreevalidation concern.
 func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 	if len(data) < 4 {
 		return nil
 	}
 
-	offset := 0
+	var (
+		offset     int
+		entryCount uint32
+		isV2       bool
+	)
 
-	// Read entry count
-	entryCount := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
+	// Speculative v2 detection: require the full header signature
+	// (magic + version + reserved bytes) and an entry count that fits in the
+	// remaining buffer at the minimum v2 entry size. Any failure falls
+	// through to v1 — never silently drops a valid v1 message.
+	if len(data) >= txmetacache.WireV2HeaderLen &&
+		data[0] == txmetacache.WireV2Magic &&
+		data[1] == txmetacache.WireV2Version &&
+		data[2] == 0 && data[3] == 0 {
+		candidateCount := binary.LittleEndian.Uint32(data[4:])
+		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+			entryCount = candidateCount
+			offset = txmetacache.WireV2HeaderLen
+			isV2 = true
+		}
+	}
+
+	if !isV2 {
+		entryCount = binary.LittleEndian.Uint32(data[:4])
+		offset = 4
+	}
+
+	// Per-entry header size (excluding content). The shared constants in
+	// stores/txmetacache encode the same numbers; using them here keeps
+	// the producer and the receiver pinned to one source of truth.
+	entryHeaderSize := txmetacache.WireV1MinEntrySize
+	if isV2 {
+		entryHeaderSize = txmetacache.WireV2MinEntrySize
+	}
 
 	// Process each entry
 	for i := uint32(0); i < entryCount; i++ {
-		// Check minimum bytes for hash + action + length
-		if offset+32+1+4 > len(data) {
+		if offset+entryHeaderSize > len(data) {
 			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
 			return nil
+		}
+
+		// v2: skip the 8-byte xxhash prefix; netsync doesn't use it.
+		if isV2 {
+			offset += 8
 		}
 
 		// Read hash (32 bytes)
@@ -2579,7 +2651,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetaActionADD {
+		if action == txmetacache.WireActionADD {
 			// Handle ADD
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)

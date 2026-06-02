@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import { onMount } from 'svelte'
@@ -8,24 +10,26 @@
   import { goto } from '$app/navigation'
   import { Button } from '$lib/components'
 
-  let vis: HTMLDivElement
-  let tree: any
-  let pageSize = 20
-  let mounted = false
-  let lastLoadedHash = ''
+  let vis = $state<HTMLDivElement | undefined>(undefined)
+  let tree: any = $state(null)
+  const pageSize = 20
+  let mounted = $state(false)
+  let lastLoadedHash = $state('')
 
   let nearestForks: {
     current_height: number
     prev_fork: { height: number; parent_hash: string } | null
     next_fork: { height: number; parent_hash: string } | null
-  } | null = null
+  } | null = $state(null)
 
-  $: hash = $page.url.searchParams.get('hash') || ''
-  $: orientation = $page.url.searchParams.get('orientation') || checkOrientation()
+  const hash = $derived($page.url.searchParams.get('hash') || '')
+  const orientation = $derived($page.url.searchParams.get('orientation') || checkOrientation())
 
-  $: if (mounted && hash && hash !== lastLoadedHash) {
-    loadData(hash)
-  }
+  $effect(() => {
+    if (mounted && hash && hash !== lastLoadedHash) {
+      loadData(hash)
+    }
+  })
 
   function checkOrientation() {
     let orientation = 'left-to-right'
@@ -92,13 +96,13 @@
   })
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="content">
     <div class="fork-nav">
       <Button
         size="small"
         disabled={!nearestForks?.prev_fork}
-        on:click={() => nearestForks?.prev_fork && goToFork(nearestForks.prev_fork.parent_hash)}
+        onclick={() => nearestForks?.prev_fork && goToFork(nearestForks.prev_fork.parent_hash)}
       >
         &larr; Prev fork{nearestForks?.prev_fork ? ` (h: ${nearestForks.prev_fork.height})` : ''}
       </Button>
@@ -112,7 +116,7 @@
       <Button
         size="small"
         disabled={!nearestForks?.next_fork}
-        on:click={() => nearestForks?.next_fork && goToFork(nearestForks.next_fork.parent_hash)}
+        onclick={() => nearestForks?.next_fork && goToFork(nearestForks.next_fork.parent_hash)}
       >
         Next fork{nearestForks?.next_fork ? ` (h: ${nearestForks.next_fork.height})` : ''} &rarr;
       </Button>

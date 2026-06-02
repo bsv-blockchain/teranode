@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import TxDetailsCard from './tx-details-card/index.svelte'
   import TxIoCard from './tx-io-card/index.svelte'
@@ -13,38 +14,40 @@
   import * as api from '$internal/api'
   import type { MerkleProofData } from '$internal/api'
 
-  let ready = false
-  beforeUpdate(() => {
+  let ready = $state(false)
+  $effect(() => {
     ready = true
   })
 
   const type = DetailType.tx
 
-  export let hash = ''
+  let { hash = '' }: { hash?: string } = $props()
 
-  let display: DetailTab
+  let display: DetailTab = $state(DetailTab.overview)
 
-  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json : 
+  const tab = $derived(ready ? $page.url.searchParams.get('tab') ?? '' : '')
+  $effect(() => {
+    display = tab === DetailTab.json ? DetailTab.json :
               tab === DetailTab.merkleproof ? DetailTab.merkleproof : DetailTab.overview
+  })
 
-  let result: any = null
-  let merkleProof: MerkleProofData | null = null
-  let merkleProofLoading: boolean = false
-  let merkleProofError: string | null = null
+  let result: any = $state(null)
+  let merkleProof: MerkleProofData | null = $state(null)
+  let merkleProofLoading: boolean = $state(false)
+  let merkleProofError: string | null = $state(null)
 
-  $: {
+  $effect(() => {
     if ($assetHTTPAddress && type && hash && hash.length === 64) {
       fetchData()
     }
-  }
+  })
 
   function onDisplay(e) {
-    display = e.detail.value
+    display = e.value
     setQueryParam('tab', display)
-    
+
     // Fetch merkle proof data when switching to merkle proof tab
-    if (display === DetailTab.merkleproof && !merkleProof && 
+    if (display === DetailTab.merkleproof && !merkleProof &&
         (result?.blockHashes?.length > 0 || result?.blockIDs?.length > 0)) {
       fetchMerkleProof()
     }
@@ -115,16 +118,15 @@
 </script>
 
 {#if result}
-  <TxDetailsCard data={result} {display} on:display={onDisplay}>
-    <svelte:fragment slot="merkle-proof">
-      <MerkleProofVisualizer 
-        merkleProof={merkleProof} 
-        loading={merkleProofLoading} 
-        error={merkleProofError} />
-    </svelte:fragment>
-  </TxDetailsCard>
+  <TxDetailsCard data={result} {display} ondisplay={onDisplay} merkleProof={merkleProofSnippet} />
+  {#snippet merkleProofSnippet()}
+    <MerkleProofVisualizer
+      merkleProof={merkleProof}
+      loading={merkleProofLoading}
+      error={merkleProofError} />
+  {/snippet}
   {#if display === DetailTab.overview}
-    <div style="height: 20px" />
+    <div style="height: 20px"></div>
     <TxIoCard data={result} />
   {/if}
 {:else if $spinCount === 0}

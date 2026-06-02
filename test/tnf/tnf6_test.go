@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/tconfig"
-	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,14 +103,14 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	ports := []int{port, port, port}
 
 	for index, port := range ports {
-		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), fmt.Sprintf("%d/tcp", port))
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Waiting for node %d to be ready", index)
 
-		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		err = helper.WaitForHealthLiveness(int(mappedPort.Num()), 30*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

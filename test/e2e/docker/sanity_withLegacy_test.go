@@ -19,7 +19,6 @@ import (
 
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/tconfig"
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -102,14 +101,14 @@ func (suite *SanitywithLegacyTestSuite) TestShouldSyncWithLegacy() {
 	ports := []int{8000}
 
 	for index, port := range ports {
-		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), fmt.Sprintf("%d/tcp", port))
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Waiting for node %d to be ready", index)
 
-		err = helper.WaitForHealthLiveness(mappedPort.Int(), 60*time.Second)
+		err = helper.WaitForHealthLiveness(int(mappedPort.Num()), 60*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
@@ -206,14 +205,14 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyPeers() {
 	ports := []int{8000}
 
 	for index, port := range ports {
-		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), fmt.Sprintf("%d/tcp", port))
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Waiting for node %d to be ready", index)
 
-		err = helper.WaitForHealthLiveness(mappedPort.Int(), 60*time.Second)
+		err = helper.WaitForHealthLiveness(int(mappedPort.Num()), 60*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
@@ -298,14 +297,14 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanTeranodePeers() {
 	ports := []int{8000}
 
 	for index, port := range ports {
-		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), fmt.Sprintf("%d/tcp", port))
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Waiting for node %d to be ready", index)
 
-		err = helper.WaitForHealthLiveness(mappedPort.Int(), 60*time.Second)
+		err = helper.WaitForHealthLiveness(int(mappedPort.Num()), 60*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

@@ -509,6 +509,19 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return nil
 	}
 
+	// Detach from sibling cancellation: this function is called from a per-subtree
+	// goroutine inside fetchSubtreeDataForBlock's errgroup. Using gCtx for the HTTP
+	// fetch + parse + store means a single sibling failure cancels every in-flight
+	// subtree_data download in the batch — and each cancellation closes the upstream
+	// connection, causing the peer to abort its on-demand creation (storer.Abort) and
+	// throw away Aerospike work that was already paid for. Detaching here lets each
+	// fetch run to completion (or hit its own http_streaming_timeout) so the peer can
+	// finish writing its subtreeData file. The existence check above still respects
+	// the original ctx, so a pre-cancelled call still exits early.
+	//
+	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
+	ctx = context.WithoutCancel(ctx)
+
 	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL)
 	if err != nil {
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to fetch subtreeData for %s", subtreeHash.String(), err)

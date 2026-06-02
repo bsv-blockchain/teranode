@@ -116,7 +116,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetSubtree_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtree in %s for %s: %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

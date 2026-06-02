@@ -404,6 +404,21 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 	return resp, nil
 }
 
+// RebroadcastDropCounts exposes the rebroadcast queue's drop counters for
+// operator observability. Returns (adds, capHits): `adds` counts
+// AddRebroadcastInventory sends that were dropped because
+// modifyRebroadcastInv was full; `capHits` counts in-handler adds that
+// were dropped because pendingInvs was at maxRebroadcastInventory.
+//
+// Both counters are cumulative since process start and are never reset.
+// Returns (0, 0) when the internal server is not initialised.
+func (s *Server) RebroadcastDropCounts() (adds, capHits uint64) {
+	if s.server == nil {
+		return 0, 0
+	}
+	return s.server.RebroadcastDropCounts()
+}
+
 // IsBanned checks if a specific IP address or subnet is currently banned.
 //
 // This method is part of the peer_api.PeerServiceServer gRPC interface and provides

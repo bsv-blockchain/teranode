@@ -10,6 +10,8 @@ __pycache__/
 *.tar.gz
 /build/
 ui/dashboard/build/
+ui/dashboard/test-results/
+ui/dashboard/playwright-report/
 data
 data/
 *.run

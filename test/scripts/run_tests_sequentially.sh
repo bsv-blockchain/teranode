@@ -6,6 +6,9 @@ set -euo pipefail
 DB_FILTER=""
 RETRY_COUNT=${TEST_RETRY_COUNT:-3}
 RETRY_DELAY=${TEST_RETRY_DELAY:-2}
+SHARD=""
+TOTAL=""
+LIST_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -21,13 +24,43 @@ while [[ $# -gt 0 ]]; do
             RETRY_DELAY="$2"
             shift 2
             ;;
+        --shard)
+            SHARD="$2"; shift 2 ;;
+        --total)
+            TOTAL="$2"; shift 2 ;;
+        --list-only)
+            LIST_ONLY=true; shift ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--db sqlite|postgres|aerospike] [--retry COUNT] [--retry-delay SECONDS]"
+            echo "Usage: $0 [--db sqlite|postgres|aerospike] [--retry COUNT] [--retry-delay SECONDS] [--shard N] [--total M] [--list-only]"
             exit 1
             ;;
     esac
 done
+
+# --shard and --total are only meaningful together, and shard must be in range.
+if { [ -n "$SHARD" ] && [ -z "$TOTAL" ]; } || { [ -n "$TOTAL" ] && [ -z "$SHARD" ]; }; then
+    echo "Error: --shard and --total must be used together" >&2
+    exit 1
+fi
+if [ -n "$TOTAL" ]; then
+    if ! [ "$TOTAL" -gt 0 ] 2>/dev/null; then
+        echo "Error: --total must be a positive integer (got '$TOTAL')" >&2
+        exit 1
+    fi
+    if ! { [ "$SHARD" -ge 0 ] && [ "$SHARD" -lt "$TOTAL" ]; } 2>/dev/null; then
+        echo "Error: --shard must be an integer in [0, $TOTAL) (got '$SHARD')" >&2
+        exit 1
+    fi
+fi
+
+# --db (legacy name-substring filter) and --shard must not be combined: the shard
+# index spans the full list and --db is applied afterward, which would leave shards
+# uneven. They are mutually exclusive.
+if [ -n "$DB_FILTER" ] && [ -n "$TOTAL" ]; then
+    echo "Error: --db cannot be combined with --shard/--total" >&2
+    exit 1
+fi
 
 # Common test flags
 TEST_FLAGS="-timeout 120 -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -count=1"
@@ -43,12 +76,98 @@ if [ -z "$test_files" ]; then
     exit 1
 fi
 
+# Build the full ordered spec list by parsing every test file once.
+# Each element is: test_dir<TAB>test_binary<TAB>testspec
+# where testspec is either "Func" (no subtests) or "Func/Subtest".
+declare -a ALL_SPECS=()
+for test_file in $test_files; do
+    test_dir=$(dirname "$test_file")
+    test_filename=$(basename "$test_file")
+    package_name=$(basename "$test_dir")
+    test_binary="${package_name}.test"
+
+    # Read all Test functions (excluding TestMain), keeping line numbers.
+    # || true: when grep finds no Test functions, printf '\0' never runs and read -d '' exits non-zero; prevent set -e from aborting.
+    IFS=$'\n' read -r -d '' -a test_functions < <(grep -n "^func Test" "$test_file" | grep -v "^[0-9]*:func TestMain" && printf '\0') || true
+
+    total_lines=$(wc -l < "$test_file")
+
+    for ((fi=0; fi<${#test_functions[@]}; fi++)); do
+        line_info="${test_functions[fi]}"
+        line_num=$(echo "$line_info" | cut -d: -f1)
+        line=$(echo "$line_info" | cut -d: -f2-)
+
+        test_func=$(echo "$line" | awk '{print $2}' | cut -d'(' -f1)
+
+        # Find the end boundary (next function or EOF)
+        if [ $((fi + 1)) -lt "${#test_functions[@]}" ]; then
+            next_line_num=$(echo "${test_functions[$((fi + 1))]}" | cut -d: -f1)
+        else
+            next_line_num=$total_lines
+        fi
+
+        # Collect subtests in this function's body
+        has_subtests=false
+        while IFS= read -r subtest_line; do
+            if echo "$subtest_line" | grep -q 't\.Run('; then
+                subtest_name=$(echo "$subtest_line" | sed -n 's/.*t\.Run("\([^"]*\)".*/\1/p')
+                if [ -n "$subtest_name" ]; then
+                    has_subtests=true
+                    ALL_SPECS+=("${test_dir}"$'\t'"${test_binary}"$'\t'"${test_func}/${subtest_name}")
+                fi
+            fi
+        done < <(sed -n "${line_num},${next_line_num}p" "$test_file")
+
+        if [ "$has_subtests" = false ]; then
+            ALL_SPECS+=("${test_dir}"$'\t'"${test_binary}"$'\t'"${test_func}")
+        fi
+    done
+done
+
+# Apply even shard partitioning (on the full list index) then optional --db filter.
+# The shard index runs over ALL specs regardless of --db, so the disjoint/exhaustive
+# property holds for the self-test even when --db is not set.
+declare -a RUN_SPECS=()
+idx=0
+for spec in "${ALL_SPECS[@]}"; do
+    testspec="${spec##*$'\t'}"
+
+    # Shard filter: only keep entries whose position mod TOTAL == SHARD
+    if [ -n "${TOTAL}" ]; then
+        if [ $(( idx % TOTAL )) -ne "${SHARD:-0}" ]; then
+            idx=$((idx+1))
+            continue
+        fi
+    fi
+
+    # DB name-substring filter (case-insensitive, orthogonal to sharding)
+    if [ -n "$DB_FILTER" ]; then
+        ts_lower=$(echo "$testspec" | tr '[:upper:]' '[:lower:]')
+        db_lower=$(echo "$DB_FILTER" | tr '[:upper:]' '[:lower:]')
+        if [[ ! "$ts_lower" =~ $db_lower ]]; then
+            idx=$((idx+1))
+            continue
+        fi
+    fi
+
+    RUN_SPECS+=("$spec")
+    idx=$((idx+1))
+done
+
+# --list-only: print specs and exit before any compilation or execution
+if [ "$LIST_ONLY" = true ]; then
+    for spec in "${RUN_SPECS[@]}"; do
+        echo "${spec##*$'\t'}"
+    done
+    exit 0
+fi
+
 # Store start time
 start_time=$(date +%s)
 echo -e "\nStarting test execution at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "----------------------------------------------------------"
 
-# First compile all test packages
+# Compile all test packages
 echo "Compiling test packages..."
 for test_file in $test_files; do
     test_dir=$(dirname "$test_file")
@@ -128,74 +247,21 @@ run_test() {
 }
 
 any_test_failed=0
-# Process each test file
-for test_file in $test_files; do
-    # Change to the directory containing the test file
-    test_dir=$(dirname "$test_file")
+
+# Run each spec from the pre-built list
+for spec in "${RUN_SPECS[@]}"; do
+    # Parse the three tab-separated fields
+    IFS=$'\t' read -r test_dir test_binary testspec <<< "$spec"
+
     cd "$test_dir"
-    test_filename=$(basename "$test_file")
-    package_name=$(basename "$test_dir")
-    test_binary="${package_name}.test"
 
-    # Store all test functions in an array
-    IFS=$'\n' read -r -d '' -a test_functions < <(grep -n "^func Test" "$test_filename" | grep -v "^func TestMain" && printf '\0')
-    
-    for ((i=0; i<${#test_functions[@]}; i++)); do
-        line_info="${test_functions[i]}"
-        line_num=$(echo "$line_info" | cut -d: -f1)
-        line=$(echo "$line_info" | cut -d: -f2-)
-        
-        # Extract the test function name
-        test_func=$(echo "$line" | awk '{print $2}' | cut -d'(' -f1)
+    echo -e "\nRunning: $testspec"
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    if ! run_test "${testspec}" "${test_binary}"; then
+        any_test_failed=1
+    fi
 
-        # Skip test if DB filter is set and test doesn't match
-        if [ ! -z "$DB_FILTER" ]; then
-            # Normalize both to lowercase for case-insensitive matching
-            test_func_lower=$(echo "$test_func" | tr '[:upper:]' '[:lower:]')
-            db_filter_lower=$(echo "$DB_FILTER" | tr '[:upper:]' '[:lower:]')
-            if [[ ! "$test_func_lower" =~ $db_filter_lower ]]; then
-                continue
-            fi
-        fi
-
-        # Find the next test function to get the end line
-        next_line_num=
-        if [ $((i + 1)) -lt "${#test_functions[@]}" ]; then
-            next_line_num=$(echo "${test_functions[$((i + 1))]}" | cut -d: -f1)
-        else
-            next_line_num=$(wc -l < "$test_filename")
-        fi
-
-        # Look for t.Run calls between the current function and the next
-        has_subtests=false
-        while IFS= read -r subtest_line; do
-            if echo "$subtest_line" | grep -q "t.Run("; then
-                has_subtests=true
-                subtest_name=$(echo "$subtest_line" | sed -n 's/.*t.Run("\([^"]*\)".*/\1/p')
-                if [ ! -z "$subtest_name" ]; then
-                    echo -e "\nRunning $test_func / $subtest_name"
-                    
-                    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-                    if ! run_test "${test_func}/${subtest_name}" "${test_binary}"; then
-                        any_test_failed=1
-                    fi
-                fi
-            fi
-        done < <(sed -n "${line_num},${next_line_num}p" "$test_filename")
-        
-        # If no subtests found, run the main test function
-        if [ "$has_subtests" = false ]; then
-            echo "Running: $test_func"
-            TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            if ! run_test "${test_func}" "${test_binary}"; then
-                any_test_failed=1
-            fi
-        fi
-
-        echo -e "\n"
-    done
-
-    # Return to the original directory after processing each test file
+    echo -e "\n"
     cd "$ORIGINAL_DIR"
 done
 

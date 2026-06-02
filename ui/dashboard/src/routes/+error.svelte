@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
@@ -9,36 +11,37 @@
 
   const fieldKey = 'comp.error'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
   const maxWidth = 500
 
-  $: is404 = $page.status === 404
-  $: isFatal = $page.status >= 500 && $page.status < 600
+  const is404 = $derived($page.status === 404)
+  const isFatal = $derived($page.status >= 500 && $page.status < 600)
 
-  let logoName = ''
-  let title = ''
-  let body = ''
-  let btnLabel = ''
-
-  $: {
+  const display = $derived.by(() => {
     if (is404) {
-      logoName = 'error-404'
-      title = t(`${fieldKey}.404.title`)
-      body = t(`${fieldKey}.404.body`, { url: $page.url })
-      btnLabel = t(`${fieldKey}.404.home`)
+      return {
+        logoName: 'error-404',
+        title: t(`${fieldKey}.404.title`),
+        body: t(`${fieldKey}.404.body`, { url: $page.url }),
+        btnLabel: t(`${fieldKey}.404.home`),
+      }
     } else if (isFatal) {
-      logoName = 'error-fatal'
-      title = t(`${fieldKey}.fatal.title`)
-      body = $page?.error?.message || ''
-      btnLabel = t(`${fieldKey}.fatal.home`)
+      return {
+        logoName: 'error-fatal',
+        title: t(`${fieldKey}.fatal.title`),
+        body: $page?.error?.message || '',
+        btnLabel: t(`${fieldKey}.fatal.home`),
+      }
     } else {
-      logoName = 'error-x'
-      title = t(`${fieldKey}.x.title`, { status: $page.status })
-      body = $page?.error?.message || ''
-      btnLabel = t(`${fieldKey}.x.home`)
+      return {
+        logoName: 'error-x',
+        title: t(`${fieldKey}.x.title`, { status: $page.status }),
+        body: $page?.error?.message || '',
+        btnLabel: t(`${fieldKey}.x.home`),
+      }
     }
-  }
+  })
 
   function onHome() {
     goto('/')
@@ -47,16 +50,16 @@
 
 <div class="error" style:--max-width={maxWidth}>
   <div class="logo">
-    <Logo name={logoName} width={162} />
+    <Logo name={display.logoName} width={162} />
   </div>
   <div class="title">
-    <Typo variant="title" size="h5" value={title} color="var(--app-color)" />
+    <Typo variant="title" size="h5" value={display.title} color="var(--app-color)" />
   </div>
   <div class="body">
-    <Typo variant="text" size="md" value={body} color="var(--comp-label-color)" />
+    <Typo variant="text" size="md" value={display.body} color="var(--comp-label-color)" />
   </div>
   <div class="btn">
-    <Button variant="tertiary" width={140} on:click={onHome}>{btnLabel}</Button>
+    <Button variant="tertiary" width={140} onclick={onHome}>{display.btnLabel}</Button>
   </div>
 </div>
 

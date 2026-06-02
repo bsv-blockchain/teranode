@@ -147,7 +147,7 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetMerkleProof_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http] GetMerkleProof in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithLogMessage(h.logger, "[Asset_http] GetMerkleProof in %s for %s: %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

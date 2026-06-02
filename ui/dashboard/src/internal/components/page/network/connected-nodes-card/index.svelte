@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import Table from '$lib/components/table/index.svelte'
   import Pager from '$internal/components/pager/index.svelte'
   import Icon from '$lib/components/icon/index.svelte'
@@ -12,59 +13,73 @@
   import { getColDefs, renderCells, getRenderProps } from './data'
 
   const pageKey = 'page.network.nodes'
-  const dispatch = createEventDispatcher()
 
-  $: t = $i18n.t
-  $: i18nLocal = { t, baseKey: 'comp.pager' }
+  let {
+    data = [], // Paginated data
+    allData = [], // Full dataset for pagination calculation
+    connected = false,
+    page = 1,
+    pageSize = 10,
+    sortColumn = '',
+    sortOrder = '',
+    onpagechange,
+    onsort,
+  }: {
+    data?: any[]
+    allData?: any[]
+    connected?: boolean
+    page?: number
+    pageSize?: number
+    sortColumn?: string
+    sortOrder?: string
+    onpagechange?: (e: any) => void
+    onsort?: (e: any) => void
+  } = $props()
 
-  let colDefs: any[] = []
-  $: colDefs = getColDefs(t) || []
+  const t = $derived($i18n.t)
+  const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
-  export let data: any[] = [] // Paginated data
-  export let allData: any[] = [] // Full dataset for pagination calculation
-  export let connected = false
-  export let page = 1
-  export let pageSize = 10
-  export let sortColumn = ''
-  export let sortOrder = ''
+  const colDefs = $derived(getColDefs(t) || [])
 
   function onPage(e) {
     // Forward pagination changes to parent component
-    dispatch('pagechange', e.detail)
+    onpagechange?.(e)
   }
 
   function onSort(e) {
     // Forward sort changes to parent component
-    dispatch('sort', e.detail)
+    onsort?.(e)
   }
 
   function clearSort() {
     // Dispatch a sort event with empty values to clear sorting
-    dispatch('sort', {
+    onsort?.({
       colId: '',
       value: ''
     })
   }
 
-  $: hasSorting = sortColumn && sortOrder
+  const hasSorting = $derived(sortColumn && sortOrder)
 
-  $: totalPages = Math.max(1, Math.ceil((allData?.length || 0) / pageSize))
-  $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
-  $: showTableFooter = showPagerSize
+  const totalPages = $derived(Math.max(1, Math.ceil((allData?.length || 0) / pageSize)))
+  const showPagerNav = $derived(totalPages > 1)
+  const showPagerSize = $derived(showPagerNav || (totalPages === 1 && allData.length > 5))
+  const showTableFooter = $derived(showPagerSize)
 
-  let variant = 'dynamic'
+  let variant = $state('dynamic')
   function onToggle(e) {
-    const value = e.detail.value
+    const value = e.value
     variant = $tableVariant = value
   }
 </script>
 
 <Card contentPadding="0" showFooter={showTableFooter}>
-  <div class="title" slot="title">
-    <Typo variant="title" size="h4" value={t(`${pageKey}.title`)} />
-  </div>
-  <svelte:fragment slot="header-tools">
+  {#snippet title()}
+    <div class="title">
+      <Typo variant="title" size="h4" value={t(`${pageKey}.title`)} />
+    </div>
+  {/snippet}
+  {#snippet headerTools()}
     <Pager
       i18n={i18nLocal}
       expandUp={true}
@@ -77,11 +92,11 @@
         pageSize,
       }}
       hasBoundaryRight={true}
-      on:change={onPage}
+      onchange={onPage}
     />
-    <TableToggle value={variant} on:change={onToggle} />
+    <TableToggle value={variant} onchange={onToggle} />
     {#if hasSorting}
-      <button class="clear-sort-btn" on:click={clearSort} title="Clear sorting">
+      <button class="clear-sort-btn" onclick={clearSort} title="Clear sorting">
         <Icon name="icon-close-line" size={16} />
       </button>
     {/if}
@@ -91,7 +106,7 @@
       </div>
       <div class="live-label">{t(`page.network.live`)}</div>
     </div>
-  </svelte:fragment>
+  {/snippet}
   <Table
     name="nodes"
     {variant}
@@ -114,25 +129,27 @@
     {renderCells}
     {getRenderProps}
     getRowIconActions={null}
-    on:action={() => {}}
-    on:sort={onSort}
+    onaction={() => {}}
+    onsort={onSort}
   />
-  <div slot="footer">
-    <Pager
-      i18n={i18nLocal}
-      expandUp={true}
-      totalItems={allData?.length}
-      showPageSize={showPagerSize}
-      showQuickNav={showPagerNav}
-      showNav={showPagerNav}
-      value={{
-        page,
-        pageSize,
-      }}
-      hasBoundaryRight={true}
-      on:change={onPage}
-    />
-  </div>
+  {#snippet footer()}
+    <div>
+      <Pager
+        i18n={i18nLocal}
+        expandUp={true}
+        totalItems={allData?.length}
+        showPageSize={showPagerSize}
+        showQuickNav={showPagerNav}
+        showNav={showPagerNav}
+        value={{
+          page,
+          pageSize,
+        }}
+        hasBoundaryRight={true}
+        onchange={onPage}
+      />
+    </div>
+  {/snippet}
 </Card>
 
 <BlockAssemblyModal />

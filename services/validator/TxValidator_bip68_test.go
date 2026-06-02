@@ -231,6 +231,46 @@ func TestSequenceLocks_TimeBased_Failure(t *testing.T) {
 	require.Contains(t, err.Error(), "sequence lock time not satisfied")
 }
 
+// TestSequenceLocks_TimeBased_Boundary verifies parity with bitcoin-sv's
+// CalculateSequenceLocks at the exact equality boundary of the time-based
+// branch. bitcoin-sv (src/validation.cpp ~310-315) computes
+// nMinTime = nCoinTime + (sequence << granularity) - 1, then accepts the tx
+// when blockMTP > nMinTime — equivalently, accepts when
+// blockMTP >= nCoinTime + (sequence << granularity).
+//
+// The two assertions below pin the boundary:
+//   - blockMTP exactly equal to nCoinTime + (sequence << granularity) accepts.
+//   - blockMTP one below the boundary rejects.
+func TestSequenceLocks_TimeBased_Boundary(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := bip68TestSettings(t)
+	txValidator := newBIP68TxValidator(logger, tSettings)
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
+
+	tx.Version = 2
+	const sequenceOffset uint32 = 10
+	tx.Inputs[0].SequenceNumber = SequenceLockTimeTypeFlag | sequenceOffset
+
+	const utxoMTP uint32 = 1000000
+	requiredMTP := utxoMTP + (sequenceOffset << SequenceLockTimeGranularity)
+
+	blockHeight := uint32(419911)
+	utxoHeights := []uint32{419900}
+	utxoMTPs := []uint32{utxoMTP}
+
+	// At the boundary (blockMTP == utxoMTP + offset): tx becomes final.
+	err := txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, requiredMTP)
+	require.NoError(t, err, "Time-based sequence lock must accept at the equality boundary")
+
+	// One below the boundary: still locked.
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, requiredMTP-1)
+	require.Error(t, err, "Time-based sequence lock must reject one below the boundary")
+	require.Contains(t, err.Error(), "sequence lock time not satisfied")
+}
+
 // TestSequenceLocks_MultipleInputs verifies sequence locks with multiple inputs.
 func TestSequenceLocks_MultipleInputs(t *testing.T) {
 	logger := ulogger.TestLogger{}

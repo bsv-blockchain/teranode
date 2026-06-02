@@ -1,23 +1,26 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import Typo from '../typo/index.svelte'
   import i18n from '../../i18n'
 
-  $: t = $i18n.t
+  let { testId = null }: { testId?: string | undefined | null } = $props()
+
+  const t = $derived($i18n.t)
   const tKey = 'comp.footer'
 
-  $: gutterW =
+  const gutterW = $derived(
     $mediaSize <= MediaSize.lg
       ? $mediaSize <= MediaSize.sm
         ? $mediaSize <= MediaSize.xs
           ? 16
           : 20
         : 32
-      : 90
+      : 90,
+  )
 
-  export let testId: string | undefined | null = null
-
-  let year = new Date().getFullYear()
+  const year = new Date().getFullYear()
 </script>
 
 <div class="tui-footer" data-test-id={testId} style:--padding={`0px ${gutterW}px`}>

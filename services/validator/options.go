@@ -51,6 +51,54 @@ type Options struct {
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
 	SkipTxMetaPublishing bool
+
+	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
+	// When true, the validator skips the BDK ValidateTransaction call (script execution,
+	// sigops, standardness, consensus checks). Intended for legacy catchup
+	// (quickValidationMode) where the block is anchored to a hard-coded checkpoint and
+	// PoW + checkpoint linkage already establish the chain as canonical — re-running
+	// scripts is pure overhead. MUST NOT be set on non-trusted validation paths.
+	SkipScriptValidation bool
+
+	// CandidateBlockTime carries the candidate block's own header timestamp
+	// (block.Header.Timestamp) for block-validation finality on pre-CSV blocks.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight < CSVHeight, which
+	// matches bitcoin-sv's ContextualCheckBlock comparing nLockTime against the
+	// candidate block header time (src/validation.cpp:6020-6022) before CSV.
+	// Policy mode and post-CSV consensus do not read this field — leaving it at
+	// zero in those contexts is harmless.
+	CandidateBlockTime uint32
+
+	// CandidateParentMedianTime carries the equivalent of bitcoin-sv's
+	// pindexPrev->GetMedianTimePast() for the candidate block being validated.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight,
+	// matching bitcoin-sv's BIP113 activation at ContextualCheckBlock
+	// (src/validation.cpp:6001), where post-activation finality is checked
+	// against the parent's MTP rather than the candidate block's own timestamp.
+	//
+	// Required field on the consensus path. Block-validation callers MUST
+	// populate this. selectFinalityComparisonTime returns a ProcessingError
+	// when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
+	// is updated asynchronously from blockchain notifications, so a tip
+	// advance / reorg between the caller's snapshot and the validator's read
+	// would silently swap the comparison time source; the hard-error stance
+	// makes a forgotten populate-callsite fail fast at validation time
+	// instead of silently degrading.
+	//
+	// Sourcing on the caller side: bitcoin-sv's pindexPrev->GetMedianTimePast()
+	// for a candidate at height H is the median of timestamps at heights
+	// [H-11, H-1] — i.e. the parent block's own timestamp AND its 10 previous
+	// ancestors along the parent's actual chain (the bitcoin-sv routine
+	// iterates `this` then `pprev` 10 times). Teranode's height-based MTP
+	// lookups (GetMedianTimePastForHeights, GetMedianTimePastRange) are
+	// restricted to the current main chain — wrong for a side-chain
+	// candidate. The correct primitive is
+	// blockchainClient.GetBlockHeaders(parentHash, 11), whose SQL fallback
+	// recursively walks parent_id when the start hash is off main chain;
+	// callers then take the median of the 11 returned headers' timestamps
+	// (see services/legacy/netsync and services/subtreevalidation for the
+	// reference implementations).
+	CandidateParentMedianTime uint32
 }
 
 // Option defines a function type for setting options
@@ -172,6 +220,14 @@ func WithSkipTxMetaPublishing(skip bool) Option {
 	}
 }
 
+// WithSkipScriptValidation creates an option to skip the BDK transaction/script
+// validation step. See Options.SkipScriptValidation for safety constraints.
+func WithSkipScriptValidation(skip bool) Option {
+	return func(o *Options) {
+		o.SkipScriptValidation = skip
+	}
+}
+
 // WithParentMetadata creates an option to provide pre-fetched parent transaction metadata
 // Parameters:
 //   - metadata: Map of parent transaction hashes to their metadata (block height, etc.)
@@ -181,6 +237,44 @@ func WithSkipTxMetaPublishing(skip bool) Option {
 func WithParentMetadata(metadata map[chainhash.Hash]*ParentTxMetadata) Option {
 	return func(o *Options) {
 		o.ParentMetadata = metadata
+	}
+}
+
+// WithCandidateBlockTime creates an option carrying the candidate block's
+// own header timestamp. Required by block-validation callers when validating
+// pre-CSV blocks; ignored in other contexts. See Options.CandidateBlockTime.
+//
+// Parameters:
+//   - timestamp: The candidate block's Header.Timestamp value
+//
+// Returns:
+//   - Option: Function that sets the candidateBlockTime option
+func WithCandidateBlockTime(timestamp uint32) Option {
+	return func(o *Options) {
+		o.CandidateBlockTime = timestamp
+	}
+}
+
+// WithCandidateParentMedianTime creates an option carrying the candidate
+// block's parent-chain MTP (the equivalent of bitcoin-sv's
+// pindexPrev->GetMedianTimePast()). Required by block-validation callers on
+// every post-CSV consensus request — selectFinalityComparisonTime returns
+// a ProcessingError when this field is missing on that path (no tip-MTP
+// soft-fall). See Options.CandidateParentMedianTime for the rationale of
+// the hard-error stance.
+//
+// Parameters:
+//   - mtp: The candidate-parent-chain MTP computed at the caller — i.e. the
+//     median of timestamps at [H-11, H-1] following the parent's actual
+//     chain (use blockchainClient.GetBlockHeaders(parentHash, 11) which has
+//     a fork-aware fallback, then take the median of the returned headers'
+//     timestamps).
+//
+// Returns:
+//   - Option: Function that sets the candidateParentMedianTime option
+func WithCandidateParentMedianTime(mtp uint32) Option {
+	return func(o *Options) {
+		o.CandidateParentMedianTime = mtp
 	}
 }
 

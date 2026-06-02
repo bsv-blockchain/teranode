@@ -29,19 +29,11 @@ var (
 	metadataCacheOnce sync.Once
 )
 
-// sensitiveKeys contains setting keys whose values must be redacted in exported metadata.
-var sensitiveKeys = map[string]bool{
-	"rpc_pass":                    true,
-	"rpc_limit_pass":              true,
-	"p2p_private_key":             true,
-	"coinbase_p2p_private_key":    true,
-	"alert_p2p_private_key":       true,
-	"coinbase_wallet_private_key": true,
-	"miner_wallet_private_keys":   true,
-	"coinbaseDBUserPwd":           true,
-	"slack_token":                 true,
-	"grpc_admin_api_key":          true,
-}
+// sensitiveKeys contains setting keys whose values must be redacted in
+// exported metadata. Derived once from struct tags via extractSensitiveKeys
+// (see redact.go) — add `redact:"true"` to a field's struct tag to mark it
+// sensitive; the tag is the single source of truth.
+var sensitiveKeys = extractSensitiveKeys()
 
 const redactedValue = "********"
 

@@ -141,7 +141,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHeight_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height")),
+			tracing.WithLogMessage(h.logger, "[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.RealIP(), c.Param("height")),
 		)
 
 		defer deferFn()
@@ -292,7 +292,7 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHash_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

@@ -207,6 +207,99 @@ func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 	return nil
 }
 
+// candidateBlockTimePtr returns a pointer to opts.CandidateBlockTime when the
+// value is non-zero, and nil otherwise. Keeping the proto field absent on the
+// wire for the common policy-mode case (where CandidateBlockTime is always 0)
+// avoids unnecessary per-request bytes on the validator hot path; the field is
+// only meaningful for block-validation callers passing a candidate block
+// header timestamp. Returns &opts.CandidateBlockTime directly so the pointer
+// targets the caller's existing struct field (no per-request allocation),
+// matching the pattern of the other request fields built from the same opts.
+func candidateBlockTimePtr(opts *Options) *uint32 {
+	if opts.CandidateBlockTime == 0 {
+		return nil
+	}
+
+	return &opts.CandidateBlockTime
+}
+
+// candidateParentMedianTimePtr mirrors candidateBlockTimePtr for the
+// post-CSV consensus path. Returns &opts.CandidateParentMedianTime directly
+// when non-zero so the wire write is no-copy. Returns nil only when the
+// field is genuinely unset — the server-side selectFinalityComparisonTime
+// hard-errors on absent values for post-CSV consensus requests, so the
+// nil-encoded branch exists only for policy-mode and pre-CSV consensus
+// requests (where the field is not consumed).
+func candidateParentMedianTimePtr(opts *Options) *uint32 {
+	if opts.CandidateParentMedianTime == 0 {
+		return nil
+	}
+
+	return &opts.CandidateParentMedianTime
+}
+
+// buildValidateTxRequest constructs the gRPC ValidateTransactionRequest from
+// raw transaction bytes, block height, and validation options. Shared by the
+// client's non-batch / batch send paths AND by the server's HTTP /tx, /txs
+// handlers (which receive raw bytes from the request body) so the wire
+// representation cannot diverge between any caller.
+func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Options) *validator_api.ValidateTransactionRequest {
+	return &validator_api.ValidateTransactionRequest{
+		TransactionData:           transactionData,
+		BlockHeight:               blockHeight,
+		SkipUtxoCreation:          &opts.SkipUtxoCreation,
+		AddTxToBlockAssembly:      &opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:          &opts.SkipPolicyChecks,
+		CreateConflicting:         &opts.CreateConflicting,
+		SkipTxmetaPublishing:      &opts.SkipTxMetaPublishing,
+		CandidateBlockTime:        candidateBlockTimePtr(opts),
+		CandidateParentMedianTime: candidateParentMedianTimePtr(opts),
+	}
+}
+
+// buildValidateTxHTTPQuery constructs the query string for the HTTP fallback
+// /tx endpoint. Shared with the gRPC builder above so the HTTP path cannot
+// silently drop fields that the gRPC path carries — the most-likely path to
+// hit HTTP fallback is large transactions (gRPC message size limit), which
+// must still receive their per-request options end-to-end.
+func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
+	queryParams := url.Values{}
+
+	if opts.SkipUtxoCreation {
+		queryParams.Add("skipUtxoCreation", "true")
+	}
+
+	if opts.AddTXToBlockAssembly {
+		queryParams.Add("addTxToBlockAssembly", "true")
+	}
+
+	if opts.SkipPolicyChecks {
+		queryParams.Add("skipPolicyChecks", "true")
+	}
+
+	if opts.CreateConflicting {
+		queryParams.Add("createConflicting", "true")
+	}
+
+	if opts.SkipTxMetaPublishing {
+		queryParams.Add("skipTxMetaPublishing", "true")
+	}
+
+	if opts.CandidateBlockTime > 0 {
+		queryParams.Add("candidateBlockTime", fmt.Sprintf("%d", opts.CandidateBlockTime))
+	}
+
+	if opts.CandidateParentMedianTime > 0 {
+		queryParams.Add("candidateParentMedianTime", fmt.Sprintf("%d", opts.CandidateParentMedianTime))
+	}
+
+	if blockHeight > 0 {
+		queryParams.Add("blockHeight", fmt.Sprintf("%d", blockHeight))
+	}
+
+	return queryParams
+}
+
 // Validate performs transaction validation by applying the given options and delegating
 // to ValidateWithOptions. See ValidateWithOptions for details on the validation flow.
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {
@@ -230,15 +323,7 @@ type validateBatchResponse struct {
 func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *utxometa.Data, err error) {
 	if c.batchSize == 0 {
 		// Non-batch mode: direct validation
-		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-			TransactionData:      tx.SerializeBytes(),
-			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
-			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
-			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
-			CreateConflicting:    &validationOptions.CreateConflicting,
-			SkipTxmetaPublishing: &validationOptions.SkipTxMetaPublishing,
-		})
+		response, err := c.client.ValidateTransaction(ctx, buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions))
 		if err != nil {
 			c.logger.Errorf("[ValidateWithOptions] failed to validate non-batched transaction: %v", err)
 			return nil, c.handleValidationError(ctx, tx, blockHeight, validationOptions, err)
@@ -257,15 +342,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	// Batch mode
 	doneCh := make(chan validateBatchResponse)
 	c.batcher.PutCtx(ctx, &batchItem{
-		req: &validator_api.ValidateTransactionRequest{
-			TransactionData:      tx.SerializeBytes(),
-			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
-			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
-			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
-			CreateConflicting:    &validationOptions.CreateConflicting,
-			SkipTxmetaPublishing: &validationOptions.SkipTxMetaPublishing,
-		},
+		req:  buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions),
 		done: doneCh,
 	})
 
@@ -369,13 +446,14 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 			continue
 		}
 
-		// Create options from the request
-		options := &Options{
-			SkipUtxoCreation:     *txReq.SkipUtxoCreation,
-			AddTXToBlockAssembly: *txReq.AddTxToBlockAssembly,
-			SkipPolicyChecks:     *txReq.SkipPolicyChecks,
-			CreateConflicting:    *txReq.CreateConflicting,
-		}
+		// Create options from the request. Reuses the same projection the
+		// server uses so the HTTP fallback cannot silently drop fields that the
+		// gRPC request carried — historically this site missed SkipTxMetaPublishing
+		// (which legacy catchup relies on to avoid extra Kafka work),
+		// CandidateBlockTime (which pre-CSV block validation needs), and
+		// CandidateParentMedianTime (which post-CSV fork / historical block
+		// validation needs).
+		options := optionsFromValidateRequest(txReq)
 
 		// Try HTTP fallback for this individual transaction
 		httpErr := c.validateTransactionViaHTTP(ctx, tx, txReq.BlockHeight, options)
@@ -426,29 +504,7 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 		return errors.NewServiceError("[ValidateWithOptions][%s] error parsing endpoint /tx: %v", tx.TxID(), err)
 	}
 
-	// Add validation options as query parameters
-	queryParams := url.Values{}
-	if validationOptions.SkipUtxoCreation {
-		queryParams.Add("skipUtxoCreation", "true")
-	}
-
-	if validationOptions.AddTXToBlockAssembly {
-		queryParams.Add("addTxToBlockAssembly", "true")
-	}
-
-	if validationOptions.SkipPolicyChecks {
-		queryParams.Add("skipPolicyChecks", "true")
-	}
-
-	if validationOptions.CreateConflicting {
-		queryParams.Add("createConflicting", "true")
-	}
-
-	if blockHeight > 0 {
-		queryParams.Add("blockHeight", fmt.Sprintf("%d", blockHeight))
-	}
-
-	endpoint.RawQuery = queryParams.Encode()
+	endpoint.RawQuery = buildValidateTxHTTPQuery(validationOptions, blockHeight).Encode()
 
 	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
 

@@ -61,7 +61,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -520,6 +520,19 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		return
 	}
 
+	s.executeLuaSpendBatch(batch)
+}
+
+// executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
+// shared backend used by sendSpendBatchLua's Lua route and by the expression path's
+// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
+// filtering, since this method does not re-run it and assumes every item still expects
+// exactly one response on its errCh.
+func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
+	if len(batch) == 0 {
+		return
+	}
+
 	start := time.Now()
 	stat := gocore.NewStat("sendSpendBatchLua")
 
@@ -536,7 +549,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))
 
-	// Prepare and execute batch
 	batchesByKey, err := s.prepareSpendBatches(batch, batchID)
 	if err != nil {
 		return
@@ -548,7 +560,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		return
 	}
 
-	// Process results
 	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID)
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
@@ -727,8 +738,10 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 	}
-	// Record batch-level failure for circuit breaker
-	if s.spendCircuitBreaker != nil {
+	// Only count infrastructure failures toward the circuit breaker.
+	// Per-record data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing
+	// parents during catch-up sync) must not trip the breaker — issue #953.
+	if s.spendCircuitBreaker != nil && isInfrastructureFailure(err) {
 		s.spendCircuitBreaker.RecordFailure()
 	}
 }

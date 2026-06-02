@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import { onMount, onDestroy } from 'svelte'
@@ -12,41 +14,41 @@
   import RenderHashWithMiner from '$lib/components/table/renderers/render-hash-with-miner/index.svelte'
 
   // FSM State Management
-  let fsmState: FSMState | null = null
-  let fsmEvents: FSMEvent[] = []
-  let fsmStates: string[] = []
-  let fsmLoading = true
-  let fsmError: string | null = null
-  let apiBaseUrl = ''
+  let fsmState: FSMState | null = $state(null)
+  let fsmEvents: FSMEvent[] = $state([])
+  let fsmStates: string[] = $state([])
+  let fsmLoading = $state(true)
+  let fsmError: string | null = $state(null)
+  let apiBaseUrl = $state('')
   let pollingInterval: any = null
-  let selectedEvent: string | null = null
+  let selectedEvent: string | null = $state(null)
   const POLLING_INTERVAL_MS = 5000 // 5 seconds
 
   // Block invalidation
-  let blockHash = ''
-  let blockActionLoading = false
-  let blockActionResult: { success: boolean; message: string } | null = null
+  let blockHash = $state('')
+  let blockActionLoading = $state(false)
+  let blockActionResult: { success: boolean; message: string } | null = $state(null)
   // Create regex pattern for hash validation
   const hashRegex = /^[0-9a-fA-F]{64}$/
 
   // Invalid blocks list
-  let invalidBlocks: any[] = []
-  let invalidBlocksLoading = false
-  let invalidBlocksError: string | null = null
-  let lastInvalidBlocksRefresh: Date | null = null
-  let invalidBlocksOffset = 0
+  let invalidBlocks: any[] = $state([])
+  let invalidBlocksLoading = $state(false)
+  let invalidBlocksError: string | null = $state(null)
+  let lastInvalidBlocksRefresh: Date | null = $state(null)
+  let invalidBlocksOffset = $state(0)
   const INVALID_BLOCKS_PAGE_SIZE = 5
-  let invalidBlocksHasMore = false
+  let invalidBlocksHasMore = $state(false)
 
-  $: invalidBlocksShowingFrom = invalidBlocks.length > 0 ? invalidBlocksOffset + 1 : 0
-  $: invalidBlocksShowingTo = invalidBlocksOffset + invalidBlocks.length
+  const invalidBlocksShowingFrom = $derived(invalidBlocks.length > 0 ? invalidBlocksOffset + 1 : 0)
+  const invalidBlocksShowingTo = $derived(invalidBlocksOffset + invalidBlocks.length)
 
   // Re-validate block state
-  let revalidatingBlock = false
-  let revalidatingBlockHash = ''
+  let revalidatingBlock = $state(false)
+  let revalidatingBlockHash = $state('')
 
   // Reset peer reputations
-  let resettingReputations = false
+  let resettingReputations = $state(false)
 
   // Subscribe to the API base URL
   const unsubscribe = api.assetHTTPAddress.subscribe((value) => {
@@ -629,7 +631,7 @@
   }
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="admin-container">
     <header class="admin-header">
       <h1>{t('admin.title', 'Admin Dashboard')}</h1>
@@ -654,7 +656,7 @@
               <div class="error-message">
                 <p><i class="fas fa-exclamation-triangle"></i> {fsmError}</p>
               </div>
-              <button class="btn btn-primary" on:click={handleRefreshClick}>
+              <button class="btn btn-primary" onclick={handleRefreshClick}>
                 <i class="fas fa-sync-alt"></i> Retry
               </button>
             </div>
@@ -680,7 +682,7 @@
                       {#if event && event.name}
                         {@const allowed = isEventAllowedForState(fsmState?.state, event.name)}
                         <button
-                          on:click={() => sendFSMEvent(event.name)}
+                          onclick={() => sendFSMEvent(event.name)}
                           disabled={fsmLoading || !allowed}
                           class="action-button"
                           data-event={event.name.toLowerCase()}
@@ -703,7 +705,7 @@
           {:else}
             <div class="no-state">
               <p>No state information available.</p>
-              <button class="btn btn-primary" on:click={handleRefreshClick}>
+              <button class="btn btn-primary" onclick={handleRefreshClick}>
                 <i class="fas fa-sync-alt"></i> Refresh
               </button>
             </div>
@@ -751,7 +753,7 @@
           <div class="block-actions">
             <button
               class="block-action-button"
-              on:click={() => performBlockAction(api.invalidateBlock, 'invalidate')}
+              onclick={() => performBlockAction(api.invalidateBlock, 'invalidate')}
               disabled={!hashRegex.test(blockHash) || blockActionLoading}
             >
               <i class="fas fa-ban"></i> Invalidate Block
@@ -759,7 +761,7 @@
 
             <button
               class="block-action-button"
-              on:click={() => performBlockAction(api.revalidateBlock, 'revalidate')}
+              onclick={() => performBlockAction(api.revalidateBlock, 'revalidate')}
               disabled={!hashRegex.test(blockHash) || blockActionLoading}
             >
               <i class="fas fa-check-circle"></i> Revalidate Block
@@ -782,7 +784,7 @@
         <div class="refresh-container">
           <button
             class="icon-button with-text"
-            on:click={goToPrevInvalidBlocksPage}
+            onclick={goToPrevInvalidBlocksPage}
             disabled={invalidBlocksLoading || invalidBlocksOffset === 0}
             title="Previous page"
           >
@@ -793,7 +795,7 @@
           </span>
           <button
             class="icon-button with-text"
-            on:click={goToNextInvalidBlocksPage}
+            onclick={goToNextInvalidBlocksPage}
             disabled={invalidBlocksLoading || !invalidBlocksHasMore}
             title="Next page"
           >
@@ -806,7 +808,7 @@
           {/if}
           <button
             class="icon-button"
-            on:click={() => fetchInvalidBlocks()}
+            onclick={() => fetchInvalidBlocks()}
             disabled={invalidBlocksLoading}
             title="Refresh invalidated blocks list"
           >
@@ -832,7 +834,7 @@
               <i class="fas fa-exclamation-circle"></i>
               <p>Error loading invalidated blocks</p>
               <p class="error-message">{invalidBlocksError}</p>
-              <button class="icon-button with-text" on:click={() => fetchInvalidBlocks()}>
+              <button class="icon-button with-text" onclick={() => fetchInvalidBlocks()}>
                 <Icon name="icon-refresh-line" size={16} />
                 <span>Try again</span>
               </button>
@@ -874,7 +876,7 @@
                       <td class="actions-cell">
                         <button
                           class="revalidate-button"
-                          on:click={() => revalidateBlock(block.hash)}
+                          onclick={() => revalidateBlock(block.hash)}
                           disabled={revalidatingBlock}
                         >
                           {#if revalidatingBlock && revalidatingBlockHash === block.hash}
@@ -908,7 +910,7 @@
         <div class="action-buttons">
           <button
             class="action-button neutral"
-            on:click={resetPeerReputations}
+            onclick={resetPeerReputations}
             disabled={resettingReputations}
           >
             {#if resettingReputations}

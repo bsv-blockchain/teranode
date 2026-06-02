@@ -39,6 +39,27 @@
 - `-1` = Dynamic limit based on runtime.NumCPU()
 - `>0` = Exact concurrency limit
 
+## HTTP Rate Limit and Peer Authentication Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| HTTPRateLimit | int | 1024 | asset_httpRateLimit | Per-IP req/s for unverified clients (0 disables) |
+| HTTPHeavyRateLimit | int | 10 | asset_httpHeavyRateLimit | Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs) |
+| HTTPPeerRateMultiplier | int | 5 | asset_httpPeerRateMultiplier | Authenticated peers get base × this rate |
+| HTTPMinerRateLimit | int | 0 | asset_httpMinerRateLimit | Per-peer req/s cap for miner tier; 0 = fully exempt |
+| HTTPBodyLimit | string | "100MB" | asset_httpBodyLimit | Max request body size (Echo BodyLimit, returns 413) |
+| TrustedProxyCIDRs | string | "" | asset_trustedProxyCIDRs | Pipe-separated CIDRs trusted for X-Forwarded-For extraction (fails Init if non-empty but unparseable) |
+| PeerAuthAllowlist | string | "" | asset_peerAuthAllowlist | Pipe-separated libp2p peer IDs eligible for tier elevation; empty = no peer is elevated |
+| PeerMinerReputationThreshold | float64 | 50.0 | asset_peerMinerReputationThreshold | Min reputation score for tierMiner classification |
+
+**Rate-limit tiers:**
+
+- **Unverified** (no signature or signature fails verification): bucketed by source IP, IPv6 normalised to `/64`. Held in a bounded LRU (50k entries) so an attacker rotating addresses cannot grow the map without limit.
+- **Peer** (valid signature + peer ID in allowlist + not classified as miner): bucketed by libp2p peer ID at `HTTPRateLimit × HTTPPeerRateMultiplier`.
+- **Miner** (valid signature + peer ID in allowlist + `BlocksReceived > 0` + `ReputationScore ≥ PeerMinerReputationThreshold`): fully exempt if `HTTPMinerRateLimit = 0`, otherwise bucketed by peer ID at `HTTPMinerRateLimit`.
+
+When `PeerAuthAllowlist` is empty (the default), signatures are still verified (replay cache + body digest + ±10s freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as unverified for rate-limit purposes. This is the safe opt-in default; operators must explicitly list trusted peers.
+
 ## Global Settings
 
 | Setting | Type | Default | Environment Variable | Usage |

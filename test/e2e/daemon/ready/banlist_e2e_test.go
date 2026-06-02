@@ -44,9 +44,6 @@ func TestBanListGRPCE2E(t *testing.T) {
 		})
 		defer daemonNode.Stop(t)
 
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
-
 		// Create client using the daemon's settings (which already has the correct ports and API key)
 		clientI, err := p2p.NewClient(context.Background(), ulogger.NewVerboseTestLogger(t), daemonNode.Settings)
 		require.NoError(t, err)
@@ -80,7 +77,6 @@ func TestBanListGRPCE2E(t *testing.T) {
 			},
 		})
 		defer daemonNode.Stop(t)
-		time.Sleep(5 * time.Second)
 
 		clientI, err = p2p.NewClient(context.Background(), ulogger.NewVerboseTestLogger(t), daemonNode.Settings)
 		require.NoError(t, err)
@@ -175,9 +171,6 @@ func TestPeerIDBanE2E(t *testing.T) {
 			},
 		})
 		defer daemonNode.Stop(t)
-
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
 
 		// Create client using the daemon's settings
 		clientI, err := p2p.NewClient(context.Background(), ulogger.NewVerboseTestLogger(t), daemonNode.Settings)
@@ -282,9 +275,6 @@ func TestPeerIDBanExpirationE2E(t *testing.T) {
 		})
 		defer daemonNode.Stop(t)
 
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
-
 		// Create client using the daemon's settings
 		clientI, err := p2p.NewClient(context.Background(), ulogger.NewVerboseTestLogger(t), daemonNode.Settings)
 		require.NoError(t, err)
@@ -317,7 +307,7 @@ func TestPeerIDBanExpirationE2E(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, isBanned, "Peer should be banned after reaching threshold")
 
-		// Wait for the ban to expire (ban duration + 1 second buffer)
+		// intentional: ban TTL must physically elapse (banDuration + 1s buffer); polling cannot shorten a real timeout
 		t.Logf("Waiting %v for ban to expire...", banDuration+time.Second)
 		time.Sleep(banDuration + time.Second)
 
@@ -352,9 +342,6 @@ func TestBanListRPCE2E(t *testing.T) {
 			},
 		})
 		defer daemonNode.Stop(t)
-
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
 
 		ctx := context.Background()
 		ip := "192.168.200.1"
@@ -449,9 +436,6 @@ func TestBanListRPCAbsoluteTimeE2E(t *testing.T) {
 		})
 		defer daemonNode.Stop(t)
 
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
-
 		ctx := context.Background()
 		ip := "192.168.201.1"
 
@@ -505,9 +489,6 @@ func TestBanListRPCIPv6Subnet(t *testing.T) {
 		})
 		defer daemonNode.Stop(t)
 
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
-
 		ctx := context.Background()
 		banTimeSeconds := int64(3600)
 
@@ -552,9 +533,6 @@ func TestIsBannedRPCWithPeerID(t *testing.T) {
 			},
 		})
 		defer daemonNode.Stop(t)
-
-		// Wait for node to be ready
-		time.Sleep(5 * time.Second)
 
 		// Create gRPC P2P client for AddBanScore
 		clientI, err := p2p.NewClient(context.Background(), ulogger.NewVerboseTestLogger(t), daemonNode.Settings)

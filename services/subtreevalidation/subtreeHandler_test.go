@@ -158,17 +158,12 @@ func TestSubtreesHandler(t *testing.T) {
 
 			server := &testServer{
 				Server: Server{
-					logger:           logger,
-					settings:         tSettings,
-					blockchainClient: blockchainClient,
-					subtreeStore:     subtreeStore,
-					utxoStore:        utxoStore,
-					validatorClient:  &validator.MockValidator{},
-					orphanage: func() *Orphanage {
-						o, err := NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
-						require.NoError(t, err)
-						return o
-					}(),
+					logger:              logger,
+					settings:            tSettings,
+					blockchainClient:    blockchainClient,
+					subtreeStore:        subtreeStore,
+					utxoStore:           utxoStore,
+					validatorClient:     &validator.MockValidator{},
 					currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
 					bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
 					bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
@@ -245,17 +240,12 @@ func TestSubtreeMessageHandler_BlocksOnly_SkipsProcessing(t *testing.T) {
 	blockIDsMap := make(map[uint32]bool)
 	server := &testServer{
 		Server: Server{
-			logger:           ulogger.TestLogger{},
-			settings:         tSettings,
-			blockchainClient: blockchainClient,
-			subtreeStore:     memory.New(),
-			utxoStore:        func() utxo.Store { s, _ := nullstore.NewNullStore(); return s }(),
-			validatorClient:  &validator.MockValidator{},
-			orphanage: func() *Orphanage {
-				o, err := NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, ulogger.TestLogger{})
-				require.NoError(t, err)
-				return o
-			}(),
+			logger:              ulogger.TestLogger{},
+			settings:            tSettings,
+			blockchainClient:    blockchainClient,
+			subtreeStore:        memory.New(),
+			utxoStore:           func() utxo.Store { s, _ := nullstore.NewNullStore(); return s }(),
+			validatorClient:     &validator.MockValidator{},
 			currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
 			bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
 			bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
@@ -311,17 +301,12 @@ func TestSubtreeMessageHandler_BlocksOnlyFalse_ProcessesMessage(t *testing.T) {
 	blockIDsMap := make(map[uint32]bool)
 	server := &testServer{
 		Server: Server{
-			logger:           ulogger.TestLogger{},
-			settings:         tSettings,
-			blockchainClient: blockchainClient,
-			subtreeStore:     memory.New(),
-			utxoStore:        func() utxo.Store { s, _ := nullstore.NewNullStore(); return s }(),
-			validatorClient:  &validator.MockValidator{},
-			orphanage: func() *Orphanage {
-				o, err := NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, ulogger.TestLogger{})
-				require.NoError(t, err)
-				return o
-			}(),
+			logger:              ulogger.TestLogger{},
+			settings:            tSettings,
+			blockchainClient:    blockchainClient,
+			subtreeStore:        memory.New(),
+			utxoStore:           func() utxo.Store { s, _ := nullstore.NewNullStore(); return s }(),
+			validatorClient:     &validator.MockValidator{},
 			currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
 			bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
 			bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
@@ -378,17 +363,12 @@ func TestSubtreesHandler_NilSubtree(t *testing.T) {
 	blockIDsMap := make(map[uint32]bool)
 
 	server := &Server{
-		logger:           logger,
-		settings:         tSettings,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		utxoStore:        utxoStore,
-		validatorClient:  &validator.MockValidator{},
-		orphanage: func() *Orphanage {
-			o, err := NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
-			require.NoError(t, err)
-			return o
-		}(),
+		logger:              logger,
+		settings:            tSettings,
+		blockchainClient:    blockchainClient,
+		subtreeStore:        subtreeStore,
+		utxoStore:           utxoStore,
+		validatorClient:     &validator.MockValidator{},
 		currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
 		bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
 		bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},

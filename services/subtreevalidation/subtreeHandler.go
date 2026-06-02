@@ -163,10 +163,5 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 		return nil
 	}
 
-	// if no error was thrown, remove all the transactions from this subtree from the orphanage
-	for _, node := range subtree.Nodes {
-		u.orphanage.Delete(node.Hash)
-	}
-
 	return nil
 }

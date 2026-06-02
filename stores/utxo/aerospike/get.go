@@ -62,7 +62,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -183,16 +183,38 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if value != nil {
 		utxos, ok := value.Bins[fields.Utxos.String()].([]interface{})
 		if ok {
-			b, ok := utxos[spend.Vout%uint32(s.utxoBatchSize)].([]byte)
+			// The Utxos bin holds only the actual outputs for this batch, not a
+			// fixed-size slot table padded to utxoBatchSize. A caller passing a
+			// vout greater than the tx's output count (possible via the HTTP
+			// /api/v1/utxo and /api/v1/utxos endpoints, which no longer
+			// pre-validate vout against the output count) would index past the
+			// slice and panic with index-out-of-range — crashing the asset
+			// process when the panic surfaces in an errgroup goroutine outside
+			// echo's recover middleware. Treat it as NOT_FOUND, mirroring
+			// ErrKeyNotFound above.
+			idx := spend.Vout % uint32(s.utxoBatchSize)
+			if int(idx) >= len(utxos) {
+				return &utxo.SpendResponse{
+					Status: int(utxo.Status_NOT_FOUND),
+				}, nil
+			}
+
+			b, ok := utxos[idx].([]byte)
 			if ok {
 				if len(b) < 32 {
 					return nil, errors.NewProcessingError("invalid utxo hash length", nil)
 				}
 
-				// check utxoHash is the same as the one we expect
-				utxoHash := chainhash.Hash(b[:32])
-				if !utxoHash.IsEqual(spend.UTXOHash) {
-					return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+				// Verify the caller-supplied hash matches the stored one. When the
+				// caller passes nil (e.g. the bulk /api/v1/utxos endpoint, which
+				// intentionally avoids fetching the full transaction to recompute
+				// it) we trust the stored hash — the record was located by primary
+				// key (txid, vout) and the stored hash is canonical.
+				if spend.UTXOHash != nil {
+					utxoHash := chainhash.Hash(b[:32])
+					if !utxoHash.IsEqual(spend.UTXOHash) {
+						return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+					}
 				}
 
 				if len(b) == 68 {

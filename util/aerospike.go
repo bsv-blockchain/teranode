@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -115,7 +115,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
 		}
 
-		logger.Infof("[Aerospike] readPolicy url %s", readPolicyURL)
+		logger.Infof("[Aerospike] readPolicy url %s", redactURL(readPolicyURL))
 
 		var err error
 
@@ -154,7 +154,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_writePolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] writePolicy url %s", writePolicyURL)
+		logger.Infof("[Aerospike] writePolicy url %s", redactURL(writePolicyURL))
 
 		writeMaxRetries, err = getQueryInt(writePolicyURL, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
 		if err != nil {
@@ -192,7 +192,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_batchPolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyURL)
+		logger.Infof("[Aerospike] batchPolicy url %s", redactURL(batchPolicyURL))
 
 		batchTotalTimeout, err = getQueryDuration(batchPolicyURL, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 		if err != nil {
@@ -239,7 +239,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			querySleepBetweenRetries = aerospike.NewQueryPolicy().SleepBetweenRetries
 			querySleepMultiplier = aerospike.NewQueryPolicy().SleepMultiplier
 		} else {
-			logger.Infof("[Aerospike] queryPolicy url %s", queryPolicyURL)
+			logger.Infof("[Aerospike] queryPolicy url %s", redactURL(queryPolicyURL))
 
 			queryMaxRetries, err = getQueryInt(queryPolicyURL, "MaxRetries", aerospike.NewQueryPolicy().MaxRetries, logger)
 			if err != nil {
@@ -270,7 +270,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 		// todo optimize read policies
 		// todo optimize write policies
-		logger.Infof("[Aerospike] base/connection policy url %s", url)
+		logger.Infof("[Aerospike] base/connection policy url %s", redactURL(url))
 
 		policy.LimitConnectionsToQueueSize, err = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 		if err != nil {
@@ -364,10 +364,19 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		}
 	}
 
-	logger.Debugf("url %s policy %#v\n", url, policy)
+	logger.Debugf("url %s policy %s\n", redactURL(url), aerospikePolicySummary(policy))
+
+	// Apply the aerospike_semaphore_multiplier setting to the in-process
+	// uaerospike connection-semaphore. 1.0 (default) preserves prior
+	// behavior; 0 disables the semaphore so concurrency is governed only by
+	// the underlying aerospike-client-go connection pool. See
+	// util/uaerospike.WithSemaphoreMultiplier for the precise contract.
+	clientOpts := []uaerospike.ClientOption{
+		uaerospike.WithSemaphoreMultiplier(tSettings.Aerospike.SemaphoreMultiplier),
+	}
 
 	// policy = aerospike.NewClientPolicy()
-	client, err := uaerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	client, err := uaerospike.NewClientWithPolicyAndHostOpts(policy, hosts, clientOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -391,12 +400,80 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	return client, nil
 }
 
+// redactURL returns the URL string with the userinfo password component
+// masked. It does not mutate the input. A nil input returns "<nil>".
+//
+// The placeholder "REDACTED" is intentionally URL-safe; "***" would be
+// percent-encoded as %2A%2A%2A by url.UserPassword because '*' is a
+// reserved character in the userinfo subcomponent (RFC 3986).
+func redactURL(u *url.URL) string {
+	if u == nil {
+		return "<nil>"
+	}
+
+	if u.User == nil {
+		return u.String()
+	}
+
+	if _, hasPwd := u.User.Password(); !hasPwd {
+		return u.String()
+	}
+
+	clone := *u
+	clone.User = url.UserPassword(u.User.Username(), "REDACTED")
+
+	return clone.String()
+}
+
+// aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.
+// The Password field is never printed. The selected fields are the ones useful
+// for diagnosing connection-pool and authentication configuration without
+// revealing secrets; the full ClientPolicy has many more fields not deemed
+// useful enough to log here. Add fields here if a debug session needs them.
+func aerospikePolicySummary(p *aerospike.ClientPolicy) string {
+	if p == nil {
+		return "<nil>"
+	}
+
+	tlsState := "no"
+	if p.TlsConfig != nil {
+		tlsState = "yes"
+	}
+
+	return fmt.Sprintf(
+		"ClientPolicy{User:%q, Password:***, AuthMode:%d, ClusterName:%q, "+
+			"Timeout:%s, IdleTimeout:%s, LoginTimeout:%s, "+
+			"ConnectionQueueSize:%d, MinConnectionsPerNode:%d, "+
+			"MaxErrorRate:%d, ErrorRateWindow:%d, "+
+			"LimitConnectionsToQueueSize:%t, FailIfNotConnected:%t, "+
+			"TendInterval:%s, UseServicesAlternate:%t, RackAware:%t, "+
+			"TLS:%s}",
+		p.User, p.AuthMode, p.ClusterName,
+		p.Timeout, p.IdleTimeout, p.LoginTimeout,
+		p.ConnectionQueueSize, p.MinConnectionsPerNode,
+		p.MaxErrorRate, p.ErrorRateWindow,
+		p.LimitConnectionsToQueueSize, p.FailIfNotConnected,
+		p.TendInterval, p.UseServicesAlternate, p.RackAware,
+		tlsState,
+	)
+}
+
 func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *settings.Settings) {
+	if client == nil {
+		return
+	}
+
 	var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 	aerospikeStatsRefreshInterval := tSettings.Aerospike.StatsRefreshDuration
 
-	client.EnableMetrics(nil)
+	// Aerospike client metrics are intentionally NOT enabled: the fork's
+	// per-record stats path (nodeStats.updateOrInsert) is quadratic per batch
+	// — every batch command pays ~N^2 counter increments. Worst observed during
+	// mainnet IBD (44-60% of legacy CPU) where batches are largest, but it is a
+	// general per-batch cost. Re-enable once the fork fix lands.
+	// See https://github.com/bsv-blockchain/teranode/issues/1001
+	// client.EnableMetrics(nil)
 
 	aerospikeLatencyBuckets := func() []float64 {
 		buckets := make([]float64, 24)

@@ -16,12 +16,15 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -48,9 +51,17 @@ func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 		t.Fatalf("kafkatest: free port: %v", err)
 	}
 
+	portStr := fmt.Sprintf("%d/tcp", port)
 	req := testcontainers.ContainerRequest{
 		Image:        fmt.Sprintf("%s:%s", redpandaImage, redpandaVersion),
-		ExposedPorts: []string{fmt.Sprintf("%d:%d/tcp", port, port)},
+		ExposedPorts: []string{portStr},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(portStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", port)},
+				},
+			}
+		},
 		Cmd: []string{
 			"redpanda", "start",
 			"--overprovisioned",

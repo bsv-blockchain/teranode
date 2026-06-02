@@ -252,9 +252,20 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 		// Write all transactions to both destinations
 		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, multiWriter, nil, subtreeHash)
 		if err != nil {
-			repo.logger.Warnf("[GetSubtreeDataReader] Error writing subtreeData for %s: %v", subtreeHash.String(), err)
 			storer.Abort(err)
 			_ = httpWriter.CloseWithError(err)
+			// "Client gone" — the HTTP client (or proxy) disconnected mid-stream, which
+			// surfaces as either io.ErrClosedPipe on the next pipe write or context
+			// cancellation observed by writeChunkToWriter. This is not a server fault
+			// and dominates under catchup load (one cancelled batch can cascade tens of
+			// in-flight streams). Log at debug and segregate the metric so the operational
+			// signal stays clean.
+			if errors.IsContextError(err) || errors.Is(err, io.ErrClosedPipe) {
+				repo.logger.Debugf("[GetSubtreeDataReader] Client gone while writing subtreeData for %s: %v", subtreeHash.String(), err)
+				prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone").Inc()
+				return err
+			}
+			repo.logger.Warnf("[GetSubtreeDataReader] Error writing subtreeData for %s: %v", subtreeHash.String(), err)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed").Inc()
 			return err
 		}

@@ -1,27 +1,31 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { Modal } from '$lib/components'
   import { blockAssemblyModalStore } from '../../stores/blockAssemblyModalStore'
   import { formatNum } from '$lib/utils/format'
   import { onMount, onDestroy } from 'svelte'
 
-  let isOpen = false
-  let nodeId = ''
-  let nodeUrl = ''
-  let blockAssembly: any = null
-  
+  let isOpen = $state(false)
+  let nodeId = $state('')
+  let nodeUrl = $state('')
+  let blockAssembly: any = $state(null)
+
   // Subtree pagination state
-  let subtreesExpanded = false
-  let subtreesPage = 1
-  let subtreesPerPage = 10
-  
-  $: totalSubtrees = blockAssembly?.subtrees?.length || 0
-  $: totalPages = Math.ceil(totalSubtrees / subtreesPerPage)
-  $: paginatedSubtrees = blockAssembly?.subtrees?.slice(
-    (subtreesPage - 1) * subtreesPerPage,
-    subtreesPage * subtreesPerPage
-  ) || []
-  $: startIndex = (subtreesPage - 1) * subtreesPerPage + 1
-  $: endIndex = Math.min(subtreesPage * subtreesPerPage, totalSubtrees)
+  let subtreesExpanded = $state(false)
+  let subtreesPage = $state(1)
+  let subtreesPerPage = $state(10)
+
+  const totalSubtrees = $derived(blockAssembly?.subtrees?.length || 0)
+  const totalPages = $derived(Math.ceil(totalSubtrees / subtreesPerPage))
+  const paginatedSubtrees = $derived(
+    blockAssembly?.subtrees?.slice(
+      (subtreesPage - 1) * subtreesPerPage,
+      subtreesPage * subtreesPerPage
+    ) || []
+  )
+  const startIndex = $derived((subtreesPage - 1) * subtreesPerPage + 1)
+  const endIndex = $derived(Math.min(subtreesPage * subtreesPerPage, totalSubtrees))
 
   const unsubscribe = blockAssemblyModalStore.subscribe((state) => {
     isOpen = state.isOpen
@@ -78,7 +82,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h2>Block Assembly Details</h2>
-        <button class="close-btn" on:click={handleClose}>×</button>
+        <button class="close-btn" onclick={handleClose}>×</button>
       </div>
       
       <div class="node-info">
@@ -126,7 +130,7 @@
         {#if blockAssembly.subtrees && blockAssembly.subtrees.length > 0}
           <div class="detail-item full-width">
             <div class="subtrees-header">
-              <button class="expand-btn" on:click={toggleSubtrees}>
+              <button class="expand-btn" onclick={toggleSubtrees}>
                 <span class="expand-icon">{subtreesExpanded ? '▼' : '▶'}</span>
                 <span class="label">Subtrees ({formatNum(blockAssembly.subtrees.length)})</span>
               </button>
@@ -153,8 +157,8 @@
                 {#if totalPages > 1}
                   <div class="pagination">
                     <button 
-                      class="page-btn" 
-                      on:click={() => goToPage(subtreesPage - 1)}
+                      class="page-btn"
+                      onclick={() => goToPage(subtreesPage - 1)}
                       disabled={subtreesPage === 1}
                     >
                       ←
@@ -166,8 +170,8 @@
                     </span>
                     
                     <button 
-                      class="page-btn" 
-                      on:click={() => goToPage(subtreesPage + 1)}
+                      class="page-btn"
+                      onclick={() => goToPage(subtreesPage + 1)}
                       disabled={subtreesPage === totalPages}
                     >
                       →

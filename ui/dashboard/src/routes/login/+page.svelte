@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
@@ -9,18 +11,19 @@
   import i18n from '$internal/i18n'
 
   // Form fields
-  let username = ''
-  let password = ''
-  let showPassword = false
-  let loading = false
-  let errorMessage = ''
-  let csrfToken = ''
+  let username = $state('')
+  let password = $state('')
+  let showPassword = $state(false)
+  let loading = $state(false)
+  let errorMessage = $state('')
+  let csrfToken = $state('')
   let passwordTimeout: ReturnType<typeof setTimeout>
-  let passwordStrength = 0
 
   // Subscribe to the auth error store
-  $: errorMessage = $authError
-  $: t = $i18n.t
+  $effect(() => {
+    errorMessage = $authError
+  })
+  const t = $derived($i18n.t)
 
   // Get the redirect URL from the query parameter
   let redirectUrl = '/admin'
@@ -71,15 +74,16 @@
   }
 
   // Update password strength when password changes
-  $: passwordStrength = checkPasswordStrength(password)
+  const passwordStrength = $derived(checkPasswordStrength(password))
 
   // Get strength color based on score
-  $: strengthColor =
+  const strengthColor = $derived(
     passwordStrength < 30
       ? 'var(--color-error)'
       : passwordStrength < 60
         ? 'var(--color-warning)'
-        : 'var(--color-success)'
+        : 'var(--color-success)',
+  )
 
   // Handle form submission
   async function handleSubmit() {
@@ -145,7 +149,7 @@
   <title>{t('login.title', 'Login - Teranode Admin')}</title>
 </svelte:head>
 
-<div class="login-page">
+<div class="login-page" data-test-id="page-root">
   <div class="login-container">
     <div class="login-card" in:fade={{ duration: 300, delay: 150 }}>
       <div class="login-header">
@@ -160,7 +164,10 @@
       {/if}
 
       <form
-        on:submit|preventDefault={handleSubmit}
+        onsubmit={(e) => {
+          e.preventDefault()
+          handleSubmit()
+        }}
         id="login-form"
         name="login-form"
         autocomplete="on"
@@ -192,7 +199,7 @@
             <button
               type="button"
               class="password-toggle password-toggle-left"
-              on:click={togglePasswordVisibility}
+              onclick={togglePasswordVisibility}
               disabled={loading}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
               tabindex="-1"
@@ -292,7 +299,14 @@
       </form>
 
       <div class="back-link-container">
-        <a href="/" class="back-link" on:click|preventDefault={goToDashboard}>
+        <a
+          href="/"
+          class="back-link"
+          onclick={(e) => {
+            e.preventDefault()
+            goToDashboard()
+          }}
+        >
           {t('login.back_to_dashboard', 'Back to Dashboard')}
         </a>
       </div>

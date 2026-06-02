@@ -119,7 +119,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		e := echo.New()
 
 		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false"
+		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
 		req := httptest.NewRequest(http.MethodPost, "/tx?"+queryParams, bytes.NewReader(txBytes))
 		rec := httptest.NewRecorder()
 
@@ -175,7 +175,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		buf.Write(txBytes)
 
 		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false"
+		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
 		req := httptest.NewRequest(http.MethodPost, "/txs?"+queryParams, &buf)
 		rec := httptest.NewRecorder()
 

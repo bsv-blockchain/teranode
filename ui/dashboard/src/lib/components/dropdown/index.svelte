@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { fade, slide } from 'svelte/transition'
   import { clickOutside } from '../../actions'
   import { FootnoteContainer, Icon, LabelContainer, FocusRect } from '$lib/components'
@@ -12,46 +13,66 @@
   import type { LabelAlignmentType, LabelPlacementType } from '$lib/styles/types'
   import type { InputSizeType } from '$lib/styles/types/input'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    label = '',
+    footnote = '',
+    required = false,
+    name = '',
+    value = $bindable(undefined),
+    multiple = false,
+    items = [],
+    disabled = false,
+    valid = true,
+    error = '',
+    maxVisibleListItems = -1,
+    expandUp = false,
+    stretch = false,
+    labelPlacement = LabelPlacement.top,
+    labelAlignment = LabelAlignment.start,
+    size = ComponentSize.medium,
+    onchange,
+    onfocus,
+    onblur,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    label?: any
+    footnote?: any
+    required?: boolean
+    name?: string
+    value?: any
+    multiple?: boolean
+    items?: { value: any; label: string }[]
+    disabled?: boolean
+    valid?: boolean
+    error?: string
+    maxVisibleListItems?: number
+    expandUp?: boolean
+    stretch?: boolean
+    labelPlacement?: LabelPlacementType
+    labelAlignment?: LabelAlignmentType
+    size?: InputSizeType
+    onchange?: (e: { name: string; type: string; value: any }) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const type = 'select'
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  let open = $state(false)
 
-  export let style = ''
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let label: any = ''
-  export let footnote: any = ''
-  export let required = false
-  export let name = ''
-  export let value: any = undefined
-  export let multiple = false
-  export let items: { value: any; label: string }[] = []
-  export let disabled = false
-  export let valid = true
-  export let error = ''
-  export let maxVisibleListItems = -1
-  export let expandUp = false
-  export let stretch = false
+  const inputVarStr = `--input-default`
+  const inputSizeStr = $derived(`--input-size-${styleSize}`)
 
-  let type = 'select'
-
-  let open = false
-
-  export let labelPlacement: LabelPlacementType = LabelPlacement.top
-  export let labelAlignment: LabelAlignmentType = LabelAlignment.start
-
-  export let size: InputSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: inputVarStr = `--input-default`
-  $: inputSizeStr = `--input-size-${styleSize}`
-
-  let cssVars: string[] = []
-  $: {
-    let states = ['enabled', 'hover', 'active', 'focus', 'disabled']
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    const states = ['enabled', 'hover', 'active', 'focus', 'disabled']
+    const vars = [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -85,20 +106,21 @@
       `--list-top:${expandUp ? `auto` : '0'}`,
     ]
     if (maxVisibleListItems === -1) {
-      cssVars.push(`--list-height:calc(${items.length} * var(${inputSizeStr}-height))`)
+      vars.push(`--list-height:calc(${items.length} * var(${inputSizeStr}-height))`)
     } else {
-      cssVars.push(
+      vars.push(
         `--list-height:calc(min(calc(${items.length} * var(${inputSizeStr}-height)), calc(${maxVisibleListItems} * var(${inputSizeStr}-height))))`,
       )
     }
-  }
+    return vars
+  })
 
-  let focused = false
+  let focused = $state(false)
 
-  let selectRef
+  let selectRef = $state<HTMLSelectElement>()
 
   function onSelectParentClick() {
-    selectRef.focus()
+    selectRef?.focus()
     open = !open
     if (open) {
       const result = items.filter((item) => item.value === value)
@@ -110,29 +132,30 @@
     }
   }
 
-  function onSelectChange(e) {
+  function onSelectChange(e: Event) {
     arrowFocusIndex = -1
-    value = items[e.srcElement.selectedIndex].value
-    dispatch('change', { name, type, value })
-    selectRef.focus()
+    const target = e.target as HTMLSelectElement
+    value = items[target.selectedIndex].value
+    onchange?.({ name, type, value })
+    selectRef?.focus()
   }
 
   function onClose() {
     open = false
   }
 
-  function onItemSelect(val) {
+  function onItemSelect(val: any) {
     value = val
     open = false
     arrowFocusIndex = -1
-    dispatch('change', { name, type, value })
-    selectRef.focus()
+    onchange?.({ name, type, value })
+    selectRef?.focus()
   }
 
-  let arrowFocusIndex = -1
+  let arrowFocusIndex = $state(-1)
 
-  function onKeyDown(e) {
-    if (!e) e = window.event
+  function onKeyDown(e: KeyboardEvent) {
+    if (!e) e = window.event as KeyboardEvent
     const keyCode = e.code || e.key
     switch (keyCode) {
       case 'Space':
@@ -160,7 +183,7 @@
     }
   }
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -169,7 +192,8 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 </script>
 
@@ -192,11 +216,11 @@
       class:expandUp
       class:stretch
       use:clickOutside
-      on:outclick={onClose}
-      on:focus={(e) => (focused = true)}
+      {...{ onoutclick: onClose }}
+      onfocus={() => (focused = true)}
     >
       <FocusRect {disabled} style={`--comp-focus-rect-border-radius:var(--border-radius)`}>
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           role="button"
           tabindex="-1"
@@ -204,8 +228,8 @@
           class:disabled
           class:error={!valid || error !== ''}
           class:focused
-          on:click={disabled ? null : onSelectParentClick}
-          on:keydown={(e) => {
+          onclick={disabled ? null : onSelectParentClick}
+          onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
               !disabled && onSelectParentClick()
@@ -218,10 +242,10 @@
             {disabled}
             {name}
             {value}
-            on:change={onSelectChange}
-            on:focus={() => onFocusAction('focus')}
-            on:blur={() => onFocusAction('blur')}
-            on:keydown={onKeyDown}
+            onchange={onSelectChange}
+            onfocus={() => onFocusAction('focus')}
+            onblur={() => onFocusAction('blur')}
+            onkeydown={onKeyDown}
             aria-labelledby={`${name}_label`}
           >
             {#each items as item (item.value)}
@@ -248,7 +272,7 @@
             >
               <div class="options-container">
                 {#each items as item, i (item.value)}
-                  <!-- svelte-ignore a11y-click-events-have-key-events -->
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <div
                     role="option"
                     tabindex="-1"
@@ -256,8 +280,8 @@
                     class="list-item"
                     class:selected={item.value === value}
                     class:arrowFocused={arrowFocusIndex === i}
-                    on:click={() => onItemSelect(item.value)}
-                    on:keydown={(e) => {
+                    onclick={() => onItemSelect(item.value)}
+                    onkeydown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         onItemSelect(item.value)

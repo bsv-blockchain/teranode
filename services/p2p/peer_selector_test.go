@@ -1,506 +1,173 @@
 package p2p
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	testPeer1 = "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
-	testPeer2 = "12D3KooWEyX7hgdXy8zUjCs9CqvMGpB5dKVFj9MX2nUBLwajdSZH"
-	testPeer3 = "12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA"
-	testPeer4 = "12D3KooWB9kmtfHg5Ct1Sj5DX6fmqRnatrXnE5zMRg25d6rbwLzp"
-)
-
-func TestPeerSelector_SelectSyncPeer_NoPeers(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Empty peer list
-	selected := ps.SelectSyncPeer([]*PeerInfo{}, SelectionCriteria{
-		LocalHeight: 100,
+func newSelectorForTest() *PeerSelector {
+	return NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback: true,
+		},
 	})
-
-	assert.Equal(t, peer.ID(""), selected, "Should return empty peer ID when no peers")
 }
 
-func TestSelector_SkipsPeerMarkedUnhealthyByHealthChecker(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Health check servers: one OK, one 500
-	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer okSrv.Close()
-
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer failSrv.Close()
-
-	// Registry
-	registry := NewPeerRegistry()
-
-	// Add two peers
-	healthyID := peer.ID("H")
-	unhealthyID := peer.ID("U")
-
-	// Set heights so both are ahead
-	registry.Put(healthyID, "", 120, nil, okSrv.URL)
-	registry.UpdateStorage(healthyID, "full")
-
-	registry.Put(unhealthyID, "", 125, nil, failSrv.URL)
-
-	// Fetch peers and select
-	peers := registry.GetAll()
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 100})
-
-	assert.Equal(t, healthyID, selected, "selector should skip peer marked unhealthy by health checker")
-}
-
-func TestPeerSelector_SelectSyncPeer_NoEligiblePeers(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Create peers that are all banned
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 110, true, true, ""), // banned
-		CreateTestPeerInfo(peer.ID("B"), 120, true, true, ""), // banned
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID(""), selected, "Should return empty when all peers are banned")
-}
-
-func TestPeerSelector_SelectSyncPeer_NoPeersAhead(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Create peers that are all behind or at same height
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 90, true, false, "http://test.com"),  // behind
-		CreateTestPeerInfo(peer.ID("B"), 100, true, false, "http://test.com"), // same height
-		CreateTestPeerInfo(peer.ID("C"), 95, true, false, "http://test.com"),  // behind
-	}
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID(""), selected, "Should return empty when no peers are ahead")
-}
-
-func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peer1, _ := peer.Decode(testPeer1)
-	peer2, _ := peer.Decode(testPeer2)
-	peer3, _ := peer.Decode(testPeer3)
-	peer4, _ := peer.Decode(testPeer4)
-
-	// Create peers with different heights
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer1, 90, true, false, "http://test.com"),  // behind
-		CreateTestPeerInfo(peer2, 110, true, false, "http://test.com"), // ahead
-		CreateTestPeerInfo(peer3, 120, true, false, "http://test.com"), // ahead more
-		CreateTestPeerInfo(peer4, 100, true, false, "http://test.com"), // same height
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Contains(t, []peer.ID{peer2, peer3}, selected, "Should select a peer that is ahead")
-}
-
-func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Create peers with different ban scores
-	peers := []*PeerInfo{
-		{
-			ID:              peer.ID("A"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        50,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("B"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        10, // Lower ban score, should be preferred
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        30,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-	}
-
-	// Run multiple times to account for randomization
-	selections := make(map[peer.ID]int)
-	for i := 0; i < 100; i++ {
-		selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-			LocalHeight: 100,
-		})
-		selections[selected]++
-	}
-
-	// Peer B with lowest ban score should be selected most often
-	assert.Greater(t, selections[peer.ID("B")], 50, "Peer with lowest ban score should be selected most")
-}
-
-func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Create peers with same ban score but different heights
-	peers := []*PeerInfo{
-		{
-			ID:              peer.ID("A"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("B"),
-			Height:          120,  // Higher, should be preferred
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          115,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-	}
-
-	// Since all have same ban score, should select the one with highest height (B)
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should select peer with highest height when ban scores are equal")
-}
-
-func TestPeerSelector_SelectSyncPeer_RequireHealthy(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 110, false, false, "http://test.com"), // unhealthy
-		CreateTestPeerInfo(peer.ID("B"), 120, true, false, "http://test.com"),  // healthy
-		CreateTestPeerInfo(peer.ID("C"), 115, false, false, "http://test.com"), // unhealthy
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should only select healthy peer")
-}
-
-func TestPeerSelector_SelectSyncPeer_RequireDataHub(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 110, true, false, ""),               // no DataHub
-		CreateTestPeerInfo(peer.ID("B"), 120, true, false, "http://hub.com"), // has DataHub
-		CreateTestPeerInfo(peer.ID("C"), 115, true, false, ""),               // no DataHub
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should only select peer with DataHub")
-}
-
-func TestPeerSelector_SelectSyncPeer_ForcedPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	// Create multiple eligible peers
-	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 110, true, false, "http://test.com"),
-		CreateTestPeerInfo(peer.ID("B"), 120, true, false, "http://test.com"),
-		CreateTestPeerInfo(peer.ID("C"), 115, true, false, "http://test.com"),
-	}
-
-	// Force selection of peer B
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight:  100,
-		ForcedPeerID: peer.ID("B"),
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should select forced peer")
-
-	// Force selection of non-existent peer
-	selected = ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight:  100,
-		ForcedPeerID: peer.ID("Z"),
-	})
-
-	assert.Equal(t, peer.ID(""), selected, "Should return empty for non-existent forced peer")
-
-	// Force selection of ineligible peer (banned) - should still select it
-	peers[1].IsBanned = true
-	selected = ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight:  100,
-		ForcedPeerID: peer.ID("B"),
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should still select forced peer even if ineligible")
-}
-
-func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peers := []*PeerInfo{
-		{
-			ID:              peer.ID("A"),
-			Height:          0,    // Invalid height
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("B"),
-			Height:          0,    // Invalid/unset height
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          110,  // Valid height
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("C"), selected, "Should skip peers with invalid heights")
-}
-
-func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peers := []*PeerInfo{
-		{
-			ID:              peer.ID("A"),
-			Height:          110,
-			ReputationScore: 15.0, // Low reputation // fails health check
-			IsBanned:        false,
-			DataHubURL:      "http://hub.com",
-			BanScore:        0,
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("B"),
-			Height:          120,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        true, // fails ban check
-			DataHubURL:      "http://hub.com",
-			BanScore:        100,
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          115,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			DataHubURL:      "", // fails DataHub requirement
-			BanScore:        10,
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("D"),
-			Height:          125,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			DataHubURL:      "http://hub.com",
-			BanScore:        20,
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("E"),
-			Height:          130,
-			ReputationScore: 80.0, // Good reputation
-			IsBanned:        false,
-			DataHubURL:      "http://hub.com",
-			BanScore:        5,
-			Storage:         "full",
-		},
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("E"), selected, "Should select only peer meeting all criteria")
-}
-
-func TestPeerSelector_isEligible(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	tests := []struct {
-		name     string
-		peer     *PeerInfo
-		criteria SelectionCriteria
-		expected bool
-	}{
-		{
-			name: "healthy peer passes basic criteria",
-			peer: &PeerInfo{
-				ID:              peer.ID("A"),
-				Height:          100,
-				ReputationScore: 80.0, // Good reputation
-				IsBanned:        false,
-				DataHubURL:      "http://test.com",
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: true,
-		},
-		{
-			name: "banned peer is always excluded",
-			peer: &PeerInfo{
-				ID:              peer.ID("B"),
-				Height:          100,
-				ReputationScore: 80.0, // Good reputation
-				IsBanned:        true,
-				DataHubURL:      "http://test.com",
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: false,
-		},
-		{
-			name: "unhealthy peer fails health requirement",
-			peer: &PeerInfo{
-				ID:              peer.ID("C"),
-				Height:          100,
-				ReputationScore: 15.0, // Low reputation
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: false,
-		},
-		{
-			name: "peer without DataHub fails DataHub requirement",
-			peer: &PeerInfo{
-				ID:              peer.ID("D"),
-				Height:          100,
-				ReputationScore: 80.0, // Good reputation
-				DataHubURL:      "",
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: false,
-		},
-		{
-			name: "peer with invalid height fails",
-			peer: &PeerInfo{
-				ID:              peer.ID("F"),
-				Height:          0,
-				ReputationScore: 80.0, // Good reputation
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ps.isEligible(tt.peer, tt.criteria)
-			assert.Equal(t, tt.expected, result)
-		})
+func newPeer(id string, height uint32, storage string, rep float64, ban int32) *blockchain.PeerInfo {
+	return &blockchain.PeerInfo{
+		ID:              id,
+		Height:          height,
+		Storage:         storage,
+		ReputationScore: rep,
+		BanScore:        ban,
+		DataHubURL:      "http://" + id + ".example",
 	}
 }
 
-func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
+func TestPeerSelector_SelectSyncPeer_PrefersFullNode(t *testing.T) {
+	ps := newSelectorForTest()
 
-	// Create multiple peers with same ban score and height
-	peers := []*PeerInfo{
+	peers := []*blockchain.PeerInfo{
+		newPeer("a", 100, "pruned", 90, 0),
+		newPeer("b", 100, "full", 60, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50})
+	require.Equal(t, "b", got, "full storage must beat pruned regardless of reputation")
+}
+
+func TestPeerSelector_SelectSyncPeer_FallbackToPrunedPrefersLowerHeight(t *testing.T) {
+	ps := newSelectorForTest()
+
+	// Same reputation so the height tiebreaker decides. Pruned-mode prefers
+	// LOWER height (younger pruning window) per existing logic.
+	peers := []*blockchain.PeerInfo{
+		newPeer("high", 200, "pruned", 80, 0),
+		newPeer("low", 100, "pruned", 80, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50})
+	require.Equal(t, "low", got)
+}
+
+func TestPeerSelector_SelectSyncPeer_ForcedPeerSticky(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("forced-id", 1, "pruned", 0, 999),
+		newPeer("better-id", 100, "full", 99, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+		LocalHeight:  0,
+		ForcedPeerID: "forced-id",
+	})
+	require.Equal(t, "forced-id", got, "forced peer overrides eligibility filters")
+}
+
+func TestPeerSelector_SelectSyncPeer_ForcedPeerNotConnected(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("a", 100, "full", 90, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+		LocalHeight:  0,
+		ForcedPeerID: "missing",
+	})
+	require.Empty(t, got, "missing forced peer means no selection, not fallback")
+}
+
+func TestPeerSelector_SelectSyncPeer_PreviousPeerSecondChoiceWhenTopMatches(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("a", 100, "full", 90, 0),
+		newPeer("b", 100, "full", 80, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50, PreviousPeer: "a"})
+	require.Equal(t, "b", got, "rotate off the previous peer if it would be top again")
+}
+
+func TestPeerSelector_SelectSyncPeer_SkipsLowReputation(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("low-rep", 100, "full", 10, 0),
+		newPeer("ok", 100, "full", 50, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50})
+	require.Equal(t, "ok", got)
+}
+
+func TestPeerSelector_SelectSyncPeer_RejectsZeroHeight(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		newPeer("zero", 0, "full", 90, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 0})
+	require.Empty(t, got, "peer with zero height is never eligible")
+}
+
+func TestPeerSelector_SelectSyncPeer_SyncCooldownExcludesRecentlyAttempted(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
 		{
-			ID:              peer.ID("A"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
+			ID:              "recent",
+			Height:          100,
 			Storage:         "full",
+			ReputationScore: 80,
+			DataHubURL:      "http://recent.example",
+			LastSyncAttempt: time.Now().Add(-30 * time.Second),
+		},
+		newPeer("fresh", 100, "full", 70, 0),
+	}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{
+		LocalHeight:         50,
+		SyncAttemptCooldown: time.Minute,
+	})
+	require.Equal(t, "fresh", got, "peer within cooldown must be skipped")
+}
+
+func TestPeerSelector_SelectSyncPeer_PrunedFallbackDisabled(t *testing.T) {
+	ps := NewPeerSelector(ulogger.TestLogger{}, &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback: false,
+		},
+	})
+
+	peers := []*blockchain.PeerInfo{newPeer("p", 100, "pruned", 80, 0)}
+
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50})
+	require.Empty(t, got, "no fallback, no full node, no peer")
+}
+
+func TestPeerSelector_SelectSyncPeer_TieBreakOnAvgResponseTime(t *testing.T) {
+	ps := newSelectorForTest()
+
+	peers := []*blockchain.PeerInfo{
+		{
+			ID: "fast", Height: 100, Storage: "full", ReputationScore: 80,
+			DataHubURL: "http://fast.example", AvgResponseTimeMs: 50,
 		},
 		{
-			ID:              peer.ID("B"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			BanScore:        10,
-			DataHubURL:      "http://test.com",
-			Storage:         "full",
+			ID: "slow", Height: 100, Storage: "full", ReputationScore: 80,
+			DataHubURL: "http://slow.example", AvgResponseTimeMs: 500,
 		},
 	}
 
-	// Selection should be deterministic - always select the first peer (sorted by ID)
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-	assert.Equal(t, peer.ID("A"), selected, "Should select first peer alphabetically when all else is equal")
-
-	// If previous peer was A, should select B
-	selected = ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight:  100,
-		PreviousPeer: peer.ID("A"),
-	})
-	assert.Equal(t, peer.ID("B"), selected, "Should select next peer when previous was the first")
+	got := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 50})
+	require.Equal(t, "fast", got)
 }

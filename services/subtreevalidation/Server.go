@@ -32,7 +32,6 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -116,9 +115,6 @@ type Server struct {
 	// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
 	invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-	// orphanage manages orphaned transactions that are missing their parent transactions
-	orphanage *Orphanage
-
 	// bestBlockHeader is used to store the current best block header
 	bestBlockHeader atomic.Pointer[model.BlockHeader]
 
@@ -193,12 +189,6 @@ func New(
 	}
 
 	var err error
-
-	// Initialize orphanage
-	u.orphanage, err = NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
-	if err != nil {
-		return nil, errors.NewConfigurationError("Failed to create orphanage: %v", err)
-	}
 
 	quorumPath := tSettings.SubtreeValidation.QuorumPath
 	if quorumPath == "" {
@@ -565,9 +555,6 @@ func (u *Server) Stop(_ context.Context) error {
 	if u.invalidSubtreeDeDuplicateMap != nil {
 		u.invalidSubtreeDeDuplicateMap.Stop()
 	}
-	if u.orphanage != nil {
-		u.orphanage.Stop()
-	}
 
 	return nil
 }
@@ -723,7 +710,23 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 	u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
-	var subtree *subtreepkg.Subtree
+	// Post-CSV candidate-parent MTP for the validator's consensus-path finality
+	// check (Options.CandidateParentMedianTime). Without this, two peer-priority
+	// handlers processing the same subtree under different tip-MTP snapshots
+	// could diverge on the finality decision. The request carries the previous
+	// block hash, so the candidate-parent MTP is locally derivable here — see
+	// fetchCandidateParentMedianTime for the parent-chain-walk sourcing rule
+	// and the chain re-anchor + walkParentChain fallback that closes the
+	// reorg-race window. Pre-CSV (CandidateBlockTime) still cannot be
+	// populated on this path because the request does not carry the candidate
+	// block's own header timestamp.
+	var candidateParentMedianTime uint32
+	if request.BlockHeight >= uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateParentMedianTime, err = u.fetchCandidateParentMedianTime(ctx, previousBlockHash)
+		if err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] candidate-parent MTP", err)
+		}
+	}
 
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
@@ -737,7 +740,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
 		}
 
-		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
+		subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
 		_ = subtreeReader.Close() // close the reader after use
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
@@ -756,10 +759,19 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			AllowFailFast: false,
 		}
 
+		// CheckSubtree responds to peer subtree-validation requests. The request
+		// does not carry the candidate block's own header timestamp, so
+		// Options.CandidateBlockTime (pre-CSV finality source) stays zero —
+		// the validator skips pre-CSV consensus finality in that case, matching
+		// the prior behaviour. Options.CandidateParentMedianTime (post-CSV) is
+		// populated above from the request's PreviousBlockHash so two
+		// peer-priority handlers processing the same subtree cannot diverge
+		// on tip-MTP snapshots.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
+			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		}
 
 		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
@@ -797,7 +809,11 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// Call the ValidateSubtreeInternal method
-	if subtree, err = u.ValidateSubtreeInternal(
+	// Options.CandidateBlockTime intentionally not populated (no candidate
+	// block header in the peer-facing request); Options.CandidateParentMedianTime
+	// IS populated from the request's PreviousBlockHash — see the legacy
+	// branch above for the rationale.
+	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,
 		request.BlockHeight,
@@ -805,89 +821,14 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 	); err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}
 
-	if subtree != nil {
-		// remove all transactions that are part of the subtree from the orphanage
-		for _, node := range subtree.Nodes {
-			u.orphanage.Delete(node.Hash)
-		}
-	}
-
-	u.processOrphans(ctx, *blockHash, request.BlockHeight, blockIds)
-
 	u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 	return true, nil
-}
-
-func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) {
-	initialLength := u.orphanage.Len()
-
-	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processOrphans",
-		tracing.WithParentStat(u.stats),
-		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[processOrphans] Processing orphans for block %s at block height %d", blockHash.String(), blockHeight),
-	)
-	defer func() {
-		u.logger.Infof("[processOrphans] Finished processing orphans for block %s at block height %d, initial orphanage length: %d, final orphanage length: %d", blockHash.String(), blockHeight, initialLength, u.orphanage.Len())
-		deferFn()
-	}()
-
-	// process remaining orphaned transactions if any
-	if u.orphanage.Len() > 0 {
-		u.logger.Infof("[CheckSubtreeFromBlock] Processing orphaned transactions after subtree validation, count: %d", u.orphanage.Len())
-
-		processedOrphans := atomic.Uint32{}
-		processedValidatorOptions := validator.ProcessOptions()
-		orphanTxs := u.orphanage.Items()
-
-		// first we need to process all the orphans into levels, making sure we process them
-		// in the correct order, so we can bless them correctly
-		orphanMissingTxs := make([]missingTx, 0, len(orphanTxs))
-		for _, item := range orphanTxs {
-			orphanMissingTxs = append(orphanMissingTxs, missingTx{
-				tx: item,
-			})
-		}
-
-		maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, orphanMissingTxs)
-		if err != nil {
-			u.logger.Errorf("[CheckSubtreeFromBlock] Failed to prepare transactions per level: %v", err)
-			return
-		}
-
-		for level := uint32(0); level <= maxLevel; level++ {
-			// we process each level of transactions in parallel
-			g, gCtx := errgroup.WithContext(ctx)
-			util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
-
-			for _, mTx := range txsPerLevel[level] {
-				tx := mTx.tx
-
-				g.Go(func() error {
-					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, chainhash.Hash{}, tx, blockHeight+1, blockIds, processedValidatorOptions)
-					if txErr == nil && txMeta != nil {
-						// transaction was successfully blessed, now remove it from the orphanage
-						u.orphanage.Delete(*tx.TxIDChainHash())
-						processedOrphans.Add(1)
-					} else {
-						u.logger.Debugf("[CheckSubtreeFromBlock] Failed to bless orphaned transaction %s: %v", tx.TxIDChainHash().String(), txErr)
-					}
-
-					return nil
-				})
-			}
-
-			if err := g.Wait(); err != nil {
-				u.logger.Errorf("[CheckSubtreeFromBlock] Failed to process orphaned transactions: %v", err)
-			}
-		}
-
-		u.logger.Infof("[CheckSubtreeFromBlock] Processed %d orphaned transactions after subtree validation", processedOrphans.Load())
-	}
 }
 
 // resolveTxMetaCacheBucketType maps the subtreevalidation_txMetaCacheBucketType
