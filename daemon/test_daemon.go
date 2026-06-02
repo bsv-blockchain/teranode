@@ -355,6 +355,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	chainParams.CoinbaseMaturity = 1
 	appSettings.ChainCfgParams = &chainParams
 
+	// Disable the RPC absurd-fee user-protection ceiling for e2e tests. Test
+	// transactions typically spend full-coinbase value (~5 BSV) with tiny
+	// outputs, producing fees far above the production default
+	// (0.1 BSV / 10M sats) that this guard enforces. Tests don't model
+	// realistic fee economics, so the ceiling would otherwise reject every
+	// sendrawtransaction call with `absurdly-high-fee`. Same pattern as
+	// MinMiningTxFee = 0 in the validator-package unit tests.
+	appSettings.Policy.MaxRawTxFee = 0
+
 	// Override DataFolder BEFORE creating any directories
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
 	// Always set DataFolder and QuorumPath to test-specific directory
