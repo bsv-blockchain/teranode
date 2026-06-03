@@ -115,6 +115,12 @@ type KafkaAsyncProducer struct {
 	// For in-memory support
 	inMemoryProducer *inmemorykafka.InMemoryAsyncProducer
 	isInMemory       bool
+
+	// produceHook, when non-nil, replaces the real client.Produce call in the
+	// flush path. Test-only seam: lets a test capture what the batching loop
+	// emits — including the final drain on Stop — without a live broker. It is
+	// nil in production.
+	produceHook func(*Message)
 }
 
 // ProducerOption mutates the KafkaProducerConfig built from a URL before the
@@ -348,11 +354,26 @@ func (c *KafkaAsyncProducer) currentBackpressureThreshold() int {
 	return threshold
 }
 
+// flushBuffered produces the buffered messages. It gates only on `closed` (the
+// client is gone), deliberately NOT on `shuttingDown`: Stop sets shuttingDown
+// before closing the publish channel but closes the client only after the
+// worker goroutine has returned (publishWg.Wait precedes client.Close), so
+// producing while shutting-down is always safe — and is exactly what the final
+// drain on Stop relies on to avoid silently dropping the last buffered batch.
+// An earlier shuttingDown gate here defeated that drain and also lost any batch
+// cleared after a size/linger flush during shutdown.
 func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered []*Message) {
 	for _, msgBytes := range buffered {
-		if c.closed.Load() || c.shuttingDown.Load() {
+		if c.closed.Load() {
 			return
 		}
+
+		// Test seam: capture instead of producing to a real broker.
+		if c.produceHook != nil {
+			c.produceHook(msgBytes)
+			continue
+		}
+
 		record := &kgo.Record{
 			Topic: c.Config.Topic,
 			Key:   msgBytes.Key,
@@ -368,6 +389,144 @@ func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered
 				c.Config.Logger.Debugf("Successfully sent message to topic %s, partition: %d, offset: %d", r.Topic, r.Partition, r.Offset)
 			}
 		})
+	}
+}
+
+// runProducerWorker is the async producer's batching loop: it accumulates
+// messages from ch into a local buffer and flushes them on batch-size or linger
+// timeout. On shutdown it relies on Stop closing ch: the close drains any
+// channel-resident messages into the buffer and the final drain produces them,
+// so a graceful Stop does not silently drop buffered messages. (It deliberately
+// does NOT break out of the loop merely because shuttingDown is set, which would
+// strand messages still queued in ch.)
+func (c *KafkaAsyncProducer) runProducerWorker(internalCtx context.Context, ch chan *Message) {
+	buffered := make([]*Message, 0, 256)
+	backpressureLogged := false
+	bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
+	backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
+	bufferedGauge.Set(0)
+
+	slowMode := c.adaptiveSlow.Load()
+	linger := c.currentBatchLinger()
+	maxBatch := c.currentBatchSize()
+	backpressureThreshold := c.currentBackpressureThreshold()
+
+	const metricsUpdateInterval = 64
+	metricTick := 0
+
+	var lingerTimer *time.Timer
+	var lingerCh <-chan time.Time
+	defer func() {
+		if lingerTimer == nil {
+			return
+		}
+		if !lingerTimer.Stop() {
+			select {
+			case <-lingerTimer.C:
+			default:
+			}
+		}
+	}()
+
+	resetLingerTimer := func(d time.Duration) {
+		if lingerTimer == nil {
+			lingerTimer = time.NewTimer(d)
+		} else {
+			if !lingerTimer.Stop() {
+				select {
+				case <-lingerTimer.C:
+				default:
+				}
+			}
+			lingerTimer.Reset(d)
+		}
+		lingerCh = lingerTimer.C
+	}
+
+	flushBufferedFinal := func() {
+		if len(buffered) == 0 {
+			return
+		}
+		// Use a fresh context so final drain still runs after parent cancellation.
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer flushCancel()
+		c.flushBuffered(flushCtx, buffered)
+		buffered = buffered[:0]
+		bufferedGauge.Set(0)
+	}
+
+	for {
+		// A fully-closed producer cannot produce, so just exit. Shutdown-in-
+		// progress is intentionally NOT an exit condition here: the worker
+		// keeps draining until Stop closes ch (handled by the receive paths
+		// below), so messages still queued in ch are not stranded.
+		if c.closed.Load() {
+			break
+		}
+
+		newSlowMode := c.adaptiveSlow.Load()
+		if newSlowMode != slowMode {
+			slowMode = newSlowMode
+			linger = c.currentBatchLinger()
+			maxBatch = c.currentBatchSize()
+			backpressureThreshold = c.currentBackpressureThreshold()
+		}
+
+		metricTick++
+		if metricTick >= metricsUpdateInterval {
+			bufferedGauge.Set(float64(len(buffered)))
+			metricTick = 0
+		}
+
+		if len(buffered) > backpressureThreshold {
+			if !backpressureLogged {
+				backpressureLogged = true
+				backpressureCounter.Inc()
+				c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
+					c.Config.Topic, len(buffered), backpressureThreshold)
+			}
+		} else {
+			backpressureLogged = false
+		}
+
+		if len(buffered) == 0 {
+			msgBytes, ok := <-ch
+			if !ok {
+				break
+			}
+			if msgBytes != nil {
+				buffered = append(buffered, msgBytes)
+			}
+			continue
+		}
+
+		if len(buffered) >= maxBatch {
+			c.flushBuffered(internalCtx, buffered)
+			buffered = buffered[:0]
+			bufferedGauge.Set(0)
+			continue
+		}
+
+		resetLingerTimer(linger)
+
+		select {
+		case msgBytes, ok := <-ch:
+			if !ok {
+				flushBufferedFinal()
+				return
+			}
+			if msgBytes != nil {
+				buffered = append(buffered, msgBytes)
+			}
+		case <-lingerCh:
+			lingerCh = nil
+			c.flushBuffered(internalCtx, buffered)
+			buffered = buffered[:0]
+			bufferedGauge.Set(0)
+		case <-internalCtx.Done():
+			flushBufferedFinal()
+			return
+		}
 	}
 }
 
@@ -405,131 +564,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			ch := c.publishChannel
 			c.channelMu.RUnlock()
 
-			buffered := make([]*Message, 0, 256)
-			backpressureLogged := false
-			bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
-			backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
-			bufferedGauge.Set(0)
-
-			slowMode := c.adaptiveSlow.Load()
-			linger := c.currentBatchLinger()
-			maxBatch := c.currentBatchSize()
-			backpressureThreshold := c.currentBackpressureThreshold()
-
-			const metricsUpdateInterval = 64
-			metricTick := 0
-
-			var lingerTimer *time.Timer
-			var lingerCh <-chan time.Time
-			defer func() {
-				if lingerTimer == nil {
-					return
-				}
-				if !lingerTimer.Stop() {
-					select {
-					case <-lingerTimer.C:
-					default:
-					}
-				}
-			}()
-
-			resetLingerTimer := func(d time.Duration) {
-				if lingerTimer == nil {
-					lingerTimer = time.NewTimer(d)
-				} else {
-					if !lingerTimer.Stop() {
-						select {
-						case <-lingerTimer.C:
-						default:
-						}
-					}
-					lingerTimer.Reset(d)
-				}
-				lingerCh = lingerTimer.C
-			}
-
-			flushBufferedFinal := func() {
-				if len(buffered) == 0 {
-					return
-				}
-				// Use a fresh context so final drain still runs after parent cancellation.
-				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer flushCancel()
-				c.flushBuffered(flushCtx, buffered)
-				buffered = buffered[:0]
-				bufferedGauge.Set(0)
-			}
-
-			for {
-				if c.closed.Load() || c.shuttingDown.Load() {
-					break
-				}
-
-				newSlowMode := c.adaptiveSlow.Load()
-				if newSlowMode != slowMode {
-					slowMode = newSlowMode
-					linger = c.currentBatchLinger()
-					maxBatch = c.currentBatchSize()
-					backpressureThreshold = c.currentBackpressureThreshold()
-				}
-
-				metricTick++
-				if metricTick >= metricsUpdateInterval {
-					bufferedGauge.Set(float64(len(buffered)))
-					metricTick = 0
-				}
-
-				if len(buffered) > backpressureThreshold {
-					if !backpressureLogged {
-						backpressureLogged = true
-						backpressureCounter.Inc()
-						c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
-							c.Config.Topic, len(buffered), backpressureThreshold)
-					}
-				} else {
-					backpressureLogged = false
-				}
-
-				if len(buffered) == 0 {
-					msgBytes, ok := <-ch
-					if !ok {
-						break
-					}
-					if msgBytes != nil {
-						buffered = append(buffered, msgBytes)
-					}
-					continue
-				}
-
-				if len(buffered) >= maxBatch {
-					c.flushBuffered(internalCtx, buffered)
-					buffered = buffered[:0]
-					bufferedGauge.Set(0)
-					continue
-				}
-
-				resetLingerTimer(linger)
-
-				select {
-				case msgBytes, ok := <-ch:
-					if !ok {
-						flushBufferedFinal()
-						return
-					}
-					if msgBytes != nil {
-						buffered = append(buffered, msgBytes)
-					}
-				case <-lingerCh:
-					lingerCh = nil
-					c.flushBuffered(internalCtx, buffered)
-					buffered = buffered[:0]
-					bufferedGauge.Set(0)
-				case <-internalCtx.Done():
-					flushBufferedFinal()
-					return
-				}
-			}
-
+			c.runProducerWorker(internalCtx, ch)
 		}()
 
 		signals := make(chan os.Signal, 1)
