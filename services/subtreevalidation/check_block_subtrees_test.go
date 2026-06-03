@@ -1669,15 +1669,15 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	// Regression test for the consensus gap codex flagged: a parent tx that
-	// is already accepted into the UTXO store or cache BEFORE block
-	// validation (e.g. validated earlier via the peer-announced subtree
-	// path) was never seeded into the block-scoped accumulator. A child in
-	// the same candidate block referencing such a parent would then see
-	// empty ParentMetadata, fall through to the UTXO-store BlockHeights
-	// path, find it empty (the parent's blocks_transactions row is only
-	// written by SetMinedMulti AFTER this block is accepted), and the
-	// validator would stamp unconfirmedParentHeight — triggering
+	// Regression test for the seed-already-known consensus gap: a parent
+	// tx that is already accepted into the UTXO store or cache BEFORE
+	// block validation (e.g. validated earlier via the peer-announced
+	// subtree path) was never seeded into the block-scoped accumulator.
+	// A child in the same candidate block referencing such a parent would
+	// then see empty ParentMetadata, fall through to the UTXO-store
+	// BlockHeights path, find it empty (the parent's blocks_transactions
+	// row is only written by SetMinedMulti AFTER this block is accepted),
+	// and the validator would stamp unconfirmedParentHeight — triggering
 	// bad-txns-unconfirmed-input-in-block on a legitimate block.
 	t.Run("SeedsAlreadyKnownTxsIntoAccumulator", func(t *testing.T) {
 		server, cleanup := setupTestServer(t)
@@ -1689,7 +1689,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 
 		// Override BatchDecorate so this tx is reported as found in the
 		// store (Data populated). This is the "parent already in store"
-		// half of codex's scenario.
+		// half of the bug scenario above.
 		mockStore := server.utxoStore.(*utxo.MockUtxostore)
 		mockStore.ExpectedCalls = nil
 		mockStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).

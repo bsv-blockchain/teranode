@@ -264,7 +264,7 @@ func TestValidateMissingSubtreesWithOrderedRetryAccumulated_Phase2DeltasMergeAft
 }
 
 // TestValidateMissingSubtreesWithOrderedRetryAccumulated_FailedPhase2DoesNotContribute
-// pins the codex-flagged invariant: only fully-successful Phase 2 subtrees
+// pins the regression invariant: only fully-successful Phase 2 subtrees
 // contribute to the live accumulator. Failed-Phase-2 subtree contributions
 // are dropped from the merge; those subtrees retry in Phase 3 and their
 // contributions enter the accumulator there instead.
@@ -302,8 +302,8 @@ func TestValidateMissingSubtreesWithOrderedRetryAccumulated_FailedPhase2DoesNotC
 		if isPhase2 {
 			// In Phase 2: subtree 1 fails BEFORE writing anything; subtree 0
 			// fails AFTER writing a contribution; subtree 2 succeeds with a
-			// contribution. Codex's invariant: the failed subtrees' (0 and 1)
-			// Phase 2 contributions must NOT reach the live accumulator.
+			// contribution. Invariant: the failed subtrees' (0 and 1) Phase 2
+			// contributions must NOT reach the live accumulator.
 			switch i {
 			case 0:
 				// Subtree 0 writes a Phase 2 contribution then fails. The
