@@ -426,10 +426,27 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 			<-allDone
 		}
 
-		// Send error back to caller if channel exists
-		if work.request.ErrChan != nil {
-			work.request.ErrChan <- result.err
-		}
+		// Send error back to caller if channel exists.
+		sendCallerErr(ctx, work.request.ErrChan, result.err)
+	}
+}
+
+// sendCallerErr delivers err on the caller's ErrChan, if any, abandoning the
+// send when ctx is cancelled. ErrChan is unbuffered and its receiver (the
+// SubtreeProcessor) abandons the matching receive on its own context
+// cancellation, so a bare send here would block this worker forever during
+// shutdown — which would hang runNewSubtreeListener's wg.Wait() and deadlock
+// block-assembly shutdown. Dropping the result once ctx is cancelled is safe:
+// the caller is no longer waiting for it. Mirrors the ctx-guarded resultChan
+// send above.
+func sendCallerErr(ctx context.Context, errChan chan error, err error) {
+	if errChan == nil {
+		return
+	}
+
+	select {
+	case errChan <- err:
+	case <-ctx.Done():
 	}
 }
 
