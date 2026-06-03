@@ -947,9 +947,15 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	utxoHeights []uint32, tx *bt.Tx, extend bool, validationOptions *Options) error {
 
 	// OPTIMIZATION: Check if parent metadata is provided in options (for in-block parents)
-	// This allows validation without UTXO store lookups for in-block parent transactions
-	// SAFETY: Parent metadata only includes transactions that successfully validated AND created UTXOs
-	// (see check_block_subtrees.go:buildParentMetadata which filters by successful validations)
+	// This allows validation without UTXO store lookups for in-block parent transactions.
+	// SAFETY: Block-validation callers populate ParentMetadata from a block-scoped
+	// accumulator that only contains txs which successfully validated earlier in the
+	// same block (per-level post-g.Wait() merges in processTransactionsInLevels /
+	// processMissingTransactions, and the post-Phase-2 in-block-order merge in
+	// validateMissingSubtreesWithOrderedRetryAccumulated — failed-Phase-2 subtree
+	// deltas are dropped). Already-known parents are seeded at the candidate block's
+	// height so children resolve through this map instead of the UTXO-store
+	// BlockHeights fallback (which is empty for unmined in-block parents).
 	cameFromParentMetadata := false
 	if validationOptions != nil && validationOptions.ParentMetadata != nil {
 		if parentMeta, found := validationOptions.ParentMetadata[parentTxHash]; found {
