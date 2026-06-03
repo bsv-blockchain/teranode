@@ -149,7 +149,8 @@ func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 	}
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
-	got := optionsFromValidateRequest(req)
+	got, err := optionsFromValidateRequest(req)
+	require.NoError(t, err)
 
 	require.Equal(t, src.SkipUtxoCreation, got.SkipUtxoCreation)
 	require.Equal(t, src.AddTXToBlockAssembly, got.AddTXToBlockAssembly)
@@ -174,7 +175,8 @@ func TestOptionsFromValidateRequest_OmittedFieldsStayZero(t *testing.T) {
 	require.Nil(t, req.CandidateBlockTime)
 	require.Nil(t, req.CandidateParentMedianTime)
 
-	got := optionsFromValidateRequest(req)
+	got, err := optionsFromValidateRequest(req)
+	require.NoError(t, err)
 	require.Equal(t, uint32(0), got.CandidateBlockTime)
 	require.Equal(t, uint32(0), got.CandidateParentMedianTime)
 }

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -441,7 +442,16 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 // pins the round-trip from the validator client's request build through to
 // the server-side option mapping, preventing the field-by-field mapping from
 // silently drifting between sides.
-func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) *Options {
+//
+// Returns an error when the wire form contains malformed ParentMetadata
+// entries (nil or wrong-length hash). Failing closed is deliberate: a
+// silently-dropped ParentMetadata entry would force the validator into the
+// UTXO-store fallback for that input, where an in-block parent has empty
+// BlockHeights and would be stamped with unconfirmedParentHeight → BDK
+// rejection with bad-txns-unconfirmed-input-in-block. The whole point of
+// carrying ParentMetadata over the wire is to prevent that silent rejection
+// shape, so any wire degradation must surface as a request-level error.
+func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (*Options, error) {
 	opts := NewDefaultOptions()
 
 	if req.SkipUtxoCreation != nil {
@@ -472,7 +482,65 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) *
 		opts.CandidateParentMedianTime = *req.CandidateParentMedianTime
 	}
 
-	return opts
+	parentMetadata, err := parentMetadataFromWire(req.ParentMetadata)
+	if err != nil {
+		return nil, err
+	}
+	opts.ParentMetadata = parentMetadata
+
+	return opts, nil
+}
+
+// isProtobufContentType reports whether the request's Content-Type indicates
+// a protobuf body. Tolerant of charset/quality parameters (e.g.
+// "application/x-protobuf; charset=binary"); a strict prefix match would be
+// brittle against well-behaved HTTP intermediaries that may append params.
+func isProtobufContentType(contentType string) bool {
+	ct := strings.TrimSpace(strings.ToLower(contentType))
+	if ct == "" {
+		return false
+	}
+	// Strip params after the media-type token.
+	if idx := strings.Index(ct, ";"); idx >= 0 {
+		ct = strings.TrimSpace(ct[:idx])
+	}
+	return ct == "application/x-protobuf" || ct == "application/protobuf"
+}
+
+// parentMetadataFromWire reconstructs the in-memory ParentMetadata map from
+// the repeated proto form. Returns nil for an empty/missing field — both
+// proto3 round-trip identically and a nil map signals "no in-block-parent
+// metadata supplied for this request" downstream.
+//
+// Fails closed on malformed entries: a nil entry or a parent_hash whose
+// length is not chainhash.HashSize is rejected with an error rather than
+// silently skipped. Rationale: any client that emits a malformed entry has
+// a bug, and silently dropping the entry would force the validator into the
+// UTXO-store fallback for the corresponding input. For an in-block parent
+// that path stamps the unconfirmedParentHeight sentinel, which the BDK
+// adapter then translates to MEMPOOL_HEIGHT and rejects with
+// bad-txns-unconfirmed-input-in-block — exactly the silent consensus-mode
+// rejection that carrying ParentMetadata on the wire is meant to prevent.
+// Surfacing the wire error as a request-level error keeps the client's bug
+// visible instead of letting it manifest as a misleading consensus
+// rejection downstream.
+func parentMetadataFromWire(src []*validator_api.ParentTxMetadata) (map[chainhash.Hash]*ParentTxMetadata, error) {
+	if len(src) == 0 {
+		return nil, nil
+	}
+	out := make(map[chainhash.Hash]*ParentTxMetadata, len(src))
+	for i, entry := range src {
+		if entry == nil {
+			return nil, errors.NewProcessingError("[parentMetadataFromWire] entry %d is nil", i)
+		}
+		if len(entry.ParentHash) != chainhash.HashSize {
+			return nil, errors.NewProcessingError("[parentMetadataFromWire] entry %d has malformed parent_hash length: got %d bytes, want %d", i, len(entry.ParentHash), chainhash.HashSize)
+		}
+		var hash chainhash.Hash
+		copy(hash[:], entry.ParentHash)
+		out[hash] = &ParentTxMetadata{BlockHeight: entry.BlockHeight}
+	}
+	return out, nil
 }
 
 // validateTransaction performs the internal validation logic for a single transaction.
@@ -509,7 +577,11 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 	// set the tx hash, so it doesn't have to be recalculated
 	tx.SetTxHash(tx.TxIDChainHash())
 
-	validationOptions := optionsFromValidateRequest(req)
+	validationOptions, err := optionsFromValidateRequest(req)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return &validator_api.ValidateTransactionResponse{Valid: false}, err
+	}
 
 	// Pre-warm the MTP store for BIP68 validation before running transaction validation.
 	// EnsureMTPLoaded is a no-op when BIP68 is not yet active for this blockHeight.
@@ -799,14 +871,29 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 			return c.String(http.StatusBadRequest, "[handleSingleTx] Invalid request body")
 		}
 
-		// Extract validation parameters from query string
-		blockHeight, options := extractValidationParams(c)
-
-		// Use the shared request builder so the HTTP /tx path cannot drop fields
-		// that the gRPC client put in the query string (e.g. candidateBlockTime
-		// for pre-CSV block validation, candidateParentMedianTime for post-CSV
-		// fork / historical block validation).
-		req := buildValidateTxRequest(body, blockHeight, options)
+		// The /tx endpoint supports two body shapes, discriminated by Content-Type:
+		//   - application/x-protobuf: body is a serialised ValidateTransactionRequest
+		//     (the modern path; carries every field gRPC carries, including
+		//     ParentMetadata which has no query-string representation).
+		//   - any other Content-Type (legacy, including application/octet-stream):
+		//     body is the raw tx bytes; scalar fields come from query params via
+		//     extractValidationParams. Kept for backward compatibility with
+		//     non-protobuf callers; ParentMetadata is necessarily nil on this path.
+		var req *validator_api.ValidateTransactionRequest
+		if isProtobufContentType(c.Request().Header.Get("Content-Type")) {
+			req = &validator_api.ValidateTransactionRequest{}
+			if err := proto.Unmarshal(body, req); err != nil {
+				return c.String(http.StatusBadRequest, "[handleSingleTx] failed to unmarshal protobuf body: "+err.Error())
+			}
+		} else {
+			blockHeight, options := extractValidationParams(c)
+			// Use the shared request builder so the legacy /tx path cannot drop
+			// fields that the gRPC client put in the query string (e.g.
+			// candidateBlockTime for pre-CSV block validation,
+			// candidateParentMedianTime for post-CSV fork / historical block
+			// validation).
+			req = buildValidateTxRequest(body, blockHeight, options)
+		}
 
 		// Process the transaction and return appropriate response
 		response, err := v.validateTransaction(ctx, req)

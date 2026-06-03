@@ -135,7 +135,8 @@ func TestOptionsFromValidateRequest_CandidateParentMedianTimeRoundTrip(t *testin
 	src := &Options{CandidateParentMedianTime: 1699999000}
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 420000, src)
-	got := optionsFromValidateRequest(req)
+	got, err := optionsFromValidateRequest(req)
+	require.NoError(t, err)
 
 	require.Equal(t, src.CandidateParentMedianTime, got.CandidateParentMedianTime)
 }
