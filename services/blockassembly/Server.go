@@ -1007,6 +1007,10 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	storeTxInpoints := ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
 
 	for i, req := range requests {
+		if len(req.Txid) != 32 {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid)))
+		}
+
 		nodes[i] = subtreepkg.Node{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,

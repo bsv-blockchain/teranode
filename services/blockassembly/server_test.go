@@ -481,6 +481,59 @@ func TestAddTxBatch(t *testing.T) {
 		require.Nil(t, resp)
 		require.Contains(t, err.Error(), "unable to deserialize tx inpoints")
 	})
+
+	t.Run("add transaction batch with invalid txid length", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			txid []byte
+		}{
+			{
+				name: "short txid",
+				txid: []byte{1, 2, 3},
+			},
+			{
+				name: "long txid",
+				txid: append(make([]byte, 32), 1),
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				server, _ := setupServer(t)
+
+				validTxHash := chainhash.HashH([]byte("valid-batch-tx"))
+				txInpoints := subtreepkg.TxInpoints{}
+				txInpointsBytes, err := txInpoints.Serialize()
+				require.NoError(t, err)
+
+				req := &blockassembly_api.AddTxBatchRequest{
+					TxRequests: []*blockassembly_api.AddTxRequest{
+						{
+							Txid:       validTxHash[:],
+							Fee:        100,
+							Size:       250,
+							TxInpoints: txInpointsBytes,
+						},
+						{
+							Txid:       tc.txid,
+							Fee:        200,
+							Size:       300,
+							TxInpoints: txInpointsBytes,
+						},
+					},
+				}
+
+				var resp *blockassembly_api.AddTxBatchResponse
+				require.NotPanics(t, func() {
+					resp, err = server.AddTxBatch(t.Context(), req)
+				})
+				require.Error(t, err)
+				require.Nil(t, resp)
+				require.Contains(t, err.Error(), "invalid txid length")
+				require.Contains(t, err.Error(), "index 1")
+			})
+		}
+	})
 }
 
 // TestTxCount tests the TxCount method
