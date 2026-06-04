@@ -214,6 +214,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if tSettings.BatcherDrainMode {
 		s.spendBatcher.SetDrainMode(true)
 	}
+	// Tick interval applied after drain so go-batcher's drain-wins guard sees the
+	// final state (no-op + warning under drain). Default 0 = disabled.
+	if ms := tSettings.UtxoStore.SpendBatcherTickerIntervalMillis; ms > 0 {
+		s.spendBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
 
 	// Initialize get batcher — mirrors aerospike/get.go batcher setup.
 	// Batches individual Get() calls into bulk SQL queries via BatchDecorate,
@@ -224,6 +229,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		s.getBatcher = batcher.NewWithPool(getBatchSize, getBatchDuration, s.sendGetBatch, true, batcherOpts("sql_get")...)
 		if tSettings.BatcherDrainMode {
 			s.getBatcher.SetDrainMode(true)
+		}
+		if ms := tSettings.UtxoStore.GetBatcherTickerIntervalMillis; ms > 0 {
+			s.getBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
 		}
 	}
 
@@ -238,6 +246,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		if tSettings.BatcherDrainMode {
 			s.createBatcher.SetDrainMode(true)
 		}
+		if ms := tSettings.UtxoStore.StoreBatcherTickerIntervalMillis; ms > 0 {
+			s.createBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+		}
 	}
 
 	// Initialize unlock batcher for Postgres — batches single-hash SetLocked(false) calls.
@@ -247,6 +258,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		s.unlockBatcher = batcher.NewWithPool(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true, batcherOpts("sql_unlock")...)
 		if tSettings.BatcherDrainMode {
 			s.unlockBatcher.SetDrainMode(true)
+		}
+		if ms := tSettings.UtxoStore.LockedBatcherTickerIntervalMillis; ms > 0 {
+			s.unlockBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
 		}
 	}
 

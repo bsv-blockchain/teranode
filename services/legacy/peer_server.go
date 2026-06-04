@@ -1945,8 +1945,14 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		}
 	}
 
-	// Signal the sync manager this peer is a new sync candidate.
-	s.syncManager.NewPeer(sp.Peer, nil)
+	// NOTE: syncManager.NewPeer is intentionally NOT called here. Registration
+	// happens earlier in OnVersion (non-multistream) or OnProtoconf (multistream
+	// after stream setup). Calling NewPeer here in addition produced a duplicate
+	// newPeerMsg on the syncManager's msgChan: if a donePeerMsg landed between
+	// the two newPeerMsgs (e.g. when blockHandler was slow draining msgChan
+	// during a long block-validation), the resulting Set→Delete→Set sequence
+	// left a permanently-disconnected peer pointer in peerStates, which
+	// startSync then re-picked forever and the node ground to a halt.
 
 	return true
 }

@@ -109,6 +109,7 @@ type batcherIfc[T any] interface {
 	PutCtx(ctx context.Context, item *T, payloadSize ...int)
 	Trigger()
 	SetDrainMode(enabled bool)
+	SetTickInterval(d time.Duration)
 }
 
 // Store implements the UTXO store interface using Aerospike.
@@ -390,6 +391,32 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 	if tSettings.UtxoStore.LockedBatcherDrainMode {
 		s.lockedBatcher.SetDrainMode(true)
+	}
+
+	// Per-batcher tick interval (fixed-cadence flushing). Applied after drain mode
+	// so go-batcher's mutual-exclusion guard sees the final drain state: when a
+	// batcher is in drain mode SetTickInterval is a no-op and logs a warning
+	// (drain wins). Default 0 = disabled, so behaviour is unchanged.
+	if ms := tSettings.UtxoStore.StoreBatcherTickerIntervalMillis; ms > 0 {
+		s.storeBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.GetBatcherTickerIntervalMillis; ms > 0 {
+		s.getBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.SpendBatcherTickerIntervalMillis; ms > 0 {
+		s.spendBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.OutpointBatcherTickerIntervalMillis; ms > 0 {
+		s.outpointBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.IncrementBatcherTickerIntervalMillis; ms > 0 {
+		s.incrementBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.SetDAHBatcherTickerIntervalMillis; ms > 0 {
+		s.setDAHBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
+	if ms := tSettings.UtxoStore.LockedBatcherTickerIntervalMillis; ms > 0 {
+		s.lockedBatcher.SetTickInterval(time.Duration(ms) * time.Millisecond)
 	}
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)

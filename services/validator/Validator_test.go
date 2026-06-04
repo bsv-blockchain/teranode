@@ -332,6 +332,15 @@ func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	// sqlitememory has no busy_timeout and an unbounded connection pool
+	// (util/sql.go), so the two concurrent validations in this batch can race on
+	// the shared in-memory DB and surface a transient "database is locked"
+	// StorageError. The validator collapses any non-UTXO spend error into
+	// ERR_PROCESSING (Validator.go:723) instead of ERR_TX_CONFLICTING, which is
+	// the CI flake. Pin the dev-mode pool to a single connection so all SQL
+	// serialises — the concurrent batch path is still exercised; only DB access
+	// is serialised. Production uses Aerospike, so this is test hygiene.
+	utxoStore.RawDB().SetMaxOpenConns(1)
 	require.NoError(t, utxoStore.SetBlockHeight(100))
 	require.NoError(t, utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
 

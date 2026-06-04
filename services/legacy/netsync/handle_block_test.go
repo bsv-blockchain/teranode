@@ -1302,89 +1302,80 @@ func TestSyncManager_createUtxos_ChunkErrorReturnsWrappedProcessingError(t *test
 		"expected wrapped ProcessingError, got: %v", err)
 }
 
-// TestSyncManager_createUtxos_ChunkFailureCancelsSiblings proves the
-// `if mergeCtx.Err() != nil { return mergeCtx.Err() }` short-circuit at the top
-// of each worker's inner loop actually suppresses sibling iterations after a
-// chunk fails.
+// TestSyncManager_createUtxos_ChunkFailureCancelsSiblings is a deterministic
+// proof that the loop-top short-circuit in createUtxos —
 //
-// Why this design (vs orchestrating worker identity): worker A vs worker B
-// identity at runtime is not predictable from the input hash array — the
-// `existingTxHashes` slice is appended by parallel Create() goroutines in
-// arbitrary scheduler order, so subsequent worker ranges are scheduler-derived.
-// We avoid that by not trying to pin which worker calls which expectation.
+//	if mergeCtx.Err() != nil { return mergeCtx.Err() }
 //
-// Instead: pick a worker/chunk topology where the surviving worker has many
-// remaining iterations after the trigger, so the mutation's effect dominates
-// any in-flight noise.
+// — stops a worker from issuing further SetMinedMulti calls once the merge
+// context is cancelled.
 //
-//	totalTxs=32, batchSize=4, routines=2 → 8 chunks, 4 per worker.
-//	exp1 .Times(2) — first 2 calls succeed.
-//	exp2 .Once()   — 3rd call fails, cancels mergeCtx.
-//	exp3 .Maybe()  — catch-all, increments postTriggerCount.
+// Why single-worker (the original 2-worker version flaked under CI load):
+// errgroup cancels mergeCtx only AFTER the failing worker's func returns, so a
+// sibling worker keeps passing its loop-top check and draining iterations until
+// cancellation propagates. That window is timing-dependent and produced up to 4
+// post-trigger calls under load, breaking the old "<= 1" bound.
 //
-// Across every interleaving the surviving worker has at least 3 remaining
-// iterations after the trigger:
-//   - W_A blasts iter1+iter2 success, iter3 fails → W_B has all 4 iters remaining.
-//   - W_A.iter1 + W_B.iter1 → W_A.iter2 fails → W_B has 3 iters remaining.
-//   - W_B.iter1 + W_B.iter2 → W_B.iter3 fails → W_A has all 4 iters remaining.
+// Topology: totalTxs=20, batchSize=4, routines=1 → 5 chunks, one worker, 5 loop
+// iterations. The first SetMinedMulti call cancels the parent ctx (mergeCtx
+// derives from it via errgroup.WithContext) and returns success. Because the
+// single worker runs sequentially, iteration 2's loop-top mergeCtx.Err() check
+// always observes the cancellation and returns — so no call happens after the
+// trigger.
 //
-// With the check intact, the surviving worker's for-loop top observes the
-// cancelled mergeCtx on every remaining iteration and bails without a Called.
-// Post-trigger count = 0 normally, or 1 if the sibling's next call was already
-// in flight when cancellation propagated.
+// The trigger MUST come from a successful call, not an error: a failing call
+// would stop the loop via the existing `if err != nil { return err }` regardless
+// of the short-circuit, letting the mutation survive. Cancelling from a
+// successful call makes the loop-top mergeCtx.Err() check the ONLY thing that can
+// stop iteration 2.
 //
-// With the check removed, the surviving worker calls SetMinedMulti for each
-// remaining iteration → exp3 fires ≥ 2 times → postTriggerCount ≥ 2.
-//
-// Assertion: postTriggerCount ≤ 1. Mutation produces 2-4 across interleavings,
-// so the bound reliably distinguishes the two cases.
+// Short-circuit intact: iteration 2's check returns mergeCtx.Err() before any
+// further call, so postTriggerCount == 0.
+// Short-circuit removed: iteration 2 issues a SetMinedMulti call (postTriggerCount
+// becomes 1, then that call's error stops the loop) — the count assertion fails
+// with "expected 0, got 1", pinpointing the regression.
 func TestSyncManager_createUtxos_ChunkFailureCancelsSiblings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	const totalTxs = 32 // 2 workers × 4 chunks each = 8 chunks total
-	sm, txMap, block, mockStore, _ := newChunkingTestSetup(t, totalTxs, 4, 2)
+	const totalTxs = 20 // batchSize 4, routines 1 → 5 chunks handled by one worker
+	sm, txMap, block, mockStore, _ := newChunkingTestSetup(t, totalTxs, 4, 1)
 
 	var (
 		postTriggerMu    sync.Mutex
 		postTriggerCount int
 	)
 
+	// First call cancels the parent ctx (cascades to mergeCtx) and succeeds.
 	mockStore.On("SetMinedMulti",
 		mock.Anything, mock.Anything, mock.Anything,
-	).Return(map[chainhash.Hash][]uint32{}, nil).Times(2)
+	).Run(func(args mock.Arguments) {
+		cancel()
+	}).Return(map[chainhash.Hash][]uint32{}, nil).Once()
 
-	mockStore.On("SetMinedMulti",
-		mock.Anything, mock.Anything, mock.Anything,
-	).Return(
-		map[chainhash.Hash][]uint32{},
-		errors.NewStorageError("synthetic chunk failure"),
-	).Once()
-
-	// Catch-all returns nil so the surviving worker keeps iterating under
-	// mutation — if it returned an error, the worker would bail on its first
-	// post-trigger call (postTriggerCount=1) and the mutation would slip past
-	// the `<= 1` assertion. With nil returns, the surviving worker drains all
-	// its remaining iterations and postTriggerCount ≥ 3.
+	// Any further call is post-trigger and must not happen while the short-circuit
+	// is intact. It returns an error so that under the mutation the loop still exits
+	// with an error (require.Error stays satisfied) and the count assertion below —
+	// not require.Error — is what catches the regression (count 1, expected 0).
 	mockStore.On("SetMinedMulti",
 		mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
 		postTriggerMu.Lock()
 		postTriggerCount++
 		postTriggerMu.Unlock()
-	}).Return(map[chainhash.Hash][]uint32{}, nil).Maybe()
+	}).Return(map[chainhash.Hash][]uint32{}, errors.NewStorageError("SetMinedMulti must not be called after mergeCtx cancellation")).Maybe()
 
 	err := sm.createUtxos(ctx, txMap, block, 42)
-	require.Error(t, err, "expected error to propagate from failing chunk")
+	require.Error(t, err, "cancelled mergeCtx should propagate an error out of createUtxos")
 
 	postTriggerMu.Lock()
 	finalCount := postTriggerCount
 	postTriggerMu.Unlock()
 
-	require.LessOrEqual(t, finalCount, 1,
-		"mergeCtx short-circuit should suppress sibling iterations after a chunk fails; "+
-			"observed %d post-trigger call(s). Removing the short-circuit produces ≥ 2.",
-		finalCount)
+	require.Equal(t, 0, finalCount,
+		"loop-top mergeCtx short-circuit should suppress every iteration after "+
+			"cancellation; observed %d post-trigger call(s). Removing the short-circuit "+
+			"lets at least one through.", finalCount)
 }
 
 // TestSyncManager_createUtxos_ExactBatchSize covers n == MaxMinedBatchSize.

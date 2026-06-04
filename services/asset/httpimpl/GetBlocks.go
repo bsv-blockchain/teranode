@@ -3,6 +3,7 @@
 package httpimpl
 
 import (
+	"math"
 	"net/http"
 	"strings"
 
@@ -125,7 +126,11 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 
 	latestBlockHeight := blockMeta.Height
 
-	// Validate offset doesn't exceed block height to prevent underflow
+	// Validate offset is within uint32 range before casting to prevent truncation,
+	// then validate it doesn't exceed block height to prevent underflow.
+	if offset > math.MaxUint32 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset exceeds maximum allowed value").Error())
+	}
 	if uint32(offset) > latestBlockHeight {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset exceeds block height").Error())
 	}

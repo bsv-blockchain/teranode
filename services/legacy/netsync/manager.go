@@ -479,6 +479,17 @@ func (sm *SyncManager) startSync() {
 			continue
 		}
 
+		// Defence-in-depth: never elect a peer whose socket has already been
+		// torn down. If one slips into peerStates (e.g. a future regression in
+		// the new-peer registration path), picking it here would push
+		// getheaders into a closed connection and stall sync for the duration
+		// of maxLastBlockTime before rotating.
+		if !peer.Connected() {
+			sm.logger.Debugf("[startSync] peer %v is not connected, skipping", peer.String())
+
+			continue
+		}
+
 		// Add any peers on the same block to okPeers. These should
 		// only be used as a last resort.
 
@@ -701,6 +712,15 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// Ignore if in the process of shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
+		return
+	}
+
+	// If the peer's socket was already torn down by the time this newPeerMsg
+	// drained from msgChan, don't insert it into peerStates at all. Pairs
+	// with the Connected() guard in startSync to close the window during
+	// which a dead pointer can sit in the map waiting for a donePeerMsg.
+	if !peer.Connected() {
+		sm.logger.Debugf("[handleNewPeerMsg] peer %s already disconnected before registration, skipping", peer.String())
 		return
 	}
 
@@ -2065,7 +2085,9 @@ out:
 func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 	sm.msgChan <- &newPeerMsg{peer: peer, reply: done}
@@ -2077,7 +2099,9 @@ func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan struct{}) {
 	// Don't accept more transactions if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 
@@ -2190,7 +2214,9 @@ func (sm *SyncManager) QueueHeaders(headers *wire.MsgHeaders, peer *peerpkg.Peer
 func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 

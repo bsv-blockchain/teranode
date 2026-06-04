@@ -895,7 +895,17 @@ func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
 		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
 	}
 
-	smPeer := &peer.Peer{}
+	// Use a real connected peer: handleNewPeerMsg now refuses to register peers
+	// whose socket has been torn down by the time the newPeerMsg drains.
+	peerCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+		Services:         0,
+	}
+	_, smPeer, err := MakeConnectedPeers(t, peerCfg, peerCfg, 99)
+	require.NoError(t, err)
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -907,4 +917,34 @@ func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
 
 	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
 	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
+}
+
+// TestHandleNewPeerMsg_SkipsDisconnectedPeer verifies that a peer whose socket
+// was torn down before the queued newPeerMsg drained is not inserted into
+// peerStates. Pairs with the Connected() filter in startSync to prevent a dead
+// pointer from being elected as the sync peer.
+func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return((*blockchain2.FSMStateType)(nil), errors.NewServiceError("transient gRPC error")).Maybe()
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// A zero-value Peer has connected=0, so Connected() returns false. This
+	// mirrors the state of a peer whose underlying socket has already closed
+	// by the time handleNewPeerMsg pulls its newPeerMsg off msgChan.
+	disconnectedPeer := &peer.Peer{}
+
+	sm.handleNewPeerMsg(disconnectedPeer)
+
+	require.False(t, sm.peerStates.Exists(disconnectedPeer), "disconnected peer must not be registered in peerStates")
 }

@@ -208,6 +208,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 			batcher.WithMetrics(batchermetrics.Provider()),
 			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
 		)
+		if ms := tSettings.Validator.TxMetaKafkaBatchTickerIntervalMillis; ms > 0 {
+			b.SetTickInterval(time.Duration(ms) * time.Millisecond)
+		}
 		v.txmetaKafkaBatcher = b
 		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}

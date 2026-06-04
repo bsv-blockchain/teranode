@@ -104,7 +104,7 @@
 
         function drawText(text) {
           let e = document.createElement('li');
-          e.innerHTML = [
+          e.textContent = [
             (new Date()).toLocaleString('en-UK'),
             ' ' + text
           ].join('\n');

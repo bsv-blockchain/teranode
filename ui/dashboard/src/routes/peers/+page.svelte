@@ -16,6 +16,7 @@
   import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
   import RenderSpanWithTooltip from '$lib/components/table/renderers/render-span-with-tooltip/index.svelte'
   import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+  import RenderClickableSpan from '$lib/components/table/renderers/render-clickable-span/index.svelte'
 
   const t = $derived($i18n.t)
 
@@ -598,10 +599,15 @@
     },
     catchup: (idField, item, colId) => {
       return {
-        component: RenderSpan,
+        component: RenderClickableSpan,
         props: {
-          value: 'View',
+          text: 'View',
           className: 'catchup-view-link',
+          // Capture the row's peer directly — order-independent, no DOM-index lookup.
+          onClick: () => {
+            selectedPeer = item
+            showCatchupModal = true
+          },
         },
         value: '',
       }
@@ -624,30 +630,7 @@
     refreshInterval = window.setInterval(fetchPeers, 10000)
     // Check catchup status more frequently to provide real-time updates
     catchupRefreshInterval = window.setInterval(fetchCatchupStatus, 3000)
-
-    // Add event listener for catchup view buttons
-    document.addEventListener('click', handleCatchupButtonClick)
   })
-
-  // Handle clicks on catchup view buttons
-  function handleCatchupButtonClick(event: MouseEvent) {
-    const target = event.target as HTMLElement
-    if (target.classList.contains('catchup-view-link')) {
-      // Find the row element
-      let row = target.closest('tr')
-      if (row) {
-        // Get the row index
-        const tbody = row.parentElement
-        const rowIndex = Array.from(tbody?.children || []).indexOf(row)
-        // Get the peer from the displayed data
-        const peer = data[rowIndex]
-        if (peer) {
-          selectedPeer = peer
-          showCatchupModal = true
-        }
-      }
-    }
-  }
 
   onDestroy(() => {
     if (refreshInterval) {
@@ -656,8 +639,6 @@
     if (catchupRefreshInterval) {
       clearInterval(catchupRefreshInterval)
     }
-    // Remove event listener
-    document.removeEventListener('click', handleCatchupButtonClick)
   })
 </script>
 

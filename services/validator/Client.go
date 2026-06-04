@@ -77,7 +77,7 @@ type Client struct {
 	batchTimeout int
 
 	// batcher handles the batching of transaction validation requests
-	batcher batcher.Batcher[batchItem]
+	batcher *batcher.Batcher[batchItem]
 
 	// validatorHTTPAddr holds the HTTP endpoint address for validator fallback
 	validatorHTTPAddr *url.URL
@@ -130,12 +130,20 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			client.sendBatchToValidator(ctx, batch)
 		}
 		duration := time.Duration(sendBatchTimeout) * time.Millisecond
-		client.batcher = *batcher.NewWithPool(sendBatchSize, duration, sendBatch, true,
+		// Hold the batcher by pointer: SetTickInterval mutates per-instance state
+		// (the ticker) and the v2.0.3 Batcher contains a sync.Pool, so a value
+		// copy would both drop the tick config and trip go vet copylocks.
+		// Default 0 = disabled.
+		bp := batcher.NewWithPool(sendBatchSize, duration, sendBatch, true,
 			batcher.WithName("validator_client"),
 			batcher.WithLogger(logger),
 			batcher.WithMetrics(batchermetrics.Provider()),
 			batcher.WithTracer(tracing.Tracer("validator").OTelTracer()),
 		)
+		if ms := tSettings.Validator.SendBatchTickerIntervalMillis; ms > 0 {
+			bp.SetTickInterval(time.Duration(ms) * time.Millisecond)
+		}
+		client.batcher = bp
 	}
 
 	return client, nil

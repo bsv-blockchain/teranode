@@ -127,6 +127,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
 	}
+	// Tick interval after drain: go-batcher's drain-wins guard no-ops + warns under
+	// drain. Default 0 = disabled.
+	if ms := tSettings.BlockAssembly.SendBatchTickerIntervalMillis; ms > 0 {
+		b.SetTickInterval(time.Duration(ms) * time.Millisecond)
+	}
 	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
 		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)
 		logger.Infof("Block assembly batch max concurrent: %d", tSettings.BlockAssembly.SendBatchMaxConcurrent)
@@ -185,6 +190,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	)
 	if tSettings.BatcherDrainMode {
 		b.SetDrainMode(true)
+	}
+	// Tick interval after drain: go-batcher's drain-wins guard no-ops + warns under
+	// drain. Default 0 = disabled.
+	if ms := tSettings.BlockAssembly.SendBatchTickerIntervalMillis; ms > 0 {
+		b.SetTickInterval(time.Duration(ms) * time.Millisecond)
 	}
 	if tSettings.BlockAssembly.SendBatchMaxConcurrent > 0 {
 		b.SetMaxConcurrent(tSettings.BlockAssembly.SendBatchMaxConcurrent)

@@ -27,6 +27,13 @@ function createCurrentNodePeerIDStore() {
 
 export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own node's peer ID
 
+// Keys that must never be used on a plain object — doing so pollutes Object.prototype.
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isSafeKey(key: unknown): key is string {
+  return typeof key === 'string' && key.length > 0 && !DANGEROUS_KEYS.has(key)
+}
+
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
 const BASE_RECONNECT_DELAY = 2000 // Start with 2 seconds
@@ -47,6 +54,9 @@ function cleanupExpiredPeers() {
 
   // Check each peer and remove if last update was more than 30 seconds ago
   for (const nodeKey in miningNodeSet) {
+    if (!Object.prototype.hasOwnProperty.call(miningNodeSet, nodeKey)) {
+      continue
+    }
     const node = miningNodeSet[nodeKey]
     if (node.receivedAt) {
       const lastUpdate = new Date(node.receivedAt).getTime()
@@ -173,6 +183,9 @@ export async function connectToP2PServer() {
             if (jsonData.type === 'node_status') {
               // Handle node_status messages - these provide comprehensive node information
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
 
               // The very first node_status message we receive should be from our own node
               // (sent immediately upon WebSocket connection by the backend)
@@ -241,6 +254,9 @@ export async function connectToP2PServer() {
               // Don't return here - let it fall through to add to messages array
             } else if (jsonData.type === 'block') {
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
               const currentPeerID = get(currentNodePeerID)
               const existingNode = miningNodeSet[nodeKey]
 
@@ -296,6 +312,9 @@ export async function connectToP2PServer() {
               }
             } else if (jsonData.peer_id) {
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
               const currentPeerID = get(currentNodePeerID)
               if (!miningNodeSet[nodeKey]) {
                 miningNodeSet[nodeKey] = {
