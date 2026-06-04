@@ -71,31 +71,7 @@ func (h *FSMHandler) GetFSMEvents(c echo.Context) error {
 		return err
 	}
 
-	var events []string
-	// these transitions are stable and documented in stateMachine.md.
-	switch *state {
-	case blockchain_api.FSMStateType_IDLE:
-		events = []string{
-			blockchain_api.FSMEventType_RUN.String(),
-			blockchain_api.FSMEventType_LEGACYSYNC.String(),
-		}
-	case blockchain_api.FSMStateType_RUNNING:
-		events = []string{
-			blockchain_api.FSMEventType_STOP.String(),
-			blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
-		}
-	case blockchain_api.FSMStateType_LEGACYSYNCING:
-		events = []string{
-			blockchain_api.FSMEventType_RUN.String(),
-			blockchain_api.FSMEventType_STOP.String(),
-		}
-	case blockchain_api.FSMStateType_CATCHINGBLOCKS:
-		events = []string{
-			blockchain_api.FSMEventType_RUN.String(),
-		}
-	default:
-		events = []string{}
-	}
+	events := blockchain.AvailableEventsForState(state.String())
 
 	h.logger.WithTraceContext(c.Request().Context()).Debugf("Available blockchain FSM events: %v", events)
 

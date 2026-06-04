@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
@@ -14,8 +16,9 @@
   import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
   import RenderSpanWithTooltip from '$lib/components/table/renderers/render-span-with-tooltip/index.svelte'
   import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+  import RenderClickableSpan from '$lib/components/table/renderers/render-clickable-span/index.svelte'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
   const pageKey = 'page.peers'
 
@@ -78,28 +81,28 @@
     previous_attempt?: PreviousAttemptData
   }
 
-  let allData: PeerData[] = []  // Full dataset
-  let data: PeerData[] = []      // Paginated data for display
-  let catchupStatus: CatchupStatusData | null = null
-  let isLoading = false
-  let error: string | null = null
+  let allData: PeerData[] = $state([])  // Full dataset
+  let data: PeerData[] = $state([])      // Paginated data for display
+  let catchupStatus: CatchupStatusData | null = $state(null)
+  let isLoading = $state(false)
+  let error: string | null = $state(null)
   let refreshInterval: number | null = null
   let catchupRefreshInterval: number | null = null
 
   // Modal state
-  let showCatchupModal = false
-  let selectedPeer: PeerData | null = null
+  let showCatchupModal = $state(false)
+  let selectedPeer: PeerData | null = $state(null)
 
   // Persistent pagination state
-  let currentPage = 1
-  let currentPageSize = 25
+  let currentPage = $state(1)
+  let currentPageSize = $state(25)
 
   // Persistent sort state
-  let sortColumn = ''
-  let sortOrder = ''
+  let sortColumn = $state('')
+  let sortOrder = $state('')
 
   // Memoized sorted data
-  let sortedData: PeerData[] = []
+  let sortedData: PeerData[] = $state([])
 
   // Local storage keys for persistence
   const PEERS_PAGE_SIZE_KEY = 'teranode-peers-pagesize'
@@ -178,34 +181,40 @@
     }
   }
 
-  // Get pagination from URL and localStorage
-  $: {
-    // First, try to get pageSize from URL (highest priority)
-    const urlPageSize = $page.url.searchParams.get('pageSize')
-    if (urlPageSize) {
-      const parsed = parseInt(urlPageSize, 10)
-      if (parsed > 0 && parsed <= 100) {
-        currentPageSize = parsed
+  // Get pagination from URL and localStorage.
+  // Tracks the page store (URL changes); the body both reads and writes
+  // currentPage/currentPageSize via updatePaginatedData, so it runs untracked
+  // to avoid a runes update loop.
+  $effect(() => {
+    const url = $page.url
+    untrack(() => {
+      // First, try to get pageSize from URL (highest priority)
+      const urlPageSize = url.searchParams.get('pageSize')
+      if (urlPageSize) {
+        const parsed = parseInt(urlPageSize, 10)
+        if (parsed > 0 && parsed <= 100) {
+          currentPageSize = parsed
+        }
+      } else {
+        // If no URL parameter, use localStorage default
+        currentPageSize = loadPageSizeFromStorage()
       }
-    } else {
-      // If no URL parameter, use localStorage default
-      currentPageSize = loadPageSizeFromStorage()
-    }
 
-    // Get page from URL
-    const urlPage = $page.url.searchParams.get('page')
-    if (urlPage) {
-      const parsed = parseInt(urlPage, 10)
-      if (parsed > 0) {
-        currentPage = parsed
+      // Get page from URL
+      const urlPage = url.searchParams.get('page')
+      if (urlPage) {
+        const parsed = parseInt(urlPage, 10)
+        if (parsed > 0) {
+          currentPage = parsed
+        }
+      } else {
+        currentPage = 1 // Always reset to page 1 if not in URL
       }
-    } else {
-      currentPage = 1 // Always reset to page 1 if not in URL
-    }
 
-    // Update paginated data when URL changes
-    updatePaginatedData()
-  }
+      // Update paginated data when URL changes
+      updatePaginatedData()
+    })
+  })
 
   // Update URL when pagination changes
   function updateURL(newPage: number, newPageSize: number) {
@@ -352,7 +361,7 @@
 
   // Handle pagination changes
   function onPageChange(e) {
-    const data = e.detail
+    const data = e
     const newPage = data.value.page
     const newPageSize = data.value.pageSize
 
@@ -369,7 +378,7 @@
 
   // Handle sort changes
   function onSort(e) {
-    const { colId, value } = e.detail
+    const { colId, value } = e
     sortColumn = colId || ''
     sortOrder = value || ''
 
@@ -393,27 +402,27 @@
 
   // Clear sort
   function clearSort() {
-    onSort({ detail: { colId: '', value: '' } })
+    onSort({ colId: '', value: '' })
   }
 
   // Handle table actions
   function handleAction(event) {
     // Handle any table actions if needed
-    console.log('Table action:', event.detail)
+    console.log('Table action:', event)
   }
 
-  $: hasSorting = sortColumn && sortOrder
+  const hasSorting = $derived(sortColumn && sortOrder)
 
-  let totalPages = 0
-  const onTotal = (e) => {
-    totalPages = e.detail.total
-  }
+  // The internal Pager does not emit a "total" event, so totalPages is never
+  // updated from it and stays at its initial value (behaviour unchanged from
+  // the previous dead on:total listener).
+  const totalPages: number = 0
 
-  $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
-  $: showTableFooter = showPagerSize
+  const showPagerNav = $derived(totalPages > 1)
+  const showPagerSize = $derived(showPagerNav || (totalPages === 1 && allData.length > 5))
+  const showTableFooter = $derived(showPagerSize)
 
-  $: i18nLocal = { t, baseKey: 'comp.pager' }
+  const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
   // Format error type to human-readable string
   function formatErrorType(errorType: string): string {
@@ -484,7 +493,7 @@
     ]
   }
 
-  $: colDefs = getColDefs()
+  const colDefs = $derived(getColDefs())
 
   // Custom render functions
   const renderCells = {
@@ -590,10 +599,15 @@
     },
     catchup: (idField, item, colId) => {
       return {
-        component: RenderSpan,
+        component: RenderClickableSpan,
         props: {
-          value: 'View',
+          text: 'View',
           className: 'catchup-view-link',
+          // Capture the row's peer directly — order-independent, no DOM-index lookup.
+          onClick: () => {
+            selectedPeer = item
+            showCatchupModal = true
+          },
         },
         value: '',
       }
@@ -616,30 +630,7 @@
     refreshInterval = window.setInterval(fetchPeers, 10000)
     // Check catchup status more frequently to provide real-time updates
     catchupRefreshInterval = window.setInterval(fetchCatchupStatus, 3000)
-
-    // Add event listener for catchup view buttons
-    document.addEventListener('click', handleCatchupButtonClick)
   })
-
-  // Handle clicks on catchup view buttons
-  function handleCatchupButtonClick(event: MouseEvent) {
-    const target = event.target as HTMLElement
-    if (target.classList.contains('catchup-view-link')) {
-      // Find the row element
-      let row = target.closest('tr')
-      if (row) {
-        // Get the row index
-        const tbody = row.parentElement
-        const rowIndex = Array.from(tbody?.children || []).indexOf(row)
-        // Get the peer from the displayed data
-        const peer = data[rowIndex]
-        if (peer) {
-          selectedPeer = peer
-          showCatchupModal = true
-        }
-      }
-    }
-  }
 
   onDestroy(() => {
     if (refreshInterval) {
@@ -648,12 +639,10 @@
     if (catchupRefreshInterval) {
       clearInterval(catchupRefreshInterval)
     }
-    // Remove event listener
-    document.removeEventListener('click', handleCatchupButtonClick)
   })
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   {#if catchupStatus && catchupStatus.is_catching_up}
     <div class="catchup-status-wrapper">
       <Card contentPadding="16px">
@@ -762,10 +751,12 @@
   {/if}
 
   <Card contentPadding="0" showFooter={showTableFooter}>
-    <div class="title" slot="title">
-      <Typo variant="title" size="h4" value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })} />
-    </div>
-    <svelte:fragment slot="header-tools">
+    {#snippet title()}
+      <div class="title">
+        <Typo variant="title" size="h4" value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })} />
+      </div>
+    {/snippet}
+    {#snippet headerTools()}
       <div class="stats">
         <span class="stat-item">
           <span class="stat-label">Total:</span>
@@ -796,16 +787,15 @@
           pageSize: currentPageSize,
         }}
         hasBoundaryRight={true}
-        on:change={onPageChange}
-        on:total={onTotal}
+        onchange={onPageChange}
       />
       {#if allData.length > 0}
-        <Button size="small" on:click={fetchPeers} disabled={isLoading}>
+        <Button size="small" onclick={fetchPeers} disabled={isLoading}>
           {isLoading ? 'Refreshing...' : 'Refresh'}
         </Button>
       {/if}
       {#if hasSorting}
-        <button class="clear-sort-btn" on:click={clearSort} title="Clear sorting">
+        <button class="clear-sort-btn" onclick={clearSort} title="Clear sorting">
           <Icon name="icon-close-line" size={16} />
         </button>
       {/if}
@@ -815,13 +805,13 @@
         </div>
         <div class="live-label">{t(`page.network.live`)}</div>
       </div>
-    </svelte:fragment>
+    {/snippet}
     {#if error}
       <div class="no-data">
         <Icon name="icon-status-light-glow-solid" size={48} color="#ff6b6b" />
         <p>Failed to load peer data</p>
         <p class="sub">{error}</p>
-        <Button size="small" on:click={fetchPeers} disabled={isLoading}>
+        <Button size="small" onclick={fetchPeers} disabled={isLoading}>
           Retry
         </Button>
       </div>
@@ -848,7 +838,7 @@
           sortOrder,
         }}
         sortEnabled={true}
-        serverSort={true}
+        useServerSort={true}
         pagination={{
           page: 1,
           pageSize: -1,
@@ -860,57 +850,59 @@
         {renderCells}
         getRenderProps={null}
         getRowIconActions={null}
-        on:sort={onSort}
-        on:action={handleAction}
+        onsort={onSort}
+        onaction={handleAction}
       />
     {/if}
-    <div slot="footer">
-      <Pager
-        i18n={i18nLocal}
-        expandUp={true}
-        totalItems={allData?.length}
-        showPageSize={showPagerSize}
-        showQuickNav={showPagerNav}
-        showNav={showPagerNav}
-        value={{
-          page: currentPage,
-          pageSize: currentPageSize,
-        }}
-        hasBoundaryRight={true}
-        on:change={onPageChange}
-      />
-    </div>
+    {#snippet footer()}
+      <div>
+        <Pager
+          i18n={i18nLocal}
+          expandUp={true}
+          totalItems={allData?.length}
+          showPageSize={showPagerSize}
+          showQuickNav={showPagerNav}
+          showNav={showPagerNav}
+          value={{
+            page: currentPage,
+            pageSize: currentPageSize,
+          }}
+          hasBoundaryRight={true}
+          onchange={onPageChange}
+        />
+      </div>
+    {/snippet}
   </Card>
 </PageWithMenu>
 
 {#if showCatchupModal && selectedPeer}
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="modal-overlay"
     role="presentation"
-    on:click={() => {
+    onclick={() => {
       showCatchupModal = false
       selectedPeer = null
     }}
-    on:keydown={(e) => {
+    onkeydown={(e) => {
       if (e.key === 'Escape') {
         showCatchupModal = false
         selectedPeer = null
       }
     }}
   >
-    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="modal-content"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <div class="modal-header">
         <h2 id="modal-title" class="modal-title">Catchup Details - {selectedPeer.client_name || selectedPeer.id}</h2>
-        <button class="modal-close" on:click={() => {
+        <button class="modal-close" onclick={() => {
           showCatchupModal = false
           selectedPeer = null
         }}>×</button>

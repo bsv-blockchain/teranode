@@ -1,4 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { theme as themeStore } from '$lib/stores/media'
   import deepmerge from 'deepmerge'
 
@@ -10,19 +13,25 @@
   // web fonts
   import './css/inter.css'
 
-  export let theme
-  export let themeNs
-  export let customThemeProps: any = {}
+  let {
+    theme,
+    themeNs,
+    customThemeProps = {},
+    children,
+  }: {
+    theme: any
+    themeNs: any
+    customThemeProps?: any
+    children?: Snippet
+  } = $props()
 
   const themes = {
     dark: darkTheme,
     light: lightTheme,
   }
 
-  let themeProps = {}
-
-  $: {
-    themeProps = themes[theme] ?? lightTheme
+  $effect(() => {
+    let themeProps = themes[theme] ?? lightTheme
 
     if (theme !== null) {
       themeProps = deepmerge(themeProps, customThemeProps)
@@ -34,10 +43,10 @@
     if (typeof document !== 'undefined' && (theme === 'light' || theme === 'dark')) {
       document.documentElement.setAttribute('data-theme', theme)
     }
-  }
+  })
 </script>
 
-<slot />
+{@render children?.()}
 
 <style>
   :global(:root) {

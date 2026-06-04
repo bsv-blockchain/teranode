@@ -2029,13 +2029,64 @@ func (u *BlockValidation) computeAndSetCoinbaseBUMP(ctx context.Context, block *
 		subtree0.ReplaceRootNode(coinbaseTxID, 0, uint64(block.CoinbaseTx.Size()))
 	}
 
-	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, block.Subtrees, block.Height)
+	// The block's top-level merkle tree (model.Block.CheckMerkleRoot) lifts the final
+	// subtree's root to the first subtree's height when the final subtree is shorter,
+	// and blockassembly.createMerkleTreeFromSubtrees does the same before computing the
+	// coinbase BUMP. The BUMP's block-level proof MUST be built from those same lifted
+	// roots; otherwise it does not reconcile to the header merkle root for peer-received
+	// multi-subtree blocks whose final subtree is smaller than the first.
+	subtreeHashes := block.Subtrees
+	if len(block.Subtrees) > 1 {
+		subtreeHashes, err = u.liftFinalSubtreeRootForBUMP(ctx, block, subtree0)
+		if err != nil {
+			return err
+		}
+	}
+
+	bumpBytes, err := bump.ComputeCoinbaseBUMP(subtree0, subtreeHashes, block.Height)
 	if err != nil {
 		return errors.NewProcessingError("failed to compute coinbase BUMP", err)
 	}
 
 	block.CoinbaseBUMP = bumpBytes
 	return nil
+}
+
+// liftFinalSubtreeRootForBUMP returns a copy of block.Subtrees in which the final
+// subtree's root is lifted (padded) to the first subtree's height when the final
+// subtree holds fewer leaves than the first. This mirrors the top-tree composition
+// in model.Block.CheckMerkleRoot and blockassembly.createMerkleTreeFromSubtrees, so
+// the coinbase BUMP's block-level proof matches the block-header merkle root. The
+// already-loaded first subtree is passed in as subtree0.
+func (u *BlockValidation) liftFinalSubtreeRootForBUMP(ctx context.Context, block *model.Block, subtree0 *subtreepkg.Subtree) ([]*chainhash.Hash, error) {
+	lastIdx := len(block.Subtrees) - 1
+
+	reader, err := u.subtreeStore.GetIoReader(ctx, block.Subtrees[lastIdx][:], fileformat.FileTypeSubtree)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to load final subtree for coinbase BUMP", err)
+	}
+	defer reader.Close()
+
+	finalSubtree, err := subtreepkg.NewSubtreeFromReader(reader)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to parse final subtree for coinbase BUMP", err)
+	}
+
+	subtreeHashes := make([]*chainhash.Hash, len(block.Subtrees))
+	copy(subtreeHashes, block.Subtrees)
+
+	// Only the final subtree may be shorter than the first; non-final subtrees are
+	// always full-size, so their roots already sit at the first subtree's height.
+	if finalSubtree.Length() < subtree0.Length() {
+		liftedRoot, err := finalSubtree.RootHashPadded(subtree0.Height)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to lift final subtree root for coinbase BUMP", err)
+		}
+
+		subtreeHashes[lastIdx] = liftedRoot
+	}
+
+	return subtreeHashes, nil
 }
 
 // checkOldBlockIDs verifies that referenced blocks are in the current chain.

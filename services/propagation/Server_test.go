@@ -60,6 +60,7 @@ func setupRealValidator(t *testing.T, ctx context.Context) (validator.Interface,
 	// Create UTXO store with memory SQLite
 	utxoStore := testutil.NewSQLiteMemoryUTXOStore(ctx, logger, tSettings, t)
 	_ = utxoStore.SetBlockHeight(100)
+	_ = utxoStore.SetMedianBlockTime(1700000000)
 
 	// Create blockchain client with memory SQLite
 	blockchainClient := testutil.NewMemorySQLiteBlockchainClient(logger, tSettings, t)
@@ -693,6 +694,7 @@ func Test_handleMultipleTx(t *testing.T) {
 		require.NoError(t, err)
 
 		_ = utxoStore.SetBlockHeight(101)
+		_ = utxoStore.SetMedianBlockTime(1700000000)
 
 		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, nil)
 		require.NoError(t, err)
@@ -854,6 +856,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 	require.NoError(t, err)
 
 	_ = utxoStore.SetBlockHeight(101)
+	_ = utxoStore.SetMedianBlockTime(1700000000)
 
 	t.Run("Test sending non extended tx", func(t *testing.T) {
 		for _, tx := range txs {

@@ -1,37 +1,45 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { Modal } from '$lib/components'
 
-  export let size = 75
-  export let speed = 550
-  export let color = '#232d7c'
-  export let coverColor = 'rgba(255, 255, 255, 0.7)'
-  export let thickness = 1
-  export let gap = 25
-  export let radius = 10
-  export let offsetX = 0
+  let {
+    size = 75,
+    speed = 550,
+    color = '#232d7c',
+    coverColor = 'rgba(255, 255, 255, 0.7)',
+    thickness = 1,
+    gap = 25,
+    radius = 10,
+    offsetX = 0,
+  }: {
+    size?: number | 'small'
+    speed?: number
+    color?: string
+    coverColor?: string
+    thickness?: number
+    gap?: number
+    radius?: number
+    offsetX?: number
+  } = $props()
 
   // Handle predefined sizes
-  if (size === 'small') {
-    size = 16
-    thickness = 2
-    radius = 6
-    gap = 20
-  }
+  const isSmall = $derived(size === 'small')
+  const effectiveSize = $derived(isSmall ? 16 : (size as number))
+  const effectiveThickness = $derived(isSmall ? 2 : thickness)
+  const effectiveRadius = $derived(isSmall ? 6 : radius)
+  const effectiveGap = $derived(isSmall ? 20 : gap)
 
-  let dash
-  let marginLeft = 0
-  $: {
-    dash = (2 * Math.PI * radius * (100 - gap)) / 100
-    marginLeft = offsetX
-  }
+  const dash = $derived((2 * Math.PI * effectiveRadius * (100 - effectiveGap)) / 100)
+  const marginLeft = $derived(offsetX)
 </script>
 
 <Modal flyContent={false} coverCol={coverColor}>
   <svg
-    height={size}
-    width={size}
+    height={effectiveSize}
+    width={effectiveSize}
     style="animation-duration:{speed}ms;"
-    class="svelte-spinner {size === 16 ? 'spinner-small' : ''}"
+    class="svelte-spinner {effectiveSize === 16 ? 'spinner-small' : ''}"
     viewBox="0 0 32 32"
     style:--margin-left={marginLeft + 'px'}
   >
@@ -39,10 +47,10 @@
       role="presentation"
       cx="16"
       cy="16"
-      r={radius}
+      r={effectiveRadius}
       stroke={color}
       fill="none"
-      stroke-width={thickness}
+      stroke-width={effectiveThickness}
       stroke-dasharray="{dash},100"
       stroke-linecap="round"
     />

@@ -11,6 +11,58 @@ import (
 	"github.com/looplab/fsm"
 )
 
+// FSMTransitions is the single source of truth for blockchain FSM transitions.
+// Used by NewFiniteStateMachine and by AvailableEventsForState.
+var FSMTransitions = fsm.Events{
+	{
+		Name: blockchain_api.FSMEventType_RUN.String(),
+		Src: []string{
+			blockchain_api.FSMStateType_IDLE.String(),
+			blockchain_api.FSMStateType_LEGACYSYNCING.String(),
+			blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+		},
+		Dst: blockchain_api.FSMStateType_RUNNING.String(),
+	},
+	{
+		Name: blockchain_api.FSMEventType_LEGACYSYNC.String(),
+		Src: []string{
+			blockchain_api.FSMStateType_IDLE.String(),
+		},
+		Dst: blockchain_api.FSMStateType_LEGACYSYNCING.String(),
+	},
+	{
+		Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
+		Src: []string{
+			blockchain_api.FSMStateType_RUNNING.String(),
+		},
+		Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+	},
+	{
+		Name: blockchain_api.FSMEventType_STOP.String(),
+		Src: []string{
+			blockchain_api.FSMStateType_RUNNING.String(),
+			blockchain_api.FSMStateType_LEGACYSYNCING.String(),
+		},
+		Dst: blockchain_api.FSMStateType_IDLE.String(),
+	},
+}
+
+// AvailableEventsForState returns the event names valid from the given state,
+// derived from FSMTransitions (single source of truth). Order follows the
+// table's declaration order. Unknown state returns an empty (non-nil) slice.
+func AvailableEventsForState(state string) []string {
+	events := make([]string, 0)
+	for _, e := range FSMTransitions {
+		for _, src := range e.Src {
+			if src == state {
+				events = append(events, e.Name)
+				break
+			}
+		}
+	}
+	return events
+}
+
 // NewFiniteStateMachine creates a new finite state machine for the blockchain service.
 //
 // States: IDLE, RUNNING, CATCHINGBLOCKS, LEGACYSYNCING
@@ -44,39 +96,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Create the finite state machine, with states and transitions
 	finiteStateMachine := fsm.NewFSM(
 		blockchain_api.FSMStateType_IDLE.String(),
-		fsm.Events{
-			{
-				Name: blockchain_api.FSMEventType_RUN.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_IDLE.String(),
-					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-				},
-				Dst: blockchain_api.FSMStateType_RUNNING.String(),
-			},
-			{
-				Name: blockchain_api.FSMEventType_LEGACYSYNC.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_IDLE.String(),
-				},
-				Dst: blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-			},
-			{
-				Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_RUNNING.String(),
-				},
-				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-			},
-			{
-				Name: blockchain_api.FSMEventType_STOP.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-				},
-				Dst: blockchain_api.FSMStateType_IDLE.String(),
-			},
-		},
+		FSMTransitions,
 		callbacks,
 		// fsm.Callbacks{},
 	)

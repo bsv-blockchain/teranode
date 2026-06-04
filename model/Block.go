@@ -280,7 +280,10 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		subtreeHash *chainhash.Hash
 	)
 
-	block.Subtrees = make([]*chainhash.Hash, 0, block.subtreeLength)
+	// subtreeLength is an untrusted varint from the wire. Cap the speculative
+	// pre-allocation and rely on the append below: a bogus count then errors on
+	// the first missing hash instead of forcing a multi-GB allocation up front.
+	block.Subtrees = make([]*chainhash.Hash, 0, min(block.subtreeLength, 1024))
 
 	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
@@ -967,7 +970,11 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	}
 
 	if len(parentTxMeta.BlockIDs) > 0 && parentTxMeta.BlockIDs[0] == GenesisBlockID {
-		// when blockIds[0] is GenesisBlockID, it means the transaction was imported from a restore and is on a valid chain
+		// Safe to index [0] without a main-chain filter: the restore path appends
+		// GenesisBlockID FIRST, and any subsequent real confirmations are appended
+		// after. Genesis cannot be in a fork, so BlockIDs[0] == GenesisBlockID
+		// uniquely identifies a tx imported from a restore and known to be on a
+		// valid chain. See #967.
 		return oldBlockIDs, nil
 	}
 

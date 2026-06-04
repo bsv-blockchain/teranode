@@ -24,7 +24,6 @@ import (
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -116,10 +115,10 @@ func getPorts(ctx context.Context, t *testing.T, compose compose.ComposeStack, s
 		var mappedPort int
 
 		if servicePort.IsMapped {
-			p, err := t1.MappedPort(ctx, nat.Port(strconv.Itoa(servicePort.Port)))
+			p, err := t1.MappedPort(ctx, strconv.Itoa(servicePort.Port))
 			require.NoError(t, err)
 
-			mappedPort = p.Int()
+			mappedPort = int(p.Num())
 		} else {
 			mappedPort = servicePort.Port
 		}

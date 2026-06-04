@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +112,55 @@ func TestShouldStoreNonZeroUTXO(t *testing.T) {
 		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight-1))
 		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight+1))
 	})
+}
+
+func buildExtendedTx(t *testing.T, nOutputs int) *bt.Tx {
+	t.Helper()
+	tx := bt.NewTx()
+	err := tx.From(
+		"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+		0,
+		"76a914000000000000000000000000000000000000000088ac",
+		uint64(nOutputs)*1000,
+	)
+	require.NoError(t, err)
+	script, err := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
+	require.NoError(t, err)
+	for i := 0; i < nOutputs; i++ {
+		tx.AddOutput(&bt.Output{Satoshis: 1, LockingScript: script})
+	}
+	return tx
+}
+
+func TestGetUtxoHashes_AllocsAreConstant(t *testing.T) {
+	small := buildExtendedTx(t, 1)
+	large := buildExtendedTx(t, 64)
+
+	allocsSmall := testing.AllocsPerRun(50, func() {
+		_, err := GetUtxoHashes(small)
+		require.NoError(t, err)
+	})
+	allocsLarge := testing.AllocsPerRun(50, func() {
+		_, err := GetUtxoHashes(large)
+		require.NoError(t, err)
+	})
+
+	// O(1) in output count: large (64 outputs) allocates no more than small.
+	require.LessOrEqual(t, allocsLarge, allocsSmall)
+	// 4 fixed allocs: scratch buf, hashes backing array, utxoHashes slice, TxIDChainHash heap escape.
+	require.LessOrEqual(t, allocsSmall, float64(4))
+}
+
+func TestGetUtxoHashes_ValuesUnchanged(t *testing.T) {
+	tx := buildExtendedTx(t, 4)
+	got, err := GetUtxoHashes(tx)
+	require.NoError(t, err)
+	txid := tx.TxIDChainHash()
+	for i, output := range tx.Outputs {
+		want, err := util.UTXOHashFromOutput(txid, output, uint32(i))
+		require.NoError(t, err)
+		require.Equal(t, *want, *got[i])
+	}
 }
 
 func BenchmarkGetUtxoHashes(b *testing.B) {

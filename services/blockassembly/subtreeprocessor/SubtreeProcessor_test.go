@@ -1371,6 +1371,94 @@ func testOrderPreservation(t *testing.T, subtreeProcessor *SubtreeProcessor, num
 	subtreeProcessor.GetCurrentTxMap().Clear()
 }
 
+// TestParallelBuildRemainderSubtrees_MultiChunk exercises the parallel
+// subtree-builder path where the kept-node count exceeds the first chunk's
+// free slots and forces creation of multiple new subtrees. Verifies leaf
+// order, chained-subtree count, partial-fill currentSubtree, and that every
+// completed subtree has its root hash eagerly materialised by the parallel
+// goroutines (the latter is what gives us the perf win on real workloads).
+func TestParallelBuildRemainderSubtrees_MultiChunk(t *testing.T) {
+	newSubtreeChan := make(chan NewSubtreeRequest, 100)
+
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	defer close(newSubtreeChan)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 256
+
+	ctx := context.Background()
+	stp, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+
+	const leafCount = 256
+	const numTx = 1000 // 1 coinbase + 255 fills chunk 0; 745 left → 2 full chunks + 233 partial
+
+	ordered := make([]subtreepkg.Node, numTx)
+	for i := 0; i < numTx; i++ {
+		b := make([]byte, 32)
+		_, err := rand.Read(b)
+		require.NoError(t, err)
+
+		ordered[i] = subtreepkg.Node{Hash: chainhash.Hash(b), Fee: 1, SizeInBytes: 250}
+	}
+
+	cs, err := subtreepkg.NewTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+	require.NoError(t, cs.AddCoinbaseNode())
+	stp.currentSubtree.Store(cs)
+	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
+
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, true))
+
+	// Reassemble leaf order from chainedSubtrees followed by currentSubtree,
+	// stripping coinbase placeholders.
+	var result []subtreepkg.Node
+
+	for _, st := range stp.chainedSubtrees {
+		for _, n := range st.Nodes {
+			if !n.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+				result = append(result, n)
+			}
+		}
+	}
+
+	for _, n := range stp.currentSubtree.Load().Nodes {
+		if !n.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+			result = append(result, n)
+		}
+	}
+
+	require.Equal(t, numTx, len(result), "expected %d nodes total across chained + current", numTx)
+
+	for i := range ordered {
+		require.True(t, ordered[i].Hash.Equal(result[i].Hash),
+			"leaf order mismatch at index %d", i)
+	}
+
+	// firstChunkCap=255, then two full chunks of 256, then 233 left over → 3 chained.
+	require.Equal(t, 3, len(stp.chainedSubtrees), "expected 3 completed subtrees in chain")
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[0].Nodes))
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[1].Nodes))
+	require.Equal(t, leafCount, len(stp.chainedSubtrees[2].Nodes))
+
+	// Partial chunk lands in the open currentSubtree (no coinbase placeholder
+	// on a non-first subtree).
+	currentSt := stp.currentSubtree.Load()
+	require.Equal(t, 233, len(currentSt.Nodes))
+
+	// Eager-merkle invariant: every chained (completed) subtree should already
+	// have its root hash materialised so the parallel work isn't redone
+	// serially by the first reader downstream.
+	for i, st := range stp.chainedSubtrees {
+		require.NotNil(t, st.RootHash(), "chained subtree %d missing root hash", i)
+	}
+}
+
 func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 

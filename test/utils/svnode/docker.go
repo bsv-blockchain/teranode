@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +14,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -68,9 +69,9 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 		Image:        d.opts.DockerImage,
 		ExposedPorts: []string{rpcPortStr, p2pPortStr},
 		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.PortBindings = nat.PortMap{
-				nat.Port(rpcPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.RPCPort)}},
-				nat.Port(p2pPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.P2PPort)}},
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(rpcPortStr): []network.PortBinding{{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", d.opts.RPCPort)}},
+				network.MustParsePort(p2pPortStr): []network.PortBinding{{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", d.opts.P2PPort)}},
 			}
 			hc.NetworkMode = "host"
 			// Mount the config file (not read-only as entrypoint needs to chown it)

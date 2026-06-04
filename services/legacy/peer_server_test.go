@@ -457,12 +457,31 @@ func newTestServerForRelay(t *testing.T, fsmState blockchain.FSMStateType, fsmEr
 		Return(fsmState == blockchain.FSMStateRUNNING, fsmErr)
 
 	s := &server{
-		ctx:              context.Background(),
-		settings:         &settings.Settings{},
-		blockchainClient: mockBC,
-		relayInv:         make(chan relayMsg, 16),
+		ctx:                  context.Background(),
+		settings:             &settings.Settings{},
+		blockchainClient:     mockBC,
+		relayInv:             make(chan relayMsg, 16),
+		modifyRebroadcastInv: make(chan interface{}, 16),
 	}
 	return s, mockBC
+}
+
+// drainModifyRebroadcastInv collects up to `want` entries from modifyRebroadcastInv
+// or returns whatever arrived by the deadline. AddRebroadcastInventory dispatches
+// directly (no goroutine), so a short timeout is enough.
+func drainModifyRebroadcastInv(t *testing.T, ch chan interface{}, want int, timeout time.Duration) []interface{} {
+	t.Helper()
+	var got []interface{}
+	deadline := time.After(timeout)
+	for len(got) < want {
+		select {
+		case m := <-ch:
+			got = append(got, m)
+		case <-deadline:
+			return got
+		}
+	}
+	return got
 }
 
 // drain reports how many relayMsg entries arrived on relayInv within the
@@ -561,6 +580,256 @@ func TestRelayInventory_AlwaysRelaysBlockInvs(t *testing.T) {
 			require.Len(t, drain(s.relayInv, 200*time.Millisecond), 1, "block inv must always relay")
 		})
 	}
+}
+
+// TestAnnounceNewTransactions_EnqueuesForRebroadcast closes the gap from
+// issue #942: AddRebroadcastInventory was defined but never called, so any
+// tx that hit a transient relay miss (peer not yet connected, FSM flapping
+// in/out of RUNNING, etc.) was stuck in the local mempool with no retry.
+//
+// AnnounceNewTransactions must enqueue every relayed tx for periodic
+// rebroadcast so the existing rebroadcastHandler can re-attempt delivery
+// when conditions change.
+func TestAnnounceNewTransactions_EnqueuesForRebroadcast(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+
+	h1 := chainhash.Hash{0xaa, 0x11}
+	h2 := chainhash.Hash{0xbb, 0x22}
+	s.AnnounceNewTransactions([]*netsync.TxHashAndFee{
+		{TxHash: h1, Fee: 1, Size: 100},
+		{TxHash: h2, Fee: 2, Size: 200},
+	})
+
+	got := drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 2, 200*time.Millisecond)
+	require.Len(t, got, 2, "each tx must be queued for rebroadcast")
+
+	seen := map[chainhash.Hash]bool{}
+	for _, msg := range got {
+		add, ok := msg.(broadcastInventoryAdd)
+		require.True(t, ok, "expected broadcastInventoryAdd, got %T", msg)
+		require.NotNil(t, add.invVect)
+		require.Equal(t, wire.InvTypeTx, add.invVect.Type)
+		seen[add.invVect.Hash] = true
+	}
+	require.True(t, seen[h1], "h1 missing from rebroadcast queue")
+	require.True(t, seen[h2], "h2 missing from rebroadcast queue")
+}
+
+// TestAnnounceNewTransactions_DoesNotEnqueueWhenFSMNotRunning verifies the
+// inverse of the rebroadcast wiring on the legitimate FSM gate: if the
+// relay path bails because the chain isn't synced (canRelayTx=false), we
+// must not silently queue the tx for rebroadcast either. Otherwise we'd
+// retry forever pre-Genesis and earn instant bans on the post-Genesis
+// network for `bad-txns-vout-p2sh` outputs — see the canRelayTx doc
+// comment.
+func TestAnnounceNewTransactions_DoesNotEnqueueWhenFSMNotRunning(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateCATCHINGBLOCKS, nil)
+	s.AnnounceNewTransactions([]*netsync.TxHashAndFee{{TxHash: chainhash.Hash{0x42}, Fee: 1, Size: 100}})
+	require.Empty(t, drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 1, 50*time.Millisecond),
+		"must not enqueue for rebroadcast when relay is gated by FSM")
+}
+
+// TestAnnounceNewTransactions_RelaysRegardlessOfListenMode locks in the
+// decision (review feedback on PR #955) that the legacy P2P announce
+// path is NOT gated by the modern-P2P `listen_mode` setting. listen_only
+// is documented for DataHub URL advertisement on the modern p2p service;
+// the legacy INV→GETDATA path is opt-in via enabling the legacy service
+// itself, and should propagate to explicitly-configured legacy peers
+// regardless of how the modern-P2P listen mode is set.
+//
+// A regression here would silently break legacy tx propagation for any
+// node running with listen_mode=listen_only — exactly the foot-gun this
+// PR set out to fix.
+func TestAnnounceNewTransactions_RelaysRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+
+			hash := chainhash.Hash{0x55}
+			s.AnnounceNewTransactions([]*netsync.TxHashAndFee{{TxHash: hash, Fee: 1, Size: 100}})
+
+			// Immediate relay path
+			require.Len(t, drain(s.relayInv, 100*time.Millisecond), 1,
+				"tx INV must be relayed regardless of listen_mode=%s", mode)
+
+			// Rebroadcast retry path
+			rebroadcast := drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 1, 100*time.Millisecond)
+			require.Len(t, rebroadcast, 1,
+				"tx must be enqueued for rebroadcast regardless of listen_mode=%s", mode)
+		})
+	}
+}
+
+// TestRelayInventory_RelaysTxRegardlessOfListenMode is the direct-path
+// equivalent for RelayInventory: RPC-driven rebroadcastHandler ticks
+// flow through here as well as the post-AnnounceNewTransactions path.
+// Same justification as TestAnnounceNewTransactions_RelaysRegardlessOfListenMode.
+func TestRelayInventory_RelaysTxRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+
+			hash := chainhash.Hash{0x66}
+			iv := wire.NewInvVect(wire.InvTypeTx, &hash)
+			s.RelayInventory(iv, &netsync.TxHashAndFee{TxHash: hash, Fee: 1, Size: 100})
+
+			got := drain(s.relayInv, 100*time.Millisecond)
+			require.Len(t, got, 1, "tx inv must be relayed regardless of listen_mode=%s", mode)
+			require.Equal(t, iv, got[0].invVect)
+		})
+	}
+}
+
+// TestBroadcastMessage_BroadcastsRegardlessOfListenMode covers the third
+// previously-gated call site. BroadcastMessage handles legacy wire-level
+// broadcasts (addr / ping / etc.) which are part of being a Bitcoin P2P
+// peer at all. There is no scenario in which the modern-P2P listen_mode
+// should suppress them on the legacy side.
+func TestBroadcastMessage_BroadcastsRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+			// newTestServerForRelay doesn't allocate broadcast; do it here.
+			s.broadcast = make(chan broadcastMsg, 4)
+
+			ping := wire.NewMsgPing(0)
+			s.BroadcastMessage(ping)
+
+			deadline := time.After(100 * time.Millisecond)
+			select {
+			case bm := <-s.broadcast:
+				require.Equal(t, ping, bm.message)
+			case <-deadline:
+				t.Fatalf("BroadcastMessage must dispatch regardless of listen_mode=%s", mode)
+			}
+		})
+	}
+}
+
+// TestTryAddRebroadcast_PreservesAttemptsOnReadd locks in the invariant that
+// re-adding an iv already present in pendingInvs does NOT reset its retry
+// counter — otherwise a Kafka replay (or any duplicate hit) could refresh
+// the retry budget of a tx that should have aged out, defeating the
+// maxRebroadcastAttempts ceiling.
+func TestTryAddRebroadcast_PreservesAttemptsOnReadd(t *testing.T) {
+	pending := map[wire.InvVect]*rebroadcastEntry{}
+	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
+
+	require.True(t, tryAddRebroadcast(pending, 10, iv, "first"))
+	pending[iv].attempts = 3 // simulate three retry ticks
+
+	require.True(t, tryAddRebroadcast(pending, 10, iv, "second"),
+		"re-add of an existing iv must be accepted (returns true)")
+	require.Equal(t, 3, pending[iv].attempts,
+		"re-add must preserve the existing attempts counter")
+	require.Equal(t, "second", pending[iv].data,
+		"re-add must refresh the data payload")
+	require.Len(t, pending, 1)
+}
+
+// TestTryAddRebroadcast_DropsAtCap covers the bounded-memory contract for the
+// rebroadcast queue: once pendingInvs has `capacity` entries, new (non-update)
+// adds must be rejected. Older entries keep their retry budget rather than
+// being evicted by churn from fresh adds that haven't yet failed.
+func TestTryAddRebroadcast_DropsAtCap(t *testing.T) {
+	const capacity = 4
+	pending := map[wire.InvVect]*rebroadcastEntry{}
+
+	// Fill to capacity.
+	for i := 0; i < capacity; i++ {
+		iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{byte(i + 1)}}
+		require.True(t, tryAddRebroadcast(pending, capacity, iv, i),
+			"add #%d below cap must be accepted", i)
+	}
+	require.Len(t, pending, capacity)
+
+	// One more — must be rejected.
+	overflow := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0xff}}
+	require.False(t, tryAddRebroadcast(pending, capacity, overflow, "overflow"),
+		"add beyond cap must be rejected")
+	require.Len(t, pending, capacity, "rejected add must not mutate the map")
+	_, present := pending[overflow]
+	require.False(t, present, "overflow entry must not be inserted")
+
+	// Update of an existing key must still succeed at cap.
+	existing := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
+	require.True(t, tryAddRebroadcast(pending, capacity, existing, "updated"),
+		"update of existing key must succeed even at cap")
+	require.Equal(t, "updated", pending[existing].data)
+}
+
+// TestProcessRebroadcastTick_AgesOutAfterMaxAttempts asserts the per-entry
+// retry budget: after `maxAttempts` ticks, the entry is removed even if
+// nothing called RemoveRebroadcastInventory. This is the only mechanism
+// bounding the queue from below, because TransactionConfirmed is dead code
+// in this codebase.
+func TestProcessRebroadcastTick_AgesOutAfterMaxAttempts(t *testing.T) {
+	const maxAttempts = 3
+	pending := map[wire.InvVect]*rebroadcastEntry{}
+	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x77}}
+	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
+
+	var relayed int
+	relay := func(*wire.InvVect, interface{}) { relayed++ }
+
+	for i := 1; i < maxAttempts; i++ {
+		processRebroadcastTick(pending, maxAttempts, relay)
+		require.Len(t, pending, 1, "entry must remain at tick %d", i)
+		require.Equal(t, i, pending[iv].attempts)
+	}
+
+	// Final tick — entry retries one more time, then ages out.
+	processRebroadcastTick(pending, maxAttempts, relay)
+	require.Empty(t, pending, "entry must be deleted after maxAttempts ticks")
+	require.Equal(t, maxAttempts, relayed, "relay must fire exactly maxAttempts times")
+}
+
+// TestProcessRebroadcastTick_KeepsEntriesUnderBudget guards against an
+// off-by-one in the aging logic: an entry must survive ticks until its
+// attempt count actually *reaches* maxAttempts.
+func TestProcessRebroadcastTick_KeepsEntriesUnderBudget(t *testing.T) {
+	const maxAttempts = 6
+	pending := map[wire.InvVect]*rebroadcastEntry{}
+	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x88}}
+	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
+
+	noop := func(*wire.InvVect, interface{}) {}
+	for i := 0; i < maxAttempts-1; i++ {
+		processRebroadcastTick(pending, maxAttempts, noop)
+	}
+
+	require.Len(t, pending, 1, "entry must still be present below budget")
+	require.Equal(t, maxAttempts-1, pending[iv].attempts)
+}
+
+// TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel asserts the
+// observability contract: when modifyRebroadcastInv is saturated, the
+// non-blocking send drops AND increments droppedRebroadcastAdds. Silent
+// drops would hide queue saturation from operators in a high-tx-rate
+// deployment.
+func TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+
+	// Replace the channel with a single-slot one we never drain.
+	s.modifyRebroadcastInv = make(chan interface{}, 1)
+
+	iv := wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{0x10})
+
+	// First call fills the buffer, no drop.
+	s.AddRebroadcastInventory(iv, nil)
+	require.Equal(t, uint64(0), s.droppedRebroadcastAdds.Load(),
+		"first add fills buffer, must not drop")
+
+	// Subsequent calls must drop and bump the counter.
+	const overflow = 5
+	for i := 0; i < overflow; i++ {
+		s.AddRebroadcastInventory(iv, nil)
+	}
+	require.Equal(t, uint64(overflow), s.droppedRebroadcastAdds.Load(),
+		"every add against a full buffer must bump the drop counter")
 }
 
 // TestAnnounceNewTransactions_SuppressedWhenNotRunning verifies that the

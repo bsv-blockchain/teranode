@@ -1,35 +1,49 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { tippy } from '$lib/stores/media'
   import Icon from '../../icon/index.svelte'
 
-  export let selected = false
-  export let collapsed = false
-  export let icon
-  export let iconSelected
-  export let label
+  let {
+    selected = false,
+    collapsed = false,
+    icon,
+    iconSelected,
+    label,
+    onclick,
+    onfocus,
+    onblur,
+  }: {
+    selected?: boolean
+    collapsed?: boolean
+    icon?: any
+    iconSelected?: any
+    label?: any
+    onclick?: (detail?: any) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  const dispatch = createEventDispatcher()
+  let focused = $state(false)
 
-  let focused = false
-
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
+        onblur?.()
         break
       case 'focus':
         focused = true
+        onfocus?.()
         break
     }
-    dispatch(eventName)
   }
 
-  function dispatchClick(e) {
-    dispatch('click', e.detail)
+  function dispatchClick(e: any) {
+    onclick?.(e?.detail)
   }
 
-  function onKeyDown(e) {
+  function onKeyDown(e: any) {
     if (!e) e = window.event
     const keyCode = e.code || e.key
     switch (keyCode) {
@@ -42,9 +56,9 @@
     }
   }
 
-  let active = false
+  let active = $state(false)
 
-  $: currentIcon = selected || active || focused ? iconSelected : icon
+  const currentIcon = $derived(selected || active || focused ? iconSelected : icon)
 </script>
 
 {#key collapsed}
@@ -52,12 +66,12 @@
     role="menuitem"
     class={`tui-menu-item${selected ? ' selected' : ''}${collapsed ? ' collapsed' : ''}`}
     tabindex="0"
-    on:click={dispatchClick}
-    on:keydown={onKeyDown}
-    on:focus={() => onFocusAction('focus')}
-    on:blur={() => onFocusAction('blur')}
-    on:mouseenter={() => (active = true)}
-    on:mouseleave={() => (active = false)}
+    onclick={dispatchClick}
+    onkeydown={onKeyDown}
+    onfocus={() => onFocusAction('focus')}
+    onblur={() => onFocusAction('blur')}
+    onmouseenter={() => (active = true)}
+    onmouseleave={() => (active = false)}
     use:$tippy={{ content: collapsed ? label : null, offset: [0, 0] }}
   >
     {#if icon}

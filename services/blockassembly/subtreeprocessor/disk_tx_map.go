@@ -44,7 +44,7 @@ type diskShard struct {
 	done         chan struct{}
 	path         string
 	prefix       string
-	bytesWritten int64 // only touched by the single writer goroutine — no atomic needed
+	bytesWritten int64 // written by this disk's writerLoop, read concurrently by Stats(); access via sync/atomic
 }
 
 // DiskTxMap implements TxInpointsMap using sharded cuckoo filters for fast
@@ -166,7 +166,7 @@ func (m *DiskTxMap) writerLoop(diskIdx int) {
 
 		value := serializeTxMapValue(entry.inpoints)
 		_ = d.batch.Set(entry.key[:], value)
-		d.bytesWritten += int64(chainhash.HashSize + len(value))
+		atomic.AddInt64(&d.bytesWritten, int64(chainhash.HashSize+len(value)))
 		pending++
 
 		if pending >= writerFlushThreshold {
@@ -493,11 +493,13 @@ type DiskMapStats struct {
 	DiskBytesWritten int64
 }
 
-// Stats returns current metrics. Safe to call after Flush() when writer goroutines are idle.
+// Stats returns current metrics. It may be called concurrently with active
+// writer goroutines (e.g. reportDiskMapStats during moveForwardBlock before
+// Clear()), so bytesWritten is read atomically.
 func (m *DiskTxMap) Stats() DiskMapStats {
 	var diskBytes int64
 	for i := range m.disks {
-		diskBytes += m.disks[i].bytesWritten
+		diskBytes += atomic.LoadInt64(&m.disks[i].bytesWritten)
 	}
 	return DiskMapStats{
 		Entries:          m.count.Load(),

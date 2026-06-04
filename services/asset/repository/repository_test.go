@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -79,6 +80,53 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, tx.TxID(), tx2.TxID())
+}
+
+// TestGetUtxoNilUTXOHash exercises Repository.GetUtxo with spend.UTXOHash == nil
+// (the fast path used by POST /api/v1/utxos and GET /api/v1/utxo). The repository
+// wrapper used to log spend.UTXOHash.String() unconditionally, which panicked on
+// nil. The test exercises the real Repository against a sqlitememory utxo store
+// so a regression would crash the test — the asset/repository.Mock does not
+// invoke this code path.
+func TestGetUtxoNilUTXOHash(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///nilhash")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// Extended-format tx (the SQL utxo store needs input fees to satisfy
+	// GetFees during Create). Same fixture used in stores/utxo/sql/sql_test.go.
+	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+
+	_, err = utxoStore.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, nil, blockchainClient, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	resp, err := repo.GetUtxo(ctx, &utxo.Spend{
+		TxID:     tx.TxIDChainHash(),
+		Vout:     1,
+		UTXOHash: nil,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
 }
 
 func TestGetSubtreeTransactions(t *testing.T) {

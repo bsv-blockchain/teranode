@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strconv"
+	"sync"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -37,6 +38,13 @@ type Stores struct {
 	mainUtxoStore               utxostore.Store
 	mainValidatorClient         validator.Interface
 	mainBlobDeletionScheduler   options.BlobDeletionScheduler
+	mainPeerRegistryClient      blockchain.PeerRegistryClientI
+	// peerRegistryClientOnce guards the singleton init in
+	// GetPeerRegistryClient against concurrent first-callers. The other
+	// singleton getters in this file have the same race shape; addressing
+	// them is out of scope for this PR.
+	peerRegistryClientOnce sync.Once
+	peerRegistryClientErr  error
 }
 
 // GetUtxoStore returns the main UTXO store instance. If the store hasn't been initialized yet,
@@ -124,6 +132,33 @@ func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger,
 	source string) (blockchain.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
 	return blockchain.NewClient(ctx, logger, appSettings, source)
+}
+
+// GetPeerRegistryClient returns a singleton client to the centralized peer
+// registry hosted by the blockchain service. The same connection is reused
+// across all callers within a daemon process; use GetBlockchainClient when
+// you need a per-source labelled connection instead.
+func (d *Stores) GetPeerRegistryClient(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
+	_ string) (blockchain.PeerRegistryClientI, error) {
+	d.peerRegistryClientOnce.Do(func() {
+		client, err := blockchain.NewPeerRegistryClient(ctx, appSettings.BlockChain.GRPCAddress, appSettings)
+		if err != nil {
+			d.peerRegistryClientErr = err
+			return
+		}
+		// Plumb the logger so non-fatal proto-decode warnings surface via the
+		// structured logger instead of stderr. SetLogger is a no-op on the
+		// in-memory localPeerRegistryClient; here the concrete type is
+		// *PeerRegistryClient which honours it.
+		if setter, ok := client.(interface{ SetLogger(ulogger.Logger) }); ok {
+			setter.SetLogger(logger)
+		}
+		d.mainPeerRegistryClient = client
+	})
+	if d.peerRegistryClientErr != nil {
+		return nil, d.peerRegistryClientErr
+	}
+	return d.mainPeerRegistryClient, nil
 }
 
 // GetBlockAssemblyClient creates and returns a new block assembly client instance.
@@ -521,6 +556,7 @@ func (d *Stores) Cleanup() {
 	d.mainUtxoStore = nil
 	d.mainValidatorClient = nil
 	d.mainP2PClient = nil
+	d.mainPeerRegistryClient = nil
 
 	// Reset the Aerospike cleanup service singleton if it exists
 	// This prevents state leakage between test runs

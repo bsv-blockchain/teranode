@@ -1,0 +1,58 @@
+name: Dashboard PR smoke
+
+on:
+  pull_request:
+    paths:
+      - 'ui/dashboard/**'
+      - '.github/workflows/dashboard_pr_smoke.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ui/dashboard
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/dashboard/package-lock.json
+      # --ignore-scripts: skip arbitrary postinstall scripts from deps. We
+      # don't run any install hooks ourselves (no postinstall in package.json)
+      # and Playwright fetches browsers via its own CLI below, not via install
+      # hooks. Reduces supply-chain blast radius for fork PRs.
+      - run: npm ci --ignore-scripts
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('ui/dashboard/package-lock.json') }}
+          restore-keys: |
+            pw-${{ runner.os }}-
+      # Invoke the locally-installed playwright binary directly (already
+      # resolved from package-lock.json above) instead of `npx playwright`,
+      # which could in principle fetch a different version on-demand.
+      - run: ./node_modules/.bin/playwright install --with-deps chromium
+      # svelte-check gates type-correctness + Svelte deprecation warnings.
+      # The runes migration cleared the legacy baseline (0 errors); this step
+      # keeps it clean and catches any regression to legacy syntax.
+      - run: npm run check
+      - run: npm run test:integration
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: ui/dashboard/playwright-report/
+          retention-days: 7

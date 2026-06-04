@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import { humanTime } from '$internal/utils/format'
@@ -6,17 +8,25 @@
   import type { Message, P2PMessage, StatusMessage, MessageSource, MsgDisplayField } from './types'
   import i18n from '../../i18n'
 
-  export let source: MessageSource = 'p2p'
-  export let message: Message
-  export let collapse = false
-  export let titleMinW = '120px'
-  export let hidePeer = false
-  export let rawMode = false
+  let {
+    source = 'p2p',
+    message,
+    collapse = false,
+    titleMinW = '120px',
+    hidePeer = false,
+    rawMode = false,
+  }: {
+    source?: MessageSource
+    message: Message
+    collapse?: boolean
+    titleMinW?: string
+    hidePeer?: boolean
+    rawMode?: boolean
+  } = $props()
 
-  let age = ''
+  let age = $state('')
   let fields: MsgDisplayField[] = []
-  let title = ''
-  
+
   // Format JSON with syntax highlighting
   function formatJSON(obj: any): string {
     try {
@@ -67,10 +77,10 @@
     return () => clearInterval(interval)
   })
 
-  $: updatedFields = getMessageFields(source, message, `${age} ago`, hidePeer)
-  $: baseKey = `comp.msgbox.${message.type.toLowerCase()}`
+  const updatedFields = $derived(getMessageFields(source, message, `${age} ago`, hidePeer))
+  const baseKey = $derived(`comp.msgbox.${message.type.toLowerCase()}`)
 
-  $: {
+  const title = $derived.by(() => {
     const translationKey =
       source === 'status' && (message as StatusMessage).source === 'status'
         ? `comp.msgbox.status.type.${message.type.toLowerCase()}.title`
@@ -78,11 +88,10 @@
 
     // Check if translation exists, if not provide a fallback
     const translation = $i18n.t(translationKey)
-    title =
-      translation === translationKey
-        ? `${message.type.charAt(0).toUpperCase()}${message.type.slice(1).toLowerCase().replace(/_/g, ' ')}`
-        : translation
-  }
+    return translation === translationKey
+      ? `${message.type.charAt(0).toUpperCase()}${message.type.slice(1).toLowerCase().replace(/_/g, ' ')}`
+      : translation
+  })
 </script>
 
 <div

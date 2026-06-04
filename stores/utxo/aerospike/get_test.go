@@ -316,7 +316,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		t.Fatal(err)
 	}
 
-	if err = sm.PreValidateTransactions(ctx, txMap, *blockHash, uint32(block.Height)); err != nil {
+	if err = sm.PreValidateTransactions(ctx, txMap, *blockHash, uint32(block.Height), 0, 0); err != nil {
 		t.Fatal(err)
 	}
 

@@ -3,6 +3,7 @@ package repository
 import (
 	"io"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +74,82 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		_, err := ctx.repo.GetSubtreeDataReader(t.Context(), subtree.RootHash())
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound), "expected ErrNotFound, got: %v", err)
+	})
+
+	t.Run("client disconnect during stream is classified as client_gone, not write_failed", func(t *testing.T) {
+		// Regression for the catchup avalanche: when the HTTP client/proxy disconnects
+		// mid-stream, the producer goroutine sees io.ErrClosedPipe on its next write.
+		// This is not a server fault, so it must be logged at debug and counted under
+		// the "client_gone" reason — never "write_failed", which is reserved for genuine
+		// server-side errors.
+		resetQuorumForTests()
+		ctx, subtree, _ := setupSubtreeReaderTest(t)
+
+		// Make sure on-demand path runs (subtreeData absent, subtree present).
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		// Force metrics initialization (also done lazily on first dual-stream call).
+		initPrometheusMetrics()
+		clientGoneBefore := testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone"))
+		writeFailedBefore := testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed"))
+
+		r, err := ctx.repo.GetSubtreeDataReader(t.Context(), subtree.RootHash())
+		require.NoError(t, err)
+
+		// Emulate the client disconnecting before reading any bytes — closes the pipe
+		// reader, the producer's next Write returns io.ErrClosedPipe.
+		require.NoError(t, r.Close())
+
+		require.Eventually(t, func() bool {
+			return testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone")) > clientGoneBefore
+		}, 2*time.Second, 10*time.Millisecond, "client_gone counter did not increment")
+
+		require.InDelta(t,
+			writeFailedBefore,
+			testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed")),
+			0, "write_failed must not increment for a client disconnect")
+	})
+
+	t.Run("genuine server-side write error still records write_failed", func(t *testing.T) {
+		// Companion to the client_gone test above: when the producer goroutine fails
+		// for a reason that is NOT a client disconnect (here: a referenced tx is missing
+		// from the utxo store, so writeTransactionsViaSubtreeStoreStreaming returns a
+		// ProcessingError unrelated to the pipe/ctx), the metric must record under
+		// "write_failed", not "client_gone".
+		resetQuorumForTests()
+		ctx := setup(t)
+
+		// Build a subtree referencing a tx that is NOT in the utxo store, then
+		// register only the subtree (no subtreeData), forcing the on-demand path.
+		_, subtree := newBlock(ctx, t, params)
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		// Intentionally DO NOT populate utxo store — so fetchSubtreeChunk will report
+		// missing tx meta and return a server-side ProcessingError.
+
+		initPrometheusMetrics()
+		clientGoneBefore := testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone"))
+		writeFailedBefore := testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed"))
+
+		r, err := ctx.repo.GetSubtreeDataReader(t.Context(), subtree.RootHash())
+		require.NoError(t, err)
+
+		// Drain to let the goroutine produce an error and close the pipe-with-error.
+		_, _ = io.Copy(io.Discard, r)
+		_ = r.Close()
+
+		require.Eventually(t, func() bool {
+			return testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed")) > writeFailedBefore
+		}, 2*time.Second, 10*time.Millisecond, "write_failed counter did not increment for a server-side error")
+
+		require.InDelta(t,
+			clientGoneBefore,
+			testutil.ToFloat64(prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone")),
+			0, "client_gone must not increment for a server-side fault")
 	})
 
 	t.Run("get subtree from utxo store and verify file creation", func(t *testing.T) {

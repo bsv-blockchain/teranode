@@ -19,6 +19,14 @@ import (
 
 const memoryScheme = "memory"
 
+// fsmReadyTimeout is a generous backstop for the blockchain FSM to become ready
+// after Run() is issued. The wait is event-driven — WaitUntilFSMTransitionFromIdleState
+// is a server-blocking RPC that returns the instant the FSM leaves IDLE and the
+// subscription manager is ready — so under no load it returns near-instantly; the
+// deadline only guards a genuinely stuck startup, replacing the old fixed 10s poll
+// that lost races under CI load.
+const fsmReadyTimeout = 60 * time.Second
+
 // BlockchainDaemon represents a minimal node that can run specific services
 type BlockchainDaemon struct {
 	ctx              context.Context
@@ -115,12 +123,6 @@ func (m *BlockchainDaemon) StartBlockchainService() error {
 		return err
 	}
 
-	// Create blockchain client using the configured address from settings
-	m.BlockchainClient, err = blockchain.NewClient(m.ctx, m.Logger, m.Settings, m.Settings.BlockChain.GRPCListenAddress)
-	if err != nil {
-		return err
-	}
-
 	// Start all services in background
 	go func() {
 		if err := m.serviceManager.Wait(); err != nil {
@@ -128,8 +130,18 @@ func (m *BlockchainDaemon) StartBlockchainService() error {
 		}
 	}()
 
-	// Wait for all services to be ready
+	// Wait for all services to be ready. StartGRPCServer binds the listening
+	// socket before the service signals readiness (GetListener -> register/close
+	// readyCh -> Serve), so creating the client only after this point removes the
+	// connection-refused race the client retry budget otherwise had to bridge
+	// under load.
 	m.serviceManager.WaitForServiceToBeReady()
+
+	// Create blockchain client using the configured address from settings
+	m.BlockchainClient, err = blockchain.NewClient(m.ctx, m.Logger, m.Settings, m.Settings.BlockChain.GRPCListenAddress)
+	if err != nil {
+		return err
+	}
 
 	// Check initial FSM state
 	initialState, err := m.BlockchainClient.GetFSMCurrentState(m.ctx)
@@ -143,29 +155,34 @@ func (m *BlockchainDaemon) StartBlockchainService() error {
 		return errors.NewProcessingError("failed to run blockchain FSM", err)
 	}
 
-	// Wait for FSM to actually transition to RUNNING state
-	// Poll for up to 10 seconds
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	// Wait for the FSM to leave IDLE and the subscription manager to become
+	// ready. Event-driven (server-blocking RPC) and bounded by the context
+	// deadline rather than a fixed poll budget. Crucially it waits on
+	// subscriptionManagerReady — the condition that made GetFSMCurrentState
+	// report IDLE and the old fixed 10s poll lose under CI load.
+	waitCtx, cancelWait := context.WithTimeout(m.ctx, fsmReadyTimeout)
+	defer cancelWait()
 
-	for {
-		select {
-		case <-timeout:
-			finalState, _ := m.BlockchainClient.GetFSMCurrentState(m.ctx)
-			return errors.NewProcessingError("timeout waiting for FSM to transition to RUNNING state", fmt.Sprintf("current state: %v", finalState))
-		case <-ticker.C:
-			state, err := m.BlockchainClient.GetFSMCurrentState(m.ctx)
-			if err != nil {
-				m.Logger.Warnf("Failed to get FSM state: %v", err)
-				continue
-			}
-			if state != nil && *state == blockchain.FSMStateRUNNING {
-				m.Logger.Infof("FSM successfully transitioned to RUNNING state")
-				return nil
-			}
-		}
+	if err := m.BlockchainClient.WaitUntilFSMTransitionFromIdleState(waitCtx); err != nil {
+		finalState, _ := m.BlockchainClient.GetFSMCurrentState(m.ctx)
+		return errors.NewProcessingError("timeout waiting for FSM to transition out of IDLE state (current state: %v)", finalState, err)
 	}
+
+	// Run() fires the RUN event, and every RUN transition has Dst=RUNNING (fsm.go),
+	// so the post-IDLE state is always RUNNING. Confirm it explicitly so a future
+	// extra transition can't slip through silently.
+	state, err := m.BlockchainClient.GetFSMCurrentState(m.ctx)
+	if err != nil {
+		return errors.NewProcessingError("failed to get FSM state after transition", err)
+	}
+
+	if state == nil || *state != blockchain.FSMStateRUNNING {
+		return errors.NewProcessingError("FSM left IDLE but did not reach RUNNING (current state: %v)", state)
+	}
+
+	m.Logger.Infof("FSM successfully transitioned to RUNNING state")
+
+	return nil
 }
 
 // Stop stops all services

@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
@@ -7,27 +9,41 @@
   import { valueSet } from '$lib/utils/types'
 
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
+  import Self from './index.svelte'
 
   import i18n from '$internal/i18n'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  // internal, don't set manually
-  export let level = 0 // used internally to set recursive level
-  export let id = 'exp'
-  export let isLastChild = false
-  export let expandState = {} // mapping from "expand" block id's to boolean indicating whether the block should be collapsed
-  let expIds: string[] = []
+  let {
+    // internal, don't set manually
+    level = 0, // used internally to set recursive level
+    id = 'exp',
+    isLastChild = false,
+    expandState = $bindable({}), // mapping from "expand" block id's to boolean indicating whether the block should be collapsed
+    // options
+    inlineArr = true,
+    inlineObj = true,
+    showCommas = true,
+    showFinalComma = false,
+    data = {},
+    parentKey = '',
+    blockHash = '',
+  }: {
+    level?: number
+    id?: string
+    isLastChild?: boolean
+    expandState?: Record<string, boolean>
+    inlineArr?: boolean
+    inlineObj?: boolean
+    showCommas?: boolean
+    showFinalComma?: boolean
+    data?: any
+    parentKey?: string
+    blockHash?: string
+  } = $props()
 
-  // options
-  export let inlineArr = true
-  export let inlineObj = true
-  export let showCommas = true
-  export let showFinalComma = false
-
-  export let data = {}
-  export let parentKey = ''
-  export let blockHash = ''
+  let expIds: string[] = $state([])
 
   function getType(value: any) {
     if (Array.isArray(value)) return 'array'
@@ -38,13 +54,13 @@
     return value as any[]
   }
 
-  $: entries = typeof data === 'object' ? Object.entries(data) : []
+  const entries = $derived<[string, any][]>(typeof data === 'object' ? Object.entries(data) : [])
 
   function onExpClick(e) {
-    const id = e.srcElement.id
+    const elId = e.srcElement.id
     expandState = {
       ...expandState,
-      [id]: valueSet(expandState[id]) ? !expandState[id] : false,
+      [elId]: valueSet(expandState[elId]) ? !expandState[elId] : false,
     }
   }
 
@@ -75,10 +91,10 @@
   {#if level === 0}
     <div class="tools">
       <div class="icon" use:$tippy={{ content: t('tooltip.collapse-all') }}>
-        <Icon name="icon-chevron-right-line" size={15} on:click={() => onBulkClose(true)} />
+        <Icon name="icon-chevron-right-line" size={15} onclick={() => onBulkClose(true)} />
       </div>
       <div class="icon" use:$tippy={{ content: t('tooltip.expand-all') }}>
-        <Icon name="icon-chevron-down-line" size={15} on:click={() => onBulkClose(false)} />
+        <Icon name="icon-chevron-down-line" size={15} onclick={() => onBulkClose(false)} />
       </div>
       <div class="icon" use:$tippy={{ content: t('tooltip.copy-json-to-clipboard') }}>
         <ActionStatusIcon
@@ -98,7 +114,7 @@
           class="expand"
           class:closed={expandState[id]}
           {id}
-          on:click={onExpClick}
+          onclick={onExpClick}
           type="button"
         >
           <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
@@ -116,7 +132,7 @@
                     class:closed={expandState[id + '_' + i]}
                     id={id + '_' + i}
                     style="padding-left:3px;"
-                    on:click={onExpClick}
+                    onclick={onExpClick}
                     type="button"
                   >
                     <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
@@ -138,15 +154,14 @@
 
               {#if getType(value) === 'object' && value !== null}
                 {#if !expandState[id + '_' + i] || !inlineObj}
-                  <svelte:self
+                  <Self
                     data={value}
                     {blockHash}
                     level={level + 1}
                     {showFinalComma}
                     isLastChild={i === entries.length - 1}
                     id={id + '_' + i}
-                    bind:expandState
-                  />
+                    bind:expandState />
                 {/if}
               {:else if getType(value) === 'array'}
                 {#if !expandState[id + '_' + i] || !inlineArr}
@@ -157,7 +172,7 @@
                       class:closed={expandState[id + '_' + i + '_']}
                       id={id + '_' + i + '_'}
                       style="margin-left:-15px;"
-                      on:click={onExpClick}
+                      onclick={onExpClick}
                       type="button"
                     >
                       <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
@@ -169,7 +184,7 @@
                     <ul>
                       {#each value as item, j (item)}
                         <li>
-                          <svelte:self
+                          <Self
                             data={item}
                             parentKey={key}
                             {blockHash}
@@ -178,8 +193,7 @@
                             isLastChild={j === entries.length - 1}
                             inlineObj={false}
                             id={id + '_' + i + '_' + j}
-                            bind:expandState
-                          />
+                            bind:expandState />
                         </li>
                       {/each}
                     </ul>

@@ -17,6 +17,10 @@ on:
     types:
       - completed
 
+concurrency:
+  group: sonar-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -37,12 +41,6 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
 
     steps:
-      - name: Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
-        with:
-          theme: "dark"
-          comment_on_pr: "false"
-
       - name: Get PR number and metadata
         id: pr
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7

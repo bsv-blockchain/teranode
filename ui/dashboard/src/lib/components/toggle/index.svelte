@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { tippy } from '$lib/stores/media'
 
   import {
@@ -7,63 +8,73 @@
     type ComponentSizeType,
     ComponentVariant,
     type ComponentVariantType,
-    FlexDirection,
-    type FlexDirectionType,
     getStyleSizeFromComponentSize,
     getComponentSizeDown,
   } from '$lib/styles/types'
 
   import { FocusRect, Button } from '$lib/components'
 
-  export let name = ''
-  export let items: any = []
-  export let value: any = null
-  export let tabindex = -99
-  export let disabled = false
-  export let hasFocusRect = true
-  export let round = false
-  export let stretch = false
+  let {
+    name = '',
+    items = [],
+    value = $bindable(null),
+    tabindex = -99,
+    disabled = false,
+    hasFocusRect = true,
+    round = false,
+    stretch = false,
+    testId = null,
+    class: clazz = null,
+    style = '',
+    size = ComponentSize.medium,
+    onchange,
+    onfocus,
+    onblur,
+  }: {
+    name?: string
+    items?: any
+    value?: any
+    tabindex?: number
+    disabled?: boolean
+    hasFocusRect?: boolean
+    round?: boolean
+    stretch?: boolean
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    size?: ComponentSizeType
+    onchange?: (e: { name: string; type: string; value: any }) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  let variant: ComponentVariantType = ComponentVariant.tool
-
-  const dispatch = createEventDispatcher()
-
-  export let testId: string | undefined | null = null
-
-  let clazz: string | undefined | null = null
-  export { clazz as class }
-
-  export let style = ''
+  const variant: ComponentVariantType = ComponentVariant.tool
 
   const type = 'toggle'
 
-  export let size: ComponentSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  $: buttonComponentSize = getComponentSizeDown(size as ComponentSize)
-  $: buttonStyleSize = getStyleSizeFromComponentSize(buttonComponentSize)
+  const buttonComponentSize = $derived(getComponentSizeDown(size as ComponentSize))
+  const buttonStyleSize = $derived(getStyleSizeFromComponentSize(buttonComponentSize))
 
-  $: compVarStr = `--comp-${variant}`
-  $: toggleVarStr = `--toggle-${variant}`
-  $: compSizeStr = `--comp-size-${styleSize}`
-  $: toggleSizeStr = `--toggle-size-${styleSize}`
+  const compVarStr = $derived(`--comp-${variant}`)
+  const toggleVarStr = $derived(`--toggle-${variant}`)
+  const compSizeStr = $derived(`--comp-size-${styleSize}`)
+  const toggleSizeStr = $derived(`--toggle-size-${styleSize}`)
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--border-radius:${round ? '9999px' : `var(--toggle-border-radius, 6px)`}`,
-      `--gap:var(--toggle-gap, 4px)`,
-      `--padding-x:var(--toggle-padding-x, 3px)`,
-      `--padding-y:var(--toggle-padding-y, 2px)`,
-      `--icon-tab-border-radius:${round ? '9999px' : `var(--toggle-tab-border-radius, 4px)`}`,
-      `--icon-size:var(--toggle-icon-size, 16px)`,
-      `--height:var(${toggleSizeStr}-height, var(${compSizeStr}-height))`,
-    ]
-  }
+  const cssVars = $derived.by(() => [
+    `--border-radius:${round ? '9999px' : `var(--toggle-border-radius, 6px)`}`,
+    `--gap:var(--toggle-gap, 4px)`,
+    `--padding-x:var(--toggle-padding-x, 3px)`,
+    `--padding-y:var(--toggle-padding-y, 2px)`,
+    `--icon-tab-border-radius:${round ? '9999px' : `var(--toggle-tab-border-radius, 4px)`}`,
+    `--icon-size:var(--toggle-icon-size, 16px)`,
+    `--height:var(${toggleSizeStr}-height, var(${compSizeStr}-height))`,
+  ])
 
   let focused = false
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -72,31 +83,32 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 
-  let toggleRef
+  let toggleRef = $state<HTMLElement>()
 
-  let arrowFocusIndex = -1
+  let arrowFocusIndex = $state(-1)
 
-  $: {
+  $effect(() => {
     for (let i = 0; i < items.length; i++) {
       if (items[i].value === value) {
         arrowFocusIndex = i
         break
       }
     }
-  }
+  })
 
-  function onSelect(val, index) {
+  function onSelect(val: any, index: number) {
     value = val
     arrowFocusIndex = index
-    dispatch('change', { name, type, value })
-    toggleRef.focus()
+    onchange?.({ name, type, value })
+    toggleRef?.focus()
   }
 
-  function onKeyDown(e) {
-    if (!e) e = window.event
+  function onKeyDown(e: KeyboardEvent) {
+    if (!e) e = window.event as KeyboardEvent
     const keyCode = e.code || e.key
     switch (keyCode) {
       case 'ArrowLeft':
@@ -115,7 +127,7 @@
       case 'Space':
         e.preventDefault()
         if (arrowFocusIndex !== -1) {
-          ;(toggleRef.querySelectorAll('.tab')[arrowFocusIndex] as any).click()
+          ;(toggleRef?.querySelectorAll('.tab')[arrowFocusIndex] as any).click()
         }
         return false
     }
@@ -133,9 +145,9 @@
     class={`tui-toggle${clazz ? ' ' + clazz : ''}`}
     style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
     bind:this={toggleRef}
-    on:focus={() => onFocusAction('focus')}
-    on:blur={() => onFocusAction('blur')}
-    on:keydown={onKeyDown}
+    onfocus={() => onFocusAction('focus')}
+    onblur={() => onFocusAction('blur')}
+    onkeydown={onKeyDown}
     role="listbox"
     tabindex={tabindex === -99 ? 0 : tabindex}
     aria-label={name}
@@ -145,8 +157,8 @@
         class="tab"
         class:selected={item.value === value}
         class:arrowFocused={arrowFocusIndex === i}
-        on:click={() => onSelect(item.value, i)}
-        on:keydown={() => {}}
+        onclick={() => onSelect(item.value, i)}
+        onkeydown={() => {}}
         use:$tippy={{ content: item.tooltip }}
         role="option"
         aria-selected={item.value === value}

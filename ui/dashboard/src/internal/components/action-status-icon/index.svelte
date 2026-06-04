@@ -1,23 +1,35 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { createEventDispatcher } from 'svelte'
   import { Icon } from '$lib/components'
 
-  export let size = 18
-  export let icon = ''
-  export let iconSuccess = 'icon-check-line'
-  export let iconFailure = 'icon-close-line'
-  export let statusIndicationPeriod = 2000 // millis
-  export let action: (data: any) => Promise<any>
-  export let actionData: any
+  let {
+    size = 18,
+    icon = '',
+    iconSuccess = 'icon-check-line',
+    iconFailure = 'icon-close-line',
+    statusIndicationPeriod = 2000, // millis
+    action,
+    actionData,
+    status = $bindable(null),
+    onstatus,
+  }: {
+    size?: number
+    icon?: string
+    iconSuccess?: string
+    iconFailure?: string
+    statusIndicationPeriod?: number
+    action: (data: any) => Promise<any>
+    actionData?: any
+    status?: 'success' | 'failure' | null
+    onstatus?: (e: { value: 'success' | 'failure' }) => void
+  } = $props()
 
-  export let status: 'success' | 'failure' | null = null
-  let showingStatus = false
+  let showingStatus = $state(false)
   let statusTimeoutId: any = null
 
-  const dispatch = createEventDispatcher()
-
-  function doSetStatus(value) {
+  function doSetStatus(value: 'success' | 'failure') {
     status = value
     showingStatus = true
 
@@ -29,9 +41,9 @@
     }, statusIndicationPeriod)
   }
 
-  function onStatus(value) {
+  function onStatus(value: 'success' | 'failure') {
     doSetStatus(value)
-    dispatch('status', { value })
+    onstatus?.({ value })
   }
 
   async function onClick() {
@@ -43,23 +55,13 @@
     }
   }
 
-  let showIcon = icon
-
-  $: {
-    showIcon = icon
-
+  const showIcon = $derived.by(() => {
     if (showingStatus) {
-      switch (status) {
-        case 'success':
-          showIcon = iconSuccess
-          break
-        case 'failure':
-          showIcon = iconFailure
-          break
-        default:
-      }
+      if (status === 'success') return iconSuccess
+      if (status === 'failure') return iconFailure
     }
-  }
+    return icon
+  })
 
   onDestroy(() => {
     if (statusTimeoutId) {
@@ -68,7 +70,7 @@
   })
 </script>
 
-<button class="action-status-icon" on:click={onClick} style:--size={size} type="button">
+<button class="action-status-icon" onclick={onClick} style:--size={size} type="button">
   <Icon name={showIcon} {size} />
 </button>
 

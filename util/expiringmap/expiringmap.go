@@ -6,8 +6,9 @@ import (
 )
 
 type itemWrapper[V any] struct {
-	item   V
-	expiry int64
+	item    V
+	expiry  int64
+	addedAt int64
 }
 
 // ExpiringMap is a map that expires items after a given duration.
@@ -21,6 +22,7 @@ type ExpiringMap[K comparable, V any] struct {
 	evictionCh chan []V
 	evictionFn func(K, V) bool
 	stopCh     chan struct{}
+	maxSize    int
 }
 
 // New creates a new ExpiringMap with the given expiry duration.
@@ -75,15 +77,82 @@ func (m *ExpiringMap[K, V]) WithEvictionFunction(f func(K, V) bool) *ExpiringMap
 	return m
 }
 
+// WithMaxSize bounds the map to at most n entries. Inserting a new key when
+// the map is at capacity evicts the oldest entry (by insertion time) before
+// the new entry is added. If an eviction function is configured and it vetoes
+// the eviction of the oldest entry, the new entry is dropped instead — the
+// cap is always honored. A value of 0 (the default) disables the cap and
+// preserves the original unbounded behaviour.
+//
+// Note: cap-eviction's eviction-channel send is non-blocking (the notification
+// is dropped if the channel is full), since cap-eviction runs synchronously
+// inside Set. The TTL clean() path's eviction-channel send remains blocking.
+func (m *ExpiringMap[K, V]) WithMaxSize(n int) *ExpiringMap[K, V] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.maxSize = n
+	return m
+}
+
 // Set sets the value for the given key.
 func (m *ExpiringMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.items[key] = &itemWrapper[V]{
-		item:   value,
-		expiry: time.Now().Add(m.expiry).UnixNano(),
+	now := time.Now()
+	if _, exists := m.items[key]; !exists && m.maxSize > 0 && len(m.items) >= m.maxSize {
+		if !m.evictOldestLocked() {
+			return
+		}
 	}
+
+	m.items[key] = &itemWrapper[V]{
+		item:    value,
+		expiry:  now.Add(m.expiry).UnixNano(),
+		addedAt: now.UnixNano(),
+	}
+}
+
+// evictOldestLocked removes the entry with the smallest addedAt timestamp.
+// The caller must hold m.mu for writing. The configured eviction function
+// and channel (if any) fire for the removed entry, mirroring TTL eviction.
+// Returns true if an entry was evicted; false if the eviction function vetoed
+// the removal (in which case the caller must not insert a new entry, to
+// preserve the cap).
+func (m *ExpiringMap[K, V]) evictOldestLocked() bool {
+	var (
+		oldestKey  K
+		oldestItem *itemWrapper[V]
+		haveOldest bool
+	)
+
+	for key, item := range m.items {
+		if !haveOldest || item.addedAt < oldestItem.addedAt {
+			oldestKey = key
+			oldestItem = item
+			haveOldest = true
+		}
+	}
+
+	if !haveOldest {
+		return false
+	}
+
+	if m.evictionFn != nil && !m.evictionFn(oldestKey, oldestItem.item) {
+		return false
+	}
+
+	delete(m.items, oldestKey)
+
+	if m.evictionCh != nil {
+		select {
+		case m.evictionCh <- []V{oldestItem.item}:
+		default:
+		}
+	}
+
+	return true
 }
 
 // Get returns the value for the given key.

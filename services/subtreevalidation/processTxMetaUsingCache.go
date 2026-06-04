@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -96,14 +95,6 @@ type TxMetaProcessor struct {
 }
 
 func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
-	var (
-		err   error
-		found bool
-	)
-
-	txMeta := meta.Data{}
-	cachedBytes := make([]byte, 0, 1024)
-
 	for j := 0; j < subtree.Min(p.batchSize, len(p.txHashes)-i); j++ {
 		if p.txMetaSlice[i+j].isSet {
 			continue
@@ -121,11 +112,7 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 			continue
 		}
 
-		cachedBytes, found, err = p.cache.GetMetaCachedWithBuffer(p.ctx, txHash, &txMeta, cachedBytes)
-		if err != nil && !errors.Is(err, errors.ErrNotFound) {
-			p.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
-		}
-
+		txMeta, found := p.cache.GetMetaCached(p.ctx, txHash)
 		if found {
 			p.txMetaSlice[i+j] = metaSliceItem{
 				fee:         txMeta.Fee,

@@ -3,7 +3,7 @@ import type { Writable } from 'svelte/store'
 //import * as api from '$internal/api'
 
 export const messages: Writable<any[]> = writable([])
-export const miningNodes: any = writable({})
+export const miningNodes: Writable<Record<string, any>> = writable({})
 export const wsUrl: Writable<URL | string> = writable('')
 export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
@@ -13,7 +13,7 @@ export const blockHashToMiner: Writable<Map<string, string>> = writable(new Map(
 // Create a simple store for current node peer ID (no localStorage)
 function createCurrentNodePeerIDStore() {
   const { subscribe, set, update } = writable<string | null>(null)
-  
+
   return {
     subscribe,
     set: (value: string | null) => {
@@ -26,6 +26,13 @@ function createCurrentNodePeerIDStore() {
 }
 
 export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own node's peer ID
+
+// Keys that must never be used on a plain object — doing so pollutes Object.prototype.
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isSafeKey(key: unknown): key is string {
+  return typeof key === 'string' && key.length > 0 && !DANGEROUS_KEYS.has(key)
+}
 
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -44,9 +51,12 @@ function cleanupExpiredPeers() {
   const now = new Date().getTime()
   const miningNodeSet: any = get(miningNodes)
   let hasChanges = false
-  
+
   // Check each peer and remove if last update was more than 30 seconds ago
   for (const nodeKey in miningNodeSet) {
+    if (!Object.prototype.hasOwnProperty.call(miningNodeSet, nodeKey)) {
+      continue
+    }
     const node = miningNodeSet[nodeKey]
     if (node.receivedAt) {
       const lastUpdate = new Date(node.receivedAt).getTime()
@@ -57,7 +67,7 @@ function cleanupExpiredPeers() {
       }
     }
   }
-  
+
   // Only update the store if we made changes
   if (hasChanges) {
     miningNodes.set(miningNodeSet)
@@ -68,12 +78,12 @@ function cleanupExpiredPeers() {
 function startCleanupInterval() {
   // Clear any existing interval
   stopCleanupInterval()
-  
+
   // Run cleanup every 5 seconds
   cleanupInterval = setInterval(() => {
     cleanupExpiredPeers()
   }, 5000)
-  
+
   console.log('Started peer cleanup interval (checking every 5 seconds)')
 }
 
@@ -122,9 +132,10 @@ export async function connectToP2PServer() {
           firstNodeStatusReceived = false
           // Start the cleanup interval when connection is established
           startCleanupInterval()
-          // This is required to trigger connect on server side since server expects
-          // initial connect request from a WebSocket unidirectional client.
-          socket.send(JSON.stringify({}))
+          // Send the centrifuge bidirectional connect command. The server's
+          // OnConnecting handler auto-subscribes to ping/block/subtree/mining_on/
+          // node_status, so we only need to open the connect.
+          socket.send(JSON.stringify({ id: 1, connect: {} }))
           console.log(`p2pWS connection opened to ${url}`)
         }
 
@@ -133,6 +144,12 @@ export async function connectToP2PServer() {
             const data = await event.data
             const json: any = JSON.parse(data)
 
+            // Centrifuge server ping arrives as an empty reply object — ignore it.
+            if (!json || Object.keys(json).length === 0) {
+              return
+            }
+
+            // Connect command reply: {id:1, connect:{client, subs, ping, session}}
             if (json.connect) {
               const clientID = json.connect.client
               const subscriptions: string[] = []
@@ -153,16 +170,12 @@ export async function connectToP2PServer() {
               return
             }
 
-            // Handle both wrapped (Centrifuge) and unwrapped messages
-            let jsonData
-            if (json?.pub?.data) {
-              jsonData = json.pub.data
-            } else if (json?.type === 'node_status') {
-              // Unwrapped messages: initial node_status
-              jsonData = json
-            } else {
+            // Channel publication: {push:{channel, pub:{data}}}
+            const pubData = json?.push?.pub?.data
+            if (!pubData) {
               return
             }
+            const jsonData = pubData
 
             jsonData.receivedAt = new Date()
 
@@ -170,6 +183,9 @@ export async function connectToP2PServer() {
             if (jsonData.type === 'node_status') {
               // Handle node_status messages - these provide comprehensive node information
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
 
               // The very first node_status message we receive should be from our own node
               // (sent immediately upon WebSocket connection by the backend)
@@ -191,7 +207,7 @@ export async function connectToP2PServer() {
                 receivedAt: new Date(),
                 isCurrentNode: isCurrentNode,
               }
-              
+
               // Update block hash -> miner mapping if available
               if (jsonData.best_block_hash && jsonData.miner_name) {
                 blockHashToMiner.update(map => {
@@ -199,12 +215,14 @@ export async function connectToP2PServer() {
                   // Keep cache size manageable
                   if (map.size > MAX_BLOCK_HASH_CACHE) {
                     const firstKey = map.keys().next().value
-                    map.delete(firstKey)
+                    if (firstKey !== undefined) {
+                      map.delete(firstKey)
+                    }
                   }
                   return map
                 })
               }
-              
+
               // Only update if significant data changed (excluding receivedAt)
               const hasChanges = !existingNode ||
                 existingNode.best_height !== newNode.best_height ||
@@ -223,7 +241,7 @@ export async function connectToP2PServer() {
                 existingNode.isCurrentNode !== newNode.isCurrentNode ||
                 existingNode.min_mining_tx_fee !== newNode.min_mining_tx_fee ||
                 existingNode.connected_peers_count !== newNode.connected_peers_count
-              
+
               if (hasChanges || !existingNode) {
                 miningNodeSet[nodeKey] = newNode
                 miningNodes.set(miningNodeSet)
@@ -236,9 +254,12 @@ export async function connectToP2PServer() {
               // Don't return here - let it fall through to add to messages array
             } else if (jsonData.type === 'block') {
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
               const currentPeerID = get(currentNodePeerID)
               const existingNode = miningNodeSet[nodeKey]
-              
+
               // Update block hash -> miner mapping if available
               if (jsonData.hash && jsonData.miner) {
                 blockHashToMiner.update(map => {
@@ -246,12 +267,14 @@ export async function connectToP2PServer() {
                   // Keep cache size manageable
                   if (map.size > MAX_BLOCK_HASH_CACHE) {
                     const firstKey = map.keys().next().value
-                    map.delete(firstKey)
+                    if (firstKey !== undefined) {
+                      map.delete(firstKey)
+                    }
                   }
                   return map
                 })
               }
-              
+
               if (!existingNode) {
                 miningNodeSet[nodeKey] = {
                   base_url: jsonData.base_url || '',
@@ -266,12 +289,12 @@ export async function connectToP2PServer() {
                 miningNodes.set(miningNodeSet)
               } else {
                 // Only update if block data changed
-                const hasChanges = 
+                const hasChanges =
                   existingNode.hash !== jsonData.hash ||
                   existingNode.height !== jsonData.height ||
                   existingNode.timestamp !== jsonData.timestamp ||
                   existingNode.miner !== jsonData.miner
-                
+
                 if (hasChanges) {
                   miningNodeSet[nodeKey] = {
                     ...existingNode,
@@ -289,6 +312,9 @@ export async function connectToP2PServer() {
               }
             } else if (jsonData.peer_id) {
               const nodeKey = jsonData.peer_id
+              if (!isSafeKey(nodeKey)) {
+                return
+              }
               const currentPeerID = get(currentNodePeerID)
               if (!miningNodeSet[nodeKey]) {
                 miningNodeSet[nodeKey] = {

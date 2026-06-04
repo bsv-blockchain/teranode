@@ -104,6 +104,48 @@ func TestGetOutputUtxoHash(t *testing.T) {
 	}
 }
 
+func mustScript(t *testing.T, hexScript string) *bscript.Script {
+	t.Helper()
+	s, err := bscript.NewFromHexString(hexScript)
+	require.NoError(t, err)
+	return s
+}
+
+func TestUTXOHashInto_MatchesUTXOHash(t *testing.T) {
+	prev, err := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+	require.NoError(t, err)
+	script := mustScript(t, "76a914000000000000000000000000000000000000000088ac")
+
+	want, err := UTXOHash(prev, 7, script, 5000)
+	require.NoError(t, err)
+
+	got, _, err := UTXOHashInto(nil, prev, 7, script, 5000)
+	require.NoError(t, err)
+	require.Equal(t, *want, got)
+}
+
+func TestUTXOHashInto_ZeroAllocWithScratch(t *testing.T) {
+	prev, err := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+	require.NoError(t, err)
+	script := mustScript(t, "76a914000000000000000000000000000000000000000088ac")
+	scratch := make([]byte, 0, 256)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, s, _ := UTXOHashInto(scratch, prev, 9, script, 1)
+		scratch = s
+	})
+	require.Zero(t, allocs)
+}
+
+func TestUTXOHashInto_NilScript(t *testing.T) {
+	prev := &chainhash.Hash{}
+	scratch := []byte{1, 2, 3}
+	h, out, err := UTXOHashInto(scratch, prev, 0, nil, 0)
+	require.ErrorContains(t, err, "locking script is nil")
+	require.Equal(t, chainhash.Hash{}, h)
+	require.Equal(t, scratch, out) // scratch returned unchanged on the error path
+}
+
 func TestCollision(t *testing.T) {
 	// tx id 955c4de19e3428a2620891dad1f4f2f7e5948c6a61b1602372fee47370bb23c2
 	script, err := bscript.NewFromHexString("76a9146d6baa116674e3ccc2afef914145f0d020a0366088ac")

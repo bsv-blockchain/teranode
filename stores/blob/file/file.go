@@ -1230,19 +1230,20 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
 	}
 
-	// Try to remove the hash prefix directory if now empty (best-effort, ignore errors).
-	// root.Remove on a non-empty directory returns an error, so this is safe. Routing through
-	// the store root keeps the operation inside the os.Root sandbox so it cannot follow a
-	// symlink out of the store, and is consistent with the rest of the path handling in this
-	// file (CodeQL #119).
-	if dir := filepath.Dir(fileName); dir != s.path && len(filepath.Base(dir)) <= 2 {
-		if rel, relErr := s.storeRelPath(dir); relErr == nil {
-			if root, rootErr := s.openStoreRoot(); rootErr == nil {
-				_ = root.Remove(rel)
-				_ = root.Close()
-			}
-		}
-	}
+	// Do NOT attempt to remove the hash prefix directory here. The "remove if
+	// empty" check races with concurrent writes into the same prefix dir:
+	//
+	//   1. Goroutine A (Del):   removes the last file in "44/", then rmdir "44".
+	//   2. Goroutine B (Write): OpenFile("44/.tmp", O_CREATE|O_EXCL) → ENOENT.
+	//
+	// The write path only retries on EEXIST, so ENOENT propagates as a hard
+	// failure. Observed on mainnet legacy catchup where the pruner deletes
+	// expired subtree files concurrently with the next block's subtree-meta
+	// write into the same hex-prefix directory.
+	//
+	// Empty prefix dirs are cheap (one inode each, 256 possible two-char
+	// prefixes) and will get re-populated as soon as another file lands in
+	// that bucket, so leaving them is free.
 
 	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)
 	s.debugf("[File] Del completed key=%s type=%s", keyHex, fileType)

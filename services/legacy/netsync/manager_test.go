@@ -32,6 +32,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -405,6 +406,62 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 	sm.peerStates.Set(smPeer, &peerSyncState{})
 
 	return msgChan, legacyKafkaInvCh, &sm, smPeer
+}
+
+func TestSendDuringShutdown(t *testing.T) {
+	t.Run("open channel delivers", func(t *testing.T) {
+		ch := make(chan int, 1)
+		require.True(t, sendDuringShutdown(ch, 7))
+		require.Equal(t, 7, <-ch)
+	})
+
+	t.Run("closed channel drops without panic", func(t *testing.T) {
+		ch := make(chan int)
+		close(ch)
+		require.NotPanics(t, func() {
+			require.False(t, sendDuringShutdown(ch, 1))
+		})
+	})
+}
+
+// TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown reproduces the shutdown
+// race that previously crashed the process: inv delivery runs on a peer
+// goroutine (OnInv -> QueueInv) while teardown closes the target channels — the
+// kafka async producer closes legacyKafkaInvCh in its Stop(), and the block
+// handler stops draining msgChan. QueueInv's shutdown-flag check cannot make the
+// subsequent send atomic against that close, so a late inv hit a closed channel
+// and panicked. The send must now drop the inv instead.
+func TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown(t *testing.T) {
+	t.Run("tx inv after legacyKafkaInvCh closed", func(t *testing.T) {
+		_, legacyKafkaInvCh, sm, smPeer := setupQueueInvTests()
+		close(legacyKafkaInvCh)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
+
+	t.Run("block inv after msgChan closed", func(t *testing.T) {
+		msgChan, _, sm, smPeer := setupQueueInvTests()
+		close(msgChan)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeBlock, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
+
+	t.Run("non-kafka path after msgChan closed", func(t *testing.T) {
+		msgChan, _, sm, smPeer := setupQueueInvTests()
+		sm.legacyKafkaInvCh = nil // exercise the else branch
+		close(msgChan)
+
+		inv := &wire.MsgInv{}
+		require.NoError(t, inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}}))
+
+		require.NotPanics(t, func() { sm.QueueInv(inv, smPeer) })
+	})
 }
 
 // Test blockchain syncing protocol. SyncManager should request, processes, and
@@ -815,4 +872,79 @@ func TestHandleCheckSyncPeer_HeadersFirstMode(t *testing.T) {
 		// No violations, sync peer should still be set
 		assert.Equal(t, sp, sm.loadSyncPeer())
 	})
+}
+
+// TestHandleNewPeerMsg_NilFSMState exercises the path where the blockchain
+// client returns (nil, err) from GetFSMCurrentState — common during transient
+// gRPC failures or service restarts. The pre-fix code dereferenced the nil
+// pointer and panicked. The fix must guard the dereference and still register
+// the peer.
+func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return((*blockchain2.FSMStateType)(nil), errors.NewServiceError("transient gRPC error"))
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// Use a real connected peer: handleNewPeerMsg now refuses to register peers
+	// whose socket has been torn down by the time the newPeerMsg drains.
+	peerCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+		Services:         0,
+	}
+	_, smPeer, err := MakeConnectedPeers(t, peerCfg, peerCfg, 99)
+	require.NoError(t, err)
+
+	defer func() {
+		if r := recover(); r != nil {
+			require.Failf(t, "handleNewPeerMsg panicked", "panic: %v", r)
+		}
+	}()
+
+	sm.handleNewPeerMsg(smPeer)
+
+	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
+	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
+}
+
+// TestHandleNewPeerMsg_SkipsDisconnectedPeer verifies that a peer whose socket
+// was torn down before the queued newPeerMsg drained is not inserted into
+// peerStates. Pairs with the Connected() filter in startSync to prevent a dead
+// pointer from being elected as the sync peer.
+func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return((*blockchain2.FSMStateType)(nil), errors.NewServiceError("transient gRPC error")).Maybe()
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// A zero-value Peer has connected=0, so Connected() returns false. This
+	// mirrors the state of a peer whose underlying socket has already closed
+	// by the time handleNewPeerMsg pulls its newPeerMsg off msgChan.
+	disconnectedPeer := &peer.Peer{}
+
+	sm.handleNewPeerMsg(disconnectedPeer)
+
+	require.False(t, sm.peerStates.Exists(disconnectedPeer), "disconnected peer must not be registered in peerStates")
 }

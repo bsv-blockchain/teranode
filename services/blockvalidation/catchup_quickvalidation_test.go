@@ -256,6 +256,48 @@ func TestValidateForkDepth(t *testing.T) {
 	})
 }
 
+// TestValidateForkDepth_Boundary locks in the boundary semantics of validateForkDepth
+// against CoinbaseMaturity. See issue #4592 for the proof: a reorg of depth d invalidates
+// a coinbase at height G iff G >= H - d + 1; for that coinbase to have been spent in the
+// old chain we need G + CoinbaseMaturity <= H, which has a solution only when
+// d > CoinbaseMaturity. So d == CoinbaseMaturity is safe and the operator must remain `>`.
+func TestValidateForkDepth_Boundary(t *testing.T) {
+	const coinbaseMaturity = 100
+
+	tests := []struct {
+		name      string
+		forkDepth uint32
+		wantErr   bool
+	}{
+		{name: "depth N-1 below maturity is accepted", forkDepth: coinbaseMaturity - 1, wantErr: false},
+		{name: "depth N at maturity is accepted (boundary)", forkDepth: coinbaseMaturity, wantErr: false},
+		{name: "depth N+1 above maturity is rejected", forkDepth: coinbaseMaturity + 1, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			suite.Server.settings.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
+
+			catchupCtx := &CatchupContext{
+				blockUpTo: testhelpers.CreateTestBlocks(t, 1)[0],
+				forkDepth: tt.forkDepth,
+				peerID:    "peer-boundary",
+			}
+
+			err := suite.Server.validateForkDepth(catchupCtx)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "exceeds coinbase maturity")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestRecordMaliciousAttempt tests the recordMaliciousAttempt method
 func TestRecordMaliciousAttempt(t *testing.T) {
 	t.Run("should record malicious attempt with peer metrics", func(t *testing.T) {

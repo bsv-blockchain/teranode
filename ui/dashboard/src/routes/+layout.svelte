@@ -1,5 +1,9 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
+  import type { Snippet } from 'svelte'
+  import { get } from 'svelte/store'
   import { page } from '$app/stores'
   import { SvelteToast } from '@zerodevx/svelte-toast'
   import { createTippy } from '$lib/actions/tooltip'
@@ -23,6 +27,8 @@
 
   import { connectToP2PServer } from '$internal/stores/p2pStore'
 
+  let { children }: { children?: Snippet } = $props()
+
   onMount(() => {
     connectToP2PServer()
   })
@@ -44,12 +50,12 @@
     appendTo: () => document.body,
   })
 
-  $: {
+  $effect(() => {
     $i18nStore = {
       t: $i18n.t,
       baseKey: '',
     }
-  }
+  })
 
   // inject assets
   initLib({
@@ -123,29 +129,31 @@
     ],
   }
 
-  $: {
+  $effect(() => {
+    // Only depend on pathname; reading/writing $pageLinks here would self-trigger the effect.
     const pathname = $page.url.pathname
 
-    let items: any[] = []
+    untrack(() => {
+      const links = get(pageLinks)
+      if (links) {
+        const items = links.items.map((route) => ({
+          ...route,
+          selected:
+            (pathname === '/' && route.path == '/') ||
+            pathname === route.path ||
+            pathname.indexOf(`${route.path}/`) === 0,
+        }))
+        $pageLinks = { ...links, items }
+      }
+    })
+  })
 
-    if ($pageLinks) {
-      items = $pageLinks.items.map((route) => ({
-        ...route,
-        selected:
-          (pathname === '/' && route.path == '/') ||
-          pathname === route.path ||
-          pathname.indexOf(`${route.path}/`) === 0,
-      }))
-      $pageLinks.items = items
-    }
-  }
+  const queryXl = query(xl)
+  const queryLg = query(lg)
+  const queryMd = query(md)
+  const querySm = query(sm)
 
-  $: queryXl = query(xl)
-  $: queryLg = query(lg)
-  $: queryMd = query(md)
-  $: querySm = query(sm)
-
-  $: {
+  $effect(() => {
     if ($queryXl) {
       $mediaSize = MediaSize.xl
     } else if ($queryLg) {
@@ -157,7 +165,7 @@
     } else {
       $mediaSize = MediaSize.xs
     }
-  }
+  })
 
   const toastOptions = {
     duration: 3000, // duration of progress bar tween to the `next` value
@@ -169,7 +177,7 @@
 </script>
 
 <GlobalStyle theme={$theme} themeNs={$themeNs}>
-  <slot />
+  {@render children?.()}
 </GlobalStyle>
 
 {#if $spinCount > 0}

@@ -11,15 +11,25 @@ import (
 	aerospike2 "github.com/bsv-blockchain/testcontainers-aerospike-go"
 )
 
-// init disables the testcontainers Ryuk reaper sidecar. Ryuk pulls a separate
-// image from Docker Hub which is the dominant flake source on CI runners
-// (rate-limit timeouts, 504 gateway errors). The container is terminated
-// explicitly in the cleanup func returned from InitAerospikeContainer, so the
-// reaper provides no additional safety on ephemeral CI runners.
+// init disables the testcontainers Ryuk reaper sidecar on CI only. Ryuk pulls
+// a separate image from Docker Hub which is the dominant flake source on CI
+// runners (rate-limit timeouts, 504 gateway errors). The container is
+// terminated explicitly in the cleanup func returned from
+// InitAerospikeContainer, so the reaper provides no additional safety on
+// ephemeral CI runners.
+//
+// On local dev machines Ryuk is left enabled: it cleans up containers when a
+// test process exits without graceful teardown (panic, SIGKILL, OOM), which
+// is the dominant leak source locally. Users can override either way by
+// setting TESTCONTAINERS_RYUK_DISABLED explicitly before invoking tests.
 func init() {
-	if _, set := os.LookupEnv("TESTCONTAINERS_RYUK_DISABLED"); !set {
-		_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+	if _, set := os.LookupEnv("TESTCONTAINERS_RYUK_DISABLED"); set {
+		return
 	}
+	if os.Getenv("CI") == "" {
+		return
+	}
+	_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
 }
 
 func InitAerospikeContainer() (string, func() error, error) {

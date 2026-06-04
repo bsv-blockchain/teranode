@@ -34,6 +34,9 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blobstoretypes "github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchain_sql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
@@ -96,8 +99,10 @@ type subscriber struct {
 // enabling safe parallel processing of blockchain operations while maintaining data integrity.
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
+	blockchain_api.UnimplementedPeerRegistryServiceServer
 	addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
 	store                         blockchain_store.Store               // Storage interface for blockchain data
+	peerRegistryStore             blob.Store                           // Blob store for peer-registry persistence (nil = disabled)
 	logger                        ulogger.Logger                       // Logger instance
 	settings                      *settings.Settings                   // Configuration settings
 	newSubscriptions              chan subscriber                      // Channel for new subscriptions
@@ -115,6 +120,9 @@ type Blockchain struct {
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
 	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+
+	// Peer registry for tracking peers across all transport types
+	peerRegistry *CentralizedPeerRegistry
 
 	// Blob deletion batch token management
 	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
@@ -184,9 +192,24 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
-		batchTokens:                   make(map[string]*blobDeletionBatchToken),
-		mtpCache:                      newMTPCache(),
+		peerRegistry: NewCentralizedPeerRegistry(BanConfig{
+			Threshold: int32(tSettings.P2P.BanThreshold),
+			Duration:  tSettings.P2P.BanDuration,
+			// DecayInterval and DecayAmount intentionally use the defaults (1min / 1pt)
+			// rather than operator settings. The old BanManager used the same fixed
+			// values and no deployment has needed to tune them; exposing them as
+			// settings is deferred until there is an operator use-case.
+			DecayInterval: DefaultBanConfig().DecayInterval,
+			DecayAmount:   DefaultBanConfig().DecayAmount,
+			ReasonPoints:  DefaultBanConfig().ReasonPoints,
+		}),
+		batchTokens: make(map[string]*blobDeletionBatchToken),
+		mtpCache:    newMTPCache(),
 	}
+
+	// Wire the registry's diagnostic logger so corruption events surface via
+	// structured logs instead of stderr.
+	b.peerRegistry.SetLogger(logger)
 
 	// Initialize subscription manager as not ready
 	b.subscriptionManagerReady.Store(false)
@@ -429,6 +452,49 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	b.startKafka()
 
+	// Settings here still live under tSettings.P2P.* — the centralized
+	// registry inherits the existing operator-facing knobs unchanged. Moving
+	// them under tSettings.BlockChain.* is a follow-up rename.
+	registryTTL := b.settings.P2P.PeerRegistryTTL
+	if registryTTL <= 0 {
+		registryTTL = 24 * time.Hour
+	}
+	cleanupInterval := b.settings.P2P.PeerRegistryCleanupInterval
+	maxSize := b.settings.P2P.PeerRegistryMaxSize
+
+	if storeURL := b.settings.BlockChain.PeerRegistryStore; storeURL != nil {
+		store, err := blob.NewStore(b.logger, storeURL,
+			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE))
+		if err != nil {
+			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", storeURL.Redacted(), err)
+		} else {
+			b.peerRegistryStore = store
+			// Use the configured TTL on Load so persisted reputation history
+			// survives exactly as long as operators have asked for, instead of
+			// a hardcoded value that ignored their config.
+			if err := b.peerRegistry.Load(ctx, store, registryTTL); err != nil {
+				b.logger.Warnf("[Blockchain] failed to load peer registry from %s: %v", storeURL.Redacted(), err)
+			} else {
+				b.logger.Infof("[Blockchain] loaded %d peers from %s", b.peerRegistry.Count(), storeURL.Redacted())
+			}
+			if interval := b.settings.BlockChain.PeerRegistrySaveInterval; interval > 0 {
+				// Tracked on the registry's WaitGroup so Close() drains it on Stop()
+				// alongside ban-decay and TTL cleanup.
+				b.peerRegistry.StartPeriodicSave(ctx, interval, store)
+			} else {
+				b.logger.Warnf("[Blockchain] PeerRegistrySaveInterval not configured, periodic saves disabled")
+			}
+		}
+	}
+
+	// Start ban score decay goroutine for the centralized peer registry.
+	b.peerRegistry.StartBanDecay(ctx)
+
+	// Start TTL+LRU cleanup so the registry can't grow unboundedly under
+	// peer churn. The driver loop is owned by the registry; we just feed it
+	// the operator-configured cadence and bounds. A zero interval disables.
+	b.peerRegistry.StartCleanup(ctx, cleanupInterval, registryTTL, maxSize)
+
 	go b.startSubscriptions()
 
 	// Start heartbeat sender for subscription health monitoring
@@ -444,6 +510,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
+		blockchain_api.RegisterPeerRegistryServiceServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
 	}, nil); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
@@ -882,7 +949,25 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 //
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
-func (b *Blockchain) Stop(_ context.Context) error {
+func (b *Blockchain) Stop(ctx context.Context) error {
+	// Drain background goroutines (ban decay loop, cleanup loop) before saving
+	// so we can't race a write against the final Save snapshot. Close is
+	// idempotent and safe to call even if StartBanDecay never ran.
+	b.peerRegistry.Close()
+
+	if b.peerRegistryStore != nil {
+		if err := b.peerRegistry.Save(ctx, b.peerRegistryStore); err != nil {
+			// A failed save on shutdown means peer state since the last
+			// periodic write is gone — banned peers may reconnect after
+			// restart. Log at error level and surface to the caller so the
+			// service-manager exit code reflects the partial shutdown.
+			b.logger.Errorf("[Blockchain] failed to save peer registry on shutdown: %v", err)
+			return errors.NewProcessingError("[Blockchain][Stop] save peer registry", err)
+		}
+		if err := b.peerRegistryStore.Close(ctx); err != nil {
+			b.logger.Warnf("[Blockchain] failed to close peer registry blob store: %v", err)
+		}
+	}
 	return nil
 }
 

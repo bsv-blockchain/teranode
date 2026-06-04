@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import BlockDetailsCard from './block-details-card/index.svelte'
   import BlockCoinbaseCard from './block-coinbase-card/index.svelte'
@@ -12,30 +13,32 @@
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
-  let ready = false
-  beforeUpdate(() => {
+  let ready = $state(false)
+  $effect(() => {
     ready = true
   })
 
   const type = DetailType.block
 
-  export let hash = ''
+  let { hash = '' }: { hash?: string } = $props()
 
-  let display: DetailTab
+  let display: DetailTab = $state(DetailTab.overview)
 
-  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
+  const tab = $derived(ready ? $page.url.searchParams.get('tab') ?? '' : '')
+  $effect(() => {
+    display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
+  })
 
-  let result: any = null
+  let result: any = $state(null)
 
-  $: {
+  $effect(() => {
     if ($assetHTTPAddress && type && hash && hash.length === 64) {
       fetchData()
     }
-  }
+  })
 
   function onDisplay(e) {
-    display = e.detail.value
+    display = e.value
     setQueryParam('tab', display)
   }
 
@@ -89,11 +92,11 @@
 </script>
 
 {#if result}
-  <BlockDetailsCard data={result} {display} on:display={onDisplay} />
+  <BlockDetailsCard data={result} {display} ondisplay={onDisplay} />
   {#if display === DetailTab.overview}
-    <div style="height: 20px" />
+    <div style="height: 20px"></div>
     <BlockCoinbaseCard data={result} />
-    <div style="height: 20px" />
+    <div style="height: 20px"></div>
     <BlockSubtreesCard block={result} />
   {/if}
 {:else if $spinCount === 0}

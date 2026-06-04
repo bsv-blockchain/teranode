@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { mediaSize, MediaSize, theme } from '$lib/stores/media'
@@ -10,17 +12,20 @@
   import i18n from '$internal/i18n'
   import * as api from '$internal/api'
 
-  $: t = $i18n.t
+  let {
+    style = '',
+    showTools = true,
+  }: {
+    style?: string
+    showTools?: boolean
+  } = $props()
 
-  export let style = ''
-  export let showTools = true
-
-  let searchValue = ''
-  let lastSearchCalled = ''
+  let searchValue = $state('')
+  let lastSearchCalled = $state('')
 
   async function onSearchKeyDown(e) {
     if (!e) e = window.event
-    const keyCode = e.detail.code || e.detail.key
+    const keyCode = e.code || e.key
 
     if (keyCode === 'Enter') {
       lastSearchCalled = searchValue
@@ -39,9 +44,9 @@
     }
   }
 
-  let w
+  let w = $state(0)
 
-  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
+  const focusWidth = $derived($mediaSize <= MediaSize.xs ? w - 60 : 570)
 
   function toggleTheme() {
     $theme = $theme === 'dark' ? 'light' : 'dark'
@@ -58,7 +63,7 @@
     <div class="right">
       <button
         class="theme-toggle"
-        on:click={toggleTheme}
+        onclick={toggleTheme}
         type="button"
         title={$theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         aria-label={$theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
@@ -78,7 +83,7 @@
           ? 'icon-search-line'
           : 'icon-search-solid'}
         placeholder={$i18n.t('comp.toolbar.placeholder')}
-        on:keydown={onSearchKeyDown}
+        onkeydown={onSearchKeyDown}
       />
     </div>
   </div>
