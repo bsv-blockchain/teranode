@@ -46,6 +46,12 @@ message KafkaRejectedTxTopicMessage {
   string peer_id = 3;  // Empty = internal rejection, non-empty = external peer
 }
 
+message KafkaTxPolicyRejectedTopicMessage {
+  bytes txHash = 1;    // 32-byte raw tx hash
+  bytes rawTx = 2;     // Full serialized transaction bytes
+  string reason = 3;   // Policy rejection reason
+}
+
 enum KafkaTxMetaActionType {
   ADD = 0;
   DELETE = 1;

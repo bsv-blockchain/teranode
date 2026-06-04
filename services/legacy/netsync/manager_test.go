@@ -89,7 +89,7 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		return errors.NewServiceError("failed to create utxo store", err)
 	}
 
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create validator client", err)
 	}

@@ -128,6 +128,20 @@ type Validator struct {
 	// rejectedTxKafkaProducerClient publishes rejected transaction events
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
+	// policyRejectedTxKafkaProducerClient publishes consensus-valid transactions that were
+	// rejected by local policy (ErrTxPolicy). This is a separate topic from
+	// rejectedTxKafkaProducerClient for two reasons:
+	//   1. Different message schema: this topic carries the full raw tx bytes
+	//      (KafkaTxPolicyRejectedTopicMessage.RawTx) so that consumers can reconstruct
+	//      the transaction without an extra HTTP roundtrip. The rejected-tx topic only
+	//      carries {TxHash, Reason, PeerId} and is not suitable for raw-byte delivery.
+	//   2. Different consumers: subtree validation pods consume this topic to populate a
+	//      local cache of policy-rejected txs; the rejected-tx topic is consumed by P2P
+	//      gossip components that only need the hash and rejection reason.
+	// Merging the two topics would require either sending raw bytes for every rejection
+	// (wasted bandwidth) or adding a type tag that consumers must filter (added complexity).
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
@@ -160,6 +174,7 @@ type Validator struct {
 // Returns an error if initialization fails.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blockAssemblyClient blockassembly.ClientI, blockchainClient blockchain.ClientI) (Interface, error) {
 	initPrometheusMetrics()
 
@@ -170,15 +185,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	v := &Validator{
-		logger:                        logger,
-		settings:                      tSettings,
-		txValidator:                   NewTxValidator(logger, tSettings),
-		utxoStore:                     store,
-		blockAssembler:                ba,
-		stats:                         gocore.NewStat("validator"),
-		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
-		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
-		blockchainClient:              blockchainClient,
+		logger:                              logger,
+		settings:                            tSettings,
+		txValidator:                         NewTxValidator(logger, tSettings),
+		utxoStore:                           store,
+		blockAssembler:                      ba,
+		stats:                               gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:           txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
+		blockchainClient:                    blockchainClient,
 	}
 
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
@@ -192,6 +208,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	if v.policyRejectedTxKafkaProducerClient != nil {
+		v.policyRejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
 	// Initialize TxMeta Kafka batcher if batch size is configured
@@ -464,22 +484,57 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 
-				value, err := proto.Marshal(m)
-				if err != nil {
-					return nil, err
+				value, marshalErr := proto.Marshal(m)
+				if marshalErr != nil {
+					ctxLogger.Errorf("[ValidateWithOptions] failed to marshal rejected tx message: %v", marshalErr)
+				} else {
+					v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+						Key:   []byte(txID),
+						Value: value,
+					})
 				}
-
-				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-					Key:   []byte(txID),
-					Value: value,
-				})
 
 				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 			}
 		}
+
+		// Publish consensus-valid but policy-rejected transactions so subtree validation
+		// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
+		if errors.Is(err, errors.ErrTxPolicy) {
+			v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
+		}
 	}
 
 	return txMetaData, err
+}
+
+// publishPolicyRejectedTx publishes the raw bytes of a policy-rejected transaction to
+// the KAFKA_TX_POLICY_REJECTED topic. Subtree validation pods consume from this topic
+// to populate a local cache, avoiding expensive HTTP fetches when a subtree from another
+// miner contains transactions our node rejected on policy grounds.
+func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, validationErr error) {
+	if v.policyRejectedTxKafkaProducerClient == nil {
+		return
+	}
+
+	txHash := tx.TxIDChainHash()
+
+	m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{
+		TxHash: txHash.CloneBytes(),
+		RawTx:  tx.SerializeBytes(),
+		Reason: validationErr.Error(),
+	}
+
+	value, marshalErr := proto.Marshal(m)
+	if marshalErr != nil {
+		ctxLogger.Errorf("[publishPolicyRejectedTx] proto marshal error for tx %s: %v", txHash.String(), marshalErr)
+		return
+	}
+
+	v.policyRejectedTxKafkaProducerClient.Publish(&kafka.Message{
+		Key:   txHash.CloneBytes(),
+		Value: value,
+	})
 }
 
 // validateInternal performs the core validation logic for a transaction.

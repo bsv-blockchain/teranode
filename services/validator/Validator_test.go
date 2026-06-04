@@ -87,7 +87,7 @@ func BenchmarkValidator(b *testing.B) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(b, err)
 
-	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -126,7 +126,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -172,7 +172,7 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 		require.NoError(t, err)
 
-		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are not getting blockIDs
