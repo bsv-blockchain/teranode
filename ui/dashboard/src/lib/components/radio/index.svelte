@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { FocusRect, FootnoteContainer, LabelContainer } from '$lib/components'
   import {
     ComponentSize,
@@ -10,42 +11,59 @@
   import type { LabelAlignmentType, LabelPlacementType } from '$lib/styles/types'
   import type { InputSizeType } from '$lib/styles/types/input'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    label = 'Lalala',
+    footnote = '',
+    required = false,
+    name = '',
+    group = '',
+    checked = $bindable(false),
+    disabled = false,
+    valid = true,
+    error = '',
+    allowToggle = false,
+    labelPlacement = LabelPlacement.right,
+    labelAlignment = LabelAlignment.center,
+    size = ComponentSize.large,
+    onchange,
+    onfocus,
+    onblur,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    label?: any
+    footnote?: any
+    required?: boolean
+    name?: string
+    group?: string
+    checked?: boolean
+    disabled?: boolean
+    valid?: boolean
+    error?: string
+    allowToggle?: boolean
+    labelPlacement?: LabelPlacementType
+    labelAlignment?: LabelAlignmentType
+    size?: InputSizeType
+    onchange?: (detail: { name: string; group: string; type: string; checked: boolean }) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const type = 'radio'
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  let styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let style = ''
+  let cbVarStr = $derived(`--checkbox-default`)
+  let cbSizeStr = $derived(`--checkbox-size-${styleSize}`)
+  let radioSizeStr = $derived(`--radio-size-${styleSize}`)
 
-  export let label: any = 'Lalala'
-  export let footnote: any = ''
-  export let required = false
-  export let name = ''
-  export let group = ''
-  export let checked = false
-  export let disabled = false
-  export let valid = true
-  export let error = ''
-  export let allowToggle = false
-
-  let type = 'radio'
-
-  export let labelPlacement: LabelPlacementType = LabelPlacement.right
-  export let labelAlignment: LabelAlignmentType = LabelAlignment.center
-
-  export let size: InputSizeType = ComponentSize.large
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: cbVarStr = `--checkbox-default`
-  $: cbSizeStr = `--checkbox-size-${styleSize}`
-  $: radioSizeStr = `--radio-size-${styleSize}`
-
-  let cssVars: string[] = []
-  $: {
+  let cssVars: string[] = $derived.by(() => {
     let states = ['enabled', 'hover', 'focused', 'checked', 'disabled']
-    cssVars = [
+    return [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -62,33 +80,34 @@
       `--icon-size:var(${radioSizeStr}-icon-size)`,
       `--focus-rect-size:calc(var(${cbSizeStr}-size) / 2)`,
     ]
-  }
+  })
 
-  $: blockInteraction = disabled || (checked && !allowToggle)
+  let blockInteraction = $derived(disabled || (checked && !allowToggle))
 
-  let focused = false
+  let focused = $state(false)
 
-  let inputRef
+  let inputRef: HTMLInputElement | undefined = $state()
 
   function onInputParentClick() {
     if (blockInteraction) {
       return
     }
-    inputRef.focus()
+    inputRef?.focus()
     checked = !checked
-    dispatch('change', { name, group, type, checked })
+    onchange?.({ name, group, type, checked })
   }
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: string) {
     switch (eventName) {
       case 'blur':
         focused = false
+        onblur?.()
         break
       case 'focus':
         focused = true
+        onfocus?.()
         break
     }
-    dispatch(eventName)
   }
 </script>
 
@@ -103,9 +122,9 @@
     {required}
     margin="-2px 0 0 0"
     interactive={!disabled && !blockInteraction}
-    on:click={disabled || blockInteraction ? null : onInputParentClick}
+    onclick={disabled || blockInteraction ? null : onInputParentClick}
   >
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       data-test-id={testId}
       class={`tui-radio${clazz ? ' ' + clazz : ''}`}
@@ -121,14 +140,13 @@
             {type}
             {name}
             {checked}
-            on:focus={() => onFocusAction('focus')}
-            on:blur={() => onFocusAction('blur')}
+            onfocus={() => onFocusAction('focus')}
+            onblur={() => onFocusAction('blur')}
             aria-labelledby={`${name}_label`}
           />
           <div
             class="icon"
-            style={`width:var(${radioSizeStr}-icon-size); height:var(${radioSizeStr}-icon-size); border-radius:calc(var(${radioSizeStr}-icon-size) / 2)`}
-          />
+            style={`width:var(${radioSizeStr}-icon-size); height:var(${radioSizeStr}-icon-size); border-radius:calc(var(${radioSizeStr}-icon-size) / 2)`}></div>
         </div>
       </FocusRect>
     </div>

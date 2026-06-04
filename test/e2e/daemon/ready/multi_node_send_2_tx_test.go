@@ -55,12 +55,12 @@ func TestMultiNodeSend2Tx(t *testing.T) {
 	err := node1.PropagationClient.ProcessTransaction(node1.Ctx, tx0)
 	require.NoError(t, err, "Failed to process tx through propagation client")
 
-	time.Sleep(10 * time.Second)
-
-	txHashes, err := node1.BlockAssemblyClient.GetTransactionHashes(node1.Ctx)
-	require.NoError(t, err)
-
-	require.Len(t, txHashes, 2, "Node1 should have coinbase placeholder + tx0")
+	var txHashes []string
+	require.Eventually(t, func() bool {
+		var err error
+		txHashes, err = node1.BlockAssemblyClient.GetTransactionHashes(node1.Ctx)
+		return err == nil && len(txHashes) == 2
+	}, 10*time.Second, 100*time.Millisecond, "node1 should have coinbase placeholder + tx0 in block assembly")
 
 	txHashes, err = node2.BlockAssemblyClient.GetTransactionHashes(node2.Ctx)
 	require.NoError(t, err)

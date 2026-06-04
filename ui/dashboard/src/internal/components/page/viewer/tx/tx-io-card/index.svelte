@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { formatSatoshi } from '$lib/utils/format'
@@ -11,16 +13,16 @@
 
   const baseKey = 'page.viewer-tx.txs'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  $: collapse = $mediaSize < MediaSize.sm
+  const collapse = $derived($mediaSize < MediaSize.sm)
 
-  export let data: any = []
+  let { data = [] }: { data?: any } = $props()
 
-  let sliceCount = 10
-  let outputViewModes: { [key: number]: 'default' | 'asm' | 'hex' } = {}
-  let inputViewModes: { [key: number]: 'default' | 'hex' } = {}
-  let outputAddresses: { [key: number]: string | null } = {}
+  let sliceCount = $state(10)
+  let outputViewModes: { [key: number]: 'default' | 'asm' | 'hex' } = $state({})
+  let inputViewModes: { [key: number]: 'default' | 'hex' } = $state({})
+  let outputAddresses: { [key: number]: string | null } = $state({})
 
   let legacyPubKeyHashAddrID = 0x00
   let legacyScriptHashAddrID = 0x05
@@ -43,20 +45,20 @@
     inputViewModes = { ...inputViewModes } // Trigger reactivity
   }
 
-  $: inputSlice = data.inputs.slice(0, sliceCount)
-  $: outputSlice = data.outputs.slice(0, sliceCount)
+  const inputSlice = $derived(data.inputs.slice(0, sliceCount))
+  const outputSlice = $derived(data.outputs.slice(0, sliceCount))
 
   // Track which outputs we've already processed to avoid re-processing
   let processedOutputsHash = ''
 
   // Extract addresses for outputs when data changes
-  $: {
+  $effect(() => {
     const currentHash = data.outputs ? JSON.stringify(data.outputs.map(o => o.lockingScript)) : ''
     if (currentHash && currentHash !== processedOutputsHash) {
       processedOutputsHash = currentHash
       extractOutputAddresses()
     }
-  }
+  })
 
   onMount(async () => {
     const resp: any = await api.getChainParams()
@@ -131,9 +133,9 @@
               >{`${input.previousTxSatoshis ? formatSatoshi(input.previousTxSatoshis) : '-'} BSV`}</span
             >
             {#if input.unlockingScript}
-              <button 
+              <button
                 class="view-toggle"
-                on:click={() => toggleInputView(i)}
+                onclick={() => toggleInputView(i)}
                 type="button"
               >
                 {inputViewModes[i] === 'hex' ? 'Show Default' : 'Show Hex'}
@@ -147,7 +149,7 @@
       {/each}
     </div>
     {#if data.inputs.length > inputSlice.length}
-      <button class="load-more" on:click={increaseSlize} type="button"
+      <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
     {/if}
@@ -182,9 +184,9 @@
             {/if}
             <span class="amount">{`${formatSatoshi(output.satoshis)} BSV`}</span>
             
-            <button 
+            <button
               class="view-toggle"
-              on:click={() => toggleOutputView(i)}
+              onclick={() => toggleOutputView(i)}
               type="button"
             >
               {viewMode === 'default' ? 'Show Script' : viewMode === 'asm' ? 'Show Hex' : 'Show Default'}
@@ -207,7 +209,7 @@
       {/each}
     </div>
     {#if data.outputs.length > outputSlice.length}
-      <button class="load-more" on:click={increaseSlize} type="button"
+      <button class="load-more" onclick={increaseSlize} type="button"
         >{t(`${baseKey}.load-more`)}</button
       >
     {/if}

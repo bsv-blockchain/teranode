@@ -111,7 +111,7 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockSubtrees_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockSubtrees in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockSubtrees in %s for %s: %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

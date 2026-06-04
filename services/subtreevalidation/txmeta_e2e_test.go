@@ -252,8 +252,8 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 			size += 8 + 32 + 1 + 4 + len(it.payload)
 		}
 		buf := make([]byte, size)
-		buf[0] = txmetaWireV2Magic
-		buf[1] = txmetaWireV2Version
+		buf[0] = txmetacache.WireV2Magic
+		buf[1] = txmetacache.WireV2Version
 		putUint32LE(buf[4:], uint32(len(items)))
 		off := 8
 
@@ -262,7 +262,7 @@ func (h *txmetaE2EHarness) publishV2(t testing.TB, hashes []chainhash.Hash, payl
 			off += 8
 			copy(buf[off:], it.hash[:])
 			off += 32
-			buf[off] = txmetaActionADD
+			buf[off] = txmetacache.WireActionADD
 			off++
 			putUint32LE(buf[off:], uint32(len(it.payload)))
 			off += 4
@@ -305,7 +305,7 @@ func serializeV1ForE2E(hashes []chainhash.Hash, payloads [][]byte) []byte {
 	for i := range hashes {
 		copy(buf[off:], hashes[i][:])
 		off += 32
-		buf[off] = txmetaActionADD
+		buf[off] = txmetacache.WireActionADD
 		off++
 		putUint32LE(buf[off:], uint32(len(payloads[i])))
 		off += 4
@@ -329,7 +329,7 @@ func countEntries(data []byte) int {
 	if len(data) < 4 {
 		return 0
 	}
-	if data[0] == txmetaWireV2Magic {
+	if data[0] == txmetacache.WireV2Magic {
 		if len(data) < 8 {
 			return 0
 		}
@@ -545,8 +545,8 @@ func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numParti
 		}
 		s.bufs[p] = buf
 
-		buf[0] = txmetaWireV2Magic
-		buf[1] = txmetaWireV2Version
+		buf[0] = txmetacache.WireV2Magic
+		buf[1] = txmetacache.WireV2Version
 		buf[2], buf[3] = 0, 0
 		putUint32LE(buf[4:], uint32(len(g)))
 		off := 8
@@ -555,7 +555,7 @@ func serializeV2Partitioned(hashes []chainhash.Hash, payloads [][]byte, numParti
 			off += 8
 			copy(buf[off:], hashes[it.idx][:])
 			off += 32
-			buf[off] = txmetaActionADD
+			buf[off] = txmetacache.WireActionADD
 			off++
 			putUint32LE(buf[off:], uint32(len(payloads[it.idx])))
 			off += 4

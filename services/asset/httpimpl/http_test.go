@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -339,30 +341,114 @@ func TestSign(t *testing.T) {
 	assert.True(t, ed25519.Verify(pubKey, testData, signatureBytes))
 }
 
-// TestCustomLoggerMiddleware tests the customLoggerMiddleware function
-func TestCustomLoggerMiddleware(t *testing.T) {
-	// Create a test logger
+// TestAccessLogMiddleware tests the accessLogMiddleware function
+// TestNew_TrustedProxyCIDRsFailsClosed — the M2 fail-closed semantics: when
+// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed, New()
+// must return an error rather than silently falling back to "trust loopback +
+// RFC1918". Mixed valid/invalid input also fails because partial application
+// almost always indicates a typo.
+func TestNew_TrustedProxyCIDRsFailsClosed(t *testing.T) {
+	mkSettings := func(cidrs string) *settings.Settings {
+		return &settings.Settings{
+			Asset: settings.AssetSettings{
+				APIPrefix:         "/api/v1",
+				TrustedProxyCIDRs: cidrs,
+			},
+			Dashboard:         settings.DashboardSettings{Enabled: false},
+			SecurityLevelHTTP: 0,
+		}
+	}
+
+	mkRepo := func() *repository.Repository {
+		repo := new(MockRepository)
+		repo.On("BlockchainClient").Return(&blockchain.Mock{})
+		repo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+		return &repository.Repository{}
+	}
+
+	t.Run("all entries invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("not-a-cidr|also-not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "all-invalid CIDR list must fail New()")
+		require.Contains(t, err.Error(), "asset_trustedProxyCIDRs",
+			"error must name the offending setting so operators know what to fix")
+	})
+
+	t.Run("mixed valid + invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "mixed valid/invalid CIDR list must fail New() rather than silently applying only the valid subset")
+	})
+
+	t.Run("all entries valid → no error", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|192.168.0.0/16"), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+
+	t.Run("empty setting → no error (uses Echo defaults)", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings(""), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+}
+
+// captureLogger records Errorf calls so tests can assert on what was logged.
+// Other methods are no-ops. Only used by the customHTTPErrorHandler test.
+type captureLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *captureLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+// TestCustomHTTPErrorHandler_DoesNotLogQueryString — H5 fix in the access log
+// also has to apply to the error path; query strings on 4xx/5xx are precisely
+// the values you don't want in logs (auth tokens in URLs, search terms, etc.).
+func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
+	logger := &captureLogger{}
+	handler := customHTTPErrorHandler(logger)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/v1/search")
+
+	handler(echo.NewHTTPError(http.StatusBadRequest, "boom"), c)
+
+	require.Len(t, logger.errors, 1)
+	logged := logger.errors[0]
+	require.NotContains(t, logged, "SECRET_QUERY_STRING",
+		"query-string value must not appear in error logs")
+	require.NotContains(t, logged, "DEADBEEF",
+		"query-string token must not appear in error logs")
+	require.NotContains(t, logged, "?",
+		"raw RequestURI (path?query) must not be logged; use the route pattern instead")
+	require.Contains(t, logged, "/api/v1/search",
+		"route pattern (without query) should still be logged for diagnostics")
+}
+
+func TestAccessLogMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
-	// Create the middleware
-	middleware := customLoggerMiddleware(logger)
+	mw := accessLogMiddleware(logger)
 
-	// Create a test Echo instance
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Create a test handler
 	testHandler := func(c echo.Context) error {
 		return c.String(http.StatusOK, "Test response")
 	}
 
-	// Call the middleware with the test handler
-	handler := middleware(testHandler)
+	handler := mw(testHandler)
 	err := handler(c)
 
-	// Assert that the handler was called and returned the expected response
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "Test response", rec.Body.String())

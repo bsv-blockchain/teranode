@@ -1,15 +1,22 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import MenuItem from '../menu-item/index.svelte'
 
-  const dispatch = createEventDispatcher()
-
-  export let data: any[] = []
-  export let collapsed = false
-  export let idField = 'id'
+  let {
+    data = [],
+    collapsed = false,
+    idField = 'id',
+    onselect,
+  }: {
+    data?: any[]
+    collapsed?: boolean
+    idField?: string
+    onselect?: (detail: { item: any }) => void
+  } = $props()
 
   function onMenuItem(item: any) {
-    dispatch('select', { item })
+    onselect?.({ item })
   }
 </script>
 
@@ -21,7 +28,7 @@
       label={item.label}
       selected={item.selected}
       {collapsed}
-      on:click={(e) => onMenuItem(item)}
+      onclick={() => onMenuItem(item)}
     />
   {/each}
 </div>

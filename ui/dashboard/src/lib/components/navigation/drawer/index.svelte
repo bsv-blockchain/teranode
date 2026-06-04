@@ -1,71 +1,86 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { onDestroy } from 'svelte'
-  import { createEventDispatcher } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { fade } from 'svelte/transition'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import Icon from '../../icon/index.svelte'
 
-  export let testId: string | undefined | null = null
-  export let position = 'left' // left | right
-  export let minWidth = 60
-  export let maxWidth = 212
-  export let offsetTop = ''
-  export let snapBelowHeader = true
-  export let coverColor = 'rgba(40, 41, 51, 0.7)'
-  export let showCover = false
-  export let showHeader = false
-  export let showFooter = false
+  let {
+    testId = null,
+    position = 'left', // left | right
+    minWidth = 60,
+    maxWidth = 212,
+    offsetTop = '',
+    snapBelowHeader = true,
+    coverColor = 'rgba(40, 41, 51, 0.7)',
+    showCover = false,
+    showHeader = false,
+    showFooter = false,
+    enableCollapse = true,
+    collapsed = true,
+    onmetrics,
+    onclose,
+    onheaderSelect,
+    header,
+    footer,
+    children,
+  }: {
+    testId?: string | undefined | null
+    position?: string
+    minWidth?: number
+    maxWidth?: number
+    offsetTop?: string
+    snapBelowHeader?: boolean
+    coverColor?: string
+    showCover?: boolean
+    showHeader?: boolean
+    showFooter?: boolean
+    enableCollapse?: boolean
+    collapsed?: boolean
+    onmetrics?: (detail: { position: string; width: number }) => void
+    onclose?: () => void
+    onheaderSelect?: () => void
+    header?: Snippet
+    footer?: Snippet
+    children?: Snippet
+  } = $props()
 
-  export let enableCollapse = true
-  export let collapsed = true
-
-  const dispatch = createEventDispatcher()
-
-  let collapse = collapsed
-  $: {
+  let collapse = $state(collapsed)
+  $effect(() => {
     collapse = collapsed
-  }
+  })
+
   function onCollapseClick() {
     collapse = !collapse
   }
 
-  let timeoutId: any = null
-  let calcW = collapse ? minWidth : maxWidth
-  $: {
-    calcW = collapse ? minWidth : maxWidth
-
-    timeoutId = setTimeout(() => {
-      dispatch('metrics', { position, width: calcW })
+  const calcW = $derived(collapse ? minWidth : maxWidth)
+  $effect(() => {
+    const timeoutId = setTimeout(() => {
+      onmetrics?.({ position, width: calcW })
     }, 0)
-  }
+    return () => clearTimeout(timeoutId)
+  })
 
-  $: hasHeader = showHeader && $$slots.header
-  $: hasFooter = showFooter && $$slots.footer
+  const hasHeader = $derived(showHeader && !!header)
+  const hasFooter = $derived(showFooter && !!footer)
 
   function onClose() {
-    dispatch('close', {})
+    onclose?.()
   }
 
   function onHeader() {
-    dispatch('header-select', {})
+    onheaderSelect?.()
   }
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--width:${$mediaSize <= MediaSize.xs ? '100%' : `${calcW}px`}`,
-      `--top:${snapBelowHeader ? `calc(var(--header-height)${offsetTop ? ` + ${offsetTop}` : '0'} )` : `${offsetTop}`}`,
-      `--content-top:${hasHeader ? 'var(--header-height)' : '0'}`,
-      `--content-bottom:${hasFooter ? 'var(--drawer-footer-height)' : '0'}`,
-      `--cover-color:${coverColor}`,
-    ]
-  }
-
-  onDestroy(() => {
-    if (timeoutId) {
-      clearTimeout(timeoutId)
-    }
-  })
+  const cssVars = $derived([
+    `--width:${$mediaSize <= MediaSize.xs ? '100%' : `${calcW}px`}`,
+    `--top:${snapBelowHeader ? `calc(var(--header-height)${offsetTop ? ` + ${offsetTop}` : '0'} )` : `${offsetTop}`}`,
+    `--content-top:${hasHeader ? 'var(--header-height)' : '0'}`,
+    `--content-bottom:${hasFooter ? 'var(--drawer-footer-height)' : '0'}`,
+    `--cover-color:${coverColor}`,
+  ])
 </script>
 
 {#if showCover}
@@ -74,10 +89,13 @@
     role="button"
     tabindex="-1"
     in:fade
-    on:mousedown|preventDefault={onClose}
-    on:keydown={(e) => e.key === 'Escape' && onClose()}
+    onmousedown={(e) => {
+      e.preventDefault()
+      onClose()
+    }}
+    onkeydown={(e) => e.key === 'Escape' && onClose()}
     style={`${cssVars.join(';')}`}
-  />
+  ></div>
 {/if}
 
 <div
@@ -88,7 +106,7 @@
   {#if enableCollapse}
     <button
       class="collapse-icon"
-      on:click={onCollapseClick}
+      onclick={onCollapseClick}
       type="button"
       aria-label="Toggle drawer"
     >
@@ -99,19 +117,19 @@
   <div class="container">
     {#key collapsed}
       {#if hasHeader}
-        <button class="header" on:click={onHeader} type="button">
-          <slot name="header" />
+        <button class="header" onclick={onHeader} type="button">
+          {@render header?.()}
         </button>
       {/if}
     {/key}
 
     <div class="content">
-      <slot />
+      {@render children?.()}
     </div>
 
     {#if hasFooter}
-      <button class="footer" on:click={onHeader} type="button">
-        <slot name="footer" />
+      <button class="footer" onclick={onHeader} type="button">
+        {@render footer?.()}
       </button>
     {/if}
   </div>

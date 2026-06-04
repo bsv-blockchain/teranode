@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -64,15 +65,36 @@ type Stack struct {
 	RepoRoot  string
 	Script    string // absolute path to compose/multinode.sh
 	byos      bool
+	// splitMode is set by ProvisionSplit. It selects -allinone=0 on
+	// `up` and tells container-aware helpers (Reset, containerExited,
+	// restartContainer, dumpDiagnostics) to enumerate every per-service
+	// container for a node rather than the single monolithic one.
+	splitMode bool
 }
 
-// Provision creates and starts a Stack intended to live for the whole test
-// package. Intended for use from TestMain: it uses log.Fatalf on setup
-// failure because TestMain has no *testing.T. Honours MULTINODE_BYOS=1 by
-// pointing at an already-running stack instead of starting a new one, and
-// aborts (rather than skipping) if a stack is already running without
-// MULTINODE_ALLOW_TAKEOVER=1.
+// Provision creates and starts an all-in-one Stack intended to live for the
+// whole test package. See provision for the full semantics. Use
+// ProvisionSplit when scenarios need per-service chaos.
 func Provision(nodeCount int) *Stack {
+	return provision(nodeCount, false)
+}
+
+// ProvisionSplit is Provision but with -allinone=0: each node becomes nine
+// per-service containers (blockchain, blockassembly, ..., core) so chaos
+// scenarios can kill/pause individual services without taking down the
+// whole node. Boot time is materially longer than all-in-one (≈ 9× the
+// containers); 3 nodes is the practical default for split-mode TestMains.
+func ProvisionSplit(nodeCount int) *Stack {
+	return provision(nodeCount, true)
+}
+
+// provision is the shared implementation behind Provision and ProvisionSplit.
+// Intended for use from TestMain: it uses log.Fatalf on setup failure because
+// TestMain has no *testing.T. Honours MULTINODE_BYOS=1 by pointing at an
+// already-running stack instead of starting a new one, and aborts (rather
+// than skipping) if a stack is already running without
+// MULTINODE_ALLOW_TAKEOVER=1.
+func provision(nodeCount int, splitMode bool) *Stack {
 	l := stdLogger{}
 
 	root, err := repoRoot()
@@ -89,6 +111,7 @@ func Provision(nodeCount int) *Stack {
 		RepoRoot:  root,
 		Script:    script,
 		byos:      os.Getenv(envBYOS) == "1",
+		splitMode: splitMode,
 	}
 
 	if !s.byos {
@@ -104,13 +127,19 @@ func Provision(nodeCount int) *Stack {
 			l.Logf("warning: wipe of data/multinode state failed: %v", err)
 		}
 
-		l.Logf("bringing up %d-node multinode stack...", nodeCount)
-		out, err := s.runCombined(context.Background(), "up", fmt.Sprintf("%d", nodeCount))
+		topology := "all-in-one"
+		args := []string{"up", fmt.Sprintf("%d", nodeCount)}
+		if splitMode {
+			topology = "split-per-service"
+			args = append(args, "-allinone=0")
+		}
+		l.Logf("bringing up %d-node multinode stack (%s)...", nodeCount, topology)
+		out, err := s.runCombined(context.Background(), args...)
 		if err != nil {
-			l.Fatalf("multinode.sh up %d failed: %v\n%s", nodeCount, err, out)
+			l.Fatalf("multinode.sh %s failed: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	} else {
-		l.Logf("MULTINODE_BYOS=1: using already-running stack (%d nodes assumed)", nodeCount)
+		l.Logf("MULTINODE_BYOS=1: using already-running stack (%d nodes assumed, splitMode=%v)", nodeCount, splitMode)
 	}
 
 	timeout := 4 * time.Minute
@@ -164,14 +193,17 @@ func (s *Stack) Reset(t *testing.T) {
 	// condition it undoes is absent.
 	_, _ = s.runCombined(context.Background(), "chaos", "heal")
 	for n := 1; n <= s.NodeCount; n++ {
-		// Unpause anything that was frozen.
-		_ = exec.Command("docker", "unpause", ctrName(n)).Run()
+		// Unpause anything that was frozen. In split mode each node has up
+		// to 9 service containers; unpause every running one.
+		for _, ctr := range s.nodeContainers(n) {
+			_ = exec.Command("docker", "unpause", ctr).Run()
+		}
 		// Remove any tc netem qdisc; errors are fine (none installed).
 		_, _ = s.runCombined(context.Background(), "chaos", "unslow", fmt.Sprintf("%d", n))
 		// Start anything that was killed.
-		if s.containerExited(n) {
-			t.Logf("reset: starting teranode%d (was exited)", n)
-			if err := s.restartContainer(n); err != nil {
+		if exited := s.exitedContainers(n); len(exited) > 0 {
+			t.Logf("reset: starting teranode%d (%d container(s) exited)", n, len(exited))
+			if err := s.startContainers(exited); err != nil {
 				t.Fatalf("reset: restart teranode%d: %v", n, err)
 			}
 		}
@@ -302,9 +334,9 @@ func (s *Stack) waitNodeReady(ctx context.Context, l progressLogger, node int) e
 			return err
 		}
 
-		if restarts < maxRestarts && s.containerExited(node) {
-			l.Logf("teranode%d container exited; restarting (attempt %d/%d)", node, restarts+1, maxRestarts)
-			if rerr := s.restartContainer(node); rerr != nil {
+		if exited := s.exitedContainers(node); restarts < maxRestarts && len(exited) > 0 {
+			l.Logf("teranode%d: %d container(s) exited; restarting (attempt %d/%d)", node, len(exited), restarts+1, maxRestarts)
+			if rerr := s.startContainers(exited); rerr != nil {
 				l.Logf("restart teranode%d failed: %v", node, rerr)
 			}
 			restarts++
@@ -324,30 +356,69 @@ func (s *Stack) waitNodeReady(ctx context.Context, l progressLogger, node int) e
 	}
 }
 
-// containerExited reports whether teranode<node>-multinode is in the Exited
-// state right now. Errors (including container-not-found) are treated as
-// not-exited so we don't infinite-loop restarting something that never
-// existed.
-func (s *Stack) containerExited(node int) bool {
-	cmd := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", ctrName(node))
+// nodeContainers lists every docker container associated with teranode <node>:
+// either the single monolithic teranode<node>-multinode (all-in-one) or up to
+// nine teranode<node>-<svc>-multinode siblings (split mode). Includes both
+// running and stopped containers so callers can decide what to do per-state.
+// Returns nil if docker errors or no containers match.
+func (s *Stack) nodeContainers(node int) []string {
+	pattern := fmt.Sprintf("^teranode%d(-[a-z0-9]+)?-multinode$", node)
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}")
 	out, err := cmd.Output()
 	if err != nil {
-		return false
+		return nil
 	}
-	return strings.TrimSpace(string(out)) == "exited"
+	re := regexp.MustCompile(pattern)
+	var matches []string
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if re.MatchString(name) {
+			matches = append(matches, name)
+		}
+	}
+	return matches
 }
 
-// restartContainer runs `docker start` on the named teranode container.
-func (s *Stack) restartContainer(node int) error {
-	cmd := exec.Command("docker", "start", ctrName(node))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+// exitedContainers returns the subset of node <node>'s containers that are
+// currently in the "exited" state. Errors querying a container (including
+// container-not-found) are treated as not-exited so we don't infinite-loop
+// trying to restart something that never existed.
+func (s *Stack) exitedContainers(node int) []string {
+	var exited []string
+	for _, name := range s.nodeContainers(node) {
+		cmd := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", name)
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(out)) == "exited" {
+			exited = append(exited, name)
+		}
+	}
+	return exited
+}
+
+// startContainers runs `docker start` against each container name in the
+// given list. Failures on any one container surface as the returned error;
+// the rest are still attempted so a single bad container doesn't strand the
+// others stopped.
+func (s *Stack) startContainers(names []string) error {
+	var failures []string
+	for _, name := range names {
+		cmd := exec.Command("docker", "start", name)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v (%s)", name, err, strings.TrimSpace(string(out))))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("docker start: %s", strings.Join(failures, "; "))
 	}
 	return nil
 }
 
-// dumpDiagnostics logs container status and recent logs for node n.
+// dumpDiagnostics logs container status and recent logs for node n. In split
+// mode logs from every running container are dumped (60 lines each) so a
+// healthcheck-stalled sibling is visible, not just the core sidecar.
 func (s *Stack) dumpDiagnostics(l progressLogger, node int) {
 	l.Helper()
 	if out, err := s.runCombined(context.Background(), "status"); err == nil {
@@ -355,13 +426,15 @@ func (s *Stack) dumpDiagnostics(l progressLogger, node int) {
 	} else {
 		l.Logf("status failed: %v\n%s", err, out)
 	}
-	cmd := exec.Command("docker", "logs", "--tail", "60", ctrName(node))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		l.Logf("docker logs %s failed: %v\n%s", ctrName(node), err, out)
-		return
+	for _, name := range s.nodeContainers(node) {
+		cmd := exec.Command("docker", "logs", "--tail", "60", name)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			l.Logf("docker logs %s failed: %v\n%s", name, err, out)
+			continue
+		}
+		l.Logf("--- docker logs %s (tail 60) ---\n%s", name, out)
 	}
-	l.Logf("--- docker logs %s (tail 60) ---\n%s", ctrName(node), out)
 }
 
 // runCombined execs multinode.sh with args and returns combined output.
@@ -391,9 +464,6 @@ func (s *Stack) wipePersistedState() error {
 	}
 	return nil
 }
-
-// ctrName returns the docker container name for teranode n.
-func ctrName(n int) string { return fmt.Sprintf("teranode%d-multinode", n) }
 
 // repoRoot walks up from this file's location (via runtime.Caller) until it
 // finds a go.mod. This avoids brittle dependencies on the test's cwd.

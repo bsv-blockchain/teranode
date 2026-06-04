@@ -1,14 +1,26 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let style = ''
+  import type { Snippet } from 'svelte'
 
-  export let disabled = false
-  export let show = true
-  export let borderRadius = ''
-  export let stretch = true
+  let {
+    style = '',
+    disabled = false,
+    show = true,
+    borderRadius = '',
+    stretch = true,
+    children,
+  }: {
+    style?: string
+    disabled?: boolean
+    show?: boolean
+    borderRadius?: string
+    stretch?: boolean
+    children?: Snippet
+  } = $props()
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    return [
       `--focus-rect-color:${disabled ? 'transparent' : `var(--comp-focus-rect-color)`}`,
       `--focus-rect-width:var(--comp-focus-rect-width)`,
       `--focus-rect-border-radius:${
@@ -17,7 +29,7 @@
       `--focus-rect-padding:var(--comp-focus-rect-padding)`,
       `--focus-rect-bg-color:var(--comp-focus-rect-bg-color)`,
     ]
-  }
+  })
 </script>
 
 {#if show}
@@ -26,10 +38,10 @@
     class:stretch
     style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
   >
-    <div class="halo"><slot /></div>
+    <div class="halo">{@render children?.()}</div>
   </div>
 {:else}
-  <slot />
+  {@render children?.()}
 {/if}
 
 <style>

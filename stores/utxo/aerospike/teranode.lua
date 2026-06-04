@@ -370,7 +370,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
         if spendableIn then
             local spendableHeight = spendableIn[offset]
-            if spendableHeight and spendableHeight >= currentBlockHeight then
+            if spendableHeight and spendableHeight > currentBlockHeight then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL

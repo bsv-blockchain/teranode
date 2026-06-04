@@ -594,6 +594,12 @@ export type BUMPLevel = BUMPNode[]
 export interface MerkleProofData {
   blockHeight: number
   path: BUMPLevel[]
+  // Legacy/extended fields populated for subtree-level merkle proofs.
+  // Optional because BUMP (tx-level) responses omit them.
+  subtreeIndex?: number
+  subtreeRoot?: string
+  merkleRoot?: string
+  blockProof?: string[]
 }
 
 // Legacy interface kept for backward compatibility

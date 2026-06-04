@@ -1,6 +1,7 @@
-<script lang="ts">
-  import { afterUpdate } from 'svelte'
+<svelte:options runes={true} />
 
+<script lang="ts">
+  import { untrack } from 'svelte'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import MessageBox from '$internal/components/msgbox/index.svelte'
   import Typo from '$internal/components/typo/index.svelte'
@@ -11,13 +12,13 @@
   import { messages, sock, connectionAttempts, currentNodePeerID } from '$internal/stores/p2pStore'
   import i18n from '$internal/i18n'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  $: connected = $sock !== null
+  const connected = $derived($sock !== null)
 
   const pageKey = 'page.p2p'
 
-  let innerWidth = 0
+  let innerWidth = $state(0)
 
   function scrollToTop() {
     if (!import.meta.env.SSR && window && window.scrollTo) {
@@ -30,29 +31,25 @@
     }
   }
 
-  afterUpdate(() => {
-    scrollToTop()
-  })
+  let collapseMsgContent = $state(false)
 
-  let collapseMsgContent = false
+  let byPeer = $state(false)
+  let rawMode = $state(false) // Toggle for showing raw JSON
+  let filter = $state('')
+  let showLocalMessages = $state(false) // Toggle for showing local messages (off by default)
+  let groupedMessages: any = $state({})
+  let filteredMessages: any[] = $state([])
+  let peers: string[] = $state([])
+  let peerClientNames: { [key: string]: string } = $state({}) // Map peer IDs to client names
 
   // In by-peer mode, always collapse messages for compact view
-  $: actualCollapseState = byPeer ? true : collapseMsgContent
-
-  let byPeer = false
-  let rawMode = false // Toggle for showing raw JSON
-  let filter = ''
-  let showLocalMessages = false // Toggle for showing local messages (off by default)
-  let groupedMessages: any = {}
-  let filteredMessages: any[] = []
-  let peers: string[] = []
-  let peerClientNames: { [key: string]: string } = {} // Map peer IDs to client names
+  const actualCollapseState = $derived(byPeer ? true : collapseMsgContent)
 
   // Message type filter
-  let messageTypeSet = new Set(['All'])
-  let messageTypeOptions: string[] = ['All']
-  let selectedMessageType = 'All'
-  let reverseFilter = false
+  const messageTypeSet = new Set(['All'])
+  let messageTypeOptions: string[] = $state(['All'])
+  let selectedMessageType = $state('All')
+  let reverseFilter = $state(false)
 
   // Function to process message types
   function processMessageType(messageType: string) {
@@ -68,7 +65,7 @@
     }
   }
 
-  let dataSnapshot: any = null
+  let dataSnapshot: any = $state(null)
 
   function onLive() {
     if (dataSnapshot) {
@@ -78,106 +75,134 @@
     }
   }
 
-  $: usingLiveData = dataSnapshot === null
+  const usingLiveData = $derived(dataSnapshot === null)
 
-  $: data = dataSnapshot ? dataSnapshot : $messages
+  const data = $derived(dataSnapshot ? dataSnapshot : $messages)
 
-  $: {
-    // Transform types to be lower case, as they have been changing case in the BE
-    // Filter messages based on the showLocalMessages toggle
-    filteredMessages = data
-      .filter((item) => {
-        // Only filter out local messages if showLocalMessages is false
-        if (!showLocalMessages && $currentNodePeerID) {
-          // Check if the message is from the current node using peer_id
-          const messagePeerId = item.peer_id || item.peerID || item.peer
-          return messagePeerId !== $currentNodePeerID // Keep message if it's NOT from current node
-        }
-        return true
-      })
-      .map((item) => {
-        // Process message type for dropdown
-        const lowerType = item.type?.toLowerCase()
-        processMessageType(lowerType)
-        return { ...item, type: lowerType }
-      })
+  $effect(() => {
+    // Read all genuine reactive inputs up front so the effect re-runs when they
+    // change. The body then runs untracked, so writing to (and re-reading)
+    // filteredMessages / groupedMessages / peers does not self-trigger the effect.
+    const inData = data
+    const inShowLocal = showLocalMessages
+    const inCurrentPeer = $currentNodePeerID
+    const inSelectedType = selectedMessageType
+    const inReverse = reverseFilter
+    const inFilter = filter
+    const inByPeer = byPeer
+    const inInnerWidth = innerWidth
+    const inContentLeft = $contentLeft
 
-    // Apply message type filter
-    if (selectedMessageType !== 'All') {
-      if (reverseFilter) {
-        filteredMessages = filteredMessages.filter((msg) => msg.type !== selectedMessageType)
-      } else {
-        filteredMessages = filteredMessages.filter((msg) => msg.type === selectedMessageType)
-      }
-    }
-
-    if (filter.length > 0) {
-      const f = filter.toLowerCase()
-
-      filteredMessages = filteredMessages.filter((message) => {
-        // More targeted search - check specific fields instead of entire JSON
-        return (
-          message.type?.toLowerCase().includes(f) ||
-          message.hash?.toLowerCase().includes(f) ||
-          message.base_url?.toLowerCase().includes(f) ||
-          message.miner?.toLowerCase().includes(f) ||
-          message.miner_name?.toLowerCase().includes(f) ||
-          message.client_name?.toLowerCase().includes(f) ||
-          message.peer_id?.toLowerCase().includes(f) ||
-          message.peerID?.toLowerCase().includes(f) ||
-          message.peer?.toLowerCase().includes(f) ||
-          message.fsm_state?.toLowerCase().includes(f) ||
-          message.version?.toLowerCase().includes(f)
-        )
-      })
-    }
-
-    if (byPeer) {
-      let newGroupedMessages: any = {}
-      let newPeerClientNames: { [key: string]: string } = {}
-
-      filteredMessages.forEach((message, index) => {
-        // Compare with lowercase since we convert types to lowercase
-        if (message.type !== MessageType.ping.toLowerCase()) {
-          // Check for peer_id, peerID, or peer field
-          const peerId = message.peer_id || message.peerID || message.peer || 'unknown'
-
-          if (!newGroupedMessages[peerId]) {
-            newGroupedMessages[peerId] = []
+    untrack(() => {
+      // Transform types to be lower case, as they have been changing case in the BE
+      // Filter messages based on the showLocalMessages toggle
+      let newFiltered = inData
+        .filter((item) => {
+          // Only filter out local messages if showLocalMessages is false
+          if (!inShowLocal && inCurrentPeer) {
+            // Check if the message is from the current node using peer_id
+            const messagePeerId = item.peer_id || item.peerID || item.peer
+            return messagePeerId !== inCurrentPeer // Keep message if it's NOT from current node
           }
-          newGroupedMessages[peerId].push(message)
-
-          // Extract client name if available and not already stored
-          if (!newPeerClientNames[peerId] && message.client_name) {
-            newPeerClientNames[peerId] = message.client_name
-          }
-        } else {
-        }
-      })
-
-      // Sort messages in descending order by receivedAt timestamp
-      Object.keys(newGroupedMessages).forEach((peer_id) => {
-        newGroupedMessages[peer_id].sort((a: any, b: any) => {
-          // Sort by receivedAt in descending order (newest first)
-          return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+          return true
         })
-      })
+        .map((item) => {
+          // Process message type for dropdown
+          const lowerType = item.type?.toLowerCase()
+          processMessageType(lowerType)
+          return { ...item, type: lowerType }
+        })
 
-      groupedMessages = newGroupedMessages
-      peerClientNames = newPeerClientNames
-    }
+      // Apply message type filter
+      if (inSelectedType !== 'All') {
+        if (inReverse) {
+          newFiltered = newFiltered.filter((msg) => msg.type !== inSelectedType)
+        } else {
+          newFiltered = newFiltered.filter((msg) => msg.type === inSelectedType)
+        }
+      }
 
-    peers = Object.keys(groupedMessages).length > 0 ? Object.keys(groupedMessages) : []
-    peers = peers.sort()
+      if (inFilter.length > 0) {
+        const f = inFilter.toLowerCase()
 
-    const msgboxW = byPeer ? (innerWidth - $contentLeft) / peers.length : innerWidth - $contentLeft
-    collapseMsgContent = msgboxW < 500
-  }
+        newFiltered = newFiltered.filter((message) => {
+          // More targeted search - check specific fields instead of entire JSON
+          return (
+            message.type?.toLowerCase().includes(f) ||
+            message.hash?.toLowerCase().includes(f) ||
+            message.base_url?.toLowerCase().includes(f) ||
+            message.miner?.toLowerCase().includes(f) ||
+            message.miner_name?.toLowerCase().includes(f) ||
+            message.client_name?.toLowerCase().includes(f) ||
+            message.peer_id?.toLowerCase().includes(f) ||
+            message.peerID?.toLowerCase().includes(f) ||
+            message.peer?.toLowerCase().includes(f) ||
+            message.fsm_state?.toLowerCase().includes(f) ||
+            message.version?.toLowerCase().includes(f)
+          )
+        })
+      }
+
+      filteredMessages = newFiltered
+
+      if (inByPeer) {
+        let newGroupedMessages: any = {}
+        let newPeerClientNames: { [key: string]: string } = {}
+
+        newFiltered.forEach((message) => {
+          // Compare with lowercase since we convert types to lowercase
+          if (message.type !== MessageType.ping.toLowerCase()) {
+            // Check for peer_id, peerID, or peer field
+            const peerId = message.peer_id || message.peerID || message.peer || 'unknown'
+
+            if (!newGroupedMessages[peerId]) {
+              newGroupedMessages[peerId] = []
+            }
+            newGroupedMessages[peerId].push(message)
+
+            // Extract client name if available and not already stored
+            if (!newPeerClientNames[peerId] && message.client_name) {
+              newPeerClientNames[peerId] = message.client_name
+            }
+          }
+        })
+
+        // Sort messages in descending order by receivedAt timestamp
+        Object.keys(newGroupedMessages).forEach((peer_id) => {
+          newGroupedMessages[peer_id].sort((a: any, b: any) => {
+            // Sort by receivedAt in descending order (newest first)
+            return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+          })
+        })
+
+        groupedMessages = newGroupedMessages
+        peerClientNames = newPeerClientNames
+      }
+
+      const newPeers =
+        Object.keys(groupedMessages).length > 0 ? Object.keys(groupedMessages).sort() : []
+      peers = newPeers
+
+      const msgboxW = inByPeer
+        ? (inInnerWidth - inContentLeft) / newPeers.length
+        : inInnerWidth - inContentLeft
+      collapseMsgContent = msgboxW < 500
+    })
+  })
+
+  // Scroll to top after the message list re-renders (replaces afterUpdate)
+  $effect(() => {
+    // Touch the reactive values that drive a re-render so this fires after them
+    void filteredMessages
+    void groupedMessages
+    void byPeer
+    scrollToTop()
+  })
 </script>
 
 <svelte:window bind:innerWidth />
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="tools-container">
     <div class="tools">
       <div class="title">
@@ -241,7 +266,7 @@
           icon="icon-status-light-glow-solid"
           iconColor={connected ? '#15B241' : '#CE1722'}
           uppercase={true}
-          on:click={onLive}
+          onclick={onLive}
         >
           {usingLiveData ? t(`${pageKey}.live`) : t(`${pageKey}.paused`)}
         </Button>

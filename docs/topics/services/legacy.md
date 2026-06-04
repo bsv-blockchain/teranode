@@ -16,6 +16,7 @@
         - [4.1.3. Processing New Blocks](#413-processing-new-blocks)
     - [4.2. Teranode to BSV Communication](#42-teranode-to-bsv-communication)
         - [4.2.1. Processing New Subtrees from Teranode](#421-processing-new-subtrees-from-teranode)
+        - [4.2.2. Transaction rebroadcast retry](#422-transaction-rebroadcast-retry)
 5. [Technology](#5-technology)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
@@ -346,6 +347,48 @@ The Legacy Service converts Teranode subtree container abstractions back to "fla
     - Transactions are served to the BSV network in their standard format, with no reference to the subtree structure
 
 This process effectively bridges the gap between Teranode's subtree-based architecture and the BSV network's traditional transaction model, ensuring that data originating in Teranode can be properly propagated to the BSV network.
+
+#### 4.2.2. Transaction rebroadcast retry
+
+The immediate INV dispatch for a newly-announced tx is best-effort: a peer
+that has not finished its version handshake at the instant of relay, or
+that is briefly disconnected, will silently drop the inv. To recover from
+these transient misses, the Legacy Service keeps a bounded retry queue.
+
+- Every tx that passes the FSM `RUNNING` gate is also enqueued on the
+  rebroadcast queue at announce time. (The legacy announce path is NOT
+  gated by the modern-P2P `listen_mode` setting — see
+  `peer_server.AnnounceNewTransactions` for the rationale.)
+- A background `rebroadcastHandler` periodically re-emits every pending
+  entry. The first replay fires 5 minutes after enqueue; subsequent
+  replays are scheduled at a random interval up to 30 minutes.
+- Each entry has a retry budget of `maxRebroadcastAttempts` (6) replay
+  ticks. After that, the entry is aged out — covering roughly 90 minutes
+  in expectation, long enough to ride out a peer reconnect window.
+- The queue is capped at `maxRebroadcastInventory` (4096) entries. New
+  adds beyond the cap are dropped: older entries keep their retry budget
+  rather than being evicted by fresher adds that haven't yet failed.
+- The channel between callers and the handler is bounded at
+  `modifyRebroadcastInvBuffer` (1024). Non-blocking sends keep the relay
+  hot path uncontended; if the handler is backlogged past the buffer,
+  the add is dropped.
+
+Operators can observe queue saturation via the
+`(*legacy.Server).RebroadcastDropCounts()` method, which returns
+`(adds, capHits uint64)`. A non-zero `adds` count means the channel was
+full when callers tried to add; a non-zero `capHits` count means the
+in-handler map was at capacity. Either way, the affected txs still got
+their immediate INV dispatch — only the retry safety net is lost for
+them. Sustained non-zero drops indicate the rebroadcast queue cannot
+keep up with announce rate at the configured caps. The counters are not
+yet surfaced as Prometheus metrics; wiring them through
+`services/legacy/metrics.go` as gauges (read on collect) is a small
+follow-up.
+
+A future improvement would be to wire `TransactionConfirmed` so block
+inclusion frees entries instead of waiting for them to age out — the
+hook exists on the `PeerNotifier` interface but is not yet wired in
+this codebase.
 
 ## 5. Technology
 

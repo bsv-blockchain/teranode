@@ -187,7 +187,7 @@ jobs:
             - Micro-optimizations without performance justification
 
             **Documentation Review:**
-            Apply the methodology from `.claude/agents/review-docs.md` scoped to PR changes.
+            Apply the methodology from `.claude/agents/document-reviewer.md` scoped to PR changes.
 
             When the PR modifies documentation files (README.md, docs/*, CONTRIBUTING.md, ARCHITECTURE.md,
             DESIGN.md, CHANGELOG.md, OpenAPI/Swagger specs, or significant inline doc comments/godoc):

@@ -28,6 +28,10 @@
 //   - Batch operation errors
 //   - Timeout errors at the database level
 //
+// Data-state result codes (KEY_NOT_FOUND_ERROR, FILTERED_OUT, etc.) are
+// explicitly excluded from the failure counter — see isInfrastructureFailure
+// for the exact allow-list. Issue #953.
+//
 // # Circuit Breaker States
 //
 // 1. CLOSED: Normal operation, requests flow through
@@ -55,9 +59,83 @@
 package aerospike
 
 import (
+	"context"
+	"net"
 	"sync"
 	"time"
+
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/teranode/errors"
 )
+
+// infrastructureResultCodes is the allow-list of aerospike ResultCodes that
+// count as infrastructure failure for the spend circuit breaker.
+//
+// All entries here are node- or cluster-level failure modes. Data-state
+// codes (KEY_NOT_FOUND_ERROR, FILTERED_OUT, GENERATION_ERROR, etc.) are
+// intentionally excluded — they're handled by per-record error paths in
+// the calling code (missing parents flow into subtreevalidation's
+// sequential revalidation pass; Lua business-rule rejections surface to
+// the caller), not by this breaker. Counting them here causes the breaker
+// to trip during normal IBD and stall sync (#953).
+var infrastructureResultCodes = []types.ResultCode{
+	types.TIMEOUT,
+	types.NETWORK_ERROR,
+	types.NO_RESPONSE,
+	types.MAX_RETRIES_EXCEEDED,
+	types.MAX_ERROR_RATE,
+	types.NO_AVAILABLE_CONNECTIONS_TO_NODE,
+	types.SERVER_NOT_AVAILABLE,
+	types.INVALID_NODE_ERROR,
+	types.PARTITION_UNAVAILABLE,
+	types.SERVER_MEM_ERROR,
+	types.SERVER_ERROR,
+	types.DEVICE_OVERLOAD,
+	types.BATCH_FAILED,
+	types.GRPC_ERROR,
+}
+
+// isInfrastructureFailure reports whether err represents an Aerospike
+// infrastructure failure that should count toward the spend circuit breaker.
+//
+// Matches against the aerospike.Error interface (not the *AerospikeError
+// concrete type) so that the client's constant sentinels exposed as
+// *constAerospikeError — ErrTimeout, ErrNetwork, ErrMaxRetriesExceeded,
+// ErrConnectionPoolEmpty, etc. — are classified consistently with the
+// equivalent ResultCode-bearing *AerospikeError instances. See
+// stores/utxo/aerospike/send_store_batch_test.go for prior evidence that
+// the per-record path receives both types.
+//
+// Non-Aerospike errors are only treated as infrastructure when they are
+// stdlib timeout signals (context.DeadlineExceeded or a net.Error with
+// Timeout()=true). Anything else defaults to non-infrastructure: the bias
+// is against false positives because a false trip stalls sync, while a
+// missed signal is recoverable by higher-level timeouts and health checks.
+func isInfrastructureFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var aErr aerospike.Error
+	if errors.As(err, &aErr) {
+		if aErr.Matches(infrastructureResultCodes...) {
+			return true
+		}
+		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return false
+}
 
 type cbState string
 

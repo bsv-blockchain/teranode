@@ -83,7 +83,7 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBestBlockHeader_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBestBlockHeader in %s for %s", mode, c.RealIP()),
 		)
 
 		defer deferFn()

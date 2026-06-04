@@ -914,7 +914,10 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 	}
 	defer releaseSemaphorePermit(repo.semGetUtxo)
 
-	repo.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
+	// spend.UTXOHash may be nil — callers that locate the record by primary
+	// key (txid, vout) intentionally skip recomputing the hash. Log identifiers
+	// that are always present instead of dereferencing UTXOHash.
+	repo.logger.Debugf("[Repository] GetUtxo: %s:%d", spend.TxID, spend.Vout)
 
 	resp, err := repo.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {

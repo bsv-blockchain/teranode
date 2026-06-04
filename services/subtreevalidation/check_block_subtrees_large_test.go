@@ -837,11 +837,6 @@ func setupLargeTestServer(t *testing.T, cacheDir string, subtreeStore blob.Store
 		blockchainClient: mockBlockchainClient,
 	}
 
-	// Initialize orphanage
-	orphanage, err := NewOrphanage(time.Minute*10, 100, logger)
-	require.NoError(t, err)
-	server.orphanage = orphanage
-
 	// Container cleanup is handled by t.Cleanup above
 	return server, func() {}
 }

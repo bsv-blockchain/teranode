@@ -24,6 +24,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const reputationCacheTTL = 5 * time.Second
+
+type reputationCacheEntry struct {
+	score     float64
+	expiresAt time.Time
+}
+
 func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	var (
 		blockMessage BlockMessage
@@ -249,11 +256,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	}
 }
 
-// addProtocolViolation records a protocol violation against a peer if the ban manager is available.
+// addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	if s.banManager != nil {
-		s.banManager.AddScore(peerID, ReasonProtocolViolation)
-	}
+	s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
@@ -428,10 +433,14 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 		return ""
 	}
 
-	peers := s.peerRegistry.GetAll()
+	peers, err := s.peerRegistry.ListPeers(s.gCtx, nil, 0, 0, false, false)
+	if err != nil {
+		s.logger.Warnf("[getPeerIDFromDataHubURL] ListPeers failed: %v", err)
+		return ""
+	}
 	for _, peerInfo := range peers {
 		if peerInfo.DataHubURL == dataHubURL {
-			return peerInfo.ID.String()
+			return peerInfo.ID
 		}
 	}
 	return ""
@@ -574,17 +583,40 @@ func (s *Server) getLocalHeight() uint32 {
 	return bhMeta.Height
 }
 
-func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
-	if s.peerRegistry != nil {
-		s.peerRegistry.Put(peerID, clientName, height, blockHash, dataHubURL)
+// registerPeer is a fire-and-forget shorthand for the centralized registry's
+// RegisterPeer RPC, building the PeerInfo struct from libp2p-source data.
+// Used by addPeer / addConnectedPeer / InjectPeerForTesting which previously
+// shared a single Put helper on the local registry.
+func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	if s.peerRegistry == nil {
+		return
 	}
+	info := &blockchain.PeerInfo{
+		ID:               peerID.String(),
+		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
+		TransportTypeSet: true,
+		ClientName:       clientName,
+		Height:           height,
+		BlockHash:        blockHash,
+		DataHubURL:       dataHubURL,
+	}
+	if err := s.peerRegistry.RegisterPeer(s.gCtx, info); err != nil {
+		s.logger.Warnf("[registerPeer] RegisterPeer %s failed: %v", info.ID, err)
+	}
+}
+
+func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
 func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
-	if s.peerRegistry != nil {
-		s.peerRegistry.Put(peerID, clientName, height, blockHash, dataHubURL)
-		s.peerRegistry.UpdateConnectionState(peerID, true)
+	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	if s.peerRegistry == nil {
+		return
+	}
+	if err := s.peerRegistry.UpdateConnectionState(s.gCtx, peerID.String(), true); err != nil {
+		s.logger.Warnf("[addConnectedPeer] UpdateConnectionState %s failed: %v", peerID, err)
 	}
 }
 
@@ -596,8 +628,10 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 		return
 	}
 
-	s.peerRegistry.Put(peerID, clientName, height, blockHash, dataHubURL)
-	s.peerRegistry.UpdateStorage(peerID, "full")
+	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), "full"); err != nil {
+		s.logger.Warnf("[InjectPeerForTesting] UpdateStorage %s failed: %v", peerID, err)
+	}
 
 	// Trigger sync coordinator to consider the new peer
 	if s.syncCoordinator != nil {
@@ -607,34 +641,56 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 
 func (s *Server) removePeer(peerID peer.ID) {
 	if s.peerRegistry != nil {
-		// Mark as disconnected before removing
-		s.peerRegistry.UpdateConnectionState(peerID, false)
-		s.peerRegistry.Remove(peerID)
+		idStr := peerID.String()
+		if err := s.peerRegistry.UpdateConnectionState(s.gCtx, idStr, false); err != nil {
+			s.logger.Warnf("[removePeer] UpdateConnectionState %s failed: %v", peerID, err)
+		}
+		if err := s.peerRegistry.RemovePeer(s.gCtx, idStr); err != nil {
+			s.logger.Warnf("[removePeer] RemovePeer %s failed: %v", peerID, err)
+		}
 	}
 	if s.syncCoordinator != nil {
 		s.syncCoordinator.HandlePeerDisconnected(peerID)
 	}
 }
 
-// getPeer gets peer information from the registry
-func (s *Server) getPeer(peerID peer.ID) (*PeerInfo, bool) {
-	if s.peerRegistry != nil {
-		return s.peerRegistry.Get(peerID)
+// getPeer gets peer information from the centralized registry. Returns nil and
+// false on error or when the peer is unknown.
+func (s *Server) getPeer(peerID peer.ID) (*blockchain.PeerInfo, bool) {
+	if s.peerRegistry == nil {
+		return nil, false
 	}
-	return nil, false
+	info, found, err := s.peerRegistry.GetPeer(s.gCtx, peerID.String())
+	if err != nil {
+		s.logger.Warnf("[getPeer] GetPeer %s failed: %v", peerID, err)
+		return nil, false
+	}
+	return info, found
 }
 
+// getSyncPeer returns the current sync peer as a libp2p peer.ID. Empty when no
+// sync peer is selected or the configured ID can't be decoded.
 func (s *Server) getSyncPeer() peer.ID {
-	if s.syncCoordinator != nil {
-		return s.syncCoordinator.GetCurrentSyncPeer()
+	if s.syncCoordinator == nil {
+		return ""
 	}
-	return ""
+	idStr := s.syncCoordinator.GetCurrentSyncPeer()
+	if idStr == "" {
+		return ""
+	}
+	pid, err := peer.Decode(idStr)
+	if err != nil {
+		return ""
+	}
+	return pid
 }
 
-// updateStorage updates peer storage mode in the registry
+// updateStorage updates peer storage mode in the centralized registry.
 func (s *Server) updateStorage(peerID peer.ID, mode string) {
 	if s.peerRegistry != nil && mode != "" {
-		s.peerRegistry.UpdateStorage(peerID, mode)
+		if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), mode); err != nil {
+			s.logger.Warnf("[updateStorage] UpdateStorage %s failed: %v", peerID, err)
+		}
 	}
 }
 
@@ -768,10 +824,26 @@ func (s *Server) cleanupPeerMaps() {
 		s.subtreePeerMap.Delete(key)
 	}
 
+	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
+	// inserts; without this sweep the map would grow once per unique peer ID
+	// the node has ever processed gossip from.
+	var reputationKeysToDelete []string
+	s.reputationCache.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(reputationCacheEntry); ok {
+			if now.After(entry.expiresAt) {
+				reputationKeysToDelete = append(reputationKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+	for _, key := range reputationKeysToDelete {
+		s.reputationCache.Delete(key)
+	}
+
 	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries and %d expired subtree entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete))
+	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 || len(reputationKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries, %d expired subtree entries, %d expired reputation entries",
+			len(blockKeysToDelete), len(subtreeKeysToDelete), len(reputationKeysToDelete))
 	}
 
 	// Second pass: enforce size limits if needed
@@ -835,43 +907,73 @@ func (s *Server) isOwnMessage(from string, peerID string) bool {
 	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
 }
 
-// shouldSkipBannedPeer checks if we should skip a message from a banned peer
+// shouldSkipBannedPeer checks if we should skip a message from a banned peer.
+// Banning lives in the centralized peer registry now; failures are tolerated
+// (return false) so a transient registry blip doesn't drop traffic silently.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
-	if s.banManager.IsBanned(from) {
+	if s.peerRegistry == nil {
+		return false
+	}
+	banned, err := s.peerRegistry.IsPeerBanned(s.gCtx, from)
+	if err != nil {
+		s.logger.Warnf("[%s] IsPeerBanned %s failed: %v", messageType, from, err)
+		return false
+	}
+	if banned {
 		s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
 		return true
 	}
 	return false
 }
 
-// shouldSkipUnhealthyPeer checks if we should skip a message from an unhealthy peer
-// Only checks health for directly connected peers (not gossiped peers)
+// shouldSkipUnhealthyPeer checks if we should skip a message from an unhealthy
+// peer. Reputation scores are cached for reputationCacheTTL to avoid a gRPC
+// round-trip on every pubsub message. Only applies to directly connected peers
+// whose ID can be decoded as a libp2p peer.ID; gossiped relay IDs are allowed
+// through unconditionally.
 func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
-	// If no peer registry, allow all messages
 	if s.peerRegistry == nil {
 		return false
 	}
 
 	peerID, err := peer.Decode(from)
 	if err != nil {
-		// If we can't decode the peer ID (e.g., from is a hostname/identifier in gossiped messages),
-		// we can't check health status, so allow the message through.
-		// This is normal for gossiped messages where 'from' is the relay peer's identifier, not a valid peer ID.
 		return false
 	}
+	idStr := peerID.String()
 
-	peerInfo, exists := s.peerRegistry.Get(peerID)
+	// Check cache first.
+	now := time.Now()
+	if v, ok := s.reputationCache.Load(idStr); ok {
+		entry := v.(reputationCacheEntry)
+		if now.Before(entry.expiresAt) {
+			if entry.score < 20.0 {
+				s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (cached score: %.2f)", messageType, from, entry.score)
+				return true
+			}
+			return false
+		}
+	}
+
+	// Cache miss or expired — fetch from registry.
+	peerInfo, exists, err := s.peerRegistry.GetPeer(s.gCtx, idStr)
+	if err != nil {
+		s.logger.Warnf("[shouldSkipUnhealthyPeer] GetPeer %s failed: %v", peerID, err)
+		return false
+	}
 	if !exists {
-		// Peer not in registry - allow message (peer might be new)
 		return false
 	}
 
-	// Filter peers with very low reputation scores
+	s.reputationCache.Store(idStr, reputationCacheEntry{
+		score:     peerInfo.ReputationScore,
+		expiresAt: now.Add(reputationCacheTTL),
+	})
+
 	if peerInfo.ReputationScore < 20.0 {
 		s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (score: %.2f)", messageType, from, peerInfo.ReputationScore)
 		return true
 	}
-
 	return false
 }
 
@@ -970,89 +1072,10 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }
 
-// startPeerRegistryCleanup runs periodic TTL+LRU eviction on the peer registry
-// so it cannot grow unboundedly under churn.
-func (s *Server) startPeerRegistryCleanup(ctx context.Context) {
-	if s.peerRegistry == nil {
-		return
-	}
-
-	interval := s.settings.P2P.PeerRegistryCleanupInterval
-	if interval <= 0 {
-		interval = time.Hour
-	}
-	ttl := s.settings.P2P.PeerRegistryTTL
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-	maxSize := s.settings.P2P.PeerRegistryMaxSize
-
-	s.peerRegistryCleanupTimer = time.NewTicker(interval)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				s.logger.Infof("[startPeerRegistryCleanup] stopping peer registry cleanup")
-				return
-			case <-s.peerRegistryCleanupTimer.C:
-				expired, lru := s.peerRegistry.Cleanup(maxSize, ttl)
-				size := s.peerRegistry.PeerCount()
-				if expired+lru > 0 {
-					s.logger.Infof("[startPeerRegistryCleanup] evicted %d expired and %d over-limit entries (registry size now %d)",
-						expired, lru, size)
-				}
-				// LRU cannot evict connected/banned peers; if exempt entries alone
-				// exceed maxSize, the registry stays over-cap until they age out.
-				// Surface that explicitly so it does not look like cleanup is broken.
-				if maxSize > 0 && size > maxSize {
-					s.logger.Warnf("[startPeerRegistryCleanup] registry size %d exceeds max %d — exempt (connected or banned) peers cannot be evicted",
-						size, maxSize)
-				}
-			}
-		}
-	}()
-
-	s.logger.Infof("[startPeerRegistryCleanup] started peer registry cleanup with interval %v, ttl %v, max size %d",
-		interval, ttl, maxSize)
-}
-
-// startPeerRegistryCacheSave starts periodic saving of peer registry cache
-func (s *Server) startPeerRegistryCacheSave(ctx context.Context) {
-	// Save every 5 minutes
-	saveInterval := 5 * time.Minute
-
-	s.registryCacheSaveTicker = time.NewTicker(saveInterval)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				// Save one final time before shutdown
-				if s.peerRegistry != nil {
-					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
-						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache on shutdown: %v", err)
-					} else {
-						s.logger.Infof("[startPeerRegistryCacheSave] saved peer registry cache on shutdown")
-					}
-				}
-				s.logger.Infof("[startPeerRegistryCacheSave] stopping peer registry cache save")
-				return
-			case <-s.registryCacheSaveTicker.C:
-				if s.peerRegistry != nil {
-					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
-						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache: %v", err)
-					} else {
-						peerCount := s.peerRegistry.PeerCount()
-						s.logger.Debugf("[startPeerRegistryCacheSave] saved peer registry cache with %d peers", peerCount)
-					}
-				}
-			}
-		}
-	}()
-
-	s.logger.Infof("[startPeerRegistryCacheSave] started peer registry cache save with interval %v", saveInterval)
-}
+// startPeerRegistryCleanup and startPeerRegistryCacheSave have been removed.
+// TTL/LRU eviction and persistence both belong to the centralized peer registry
+// in the blockchain service now (the periodic cleanup-driver goroutine over there
+// is intentionally deferred to a follow-up PR; the Cleanup method itself ships in PR1).
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
 	for {

@@ -1,26 +1,33 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import * as d3 from 'd3'
   import type { MerkleProofData } from '$internal/api'
   import * as api from '$internal/api'
 
-  export let subtreeHash: string = ''
-  export let blockHash: string = ''
+  let {
+    subtreeHash = '',
+    blockHash = '',
+  }: {
+    subtreeHash?: string
+    blockHash?: string
+  } = $props()
 
-  let container: HTMLDivElement
+  let container: HTMLDivElement | undefined = $state()
   let svg: d3.Selection<SVGSVGElement, unknown, null, undefined>
   let svgGroup: d3.Selection<SVGGElement, unknown, null, undefined>
   let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown>
-  let mounted = false
-  
+  let mounted = $state(false)
+
   // Navigation state
   let currentTransform = d3.zoomIdentity
   let showNavigationHelp = false
 
   // Data state
-  let merkleProof: MerkleProofData | null = null
-  let loading = false
-  let error: string | null = null
+  let merkleProof: MerkleProofData | null = $state(null)
+  let loading = $state(false)
+  let error: string | null = $state(null)
 
   // Tree visualization constants
   const NODE_WIDTH = 160
@@ -106,9 +113,11 @@
   })
 
   // Fetch merkle proof when subtree hash changes
-  $: if (subtreeHash && blockHash) {
-    fetchSubtreeMerkleProof()
-  }
+  $effect(() => {
+    if (subtreeHash && blockHash) {
+      fetchSubtreeMerkleProof()
+    }
+  })
 
   async function fetchSubtreeMerkleProof() {
     loading = true
@@ -129,13 +138,15 @@
     }
   }
 
-  $: if (mounted && merkleProof && container) {
-    // Wait for container to be properly sized
-    setTimeout(async () => {
-      await buildBlockTree()
-      renderVisualization()
-    }, 50)
-  }
+  $effect(() => {
+    if (mounted && merkleProof && container) {
+      // Wait for container to be properly sized
+      setTimeout(async () => {
+        await buildBlockTree()
+        renderVisualization()
+      }, 50)
+    }
+  })
 
   async function buildBlockTree() {
     if (!merkleProof) return
@@ -143,10 +154,10 @@
     nodes = []
     links = []
 
-    const subtreeIndex = merkleProof.subtreeIndex
-    const blockProof = merkleProof.blockProof
-    const subtreeRoot = merkleProof.subtreeRoot
-    const merkleRoot = merkleProof.merkleRoot
+    const subtreeIndex = merkleProof.subtreeIndex ?? 0
+    const blockProof = merkleProof.blockProof ?? []
+    const subtreeRoot = merkleProof.subtreeRoot ?? ''
+    const merkleRoot = merkleProof.merkleRoot ?? ''
     
     // Build complete block-level binary tree structure
     const blockLevels = blockProof.length + 1 // +1 for the subtree root level
@@ -498,7 +509,7 @@
   }
 
   function zoomToFit() {
-    if (!svg || !svgGroup || !zoomBehavior || nodes.length === 0) return
+    if (!svg || !svgGroup || !zoomBehavior || nodes.length === 0 || !container) return
 
     const bounds = svgGroup.node()?.getBBox()
     if (!bounds) return
@@ -532,7 +543,7 @@
   }
 </script>
 
-<svelte:window on:resize={handleResize} />
+<svelte:window onresize={handleResize} />
 
 <div class="subtree-merkle-visualizer">
   {#if loading}
@@ -561,11 +572,11 @@
         </div>
         <div class="info-item">
           <span class="label">Subtree Index:</span>
-          <span class="value">{merkleProof.subtreeIndex}</span>
+          <span class="value">{merkleProof.subtreeIndex ?? 0}</span>
         </div>
         <div class="info-item">
           <span class="label">Block Proof:</span>
-          <span class="value">{merkleProof.blockProof.length} levels</span>
+          <span class="value">{merkleProof.blockProof?.length ?? 0} levels</span>
         </div>
       </div>
       
@@ -585,8 +596,8 @@
       </div>
       
       <div class="navigation-controls">
-        <button class="nav-button" on:click={zoomToFit} title="Zoom to Fit">🔍</button>
-        <button class="nav-button" on:click={resetZoom} title="Reset Zoom">🏠</button>
+        <button class="nav-button" onclick={zoomToFit} title="Zoom to Fit">🔍</button>
+        <button class="nav-button" onclick={resetZoom} title="Reset Zoom">🏠</button>
       </div>
     </div>
 

@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
@@ -7,21 +9,21 @@
   import Markdown from 'svelte-exmarkdown'
   import { gfmPlugin } from 'svelte-exmarkdown/gfm'
 
-  let settings: SettingMetadata[] = []
-  let categories: string[] = []
-  let loading = true
-  let error: string | null = null
-  let version = ''
-  let commit = ''
-  let total = 0
-  let filtered = 0
+  let settings = $state<SettingMetadata[]>([])
+  let categories = $state<string[]>([])
+  let loading = $state(true)
+  let error = $state<string | null>(null)
+  let version = $state('')
+  let commit = $state('')
+  let total = $state(0)
+  let filtered = $state(0)
 
   // Filter state
-  let selectedCategory = ''
-  let searchQuery = ''
+  let selectedCategory = $state('')
+  let searchQuery = $state('')
   let searchTimeout: ReturnType<typeof setTimeout> | null = null
   // Use an object for reactivity instead of Set
-  let expandedKeys: Record<string, boolean> = {}
+  let expandedKeys = $state<Record<string, boolean>>({})
 
   // Column resizing state
   const COLUMN_WIDTHS_STORAGE_KEY = 'settings-table-column-widths'
@@ -33,7 +35,7 @@
     description: 46
   }
 
-  let columnWidths = { ...defaultColumnWidths }
+  let columnWidths = $state({ ...defaultColumnWidths })
   let resizingColumn: string | null = null
   let resizeStartX = 0
   let resizeStartWidth = 0
@@ -141,7 +143,6 @@
 
   function toggleExpanded(key: string) {
     expandedKeys[key] = !expandedKeys[key]
-    expandedKeys = expandedKeys // Trigger reactivity
   }
 
   function formatValue(value: string, type: string): string {
@@ -227,7 +228,7 @@
   })
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="settings-container">
     <header class="settings-header">
       <div class="header-left">
@@ -256,18 +257,18 @@
           <input
             type="text"
             placeholder={t('page.settings.search-placeholder', 'Search settings...')}
-            on:input={handleSearchInput}
+            oninput={handleSearchInput}
             bind:value={searchQuery}
             class="search-input"
           />
           {#if searchQuery}
-            <button class="clear-search" on:click={() => { searchQuery = ''; fetchSettings(); }}>
+            <button class="clear-search" onclick={() => { searchQuery = ''; fetchSettings(); }}>
               <Icon name="icon-close-line" size={16} />
             </button>
           {/if}
         </div>
 
-        <button class="reset-columns-btn" on:click={resetColumnWidths} title="Reset column widths to default">
+        <button class="reset-columns-btn" onclick={resetColumnWidths} title="Reset column widths to default">
           <Icon name="icon-layout-column-line" size={16} />
           <span>Reset Columns</span>
         </button>
@@ -277,7 +278,7 @@
         <button
           class="category-btn"
           class:active={selectedCategory === ''}
-          on:click={() => handleCategoryChange('')}
+          onclick={() => handleCategoryChange('')}
         >
           {t('page.settings.all-categories', 'All Categories')}
         </button>
@@ -285,7 +286,7 @@
           <button
             class="category-btn"
             class:active={selectedCategory === category}
-            on:click={() => handleCategoryChange(category)}
+            onclick={() => handleCategoryChange(category)}
           >
             {category}
           </button>
@@ -302,7 +303,7 @@
       <div class="error-container">
         <Icon name="icon-warning-line" size={48} />
         <p class="error-message">{error}</p>
-        <button class="retry-btn" on:click={fetchSettings}>
+        <button class="retry-btn" onclick={fetchSettings}>
           <Icon name="icon-refresh-line" size={18} />
           <span>Retry</span>
         </button>
@@ -311,7 +312,7 @@
       <div class="empty-container">
         <Icon name="icon-search-line" size={48} />
         <p>No settings found matching your criteria</p>
-        <button class="clear-btn" on:click={clearFilters}>
+        <button class="clear-btn" onclick={clearFilters}>
           Clear filters
         </button>
       </div>
@@ -323,25 +324,25 @@
               <th class="col-key" style="width: {columnWidths.key}%">
                 <div class="th-content">
                   {t('page.settings.col-key', 'Config Key')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('key', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('key', e)}></div>
                 </div>
               </th>
               <th class="col-type" style="width: {columnWidths.type}%">
                 <div class="th-content">
                   Type
-                  <div class="resize-handle" on:mousedown={(e) => startResize('type', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('type', e)}></div>
                 </div>
               </th>
               <th class="col-default" style="width: {columnWidths.default}%">
                 <div class="th-content">
                   {t('page.settings.col-default', 'Default')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('default', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('default', e)}></div>
                 </div>
               </th>
               <th class="col-current" style="width: {columnWidths.current}%">
                 <div class="th-content">
                   {t('page.settings.col-current', 'Current')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('current', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('current', e)}></div>
                 </div>
               </th>
               <th class="col-description" style="width: {columnWidths.description}%">
@@ -363,7 +364,7 @@
                     {#if setting.longDescription}
                       <button
                         class="expand-btn"
-                        on:click={() => toggleExpanded(uniqueKey)}
+                        onclick={() => toggleExpanded(uniqueKey)}
                         aria-expanded={expandedKeys[uniqueKey] || false}
                       >
                         <Icon name={expandedKeys[uniqueKey] ? 'icon-arrow-up-s-line' : 'icon-arrow-down-s-line'} size={16} />

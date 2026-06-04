@@ -200,8 +200,8 @@ func TestPrunerParentNotDeletedBeforeChildren(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Current height: %d (child1 DAH ~%d)", meta.Height, grandchildMinedHeight+blockHeightRetention)
 
-	// Wait for pruner to process
-	time.Sleep(5 * time.Second)
+	// Wait for the pruner to complete a cycle before asserting what survived.
+	node.WaitForPruner(t, 15*time.Second)
 
 	// ========== Verify: Parent must NOT be deleted ==========
 	// The parent still has output 4 unspent, and child2 is not fully spent.
@@ -358,8 +358,8 @@ func TestPrunerParentFullySpentNotDeletedBeforeChildren(t *testing.T) {
 	err = node.BlockValidation.ValidateBlock(node.Ctx, forkBlockWithChild2, node.AssetURL, false)
 	require.NoError(t, err)
 
-	// node.WaitForBlockAssemblyToProcessTx(t, child2Hex)
-	time.Sleep(2 * time.Second)
+	// Wait for child2 to be (re)loaded into block assembly after the forked block.
+	require.NoError(t, node.WaitForTransactionInBlockAssembly(child2, 10*time.Second))
 
 	node.VerifyNotOnLongestChainInUtxoStore(t, child2)
 	node.VerifyInBlockAssembly(t, child2)

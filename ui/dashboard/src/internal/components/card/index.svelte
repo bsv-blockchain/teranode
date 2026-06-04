@@ -1,11 +1,37 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let title = ''
-  export let headerPadding = '20px 24px 32px 24px'
-  export let contentPadding = '0 24px'
-  export let footerPadding = $$slots.footer ? '20px 24px' : '0 24px 20px 24px'
-  export let stretch = true
-  export let showFooter = true
-  export let wrapHeader = false
+  import type { Snippet } from 'svelte'
+
+  let {
+    title = '',
+    headerPadding = '20px 24px 32px 24px',
+    contentPadding = '0 24px',
+    footerPadding,
+    stretch = true,
+    showFooter = true,
+    wrapHeader = false,
+    subtitle,
+    headerTools,
+    footer,
+    children,
+  }: {
+    title?: string | Snippet
+    headerPadding?: string
+    contentPadding?: string
+    footerPadding?: string
+    stretch?: boolean
+    showFooter?: boolean
+    wrapHeader?: boolean
+    subtitle?: Snippet
+    headerTools?: Snippet
+    footer?: Snippet
+    children?: Snippet
+  } = $props()
+
+  const effectiveFooterPadding = $derived(
+    footerPadding ?? (footer ? '20px 24px' : '0 24px 20px 24px'),
+  )
 </script>
 
 <div
@@ -13,31 +39,31 @@
   class:stretch
   style:--header-padding={headerPadding}
   style:--content-padding={contentPadding}
-  style:--footer-padding={footerPadding}
+  style:--footer-padding={effectiveFooterPadding}
 >
   <div class="header" class:wrapHeader>
     <div class="title-container">
       <div class="title">
-        {#if $$slots.title}
-          <slot name="title" />
+        {#if typeof title === 'function'}
+          {@render title()}
         {:else}
           {title}
         {/if}
       </div>
       <div class="subtitle">
-        <slot name="subtitle" />
+        {@render subtitle?.()}
       </div>
     </div>
     <div class="header-tools">
-      <slot name="header-tools" />
+      {@render headerTools?.()}
     </div>
   </div>
   <div class="content">
-    <slot />
+    {@render children?.()}
   </div>
   {#if showFooter}
     <div class="footer">
-      <slot name="footer" />
+      {@render footer?.()}
     </div>
   {/if}
 </div>

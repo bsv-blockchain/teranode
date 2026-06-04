@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import Button from '$lib/components/button/index.svelte'
   import Logo from '$lib/components/logo/index.svelte'
@@ -7,10 +9,15 @@
 
   const fieldKey = 'comp.no-data'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  export let hash = ''
-  export let maxWidth = 400
+  let {
+    hash = '',
+    maxWidth = 400,
+  }: {
+    hash?: string
+    maxWidth?: number
+  } = $props()
 
   function onReverseHash() {
     reverseHashParam(hash)
@@ -38,7 +45,7 @@
     />
   </div>
   <div class="btn">
-    <Button variant="tertiary" icon="icon-reeverse-line" width={100} on:click={onReverseHash}
+    <Button variant="tertiary" icon="icon-reeverse-line" width={100} onclick={onReverseHash}
       >{t(`${fieldKey}.reverse`)}</Button
     >
   </div>

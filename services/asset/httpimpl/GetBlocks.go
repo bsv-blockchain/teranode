@@ -3,6 +3,7 @@
 package httpimpl
 
 import (
+	"math"
 	"net/http"
 	"strings"
 
@@ -125,14 +126,18 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 
 	latestBlockHeight := blockMeta.Height
 
-	// Validate offset doesn't exceed block height to prevent underflow
+	// Validate offset is within uint32 range before casting to prevent truncation,
+	// then validate it doesn't exceed block height to prevent underflow.
+	if offset > math.MaxUint32 {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset exceeds maximum allowed value").Error())
+	}
 	if uint32(offset) > latestBlockHeight {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset exceeds block height").Error())
 	}
 
 	fromHeight := latestBlockHeight - uint32(offset)
 
-	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.Request().RemoteAddr, offset, limit, fromHeight)
+	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.RealIP(), offset, limit, fromHeight)
 
 	blocks, err := h.repository.GetLastNBlocks(ctx, int64(limit), includeOrphans, fromHeight)
 	if err != nil {

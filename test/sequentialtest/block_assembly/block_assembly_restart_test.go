@@ -328,9 +328,6 @@ func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) 
 	err = td.BlockAssemblyClient.ResetBlockAssemblyFully(td.Ctx)
 	require.NoError(t, err, "Block assembly reset should succeed with external transactions")
 
-	// Wait a bit for reset to complete
-	time.Sleep(2 * time.Second)
-
 	// Step 5: Verify transaction is still in block assembly after reset
 	t.Log("Verifying external transaction is reloaded after reset")
 	err = td.WaitForTransactionInBlockAssembly(externalTx, blockWait)
@@ -489,8 +486,6 @@ func testBlockAssemblyRestartWithMultipleExternalTx(t *testing.T, utxoStoreType 
 	err = td.BlockAssemblyClient.ResetBlockAssemblyFully(td.Ctx)
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
-
 	// Verify all transactions are reloaded
 	t.Log("Verifying all external transactions are reloaded after reset")
 	require.NoError(t, td.WaitForTransactionInBlockAssembly(externalTx1, blockWait))
@@ -638,8 +633,6 @@ func testBlockAssemblyRestartWithMixedTx(t *testing.T, utxoStoreType string) {
 	t.Log("Triggering block assembly reset")
 	err = td.BlockAssemblyClient.ResetBlockAssemblyFully(td.Ctx)
 	require.NoError(t, err)
-
-	time.Sleep(2 * time.Second)
 
 	// Verify all transactions are reloaded (both regular and external)
 	t.Log("Verifying all mixed transactions are reloaded after reset")

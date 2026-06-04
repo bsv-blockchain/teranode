@@ -68,20 +68,18 @@ func ValidateUTXOFile(ctx context.Context, path string, logger ulogger.Logger, s
 }
 
 // validateUTXOSet reads a UTXO set from the reader and validates the total satoshi amount.
+//
+// The reader is expected to be positioned past the 8-byte fileformat magic.
+// Both supported sources satisfy that contract: getLocalFileReader consumes
+// and validates the magic before returning, and blockStore.GetIoReader does
+// so internally via the store layer (stores/blob/file/file.go's
+// validateFileHeader). Calling fileformat.ReadHeader here would re-consume
+// 8 bytes of the body — the first bytes of the block hash field — and fail
+// with "unknown magic: [<random hash bytes>]".
 func validateUTXOSet(ctx context.Context, r io.Reader, verbose bool) (*UTXOValidationResult, error) {
 	result := &UTXOValidationResult{}
 
 	br := bufio.NewReaderSize(r, 64*1024) // 64KB buffer - sufficient for CLI tool validation
-
-	// Read file header to verify this is a UTXO set file
-	header, err := fileformat.ReadHeader(br)
-	if err != nil {
-		return nil, errors.NewProcessingError("error reading file header", err)
-	}
-
-	if header.FileType() != fileformat.FileTypeUtxoSet {
-		return nil, errors.NewProcessingError("file is not a UTXO set file, got: %s", header.FileType())
-	}
 
 	// Read current block hash (32 bytes) - this matches what filereader calls "previous block hash"
 	// but it's actually the current block hash based on the filereader output
@@ -179,11 +177,26 @@ func getUTXOFileReader(path string, logger ulogger.Logger, settings *settings.Se
 	return getLocalFileReader(path)
 }
 
-// getLocalFileReader returns a reader for a local file.
+// getLocalFileReader opens a local file, consumes and validates the
+// fileformat magic, and returns a reader positioned at the start of
+// the UTXO set body. This mirrors the contract of
+// blockStore.GetIoReader so validateUTXOSet can stay agnostic about
+// which source it's reading from.
 func getLocalFileReader(path string) (io.ReadCloser, error) {
 	fileReader, err := os.Open(path)
 	if err != nil {
 		return nil, errors.NewProcessingError("error opening file", err)
+	}
+
+	header, err := fileformat.ReadHeader(fileReader)
+	if err != nil {
+		_ = fileReader.Close()
+		return nil, errors.NewProcessingError("error reading file header", err)
+	}
+
+	if header.FileType() != fileformat.FileTypeUtxoSet {
+		_ = fileReader.Close()
+		return nil, errors.NewProcessingError("file is not a UTXO set file, got: %s", header.FileType())
 	}
 
 	return fileReader, nil

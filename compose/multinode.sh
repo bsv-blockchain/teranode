@@ -15,12 +15,27 @@ usage() {
 Usage: compose/multinode.sh <command> [args]
 
 Commands:
-  up <N> [--build]          Generate and start an N-node network (3-10)
+  up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
+                           Generate and start an N-node network (3-10).
+                           -allinone=1 (default): one container per node runs
+                             all services in a single process.
+                           -allinone=0: split topology - each node becomes 9
+                             containers (one per microservice: blockchain,
+                             blockassembly, blockvalidation, subtreevalidation,
+                             validator, propagation, p2p, asset, and a 'core'
+                             sidecar for rpc/alert/blockpersister/etc.). Heavier
+                             but lets chaos commands target individual services.
+                           --skip N:svc: don't start the named service on node N
+                             (split mode only; repeatable). Useful for chaos
+                             scenarios where a node should come up missing a
+                             specific service. Bring it up later with
+                             'chaos start N svc'. blockchain cannot be --skipped
+                             because sibling services depend on it.
   build                    Build the teranode Docker image
   down                     Stop and remove all containers and volumes
   restart                  Restart all containers (picks up config changes)
   status                   Show container status
-  logs [node]              Tail logs (all nodes, or a specific node number)
+  logs [node[-svc]]        Tail logs (all, or a node, or a split-mode service)
   dashboards               Open all dashboards in the browser
   generate <n,count> ...   Generate blocks on specific nodes
                            e.g. generate 1,10 3,5
@@ -34,25 +49,31 @@ Commands:
                            are passed to blaster.
 
 Chaos:
-  chaos isolate <node>     Block peer traffic (RPC still works)
-  chaos heal [node]        Restore peer traffic (or all nodes if omitted)
-  chaos kill <node>        Stop a node container
-  chaos start <node>       Start a stopped node container
-  chaos pause <node>       Freeze a node (simulates hang/GC pause)
-  chaos unpause <node>     Unfreeze a paused node
-  chaos slow <node> <ms>   Add network latency to a node
-  chaos unslow <node>      Remove added latency from a node
+  chaos isolate <node>            Block peer traffic (RPC still works).
+                                  In split mode targets teranode<N>-p2p only.
+  chaos heal [node]               Restore peer traffic (or all nodes if omitted)
+  chaos kill <node> [service]     Stop a node container, or one service in
+                                  split mode (e.g. 'chaos kill 2 validator').
+  chaos start <node> [service]    Start a stopped node or service container
+  chaos pause <node> [service]    Freeze a node or service (simulates hang)
+  chaos unpause <node> [service]  Unfreeze a paused node or service
+  chaos slow <node> <ms>          Add network latency (split mode: -p2p only)
+  chaos unslow <node>             Remove added latency
 
 Examples:
   compose/multinode.sh up 5
+  compose/multinode.sh up 3 -allinone=0          # split-services topology
+  compose/multinode.sh up 3 -allinone=0 --skip 2:blockassembly  # node 2 starts without block assembly
   compose/multinode.sh generate 1,10 3,5
   compose/multinode.sh blast              # blast all running nodes (TUI)
   compose/multinode.sh blast --build --auto-mine  # rebuild, mine on node 1
   compose/multinode.sh blast 1,3 -- --headless --max-tps 50
   compose/multinode.sh chaos isolate 3
+  compose/multinode.sh chaos kill 2 validator    # split mode: only validator
   compose/multinode.sh chaos heal
   compose/multinode.sh chaos slow 2 500
   compose/multinode.sh logs 2
+  compose/multinode.sh logs 2-validator          # split mode service log
   compose/multinode.sh down
 EOF
   exit 2
@@ -62,6 +83,24 @@ require_stack() {
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     echo "error: no multinode stack found. Run '$0 up <N>' first." >&2
     exit 1
+  fi
+}
+
+# Canonical list of split-mode services. Must track buildSplitServices() in
+# compose/cmd/gennodes/main.go. Used by --skip validation at 'up' time and by
+# the chaos kill/start/pause/unpause service-arg validation so a typo like
+# 'valdiator' surfaces a friendly error instead of a raw docker/compose one.
+KNOWN_SPLIT_SERVICES=" blockchain blockassembly blockvalidation subtreevalidation validator propagation p2p asset core "
+
+# assert_known_service exits 2 with a friendly error if $1 is not one of the
+# split-mode service names. $2 is a short label used in the error message
+# (e.g. "chaos kill", "--skip") so the user knows which arg was rejected.
+assert_known_service() {
+  local svc="$1"
+  local ctx="$2"
+  if [[ "$KNOWN_SPLIT_SERVICES" != *" $svc "* ]]; then
+    echo "error: $ctx: unknown service '$svc' (valid:$KNOWN_SPLIT_SERVICES)" >&2
+    exit 2
   fi
 }
 
@@ -79,23 +118,89 @@ cmd_build() {
 cmd_up() {
   local n=""
   local do_build=false
-  for arg in "$@"; do
-    case "$arg" in
-      --build) do_build=true ;;
-      *)       n="$arg" ;;
+  local allinone=1
+  local -a skip_specs=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --build) do_build=true; shift ;;
+      -allinone=0|--allinone=0) allinone=0; shift ;;
+      -allinone=1|--allinone=1) allinone=1; shift ;;
+      -allinone=*|--allinone=*)
+        echo "error: -allinone must be 0 or 1, got '${1#*=}'" >&2
+        exit 2
+        ;;
+      --skip=*|-skip=*) skip_specs+=("${1#*=}"); shift ;;
+      --skip|-skip)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --skip requires an argument (e.g. --skip 2:blockassembly)" >&2
+          exit 2
+        fi
+        skip_specs+=("$2"); shift 2 ;;
+      *)       n="$1"; shift ;;
     esac
   done
   if [[ -z "$n" ]]; then
     echo "error: specify number of nodes, e.g. '$0 up 5'" >&2
     exit 2
   fi
-  echo "generating $n-node stack..."
-  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes -n "$n" -o compose/generated)
+  # Validate --skip specs up front, before we spend time generating.
+  # Service list must track buildSplitServices() in compose/cmd/gennodes/main.go.
+  local -A skip_set=()
+  if [[ ${#skip_specs[@]} -gt 0 ]]; then
+    if [[ "$allinone" -ne 0 ]]; then
+      echo "error: --skip requires -allinone=0; there's no per-service granularity in all-in-one mode" >&2
+      exit 2
+    fi
+    for spec in "${skip_specs[@]}"; do
+      if [[ ! "$spec" =~ ^([0-9]+):([a-z0-9]+)$ ]]; then
+        echo "error: --skip must be N:service (e.g. --skip 2:blockassembly), got '$spec'" >&2
+        exit 2
+      fi
+      local skip_n="${BASH_REMATCH[1]}"
+      local skip_svc="${BASH_REMATCH[2]}"
+      if [[ "$skip_n" -lt 1 || "$skip_n" -gt "$n" ]]; then
+        echo "error: --skip node '$skip_n' out of range 1..$n" >&2
+        exit 2
+      fi
+      assert_known_service "$skip_svc" "--skip"
+      if [[ "$skip_svc" == "blockchain" ]]; then
+        # Every other split service on the same node has
+        # depends_on: teranodeN-blockchain {condition: service_healthy},
+        # so 'compose up -d <keep-list>' would auto-resolve and start it
+        # anyway. Refuse the spec so the user isn't surprised.
+        echo "error: cannot --skip blockchain via 'up' - sibling services depend on it via service_healthy and compose will auto-start it." >&2
+        echo "       To stop blockchain after the stack is up, use: $0 chaos kill $skip_n blockchain" >&2
+        exit 2
+      fi
+      skip_set["teranode${skip_n}-${skip_svc}"]=1
+    done
+  fi
+  local topology="all-in-one"
+  [[ "$allinone" -eq 0 ]] && topology="split-per-service"
+  echo "generating $n-node stack (topology: $topology)..."
+  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes -n "$n" -allinone="$allinone" -o compose/generated)
   if [[ "$do_build" == true ]]; then
     cmd_build
   fi
-  echo "starting containers..."
-  compose up -d
+  if [[ ${#skip_set[@]} -gt 0 ]]; then
+    # Build keep-list = all compose services - skipped services. We pass
+    # explicit names so docker compose only materialises those containers;
+    # the skipped services stay declared in the file (so 'chaos start'
+    # can bring them up later via 'compose up -d <svc>').
+    local -a keep_list=()
+    while IFS= read -r svc; do
+      [[ -z "$svc" ]] && continue
+      if [[ -z "${skip_set[$svc]:-}" ]]; then
+        keep_list+=("$svc")
+      fi
+    done < <(compose config --services 2>/dev/null | sort)
+    echo "skipping services: ${!skip_set[*]}"
+    echo "starting containers..."
+    compose up -d "${keep_list[@]}"
+  else
+    echo "starting containers..."
+    compose up -d
+  fi
   echo ""
   echo "dashboards:"
   for f in "$GEN_DIR"/open-dashboards.sh; do
@@ -145,11 +250,18 @@ cmd_status() {
   local json
   json=$(compose ps --format json 2>/dev/null)
 
-  # Collect infra and node info from JSON lines
+  # Collect infra rows + a per-node tally of split-service rows.
+  # In all-in-one mode each node produces exactly one service named
+  # `teranodeN`; in split mode each node produces 9 services named
+  # `teranodeN-<svc>`. We normalise both into a node-indexed map of
+  # running/total service counts so the output shape stays consistent.
   local infra_lines=""
-  local -a node_indices=()
-  local -A node_states=()
-  local -A node_statuses=()
+  local -a node_order=()        # node indices in first-seen order
+  local -A node_seen=()         # 1 if node idx has been recorded
+  local -A node_running=()      # count of running services per node
+  local -A node_total=()        # count of all services per node
+  local -A node_service_lines=() # newline-joined per-service status (split mode only)
+  local -A node_status_oneline=() # all-in-one mode: the single-container status string
 
   while IFS= read -r line; do
     local service state status
@@ -157,19 +269,32 @@ cmd_status() {
     state=$(echo "$line" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['State'])" 2>/dev/null)
     status=$(echo "$line" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['Status'])" 2>/dev/null)
 
-    case "$service" in
-      teranode*)
-        local idx="${service#teranode}"
-        node_indices+=("$idx")
-        node_states[$idx]="$state"
-        node_statuses[$idx]="$status"
-        ;;
-      *)
-        local state_icon="x"
-        [[ "$state" == "running" ]] && state_icon="+"
-        infra_lines+=$(printf "\n  [%s] %-22s %s" "$state_icon" "$service" "$status")
-        ;;
-    esac
+    if [[ "$service" =~ ^teranode([0-9]+)(-([a-z0-9]+))?$ ]]; then
+      local idx="${BASH_REMATCH[1]}"
+      local svc="${BASH_REMATCH[3]:-}"   # empty in all-in-one mode; [a-z0-9] so "p2p" matches
+
+      if [[ -z "${node_seen[$idx]:-}" ]]; then
+        node_seen[$idx]=1
+        node_order+=("$idx")
+        node_running[$idx]=0
+        node_total[$idx]=0
+      fi
+      node_total[$idx]=$(( node_total[$idx] + 1 ))
+      [[ "$state" == "running" ]] && node_running[$idx]=$(( node_running[$idx] + 1 ))
+
+      if [[ -n "$svc" ]]; then
+        local icon="x"
+        [[ "$state" == "running" ]] && icon="+"
+        [[ "$state" == "paused" ]]  && icon="P"
+        node_service_lines[$idx]+=$(printf "\n      [%s] %-18s %s" "$icon" "$svc" "$status")
+      else
+        node_status_oneline[$idx]="$status:$state"
+      fi
+    else
+      local state_icon="x"
+      [[ "$state" == "running" ]] && state_icon="+"
+      infra_lines+=$(printf "\n  [%s] %-22s %s" "$state_icon" "$service" "$status")
+    fi
   done <<< "$json"
 
   echo "Infrastructure:$infra_lines"
@@ -177,12 +302,10 @@ cmd_status() {
 
   # Build node lines outside the herestring loop so curl and docker sidecar spawns work
   local node_lines=""
-  local node_count=${#node_indices[@]}
+  local node_count=${#node_order[@]}
   local nodes_ok=0
 
-  for idx in "${node_indices[@]}"; do
-    local state="${node_states[$idx]}"
-    local status="${node_statuses[$idx]}"
+  for idx in "${node_order[@]}"; do
     local base=$((20000 + (idx - 1) * 2000))
     local dashboard=$((base + 90))
     local rpc=$((base + 1292))
@@ -190,15 +313,30 @@ cmd_status() {
     local state_icon="x"
     local chaos_tag=""
     local height_tag=""
+    local total=${node_total[$idx]}
+    local running=${node_running[$idx]}
 
-    if [[ "$state" == "running" ]]; then
-      state_icon="+"
+    # Pick a container to probe for height / chaos state: in all-in-one mode
+    # there's only one (teranodeN); in split mode probe the -core sidecar
+    # (which hosts the RPC) for height, and the -p2p container (which holds
+    # the network namespace targeted by chaos isolate/slow) for chaos tags.
+    local probe_ctr="" net_ctr=""
+    if [[ "$total" -eq 1 ]]; then
+      probe_ctr=$(container_name "$idx")
+      net_ctr="$probe_ctr"
+    else
+      probe_ctr="teranode${idx}-core-multinode"
+      net_ctr="teranode${idx}-p2p-multinode"
+    fi
+
+    if [[ "$running" -gt 0 ]]; then
+      [[ "$running" -eq "$total" ]] && state_icon="+" || state_icon="!"
       nodes_ok=$((nodes_ok + 1))
-      local ctr
-      ctr=$(container_name "$idx")
       # One sidecar per node: emit DROP count on line 1, qdisc info on line 2.
+      # In split mode net_ctr points at the -p2p container (the netns owner);
+      # in all-in-one it's the same container as probe_ctr.
       local chaos_info drop_rules qdisc_line delay
-      chaos_info=$(netns_sh "$ctr" '
+      chaos_info=$(netns_sh "$net_ctr" '
         iptables -L INPUT --line-numbers 2>/dev/null | grep -c DROP || echo 0
         tc qdisc show dev eth0 2>/dev/null
       ' 2>/dev/null || true)
@@ -210,7 +348,7 @@ cmd_status() {
         chaos_tag+=" SLOW(${delay})"
       fi
       local height
-      height=$(docker exec "$ctr" wget -qO- --timeout=2 \
+      height=$(docker exec "$probe_ctr" wget -qO- --timeout=2 \
         --user=bitcoin --password=bitcoin \
         --header='Content-Type: application/json' \
         --post-data='{"method":"getinfo","params":[]}' \
@@ -219,12 +357,19 @@ cmd_status() {
       if [[ -n "$height" ]]; then
         height_tag="  height=$height"
       fi
-    elif [[ "$state" == "paused" ]]; then
-      chaos_tag=" PAUSED"
     fi
 
-    node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s%s" \
-      "$state_icon" "$idx" "$status" "$dashboard" "$rpc" "$health" "$height_tag" "$chaos_tag")
+    if [[ "$total" -eq 1 ]]; then
+      # All-in-one: preserve the historical one-line node row.
+      local oneline="${node_status_oneline[$idx]}"
+      local status_str="${oneline%:*}"
+      node_lines+=$(printf "\n  [%s] teranode%-3s %-24s dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s%s" \
+        "$state_icon" "$idx" "$status_str" "$dashboard" "$rpc" "$health" "$height_tag" "$chaos_tag")
+    else
+      # Split: node summary line, then a row per service container.
+      node_lines+=$(printf "\n  [%s] teranode%-3s (%d/%d services)            dashboard=localhost:%d  rpc=localhost:%d  health=localhost:%d%s%s%s" \
+        "$state_icon" "$idx" "$running" "$total" "$dashboard" "$rpc" "$health" "$height_tag" "$chaos_tag" "${node_service_lines[$idx]}")
+    fi
   done
 
   echo "Nodes ($nodes_ok/$node_count running):$node_lines"
@@ -232,12 +377,36 @@ cmd_status() {
 
 cmd_logs() {
   require_stack
-  local node="${1:-}"
-  if [[ -n "$node" ]]; then
-    compose logs -f "teranode${node}"
-  else
+  local target="${1:-}"
+  if [[ -z "$target" ]]; then
     compose logs -f
+    return
   fi
+  # Accept three forms:
+  #   2            - all-in-one node, or all services for split-mode node 2
+  #   2-validator  - one specific service container in split mode
+  #   teranode2-validator (and other compose service names) - passthrough
+  case "$target" in
+    teranode*) compose logs -f "$target" ;;
+    [0-9]*-*)  compose logs -f "teranode${target}" ;;
+    [0-9]*)
+      if is_split_mode "$target"; then
+        local svcs=()
+        while read -r ctr; do
+          [[ -z "$ctr" ]] && continue
+          svcs+=("${ctr%-multinode}")
+        done < <(node_service_containers "$target")
+        if [[ ${#svcs[@]} -eq 0 ]]; then
+          echo "error: no containers found for node $target" >&2
+          exit 1
+        fi
+        compose logs -f "${svcs[@]}"
+      else
+        compose logs -f "teranode${target}"
+      fi
+      ;;
+    *) compose logs -f "$target" ;;
+  esac
 }
 
 cmd_dashboards() {
@@ -246,7 +415,45 @@ cmd_dashboards() {
 }
 
 container_name() {
-  echo "teranode${1}-multinode"
+  # In all-in-one mode the container is teranode<N>-multinode.
+  # In split mode it's teranode<N>-<svc>-multinode. The caller passes
+  # `<n>` (any mode) and optionally `<svc>` for split mode. Without
+  # an explicit service in split mode we default to -p2p (the network
+  # namespace target for isolate/slow) since that's what made sense
+  # for the historical chaos commands.
+  local n="$1"
+  local svc="${2:-}"
+  if [[ -n "$svc" ]]; then
+    echo "teranode${n}-${svc}-multinode"
+    return
+  fi
+  # No service specified: pick whichever container exists.
+  if docker ps -a --format '{{.Names}}' | grep -qx "teranode${n}-multinode"; then
+    echo "teranode${n}-multinode"
+  else
+    # Default split-mode chaos target is the p2p container (peer traffic).
+    echo "teranode${n}-p2p-multinode"
+  fi
+}
+
+# is_split_mode reports 0 (true) iff node <n> is running in split topology,
+# detected by the absence of the monolithic teranode<n>-multinode container.
+is_split_mode() {
+  local n="$1"
+  if docker ps -a --format '{{.Names}}' | grep -qx "teranode${n}-multinode"; then
+    return 1
+  fi
+  return 0
+}
+
+# node_service_containers prints every container name for node <n>, one per
+# line. Used by chaos kill/start/pause/unpause when no specific service is
+# given in split mode so "chaos kill 2" still does something sensible (stop
+# every service container for that node).
+node_service_containers() {
+  local n="$1"
+  docker ps -a --format '{{.Names}}' \
+    | grep -E "^teranode${n}(-[a-z0-9]+)?-multinode$" || true
 }
 
 cmd_chaos() {
@@ -294,6 +501,15 @@ netns_sh() {
     "$NETSHOOT_IMAGE" -c "$script"
 }
 
+# peer_containers prints the one container per node that owns the peer
+# network namespace: -p2p in split mode, the monolithic container otherwise.
+# Used by chaos isolate / heal / slow to enumerate peer targets without
+# multi-counting split-mode service containers.
+peer_containers() {
+  docker ps --filter "name=-multinode" --format '{{.Names}}' \
+    | grep -E '^teranode[0-9]+(-p2p)?-multinode$'
+}
+
 chaos_isolate() {
   local node="${1:?usage: chaos isolate <node>}"
   local ctr
@@ -301,7 +517,7 @@ chaos_isolate() {
 
   local script=""
   local blocked=0
-  for other in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]' | grep -v "^${ctr}$"); do
+  for other in $(peer_containers | grep -v "^${ctr}$"); do
     local ip
     ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$other" 2>/dev/null)
     if [[ -n "$ip" ]]; then
@@ -331,7 +547,7 @@ chaos_heal() {
   fi
   echo "restoring all nodes..."
   local healed=0
-  for ctr in $(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]'); do
+  for ctr in $(peer_containers); do
     local count
     count=$(netns_iptables "$ctr" -L INPUT --line-numbers 2>/dev/null | grep -c DROP || true)
     if [[ "$count" -gt 0 ]]; then
@@ -346,21 +562,84 @@ chaos_heal() {
 }
 
 chaos_kill() {
-  local node="${1:?usage: chaos kill <node>}"
+  local node="${1:?usage: chaos kill <node> [service]}"
+  local svc="${2:-}"
+  if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos kill"
+    local target="teranode${node}-${svc}"
+    echo "stopping $target..."
+    compose stop "$target"
+    echo "$target is down"
+    return
+  fi
+  if is_split_mode "$node"; then
+    local stopped=0
+    while read -r ctr; do
+      [[ -z "$ctr" ]] && continue
+      local svcname="${ctr%-multinode}"
+      compose stop "$svcname"
+      stopped=$((stopped + 1))
+    done < <(node_service_containers "$node")
+    echo "teranode$node is down ($stopped service container(s) stopped)"
+    return
+  fi
   echo "stopping teranode$node..."
   compose stop "teranode${node}"
   echo "teranode$node is down"
 }
 
 chaos_start() {
-  local node="${1:?usage: chaos start <node>}"
+  local node="${1:?usage: chaos start <node> [service]}"
+  local svc="${2:-}"
+  if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos start"
+    local target="teranode${node}-${svc}"
+    echo "starting $target..."
+    # 'compose up -d' (rather than 'compose start') so this also works when
+    # the container was never created in the first place - the case for any
+    # service that was passed to 'up --skip N:svc'. Idempotent for an
+    # already-running container.
+    compose up -d "$target"
+    echo "$target is up"
+    return
+  fi
+  if is_split_mode "$node"; then
+    local started=0
+    while read -r ctr; do
+      [[ -z "$ctr" ]] && continue
+      local svcname="${ctr%-multinode}"
+      compose start "$svcname"
+      started=$((started + 1))
+    done < <(node_service_containers "$node")
+    echo "teranode$node is up ($started service container(s) started)"
+    return
+  fi
   echo "starting teranode$node..."
   compose start "teranode${node}"
   echo "teranode$node is up"
 }
 
 chaos_pause() {
-  local node="${1:?usage: chaos pause <node>}"
+  local node="${1:?usage: chaos pause <node> [service]}"
+  local svc="${2:-}"
+  if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos pause"
+    local ctr="teranode${node}-${svc}-multinode"
+    echo "pausing $ctr (simulating freeze)..."
+    docker pause "$ctr"
+    echo "$ctr is frozen"
+    return
+  fi
+  if is_split_mode "$node"; then
+    local paused=0
+    while read -r ctr; do
+      [[ -z "$ctr" ]] && continue
+      docker pause "$ctr"
+      paused=$((paused + 1))
+    done < <(node_service_containers "$node")
+    echo "teranode$node is frozen ($paused service container(s) paused)"
+    return
+  fi
   local ctr
   ctr=$(container_name "$node")
   echo "pausing $ctr (simulating freeze)..."
@@ -369,7 +648,26 @@ chaos_pause() {
 }
 
 chaos_unpause() {
-  local node="${1:?usage: chaos unpause <node>}"
+  local node="${1:?usage: chaos unpause <node> [service]}"
+  local svc="${2:-}"
+  if [[ -n "$svc" ]]; then
+    assert_known_service "$svc" "chaos unpause"
+    local ctr="teranode${node}-${svc}-multinode"
+    echo "unpausing $ctr..."
+    docker unpause "$ctr"
+    echo "$ctr is unfrozen"
+    return
+  fi
+  if is_split_mode "$node"; then
+    local unpaused=0
+    while read -r ctr; do
+      [[ -z "$ctr" ]] && continue
+      docker unpause "$ctr" 2>/dev/null || true
+      unpaused=$((unpaused + 1))
+    done < <(node_service_containers "$node")
+    echo "teranode$node is unfrozen ($unpaused service container(s) unpaused)"
+    return
+  fi
   local ctr
   ctr=$(container_name "$node")
   echo "unpausing $ctr..."
@@ -511,11 +809,19 @@ cmd_blast() {
   fi
 
   if [[ ${#nodes[@]} -eq 0 ]]; then
+    # Enumerate distinct node indices, ignoring per-service container suffixes
+    # in split mode (teranodeN-propagation, teranodeN-validator, ...).
+    declare -A seen_nodes=()
     while read -r name; do
-      local idx="${name#teranode}"
-      idx="${idx%-multinode}"
-      nodes+=("$idx")
-    done < <(docker ps --filter "name=-multinode" --format '{{.Names}}' | grep '^teranode[0-9]' | sort -V)
+      [[ -z "$name" ]] && continue
+      if [[ "$name" =~ ^teranode([0-9]+)(-[a-z0-9]+)?-multinode$ ]]; then
+        local idx="${BASH_REMATCH[1]}"
+        if [[ -z "${seen_nodes[$idx]:-}" ]]; then
+          seen_nodes[$idx]=1
+          nodes+=("$idx")
+        fi
+      fi
+    done < <(docker ps --filter "name=-multinode" --format '{{.Names}}' | sort -V)
   fi
 
   if [[ ${#nodes[@]} -eq 0 ]]; then
@@ -526,8 +832,12 @@ cmd_blast() {
   # Verify propagation port is exposed (older stacks generated before 8084 was added won't have it).
   local first="${nodes[0]}"
   local first_prop=$((20000 + (first - 1) * 2000 + 84))
-  if ! docker ps --filter "name=teranode${first}-multinode" --format '{{.Ports}}' | grep -q ":${first_prop}->8084"; then
-    echo "error: propagation port not exposed on teranode${first} (expected host port ${first_prop})." >&2
+  local prop_ctr="teranode${first}-multinode"
+  if is_split_mode "$first"; then
+    prop_ctr="teranode${first}-propagation-multinode"
+  fi
+  if ! docker ps --filter "name=${prop_ctr}" --format '{{.Ports}}' | grep -q ":${first_prop}->8084"; then
+    echo "error: propagation port not exposed on ${prop_ctr} (expected host port ${first_prop})." >&2
     echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
     exit 1
   fi
@@ -573,9 +883,12 @@ cmd_blast() {
   fi
 
   if $auto_mine_enabled; then
-    # Ensure the target is actually running (otherwise the background loop
-    # silently does nothing and the user is left wondering why funding stalls).
-    if ! docker ps --filter "name=teranode${auto_mine_node}-multinode" --filter "status=running" --format '{{.Names}}' | grep -q '.'; then
+    # Ensure the target node has at least one running container (split mode:
+    # any of the 9 service containers; all-in-one: the single teranodeN
+    # container). Without this the background mining loop silently does
+    # nothing and the user is left wondering why funding stalls.
+    if ! docker ps --filter "status=running" --format '{{.Names}}' \
+         | grep -qE "^teranode${auto_mine_node}(-[a-z0-9]+)?-multinode$"; then
       echo "error: auto-mine target teranode${auto_mine_node} is not running" >&2
       exit 1
     fi

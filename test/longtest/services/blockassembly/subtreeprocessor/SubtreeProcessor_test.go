@@ -70,7 +70,9 @@ func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
 
 	conflictingNodes := make([]chainhash.Hash, 0)
 
-	err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16, &buckets, &conflictingNodes)
+	// 128 MiB matches the default subtreevalidation_max_incoming_subtree_bytes.
+	const maxLeafDataBytes int64 = 128 * 1024 * 1024
+	err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16, maxLeafDataBytes, &buckets, &conflictingNodes)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")

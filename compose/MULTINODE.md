@@ -32,11 +32,11 @@ compose/multinode.sh down
 
 | Command | Description |
 |---|---|
-| `up <N>` | Generate config and start N nodes (3-10) |
+| `up <N> [-allinone=0\|1] [--skip N:svc ...]` | Generate config and start N nodes (3-10). See [Split topology](#split-topology) for the flags. |
 | `down` | Stop and remove all containers and volumes |
 | `restart` | Restart containers (picks up config changes after `make gen-multinode`) |
-| `status` | Show container status |
-| `logs [node]` | Tail logs for all nodes or a specific node number |
+| `status` | Show container status (split mode: tallies running/total services per node) |
+| `logs [node[-svc]]` | Tail logs for all nodes, a specific node, or one split-mode service (e.g. `logs 2-validator`) |
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
 | `blast [nodes] [--build] [--auto-mine[=N]] [-- args]` | Run the coinbase blaster against the stack |
@@ -85,10 +85,10 @@ The suite is gated behind the `network_chaos` build tag so it does not run under
 |---|---|
 | `chaos isolate <node>` | Block peer traffic (RPC still works) |
 | `chaos heal [node]` | Restore peer traffic, or all nodes if omitted |
-| `chaos kill <node>` | Stop a node container |
-| `chaos start <node>` | Start a stopped node container |
-| `chaos pause <node>` | Freeze a node (simulates hang/GC pause) |
-| `chaos unpause <node>` | Unfreeze a paused node |
+| `chaos kill <node> [service]` | Stop a node container, or one service in split mode |
+| `chaos start <node> [service]` | Start a stopped node or service container (also materialises a `--skip`-ped service) |
+| `chaos pause <node> [service]` | Freeze a node or service (simulates hang/GC pause) |
+| `chaos unpause <node> [service]` | Unfreeze a paused node or service |
 | `chaos slow <node> <ms>` | Add network latency to a node |
 | `chaos unslow <node>` | Remove added latency from a node |
 
@@ -111,6 +111,47 @@ compose/multinode.sh chaos start 4
 ```
 
 The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules into the target container's network namespace via a short-lived `nicolaka/netshoot` sidecar that shares the netns (`docker run --net=container:teranodeN --cap-add=NET_ADMIN ...`). Rules persist in the target's netns after the sidecar exits. No `sudo`, `nsenter`, or `iproute2` on the host — works identically on Linux and macOS (Docker Desktop). The sidecar image (~200MB) is pulled on first use and cached. Override with `NETSHOOT_IMAGE=...` if you need a different tag or mirror. The `kill`/`start`/`pause`/`unpause` commands are pure Docker operations with no extra dependencies.
+
+## Split topology
+
+By default each node is a single container running every teranode microservice in one process (`-allinone=1`). For chaos testing you usually want finer-grained failure injection. Pass `-allinone=0` and each node is generated as nine sibling containers, one per microservice:
+
+`teranodeN-blockchain`, `teranodeN-blockassembly`, `teranodeN-blockvalidation`, `teranodeN-subtreevalidation`, `teranodeN-validator`, `teranodeN-propagation`, `teranodeN-p2p`, `teranodeN-asset`, and `teranodeN-core` (the catch-all sidecar that bundles rpc, alert, blockpersister, utxopersister, pruner, and legacy so RPC stays reachable).
+
+Each sibling has its own gRPC listener on the docker network; addresses are wired through the generated `settings_multinode.conf`. Sibling services `depends_on` `teranodeN-blockchain` with `service_healthy`, so blockchain comes up first and dependents only start once its listener accepts connections.
+
+```bash
+# 3-node split stack: 27 service containers + infra
+compose/multinode.sh up 3 -allinone=0
+
+# Kill one service without bringing down the rest of node 2
+compose/multinode.sh chaos kill 2 validator
+
+# Bring it back
+compose/multinode.sh chaos start 2 validator
+
+# Tail one service's logs
+compose/multinode.sh logs 2-validator
+```
+
+Resource note: a 3-node split stack runs ~32 containers (3 × 9 teranode services + infra). 16 GB RAM is comfortable; smaller hosts may struggle.
+
+> **Always `down` before switching topology.** Split-mode commands (`chaos kill <node> <svc>`, `logs N-svc`, the per-node service tally in `status`) detect split vs all-in-one by checking whether the monolithic `teranodeN-multinode` container exists. Running `up <N> -allinone=0` over a stack that was previously brought up with the default `-allinone=1` (or vice versa) can leave stale containers around and confuse mode detection. Run `compose/multinode.sh down` first whenever you flip `-allinone`.
+
+### Skipping services at startup (`--skip`)
+
+To bring a node up *without* a given service from the start (instead of killing it post-up), pass `--skip N:svc` to `up`. The flag is repeatable and only valid with `-allinone=0`.
+
+```bash
+# Node 2 comes up without block assembly; node 3 without validator
+compose/multinode.sh up 3 -allinone=0 --skip 2:blockassembly --skip 3:validator
+
+# Materialise a skipped service later (uses `compose up -d` so it works even
+# though the container was never created during the initial up)
+compose/multinode.sh chaos start 2 blockassembly
+```
+
+`blockchain` cannot be `--skip`-ped because every sibling on the same node declares it as a `service_healthy` dependency, so docker compose would auto-resolve and start it anyway. To stop blockchain after the stack is up, use `chaos kill <N> blockchain`.
 
 ## Architecture
 
@@ -135,7 +176,7 @@ compose/generated/
 ### Per-node infrastructure
 
 - **Aerospike** - one instance per node on ports `3010`, `3020`, ..., `3100`
-- **Teranode** - each node runs all services (validator, block assembly, blockchain, P2P, etc.)
+- **Teranode** - each node runs all services in one container (all-in-one default), or nine sibling containers in split mode (see [Split topology](#split-topology))
 
 ### Port scheme
 

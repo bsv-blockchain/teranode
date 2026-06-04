@@ -13,6 +13,12 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+// utxoPreimageScratchCap is the initial capacity for the UTXO-hash preimage
+// scratch buffer: comfortably fits a txid (32B) + index varint + locking
+// script + satoshis varint for typical outputs. UTXOHashInto grows it safely
+// if an unusually large script exceeds this.
+const utxoPreimageScratchCap = 256
+
 // CalculateUtxoStatus determines the status of a UTXO based on its spending state
 // and coinbase maturity requirements.
 //
@@ -66,6 +72,7 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 
 	var fees uint64
 
+	hashes := make([]chainhash.Hash, len(tx.Outputs))
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 
 	if !tx.IsCoinbase() {
@@ -76,6 +83,7 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 
 	txid := tx.TxIDChainHash()
 
+	scratch := make([]byte, 0, utxoPreimageScratchCap)
 	for i, output := range tx.Outputs {
 		select {
 		case <-ctx.Done():
@@ -90,12 +98,13 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 				return 0, nil, errors.NewProcessingError("failed to convert i", err)
 			}
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, iUint32)
+			h, s, utxoErr := util.UTXOHashInto(scratch, txid, iUint32, output.LockingScript, output.Satoshis)
 			if utxoErr != nil {
 				return 0, nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}
-
-			utxoHashes[i] = utxoHash
+			scratch = s
+			hashes[i] = h
+			utxoHashes[i] = &hashes[i]
 		}
 	}
 
@@ -120,8 +129,10 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 		txChainHash = tx.TxIDChainHash()
 	}
 
+	hashes := make([]chainhash.Hash, len(tx.Outputs))
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 
+	scratch := make([]byte, 0, utxoPreimageScratchCap)
 	for i, output := range tx.Outputs {
 		if output != nil {
 			iUint32, err := safeconversion.IntToUint32(i)
@@ -129,12 +140,13 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 				return nil, errors.NewProcessingError("failed to convert i", err)
 			}
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, iUint32)
+			h, s, utxoErr := util.UTXOHashInto(scratch, txChainHash, iUint32, output.LockingScript, output.Satoshis)
 			if utxoErr != nil {
 				return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}
-
-			utxoHashes[i] = utxoHash
+			scratch = s
+			hashes[i] = h
+			utxoHashes[i] = &hashes[i]
 		}
 	}
 

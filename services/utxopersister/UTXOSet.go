@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -524,6 +525,13 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		return errors.NewStorageError("settings is nil")
 	}
 
+	// Defensive: the caller in Server.processNextBlock now gates on
+	// nil-lastBlockHash, but reject it here too so any future caller
+	// gets a clear error instead of a SIGSEGV from c.lastBlockHash[:].
+	if c.lastBlockHash == nil {
+		return errors.NewStorageError("consolidator has no lastBlockHash (block range was empty or only genesis)")
+	}
+
 	storer, err := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], fileformat.FileTypeUtxoSet)
 	if err != nil {
 		return errors.NewStorageError("error creating utxo-set file", err)
@@ -589,13 +597,31 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		defer previousUTXOSetReader.Close()
 
-		previousHeader, err := fileformat.ReadHeader(previousUTXOSetReader)
-		if err != nil {
-			return errors.NewStorageError("error reading previous utxo-set header", err)
+		// store.GetIoReader -> validateFileHeader has already consumed the
+		// 8-byte fileformat magic; reading it again here would consume the
+		// first 8 bytes of the block-hash metadata that follows, then the
+		// OUTER loop's UTXOWrapper reader would be misaligned by 8 bytes.
+		// Consume the per-file header fields written by CreateUTXOSet
+		// (32 bytes current block hash + 4 bytes height + 32 bytes
+		// previous block hash) so the loop below starts at the first
+		// UTXOWrapper record. Validate the stored current-block hash
+		// matches what we expected to open, to catch file/key confusion
+		// loudly rather than silently consolidate the wrong UTXOs.
+		var storedCurrentBlockHash chainhash.Hash
+		if _, err := io.ReadFull(previousUTXOSetReader, storedCurrentBlockHash[:]); err != nil {
+			return errors.NewStorageError("error reading previous utxo-set block hash", err)
 		}
-
-		if previousHeader.FileType() != fileformat.FileTypeUtxoSet {
-			return errors.NewStorageError("previous utxo-set header is not a utxo-set header")
+		if !storedCurrentBlockHash.IsEqual(c.firstPreviousBlockHash) {
+			return errors.NewStorageError("previous utxo-set block hash mismatch: want %s got %s",
+				c.firstPreviousBlockHash.String(), storedCurrentBlockHash.String())
+		}
+		// Skip the remaining 36 bytes of per-file metadata (4-byte height
+		// + 32-byte previous block hash). The new set being written
+		// doesn't natively carry the previous set's stored height /
+		// grandparent hash to compare against, so consuming rather than
+		// parsing avoids dead variables.
+		if _, err := io.CopyN(io.Discard, previousUTXOSetReader, 36); err != nil {
+			return errors.NewStorageError("error skipping previous utxo-set header trailer", err)
 		}
 
 	OUTER:
@@ -604,10 +630,37 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
-				// Read the next 36 bytes...
+				// Read the next UTXOWrapper record (txid + encoded
+				// height/coinbase + its UTXOs).
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
-					if err == io.EOF {
+					// CreateUTXOSet appends a 16-byte footer (txCount +
+					// utxoCount) after the final UTXOWrapper. This loop does
+					// not consult that count, so it only learns the records
+					// are exhausted when the next read either lands exactly on
+					// EOF (a bare io.EOF) or short-reads the footer, which
+					// io.ReadFull reports as io.ErrUnexpectedEOF ("unexpected
+					// EOF"). cmd/utxovalidator handles the same footer.
+					//
+					// The short read is matched by substring, not
+					// structurally: errors.New flattens a non-*Error cause to
+					// its message (errors/errors.go:334-336), discarding the
+					// io.ErrUnexpectedEOF sentinel - so errors.Is(err,
+					// io.ErrUnexpectedEOF) would itself reduce to this same
+					// strings.Contains. (And do not fold the io.EOF clause into
+					// errors.Is: "EOF" is a substring of "unexpected EOF", so
+					// it would swallow this footer error too.) A structural fix
+					// - FromReader returning a typed sentinel, and validating
+					// records-read == txCount against the footer - is tracked
+					// as a follow-up.
+					//
+					// Consequence: a genuinely truncated tail is
+					// indistinguishable from the footer and is silently
+					// accepted (pre-existing; same as utxovalidator). Matching
+					// only "unexpected EOF" - not the broader "failed to read
+					// txid" utxovalidator also matches - keeps a real non-EOF
+					// read error loud rather than swallowed.
+					if err == io.EOF || strings.Contains(err.Error(), "unexpected EOF") {
 						break OUTER
 					}
 

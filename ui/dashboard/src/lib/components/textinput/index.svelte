@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte'
+  import { onMount } from 'svelte'
   import { FootnoteContainer, Icon, LabelContainer, FocusRect } from '$lib/components'
   import {
     ComponentSize,
@@ -11,51 +13,92 @@
   import type { InputSizeType } from '$lib/styles/types/input'
   import { valueSet } from '$lib/utils'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    type = 'text',
+    min = null,
+    max = null,
+    label = '',
+    footnote = '',
+    footnoteHtml = true,
+    required = false,
+    name = '',
+    value = $bindable(''),
+    placeholder = null,
+    disabled = false,
+    valid = true,
+    error = '',
+    autocomplete = 'off',
+    stretch = false,
+    width = -1,
+    focusWidth = -1,
+    icon = null,
+    iconAfter = null,
+    labelPlacement = LabelPlacement.top,
+    labelAlignment = LabelAlignment.start,
+    size = ComponentSize.medium,
+    confirm = false,
+    onchange,
+    onmount,
+    onconfirm,
+    onkeydown,
+    onfocus,
+    onblur,
+  }: {
+    testId?: string | undefined | null
+    class?: string | undefined | null
+    style?: string
+    type?: 'text' | 'number'
+    min?: number | null
+    max?: number | null
+    label?: any
+    footnote?: any
+    footnoteHtml?: boolean
+    required?: boolean
+    name?: string
+    value?: string
+    placeholder?: any
+    disabled?: boolean
+    valid?: boolean
+    error?: string
+    autocomplete?: string | undefined | null
+    stretch?: boolean
+    width?: number
+    focusWidth?: number
+    icon?: string | undefined | null
+    iconAfter?: string | undefined | null
+    labelPlacement?: LabelPlacementType
+    labelAlignment?: LabelAlignmentType
+    size?: InputSizeType
+    confirm?: boolean
+    onchange?: (e: { name: string; type: string; value: string }) => void
+    onmount?: (e: { inputRef: HTMLInputElement | undefined }) => void
+    onconfirm?: (e: { name: string; type: string; value: string }) => void
+    onkeydown?: (e: KeyboardEvent) => void
+    onfocus?: () => void
+    onblur?: () => void
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const inputVarStr = `--input-default`
+  const inputSizeStr = $derived(`--input-size-${styleSize}`)
 
-  export let style = ''
+  // in confirm mode, changes are local until confirm is clicked,
+  // or alternatively changes can be reset to previous non-local value
+  let localValue = $state(value)
 
-  export let type: 'text' | 'number' = 'text'
-  export let min: number | null = null
-  export let max: number | null = null
+  $effect(() => {
+    localValue = value
+  })
 
-  export let label: any = ''
-  export let footnote: any = ''
-  export let footnoteHtml = true
-  export let required = false
-  export let name = ''
-  export let value = ''
-  export let placeholder: any = null
-  export let disabled = false
-  export let valid = true
-  export let error = ''
-  export let autocomplete: string | undefined | null = 'off'
-  export let stretch = false
-  export let width = -1
-  export let focusWidth = -1
-  export let icon: string | undefined | null = null
-  export let iconAfter: string | undefined | null = null
+  const placeholderActive = $derived(placeholder && !localValue)
 
-  export let labelPlacement: LabelPlacementType = LabelPlacement.top
-  export let labelAlignment: LabelAlignmentType = LabelAlignment.start
-
-  export let size: InputSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: inputVarStr = `--input-default`
-  $: inputSizeStr = `--input-size-${styleSize}`
-
-  $: placeholderActive = placeholder && !localValue
-
-  let cssVars: string[] = []
-  $: {
-    let states = ['enabled', 'hover', 'active', 'focus', 'disabled']
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    const states = ['enabled', 'hover', 'active', 'focus', 'disabled']
+    return [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -83,71 +126,63 @@
       `--width:${width}px`,
       `--focus-width:${focusWidth}px`,
     ]
-  }
+  })
 
-  // in confirm mode, changes are local until confirm is clicked,
-  // or alternatively changes can be reset to previous non-local value
-  export let confirm = false
-  let localValue = value
-
-  $: {
-    localValue = value
-  }
-
-  let inputOpts: any = {}
-
-  $: {
-    inputOpts = {}
+  const inputOpts = $derived.by(() => {
+    const opts: any = {}
 
     if (autocomplete) {
-      inputOpts.autocomplete = autocomplete
+      opts.autocomplete = autocomplete
     }
     if (placeholder) {
-      inputOpts.placeholder = placeholder
+      opts.placeholder = placeholder
     }
     if (type === 'number') {
       if (valueSet(min)) {
-        inputOpts.min = min
+        opts.min = min
       }
       if (valueSet(max)) {
-        inputOpts.max = max
+        opts.max = max
       }
     }
-  }
 
-  let focused = false
+    return opts
+  })
 
-  let inputRef
+  let focused = $state(false)
+
+  let inputRef = $state<HTMLInputElement>()
 
   function onInputParentClick() {
-    inputRef.focus()
+    inputRef?.focus()
   }
 
-  function onInputChange(e) {
+  function onInputChange(e: Event) {
+    const target = e.target as HTMLInputElement
     if (confirm) {
-      localValue = e.srcElement.value
+      localValue = target.value
     } else {
-      value = e.srcElement.value
+      value = target.value
     }
     // we always pass through the raw value here to aid validators, etc
-    dispatch('change', { name, type, value: e.srcElement.value })
+    onchange?.({ name, type, value: target.value })
   }
 
   onMount(() => {
-    dispatch('mount', { inputRef })
+    onmount?.({ inputRef })
   })
 
   function doConfirm() {
     value = localValue
-    dispatch('confirm', { name, type, value })
+    onconfirm?.({ name, type, value })
   }
 
   function doReset() {
     localValue = value
   }
 
-  function onKeyDown(e) {
-    if (!e) e = window.event
+  function onInputKeyDown(e: KeyboardEvent) {
+    if (!e) e = window.event as KeyboardEvent
     const keyCode = e.code || e.key
     if (confirm) {
       if (keyCode === 'Enter') {
@@ -158,10 +193,10 @@
         return false
       }
     }
-    dispatch('keydown', e)
+    onkeydown?.(e)
   }
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -170,7 +205,8 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 </script>
 
@@ -188,7 +224,7 @@
   {stretch}
 >
   <FootnoteContainer {footnote} {error} {disabled} html={footnoteHtml}>
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <FocusRect {disabled} style={`--comp-focus-rect-border-radius:var(--border-radius)`}>
       <div
         role="button"
@@ -200,8 +236,8 @@
         class:focusWidth={focusWidth !== -1}
         class:width={width !== -1}
         class:placeholder={placeholder && !localValue}
-        on:click={onInputParentClick}
-        on:keydown={(e) => {
+        onclick={onInputParentClick}
+        onkeydown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
             onInputParentClick()
@@ -221,10 +257,10 @@
           value={confirm ? localValue : value}
           {disabled}
           {...inputOpts}
-          on:input={onInputChange}
-          on:focus={() => onFocusAction('focus')}
-          on:blur={() => onFocusAction('blur')}
-          on:keydown={onKeyDown}
+          oninput={onInputChange}
+          onfocus={() => onFocusAction('focus')}
+          onblur={() => onFocusAction('blur')}
+          onkeydown={onInputKeyDown}
           aria-labelledby={`${name}_label`}
         />
         {#if iconAfter}
@@ -235,7 +271,7 @@
             <button
               class="confirm-icon"
               style="color: #6EC492; width: 20px; height: 20px;"
-              on:click={doConfirm}
+              onclick={doConfirm}
               type="button"
               aria-label="Confirm"
             >
@@ -244,7 +280,7 @@
             <button
               class="confirm-icon"
               style="color: #FF344C; width: 17px; height: 17px;"
-              on:click={doReset}
+              onclick={doReset}
               type="button"
               aria-label="Cancel"
             >

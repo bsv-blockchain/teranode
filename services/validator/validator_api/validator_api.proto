@@ -62,6 +62,8 @@ message ValidateTransactionRequest {
   optional bool skip_policy_checks = 5;     // Skip policy checks
   optional bool create_conflicting = 6;     // Create conflicting transaction
   optional bool skip_txmeta_publishing = 7; // Skip publishing txmeta to Kafka
+  optional uint32 candidate_block_time = 8; // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
+  optional uint32 candidate_parent_median_time = 9; // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. REQUIRED on every post-CSV consensus request — selectFinalityComparisonTime returns a ProcessingError when this field is missing. The server provides no tip-MTP soft-fall because blockState.MedianTime is updated asynchronously from blockchain notifications and would race with tip advance / reorg during validation.
 }
 
 // ValidateTransactionResponse provides transaction validation results

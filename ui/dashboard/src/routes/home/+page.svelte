@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import HomeStatsCard from '$internal/components/page/home/home-stats-card/index.svelte'
@@ -5,11 +7,11 @@
   import * as api from '$internal/api'
   import { failure } from '$lib/utils/notifications'
 
-  let isMounted = false
+  let isMounted = $state(false)
 
   // stats
-  let statsLoading = true
-  let statsData = {}
+  let statsLoading = $state(true)
+  let statsData = $state({})
 
   async function getStatsData() {
     try {
@@ -83,7 +85,7 @@
   }
 
   // graph
-  export let blockGraphData: any = []
+  let blockGraphData: any = $state([])
 
   async function getBlockGraphData(period: string) {
     const res: any = await api.getBlockGraphData({ period })
@@ -94,17 +96,19 @@
     }
   }
 
-  let period
+  let period = $state<string | undefined>(undefined)
 
-  $: if (isMounted && period) {
-    getBlockGraphData(period)
-  }
+  $effect(() => {
+    if (isMounted && period) {
+      getBlockGraphData(period)
+    }
+  })
 
   function onChangePeriod(value: string) {
     period = value
   }
 
-  let Graph
+  let Graph = $state<any>(undefined)
   onMount(() => {
     // stats
     getStatsData()
@@ -129,16 +133,16 @@
   }
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="content">
     <HomeStatsCard loading={statsLoading} data={statsData} onRefresh={getStatsData} />
     {#if Graph}
-      <svelte:component this={Graph} data={blockGraphData} {period} {onChangePeriod} />
+      <Graph data={blockGraphData} {period} {onChangePeriod} />
     {/if}
   </div>
 </PageWithMenu>
 
-<svelte:window on:keydown={onKeyDown} />
+<svelte:window onkeydown={onKeyDown} />
 
 <style>
   .content {

@@ -1,59 +1,67 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { tippy } from '$lib/stores/media'
 
   import { Icon } from '$lib/components'
   import { getLinkPrefix } from '$lib/utils/url'
 
-  const dispatch = createEventDispatcher()
+  let {
+    href = '',
+    text = null,
+    className = '',
+    external = true,
+    iconValue = null,
+    icon = '',
+    iconSize = 18,
+    iconPadding = '2px 0 0 0',
+    tooltip = '',
+    onIcon = (_value: any) => {},
+    onselect,
+  }: {
+    href?: string
+    text?: string | null
+    className?: string
+    external?: boolean
+    iconValue?: any
+    icon?: string
+    iconSize?: number
+    iconPadding?: string
+    tooltip?: string
+    onIcon?: (value: any) => void
+    onselect?: (detail: { value: any }) => void
+  } = $props()
 
-  export let href = ''
-  export let text: string | null = null
-  export let className = ''
-  export let external = true
-
-  export let iconValue: any = null
-  export let icon = ''
-  export let iconSize = 18
-  export let iconPadding = '2px 0 0 0'
-  export let tooltip = ''
-  export let onIcon = (any) => {}
-
-  let props: any = {}
-  let hrefWithPrefix = ''
-  let value = ''
-
-  $: {
-    props = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
-
+  const attrs = $derived.by(() => {
+    const a: any = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
     if (className) {
-      props.class = className
+      a.class = className
     }
+    return a
+  })
 
-    const prefix = getLinkPrefix(href, external)
-    hrefWithPrefix = prefix + href
+  const hrefWithPrefix = $derived(getLinkPrefix(href, external) + href)
 
-    value = text || href
-  }
+  const value = $derived(text || href)
 
   function onIconLocal() {
     if (onIcon) {
       onIcon(iconValue)
     }
-    dispatch('select', { value: iconValue })
+    onselect?.({ value: iconValue })
   }
 </script>
 
 {#if value}
   {#if icon && iconValue}
     <div class="link" style:--icon-padding={iconPadding}>
-      <a href={hrefWithPrefix} {...props}>{value}</a>
+      <a href={hrefWithPrefix} {...attrs}>{value}</a>
       <div class="icon" use:$tippy={{ content: tooltip }}>
-        <Icon name={icon} size={iconSize} on:click={onIconLocal} />
+        <Icon name={icon} size={iconSize} onclick={onIconLocal} />
       </div>
     </div>
   {:else}
-    <a href={hrefWithPrefix} {...props}>{value}</a>
+    <a href={hrefWithPrefix} {...attrs}>{value}</a>
   {/if}
 {:else}
   ''

@@ -107,6 +107,83 @@ func TestSQL_GetBlockInChainByHeightHash(t *testing.T) {
 	}
 }
 
+// TestSQL_GetBlockInChainByHeightHash_FastPathEquivalence verifies the #1018
+// on_main_chain fast path returns results identical to the recursive CTE for a
+// start hash that is on the main chain, and that the mainChainRebuilding guard
+// forces the CTE path. It is independent of which fork wins the chain-work tie:
+// the main-chain tip is discovered dynamically.
+func TestSQL_GetBlockInChainByHeightHash_FastPathEquivalence(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+
+	block0, err := store.GetBlockByHeight(ctx, 0)
+	require.NoError(t, err)
+
+	// Linear main chain plus a competing fork off block1, so on_main_chain is
+	// meaningfully set for some rows and false for others.
+	block1 := createTestBlock(t, 1, block0.Hash())
+	block2 := createTestBlock(t, 2, block1.Hash())
+	block3 := createTestBlock(t, 3, block2.Hash())
+	forkB := createTestBlock(t, 99, block1.Hash()) // sibling of block2, off main
+
+	for _, b := range []*model.Block{block1, block2, block3, forkB} {
+		_, _, err := store.StoreBlock(ctx, b, "")
+		require.NoError(t, err)
+	}
+
+	// Discover the actual main-chain tip (chain-work tie-break is the store's
+	// business, not this test's assumption).
+	_, tipMeta, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	tipHeight := tipMeta.Height
+
+	tip, err := store.GetBlockByHeight(ctx, tipHeight)
+	require.NoError(t, err)
+	tipHash := tip.Hash()
+
+	// Sanity: the preflight must see the tip as on the main chain.
+	var tipOnMain bool
+	require.NoError(t, store.db.QueryRowContext(ctx,
+		`SELECT COALESCE((SELECT on_main_chain FROM blocks WHERE hash = $1 LIMIT 1), false)`,
+		tipHash.CloneBytes(),
+	).Scan(&tipOnMain))
+	require.True(t, tipOnMain, "main-chain tip must have on_main_chain=true")
+
+	for h := uint32(0); h <= tipHeight; h++ {
+		// Fast path (guard == 0).
+		require.Equal(t, int32(0), store.mainChainRebuilding.Load())
+		fast, _, err := store.GetBlockInChainByHeightHash(ctx, h, tipHash)
+		require.NoError(t, err, "fast path height %d", h)
+		store.responseCache.DeleteAll() // avoid the cache masking the CTE branch
+
+		// CTE path (guard > 0 forces fallback even with an on-main start).
+		store.mainChainRebuilding.Add(1)
+		cte, _, err := store.GetBlockInChainByHeightHash(ctx, h, tipHash)
+		store.mainChainRebuilding.Add(-1)
+		require.NoError(t, err, "cte path height %d", h)
+		store.responseCache.DeleteAll()
+
+		require.Equal(t, fast.Hash().String(), cte.Hash().String(),
+			"fast path and CTE disagree at height %d", h)
+
+		// Both must equal the canonical main-chain block at that height.
+		mainByHeight, err := store.GetBlockByHeight(ctx, h)
+		require.NoError(t, err)
+		require.Equal(t, mainByHeight.Hash().String(), fast.Hash().String(),
+			"fast path is not the main-chain block at height %d", h)
+	}
+
+	// Edge: height == startHash.height returns the start block itself.
+	startAtTip, _, err := store.GetBlockInChainByHeightHash(ctx, tipHeight, tipHash)
+	require.NoError(t, err)
+	require.Equal(t, tipHash.String(), startAtTip.Hash().String())
+
+	// Edge: height > startHash.height must yield BlockNotFound on the fast path,
+	// identical to the CTE (which never walks above the seed height).
+	_, _, err = store.GetBlockInChainByHeightHash(ctx, tipHeight+1, tipHash)
+	require.Error(t, err)
+}
+
 // Helper function to create a test block
 func createTestBlock(t *testing.T, nonce uint32, previousHash *chainhash.Hash) *model.Block {
 	t.Helper()

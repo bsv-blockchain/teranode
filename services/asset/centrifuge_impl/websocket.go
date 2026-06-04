@@ -3,7 +3,7 @@
 package centrifuge_impl
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -109,23 +109,6 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	}
 }
 
-// ConnectRequest represents the initial connection request from a client.
-// It contains authentication and subscription information.
-type ConnectRequest struct {
-	Token   string                       `json:"token,omitempty"`
-	Data    json.RawMessage              `json:"data,omitempty"`
-	Subs    map[string]*SubscribeRequest `json:"subs,omitempty"`
-	Name    string                       `json:"name,omitempty"`
-	Version string                       `json:"version,omitempty"`
-}
-
-// SubscribeRequest represents a subscription request to a specific channel.
-type SubscribeRequest struct {
-	Recover bool   `json:"recover,omitempty"`
-	Epoch   string `json:"epoch,omitempty"`
-	Offset  uint64 `json:"offset,omitempty"`
-}
-
 // ServeHTTP implements the http.Handler interface for WebSocket connections.
 // It handles the WebSocket upgrade process and manages the connection lifecycle.
 //
@@ -200,7 +183,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
 
-		c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
+		// Detach cancellation: r.Context() is cancelled when ServeHTTP returns,
+		// which is right after this goroutine launches. The centrifuge core
+		// checks ctx.Done() inside HandleCommand and aborts every frame if the
+		// context is dead — so we keep request-scoped values (notably the
+		// Credentials set by authMiddleware) but strip the cancellation signal.
+		// The connection lifetime is owned by closeFn / the read loop below.
+		c, closeFn, err := centrifuge.NewClient(context.WithoutCancel(r.Context()), s.node, transport)
 		if err != nil {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "[Centrifuge] error creating client", map[string]any{"transport": transport.Name()}))
 			return
@@ -214,41 +203,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
 		}(time.Now())
 
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		var req ConnectRequest
-
-		err = json.Unmarshal(data, &req)
-		if err != nil {
-			return
-		}
-
-		connectRequest := centrifuge.ConnectRequest{
-			Token:   req.Token,
-			Data:    req.Data,
-			Name:    req.Name,
-			Version: req.Version,
-		}
-
-		if req.Subs != nil {
-			subs := make(map[string]centrifuge.SubscribeRequest)
-			for k, v := range connectRequest.Subs {
-				subs[k] = centrifuge.SubscribeRequest{
-					Recover: v.Recover,
-					Offset:  v.Offset,
-					Epoch:   v.Epoch,
-				}
-			}
-		}
-
-		c.Connect(connectRequest)
-
 		for {
-			_, _, err := conn.ReadMessage()
+			_, reader, err := conn.NextReader()
 			if err != nil {
+				break
+			}
+
+			if proceed := centrifuge.HandleReadFrame(c, reader); !proceed {
 				break
 			}
 		}
@@ -345,9 +306,12 @@ func (t *websocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
 	return centrifuge.ProtocolVersion2
 }
 
-// Unidirectional returns whether transport is unidirectional.
+// Unidirectional returns whether transport is unidirectional. WebSocket is
+// inherently bidirectional, so this returns false — the centrifuge core then
+// emits connect replies in the command-reply envelope (with the client's
+// command Id) rather than as Push frames. See issue #938.
 func (t *websocketTransport) Unidirectional() bool {
-	return true
+	return false
 }
 
 // Emulation ...

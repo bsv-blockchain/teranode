@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"

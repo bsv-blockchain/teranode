@@ -76,6 +76,16 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
 	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
+	// No on_main_chain fast path is possible here. This query's semantic is
+	// "all blocks NOT in the ancestor set of blockHashFrom", which has no
+	// equivalent on_main_chain predicate:
+	//   - NOT on_main_chain is wrong when blockHashFrom is a main-chain tip:
+	//     it would exclude the main-chain ancestors of blockHashFrom.
+	//   - on_main_chain = false is wrong when blockHashFrom is a fork tip:
+	//     the fork's own ancestors also have on_main_chain = false.
+	// The recursive CTE is the only correct way to compute the complement of the
+	// ancestor set, so it is retained deliberately (unlike the locator/height
+	// lookups in this package, which the #1018 fast path covers).
 	q := `
 		SELECT
 			 b.version

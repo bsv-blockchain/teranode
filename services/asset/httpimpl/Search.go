@@ -97,7 +97,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "Search",
 		tracing.WithParentStat(AssetStat),
-		tracing.WithDebugLogMessage(h.logger, "[Asset_http] Search for %s: %s", c.Request().RemoteAddr, q),
+		tracing.WithDebugLogMessage(h.logger, "[Asset_http] Search for %s: %s", c.RealIP(), q),
 	)
 
 	defer deferFn()

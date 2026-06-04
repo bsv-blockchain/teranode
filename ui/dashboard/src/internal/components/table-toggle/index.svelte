@@ -1,28 +1,32 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import Toggle from '$lib/components/toggle/index.svelte'
   import i18n from '$internal/i18n'
 
   const baseKey = 'comp.table-toggle'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  export let value
+  let {
+    value = $bindable(),
+    onchange,
+  }: {
+    value?: any
+    onchange?: (e: { name: string; type: string; value: any }) => void
+  } = $props()
 
-  let useValue
-  $: {
-    useValue = value
+  const useValue = $derived.by(() => {
     if (value === 'dynamic') {
-      useValue = $mediaSize <= MediaSize.sm ? 'div' : 'standard'
+      return $mediaSize <= MediaSize.sm ? 'div' : 'standard'
     }
-  }
+    return value
+  })
 
-  const dispatch = createEventDispatcher()
-
-  function onSelect(e) {
-    value = e.detail.value
-    dispatch('change', e.detail)
+  function onSelect(e: { name: string; type: string; value: any }) {
+    value = e.value
+    onchange?.(e)
   }
 </script>
 
@@ -34,5 +38,5 @@
     { icon: 'icon-card-line', value: 'div', tooltip: t(`${baseKey}.tooltip.div`) },
   ]}
   value={useValue}
-  on:change={onSelect}
+  onchange={onSelect}
 />

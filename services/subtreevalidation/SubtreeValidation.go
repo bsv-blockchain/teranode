@@ -51,7 +51,6 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
@@ -1110,11 +1109,6 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		deferFn(err)
 	}()
 
-	isRunning, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
-	if err != nil {
-		return errors.NewProcessingError("[validateSubtree][%s] failed to check if blockchain is running: %v", subtreeHash.String(), err)
-	}
-
 	missingTxs, err := u.getSubtreeMissingTxs(ctx, subtreeHash, subtree, missingTxHashes, allTxs, baseURL)
 	if err != nil {
 		return err
@@ -1142,10 +1136,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
 	var (
-		errorsFound      = atomic.Uint64{}
-		addedToOrphanage = atomic.Uint64{}
-		firstError       error
-		firstErrorOnce   sync.Once
+		errorsFound    = atomic.Uint64{}
+		firstError     error
+		firstErrorOnce sync.Once
 	)
 
 	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
@@ -1182,16 +1175,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 					// Check if this is a truly invalid transaction (not just policy error)
 					if errors.Is(err, errors.ErrTxMissingParent) {
-						// check whether we are in a running state, otherwise we can just ignore the missing parent transactions
-						if isRunning {
-							// add tx to the orphanage
-							u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent, adding to orphanage", subtreeHash.String(), tx.TxIDChainHash().String())
-							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
-								addedToOrphanage.Add(1)
-							} else {
-								u.logger.Warnf("[validateSubtree][%s] Failed to add transaction %s to orphanage - orphanage is full", subtreeHash.String(), tx.TxIDChainHash().String())
-							}
-						}
+						// Missing parent in the peer-announced subtree path. The subtree validation
+						// still fails (errorsFound was incremented above); the block path is the
+						// backstop — when the block arrives, Phase-3 sequential revalidation in
+						// CheckBlockSubtrees resolves cross-subtree parents in block order.
+						u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent", subtreeHash.String(), tx.TxIDChainHash().String())
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
@@ -1246,7 +1234,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 	if errorsFound.Load() > 0 {
 		// If there are errors found, we return here, so that the caller can handle it
-		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree, added %d to orphanage", subtreeHash.String(), errorsFound.Load(), addedToOrphanage.Load(), firstError)
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree", subtreeHash.String(), errorsFound.Load(), firstError)
 	}
 
 	if missingCount.Load() > 0 {

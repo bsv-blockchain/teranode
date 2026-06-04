@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"

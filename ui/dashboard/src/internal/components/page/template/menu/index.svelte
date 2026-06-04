@@ -1,4 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import { goto } from '$app/navigation'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { pageLinks, contentLeft } from '../../../../stores/nav'
@@ -11,21 +14,28 @@
   // import Banner from '$internal/components/banner/index.svelte'
   import AnimMenuIcon from '$internal/components/anim-menu-icon/index.svelte'
   import ContentMenu from '../../content/menu/index.svelte'
-
-  export let testId: string | undefined | null = null
-  export let showGlobalToolbar = true
-  export let showTools = true
-
   import i18n from '$internal/i18n'
 
-  $: t = $i18n.t
+  let {
+    testId = null,
+    showGlobalToolbar = true,
+    showTools = true,
+    children,
+  }: {
+    testId?: string | undefined | null
+    showGlobalToolbar?: boolean
+    showTools?: boolean
+    children?: Snippet
+  } = $props()
+
+  const t = $derived($i18n.t)
 
   function onLogo() {
     goto('/')
   }
 
-  function onMenuItem(e) {
-    const { item, type } = e.detail
+  function onMenuItem(detail) {
+    const { item, type } = detail
 
     if (type === 'page-links') {
       goto(item.path)
@@ -38,23 +48,21 @@
     }
   }
 
-  let showMenu = true
-  let showMobileNavbar = false
-  $: {
+  let showMenu = $state(true)
+  let showMobileNavbar = $state(false)
+  $effect(() => {
     let newShowMobileNavbar = $mediaSize <= MediaSize.sm
     if (showMobileNavbar !== newShowMobileNavbar) {
       showMenu = false
     }
     showMobileNavbar = newShowMobileNavbar
-  }
+  })
 
   function onToggleMenu() {
     showMenu = !showMenu
   }
 
-  function onDrawerMetrics(e) {
-    const detail = e.detail
-
+  function onDrawerMetrics(detail) {
     if (!showMobileNavbar) {
       if (detail.position === 'left') {
         $contentLeft = detail.width
@@ -62,25 +70,25 @@
     }
   }
 
-  $: expanded = showMobileNavbar || $contentLeft > 60
+  const expanded = $derived(showMobileNavbar || $contentLeft > 60)
 
-  $: showDrawer = (showMobileNavbar && showMenu) || !showMobileNavbar
+  const showDrawer = $derived((showMobileNavbar && showMenu) || !showMobileNavbar)
 
-  function onDrawerClose(e) {
+  function onDrawerClose() {
     showMenu = false
   }
 
-  $: menuKey = JSON.stringify($pageLinks.items)
+  const menuKey = $derived(JSON.stringify($pageLinks.items))
 </script>
 
 {#if showMobileNavbar}
   <MobileNavbar offsetTop={'var(--banner-height, 0px)'}>
     <div class="navbar-content">
-      <button class="logo-container" on:click={onLogo} type="button">
+      <button class="logo-container" onclick={onLogo} type="button">
         <Logo name="teranode" height={28} />
         <Logo name="teranode-text" height={14} />
       </button>
-      <button class="icon" on:click={(e) => onToggleMenu()} type="button">
+      <button class="icon" onclick={(e) => onToggleMenu()} type="button">
         <AnimMenuIcon open={showDrawer} />
       </button>
     </div>
@@ -101,7 +109,7 @@
     {#if showGlobalToolbar}
       <Toolbar style="padding-bottom: 13px;" {showTools} />
     {/if}
-    <slot />
+    {@render children?.()}
   </ContentMenu>
 
   <Footer />
@@ -118,22 +126,24 @@
     showCover={showMobileNavbar}
     showHeader={!showMobileNavbar}
     coverColor="var(--app-cover-bg-color)"
-    on:metrics={onDrawerMetrics}
-    on:close={onDrawerClose}
-    on:header-select={onLogo}
+    onmetrics={onDrawerMetrics}
+    onclose={onDrawerClose}
+    onheaderSelect={onLogo}
   >
-    <div slot="header" class="logo-container">
-      <Logo name="teranode" height={28} />
-      {#if expanded}
-        <Logo name="teranode-text" height={14} />
-      {/if}
-    </div>
+    {#snippet header()}
+      <div class="logo-container">
+        <Logo name="teranode" height={28} />
+        {#if expanded}
+          <Logo name="teranode-text" height={14} />
+        {/if}
+      </div>
+    {/snippet}
     {#key menuKey}
       <Menu
         collapsed={!expanded}
         idField="path"
         data={$pageLinks.items}
-        on:select={(e) => onMenuItem({ detail: { item: e.detail.item, type: 'page-links' } })}
+        onselect={(e) => onMenuItem({ item: e.item, type: 'page-links' })}
       />
     {/key}
   </Drawer>

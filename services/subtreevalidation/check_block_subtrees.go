@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -55,6 +56,15 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
+	}
+
+	// Pre-CSV candidate block timestamp can be picked up cheaply from the block
+	// header up front; the post-CSV candidate-parent MTP requires a blockchain
+	// round-trip and is set up lower down, after the "all subtrees already
+	// exist" early return so the no-work path skips the extra call.
+	var candidateBlockTime uint32
+	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateBlockTime = block.Header.Timestamp
 	}
 
 	// Extract PeerID from request for tracking
@@ -116,6 +126,30 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Found %d missing subtrees for block %s, proceeding with validation", len(missingSubtrees), block.Hash().String())
+
+	// Post-CSV candidate-parent MTP for the validator's consensus-path
+	// finality check (Options.CandidateParentMedianTime). Source matches
+	// bitcoin-sv's pindexPrev->GetMedianTimePast() for a candidate at height H:
+	// median of timestamps at [H-11, H-1] following the parent's actual chain.
+	// We delegate to blockchainClient.GetBlockHeaders which has a fork-aware
+	// SQL fallback (recursive parent_id CTE) — so a side-chain candidate
+	// receives MTP for ITS parent chain, not the main chain at height H.
+	// Required on every post-CSV consensus request: the validator hard-errors
+	// when the field is missing, so failing to populate here would surface as
+	// a downstream rejection rather than degrading silently.
+	var candidateParentMedianTime uint32
+	if block.Height >= uint32(u.settings.ChainCfgParams.CSVHeight) {
+		var mtpErr error
+
+		// fetchCandidateParentMedianTime already includes the parent hash in its
+		// error messages, so we just wrap with our service tag here. Reaching the
+		// inner error formatting without a nil check would dereference the parent
+		// hash pointer; that nil-guard lives inside fetchCandidateParentMedianTime.
+		candidateParentMedianTime, mtpErr = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock)
+		if mtpErr != nil {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr)
+		}
+	}
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
@@ -305,7 +339,20 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 					// Retry on 503 — peer's asset service may reject under admission control
 					// while it generates the file on-demand from Aerospike.
-					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(gCtx, url)
+					//
+					// IMPORTANT: pass the parent ctx, NOT gCtx, to the HTTP fetch and the
+					// stream processor. gCtx is the errgroup's cancellable context — using
+					// it here means a single sibling failure cancels every in-flight
+					// subtree_data download in this batch. Because each cancellation closes
+					// the upstream connection, the peer aborts its on-demand creation
+					// (storer.Abort), discarding work that was already paid for in Aerospike
+					// reads. Detaching from gCtx lets each fetch complete (or hit its own
+					// http_streaming_timeout) so the peer can finish writing its subtreeData
+					// file — converting wasted Aerospike work into a pre-warmed cache for
+					// the next retry. The trade-off is that batch failure detection waits
+					// for in-flight peers instead of cancelling early; acceptable here
+					// because the per-fetch streaming timeout still bounds it.
+					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 					if subtreeDataErr != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 					}
@@ -317,8 +364,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 						bytesRead: &bytesRead,
 					}
 
-					// Process transactions directly from the stream while storing to disk
-					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
+					// Process transactions directly from the stream while storing to disk.
+					// Same rationale as above for using ctx instead of gCtx.
+					err = u.processSubtreeDataStream(ctx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
 					_ = countingBody.Close()
 
 					// Track bytes downloaded from peer after stream is consumed
@@ -379,7 +427,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 		// Process transactions for this batch
 		if batchTxCount > 0 {
-			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, blockIds); err != nil {
+			if err = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds); err != nil {
 				// Release arenas before returning — txs won't be consumed further.
 				for i := range batchArenas {
 					if batchArenas[i] != nil {
@@ -432,14 +480,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			validator.WithSkipPolicyChecks(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
+			validator.WithCandidateBlockTime(candidateBlockTime),
+			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		)
 	}
 
 	if err := u.validateMissingSubtreesWithOrderedRetry(ctx, missingSubtrees, validateSubtree); err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
-
-	u.processOrphans(ctx, *block.Header.Hash(), block.Height, blockIds)
 
 	return &subtreevalidation_api.CheckBlockSubtreesResponse{
 		Blessed: true,
@@ -515,19 +563,11 @@ func (u *Server) validateMissingSubtreesWithOrderedRetry(
 		i, subtreeHash := i, subtreeHash
 
 		g.Go(func() error {
-			subtree, err := validateFn(gCtx, subtreeHash)
-			if err != nil {
+			if _, err := validateFn(gCtx, subtreeHash); err != nil {
 				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
 				failedParallel[i] = true
 
 				return nil
-			}
-
-			// Remove validated transactions from orphanage
-			if subtree != nil {
-				for _, node := range subtree.Nodes {
-					u.orphanage.Delete(node.Hash)
-				}
 			}
 
 			return nil
@@ -555,16 +595,8 @@ func (u *Server) validateMissingSubtreesWithOrderedRetry(
 			continue
 		}
 
-		subtree, err := validateFn(ctx, subtreeHash)
-		if err != nil {
+		if _, err := validateFn(ctx, subtreeHash); err != nil {
 			return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
-		}
-
-		// Remove validated transactions from orphanage
-		if subtree != nil {
-			for _, node := range subtree.Nodes {
-				u.orphanage.Delete(node.Hash)
-			}
 		}
 	}
 
@@ -741,9 +773,15 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 	return txIndex, nil
 }
 
-// processTransactionsInLevels processes all transactions from all subtrees using level-based validation
+// processTransactionsInLevels processes all transactions from all subtrees using level-based validation.
+//
+// candidateBlockTime and candidateParentMedianTime are paired finality-time
+// sources for the validator's consensus path. Pre-CSV consumes
+// candidateBlockTime; post-CSV consumes candidateParentMedianTime. Each is
+// expected to be zero in the era it is not consumed; see Options.CandidateBlockTime
+// and Options.CandidateParentMedianTime in services/validator/options.go.
 // This ensures transactions are processed in dependency order while maximizing parallelism
-func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) error {
+func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsInLevels",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processTransactionsInLevels] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -829,6 +867,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 	}
 
 	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
@@ -854,7 +894,6 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
-		addedToOrphanage    atomic.Uint64
 	)
 
 	// Track successfully validated transactions per level for parent metadata
@@ -942,20 +981,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 					// Count all other errors
 					errorsFound.Add(1)
 
-					// Handle missing parent transactions by adding to orphanage
 					if errors.Is(err, errors.ErrTxMissingParent) {
+						// missingParentErrors drives the all-missing-parent deferral below;
+						// resolution happens in Phase-3 ordered sequential revalidation.
 						missingParentErrors.Add(1)
-						isRunning, runningErr := u.blockchainClient.IsFSMCurrentState(gCtx, blockchain.FSMStateRUNNING)
-						if runningErr == nil && isRunning {
-							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage", tx.TxIDChainHash().String())
-							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
-								addedToOrphanage.Add(1)
-							} else {
-								u.logger.Warnf("[processTransactionsInLevels] Failed to add transaction %s to orphanage - orphanage is full", tx.TxIDChainHash().String())
-							}
-						} else {
-							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, but FSM not in RUNNING state - not adding to orphanage", tx.TxIDChainHash().String())
-						}
+						u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent (deferred to sequential revalidation)", tx.TxIDChainHash().String())
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Truly invalid (non-policy) transactions fail the level — no deferral
 						// possible because phase 3 revalidation can't resolve these.
@@ -1010,10 +1040,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		// stall the block (observed on teratestnet at block 15,631 where
 		// 1,305 of 9,216 txs had cross-subtree parents).
 		if errorsFound.Load() == missingParentErrors.Load() {
-			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation), %d added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
+			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
-		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent), %d transactions added to orphanage", errorsFound.Load(), missingParentErrors.Load(), addedToOrphanage.Load())
+		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
 	}
 
 	u.logger.Debugf("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
@@ -1125,4 +1155,141 @@ func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax i
 	}
 
 	return nil
+}
+
+// fetchCandidateParentMedianTime returns the candidate-parent MTP for the
+// post-CSV consensus path. See the equivalent helper in services/legacy/netsync
+// for the rationale of the two-step fallback: the batched API is cache-friendly
+// but its in-process cache is keyed by (parentHash, count), so a reorg-race
+// poisoning of that cache entry would re-trigger the same re-anchor failure on
+// retry. Falling back to a hash-keyed parent-chain walk is race-safe because
+// GetBlockHeader's cache is keyed by hash and block contents are immutable.
+func (u *Server) fetchCandidateParentMedianTime(ctx context.Context, parentHash *chainhash.Hash) (uint32, error) {
+	if parentHash == nil {
+		return 0, errors.NewProcessingError("nil parent hash")
+	}
+
+	headers, _, err := u.blockchainClient.GetBlockHeaders(ctx, parentHash, blockchain.MedianTimeBlocks)
+	if err != nil {
+		return 0, errors.NewProcessingError("parent hash %s: failed to fetch parent-chain headers", parentHash.String(), err)
+	}
+
+	mtp, anchorErr := candidateParentMedianTimeFromHeaders(parentHash, headers)
+	if anchorErr == nil {
+		return mtp, nil
+	}
+
+	walked, walkErr := u.walkParentChain(ctx, parentHash, blockchain.MedianTimeBlocks)
+	if walkErr != nil {
+		return 0, errors.NewProcessingError("parent hash %s: batched-API re-anchor failed (%v); fallback walk failed", parentHash.String(), anchorErr, walkErr)
+	}
+
+	mtp, err = candidateParentMedianTimeFromHeaders(parentHash, walked)
+	if err != nil {
+		return 0, errors.NewProcessingError("parent hash %s: re-anchor failed on both batched fetch (%v) and hash-walk fallback", parentHash.String(), anchorErr, err)
+	}
+
+	return mtp, nil
+}
+
+// walkParentChain fetches exactly depth block headers starting at startHash and
+// walking backwards via HashPrevBlock. See the equivalent helper in
+// services/legacy/netsync for the rationale — duplicated by design (small,
+// internal, avoids a new shared util package).
+//
+// nil pointers and nil header responses are hard errors: production callers
+// only invoke this at heights at or above CSVHeight, well past the chain's
+// first `depth` blocks, so we never legitimately walk off the beginning.
+// Tolerating short returns would silently produce an incomplete MTP on a
+// transient cache miss; raising loudly forces the caller to surface it.
+func (u *Server) walkParentChain(ctx context.Context, startHash *chainhash.Hash, depth uint64) ([]*model.BlockHeader, error) {
+	headers := make([]*model.BlockHeader, 0, depth)
+	cur := startHash
+
+	for i := uint64(0); i < depth; i++ {
+		if cur == nil {
+			return nil, errors.NewProcessingError("walkParentChain: nil prev-block link at depth %d (walked off the chain)", i)
+		}
+
+		header, _, err := u.blockchainClient.GetBlockHeader(ctx, cur)
+		if err != nil {
+			return nil, errors.NewProcessingError("walkParentChain: failed at depth %d (hash %s)", i, cur.String(), err)
+		}
+
+		if header == nil {
+			return nil, errors.NewProcessingError("walkParentChain: nil header at depth %d (hash %s) — possible transient cache miss", i, cur.String())
+		}
+
+		headers = append(headers, header)
+		cur = header.HashPrevBlock
+	}
+
+	return headers, nil
+}
+
+// candidateParentMedianTimeFromHeaders verifies that the supplied headers form
+// a contiguous chain ending at parentHash, then returns the median of their
+// timestamps. See the equivalent helper in services/legacy/netsync for the
+// full rationale — the function is duplicated by design (small, internal,
+// avoids a new shared util package) and both copies must hold the same
+// contract.
+//
+// The verification closes a concurrency gap in
+// blockchainClient.GetBlockHeaders: its main-chain fast path probes the start
+// hash's on_main_chain status in one SQL statement and then runs the SELECT
+// that returns the headers in a second statement. A reorg fired between the
+// two statements (READ COMMITTED isolation) would return main-chain headers
+// at the same height range that no longer correspond to parentHash — silently
+// swapping the timestamp set we compute MTP over. Re-anchoring the result
+// locally is O(11) and bulletproof: we check that the newest returned header
+// equals parentHash and that each consecutive pair is linked via
+// HashPrevBlock → Hash().
+//
+// Empty input and any verification failure surface as a hard error: silently
+// returning 0 would let the caller pass Options.CandidateParentMedianTime=0
+// to the validator, which now rejects post-CSV consensus requests with a
+// missing parent MTP (no tip-MTP soft-fall) — but the error here gives a
+// more precise diagnostic at the source rather than waiting for the
+// validator's downstream rejection.
+func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []*model.BlockHeader) (uint32, error) {
+	if len(headers) == 0 {
+		return 0, errors.NewProcessingError("cannot compute median timestamp from zero headers")
+	}
+
+	if parentHash == nil {
+		return 0, errors.NewProcessingError("nil parent hash")
+	}
+
+	// Each element is guarded against nil — production paths (SQL store,
+	// gRPC client) do not emit nil entries, but the helper is meant to
+	// hard-fail on bad header data rather than panic.
+	if headers[0] == nil {
+		return 0, errors.NewProcessingError("nil header at depth 0")
+	}
+
+	headHash := headers[0].Hash()
+	if headHash == nil || !headHash.IsEqual(parentHash) {
+		return 0, errors.NewProcessingError("returned chain head does not match requested parent hash (possible reorg between header probe and fetch)")
+	}
+
+	for i := 1; i < len(headers); i++ {
+		if headers[i] == nil {
+			return 0, errors.NewProcessingError("nil header at depth %d", i)
+		}
+
+		prev := headers[i-1].HashPrevBlock
+		cur := headers[i].Hash()
+		if prev == nil || cur == nil || !prev.IsEqual(cur) {
+			return 0, errors.NewProcessingError("parent-chain link broken at depth %d (possible reorg between header probe and fetch)", i)
+		}
+	}
+
+	timestamps := make([]uint32, len(headers))
+	for i, h := range headers {
+		timestamps[i] = h.Timestamp
+	}
+
+	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
+
+	return timestamps[len(timestamps)/2], nil
 }

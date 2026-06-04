@@ -4,11 +4,12 @@
 // transaction processing throughput.
 //
 // Key features:
-// - Implements a configurable memory caching mechanism for transaction metadata
-// - Uses height-based expiration to maintain cache freshness
-// - Integrates with Prometheus for operational metrics and monitoring
-// - Provides both single and batch operations for transaction metadata retrieval and updates
-// - Supports parallel processing for improved performance on multi-core systems
+//   - Implements a configurable memory caching mechanism for transaction metadata
+//   - Per-shard FIFO eviction handled by the chosen backend (ImprovedCache ring
+//     buffer or PointerCache key ring)
+//   - Integrates with Prometheus for operational metrics and monitoring
+//   - Provides both single and batch operations for transaction metadata retrieval and updates
+//   - Supports parallel processing for improved performance on multi-core systems
 //
 // The package works by intercepting calls to the underlying UTXO store, caching results
 // in memory, and proxying other calls through to the underlying store. This architecture
@@ -86,16 +87,18 @@ func putTxMetaCacheReadBuffer(buf *[]byte) {
 //
 // The cache is designed for high-throughput blockchain environments where transaction metadata
 // is frequently accessed during validation, mining, and mempool management operations.
-// It implements an LRU-like eviction policy based on block height to ensure that older, less
-// relevant transactions are removed first when memory pressure occurs.
+// Eviction is delegated to the backend: ImprovedCache overwrites the oldest
+// entries in its per-bucket byte ring, PointerCache evicts the oldest key in
+// its per-bucket FIFO ring. In both cases capacity is configured in MB at
+// construction time.
 //
 // Thread-safety: All operations are thread-safe and can be called concurrently from multiple goroutines.
 type TxMetaCache struct {
 	utxoStore                     utxo.Store     // The underlying UTXO store that this cache wraps; provides persistence
-	cache                         *ImprovedCache // The in-memory cache implementation; provides high-performance access
+	cache                         cacheBackend   // Storage primitive (ImprovedCache or PointerCache) chosen by BucketType at construction
 	metrics                       metrics        // Performance metrics for monitoring cache efficiency and throughput
 	logger                        ulogger.Logger // Logger for operational logging and diagnostic information
-	noOfBlocksToKeepInTxMetaCache uint32         // Configuration for cache expiration based on block height; controls data retention
+	noOfBlocksToKeepInTxMetaCache uint32         // Cache retention horizon (blocks); kept for compatibility with the height-based expiration plumbing in ImprovedCache
 }
 
 // CacheStats provides statistical information about the current state of the cache.
@@ -154,6 +157,17 @@ const (
 	// benefits from Go runtime optimisations and avoids external dependencies.
 	// Offers the best read/write throughput in most workloads.
 	Native
+
+	// Pointer selects the experimental pointer-backed cache implementation
+	// (see pointer_cache.go). Entries are stored as *meta.Data with no
+	// serialisation on write or deserialisation on read; eviction is per-shard
+	// FIFO via a fixed-size key ring.
+	//
+	// Trade-off vs the other bucket types: every live entry is a Go heap
+	// allocation reachable from a sharded map, so GC scan cost grows with the
+	// number of cached entries. Use only behind benchmark gating until the
+	// trade-off is measured for your workload.
+	Pointer
 )
 
 // NewTxMetaCache creates a new transaction metadata cache that wraps an existing UTXO store.
@@ -196,9 +210,22 @@ func NewTxMetaCache(
 		maxMB = maxMBOverride[0]
 	}
 
-	cache, err := New(maxMB*1024*1024, bucketType)
-	if err != nil {
-		return nil, errors.NewProcessingError("error creating cache", err)
+	var cache cacheBackend
+
+	if bucketType == Pointer {
+		pc, err := NewPointerCache(maxMB * 1024 * 1024)
+		if err != nil {
+			return nil, errors.NewProcessingError("error creating pointer cache", err)
+		}
+
+		cache = pc
+	} else {
+		c, err := New(maxMB*1024*1024, bucketType)
+		if err != nil {
+			return nil, errors.NewProcessingError("error creating cache", err)
+		}
+
+		cache = &improvedCacheBackend{cache: c}
 	}
 
 	const percentageOfGlobalBlockHeightRetentionToKeep = 10
@@ -219,6 +246,10 @@ func NewTxMetaCache(
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 	}
 
+	if bucketType == Pointer {
+		logger.Infof("txMetaCache: pointer-backed mode active (experimental) — %d MB", maxMB)
+	}
+
 	unregisterMetrics := registerTxMetaCacheMetrics(m)
 	go func() {
 		<-ctx.Done()
@@ -229,8 +260,8 @@ func NewTxMetaCache(
 }
 
 // SetCache adds or updates transaction metadata in the cache for a given transaction hash.
-// Before storing, it removes the actual transaction from the metadata to save memory,
-// and appends the current block height to support expiration policies.
+// Eviction is handled by the backend (FIFO ring per shard for both ImprovedCache and
+// PointerCache); no explicit expiration metadata is recorded with the entry.
 //
 // Parameters:
 // - hash: Transaction hash to use as the cache key
@@ -239,12 +270,13 @@ func NewTxMetaCache(
 // Returns:
 // - Error if the cache operation fails
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
-	txMetaBytes, err := txMeta.MetaBytes()
-	if err != nil {
+	if err := t.cache.Set(hash, txMeta); err != nil {
 		return err
 	}
 
-	return t.SetCacheFromBytes(hash.CloneBytes(), txMetaBytes)
+	t.metrics.insertions.Add(1)
+
+	return nil
 }
 
 // SetCacheFromBytes adds or updates transaction metadata in the cache using raw byte slices.
@@ -258,8 +290,7 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 // Returns:
 // - Error if the cache operation fails
 func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
-	err := t.cache.Set(key, t.appendHeightToValue(txMetaBytes))
-	if err != nil {
+	if err := t.cache.SetFromBytes(key, t.appendHeightToValue(txMetaBytes)); err != nil {
 		return err
 	}
 
@@ -284,8 +315,7 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 		valuesWithHeight[i] = t.appendHeightToValue(value)
 	}
 
-	err := t.cache.SetMulti(keys, valuesWithHeight)
-	if err != nil {
+	if err := t.cache.SetMultiFromBytes(keys, valuesWithHeight); err != nil {
 		return err
 	}
 
@@ -345,9 +375,7 @@ func (t *TxMetaCache) SetCacheMultiSequentialWithHashes(keys [][]byte, values []
 }
 
 func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) error {
-
-	err := t.cache.SetMulti(keys, values)
-	if err != nil {
+	if err := t.cache.SetMultiFromBytes(keys, values); err != nil {
 		return err
 	}
 
@@ -357,59 +385,30 @@ func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) err
 }
 
 // GetMetaCached retrieves transaction metadata from the cache without falling back to the
-// underlying store. This provides a way to check if data is available in the cache only.
+// underlying store — callers receive nothing if the entry is absent and do not
+// fall back to the UTXO store from this method (use GetMeta for that).
 //
 // Parameters:
-// - ctx: Context for the operation (not used, but maintained for interface consistency)
+// - ctx: Context for the operation (unused; kept for symmetry with GetMeta)
 // - hash: Transaction hash to use as the cache key
 //
 // Returns:
-// - Pointer to the cached transaction metadata if found and not expired, nil otherwise
-// - Error if the cache operation fails or if the data cannot be unmarshalled
+//   - *meta.Data, true on a cache hit. The returned pointer is shared with
+//     every other concurrent reader in pointer mode and freshly allocated in
+//     byte mode; in both cases callers must treat it as read-only.
+//   - nil, false on miss. No error is returned — a miss is the normal path.
 //
-// The function performs several checks:
-// 1. Verifies the data exists in the cache
-// 2. Validates that the data is not empty
-// 3. Checks if the data has expired based on block height
-// All these conditions have corresponding metrics incremented for monitoring.
-func (t *TxMetaCache) GetMetaCached(ctx context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
-	cachedBytes := getTxMetaCacheReadBuffer()
-	defer putTxMetaCacheReadBuffer(cachedBytes)
-
-	var (
-		found bool
-		err   error
-	)
-
-	*cachedBytes, found, err = t.GetMetaCachedWithBuffer(ctx, hash, txmetaData, *cachedBytes)
-	return found, err
-}
-
-// GetMetaCachedWithBuffer retrieves transaction metadata from the cache using a caller-owned
-// scratch buffer. The returned buffer should be reused by the caller on subsequent calls.
-func (t *TxMetaCache) GetMetaCachedWithBuffer(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data, cachedBytes []byte) ([]byte, bool, error) {
-	cachedBytes = cachedBytes[:0]
-
-	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
+// Hit/miss counts are exposed via the standard txmetacache Prometheus metrics.
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*meta.Data, bool) {
+	d, ok := t.cache.Get(hash)
+	if !ok {
 		t.metrics.misses.Add(1)
-
-		return cachedBytes, false, err
-	}
-
-	if len(cachedBytes) == 0 {
-		t.metrics.misses.Add(1)
-		t.logger.Warnf("txMetaCache empty for %s", hash.String())
-
-		return cachedBytes, false, nil
+		return nil, false
 	}
 
 	t.metrics.hits.Add(1)
 
-	if err := meta.NewMetaDataFromBytes(cachedBytes, txmetaData); err != nil {
-		return cachedBytes, false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
-	}
-
-	return cachedBytes, true, nil
+	return d, true
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
@@ -426,25 +425,39 @@ func (t *TxMetaCache) GetMetaCachedWithBuffer(_ context.Context, hash chainhash.
 // This is one of the primary interface methods that proxies calls to the underlying store
 // with a caching layer in between for improved performance.
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	cachedBytes := getTxMetaCacheReadBuffer()
-	defer putTxMetaCacheReadBuffer(cachedBytes)
+	if cached, ok := t.cache.Get(*hash); ok {
+		// In pointer mode the cache hands out the same *meta.Data to every
+		// concurrent reader. *data = *cached copies the struct but
+		// ParentTxHashes still points at the cache's backing slice — a
+		// caller doing append(data.TxInpoints.ParentTxHashes, …) would
+		// corrupt every other reader. Deep-clone TxInpoints to break the
+		// aliasing. Byte mode is unaffected (its Get returns a freshly
+		// allocated *meta.Data already), and the hot validator path uses
+		// GetMetaCached which keeps the shared-pointer read-only contract.
+		if _, isPointer := t.cache.(*PointerCache); isPointer {
+			inpoints, err := cloneTxInpoints(cached.TxInpoints)
+			if err != nil {
+				// Clone failure is pathological (the cached entry was
+				// already cloned on insert). Treat as a cache miss so the
+				// caller gets a fresh copy from the underlying store
+				// instead of aliased data.
+				t.metrics.misses.Add(1)
+				goto fromStore
+			}
 
-	err := t.cache.Get(cachedBytes, hash[:])
-	if err != nil && !errors.Is(err, errors.ErrNotFound) {
-		return err
-	}
-
-	if len(*cachedBytes) > 0 {
-		t.metrics.hits.Add(1)
-
-		if err = meta.NewMetaDataFromBytes(*cachedBytes, data); err != nil {
-			return err
+			*data = *cached
+			data.TxInpoints = inpoints
+		} else {
+			*data = *cached
 		}
 
-		data.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
+		t.metrics.hits.Add(1)
+		data.BlockIDs = make([]uint32, 0) // expected behavior, needs to be non-nil
 
 		return nil
 	}
+
+fromStore:
 
 	t.metrics.misses.Add(1)
 	t.logger.Warnf("txMetaCache GetMeta miss for %s", hash.String())
@@ -501,7 +514,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and call SetCacheMulti.
-	// Note: values are serialized the same way SetCache() does (MetaBytes + height appended inside SetCacheMulti).
+	// Note: values are serialized the same way SetCache() does (via MetaBytes).
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
 
@@ -707,19 +720,22 @@ func (t *TxMetaCache) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockI
 	return t.utxoStore.RemoveBlockIDs(ctx, removals)
 }
 
-// setMinedInCacheParallel is an internal helper method that updates the mined status
-// of multiple transactions in parallel, using goroutines to improve performance.
+// setMinedInCacheParallel evicts the cache entries for a batch of newly-mined
+// transactions, in parallel. Eviction is the only safe response — neither
+// backend can round-trip BlockIDs through the cached format (ImprovedCache's
+// MetaBytes wire format omits the field, and PointerCache's metadataOnly
+// strips it to match), so any SetCache here would silently drop the new
+// blockID. After eviction the next read on each hash falls through to the
+// underlying store which has the up-to-date BlockIDs.
 //
-// Parameters:
-// - ctx: Context for the operation
-// - hashes: List of transaction hashes to mark as mined
-// - blockID: ID of the block where the transactions were mined
-//
-// Returns:
-// - Error if updating the cache for any transaction fails
-//
-// The method uses an errgroup to manage concurrent updates while properly handling errors.
-func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+// Matches the eviction pattern used by SetMinedMulti above. Parameters:
+//   - ctx:     used for tracing; not currently consulted for cancellation
+//     because Delete is a fast in-memory op and the errgroup's semantics
+//     handle early-return naturally.
+//   - hashes:  the mined transactions to evict.
+//   - blockID: accepted for API symmetry with the byte path; not consulted —
+//     the actual store update happens before this method is invoked.
+func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, _ uint32) error {
 	g := new(errgroup.Group)
 	util.SafeSetLimit(g, 100)
 
@@ -727,24 +743,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 		hash := hash
 
 		g.Go(func() error {
-			txMeta, err := t.Get(ctx, hash)
-			if err != nil {
-				txMeta, err = t.utxoStore.Get(ctx, hash)
-			}
-
-			if err != nil {
-				return err
-			}
-
-			if txMeta.BlockIDs == nil {
-				txMeta.BlockIDs = []uint32{
-					blockID,
-				}
-			} else {
-				txMeta.BlockIDs = append(txMeta.BlockIDs, blockID)
-			}
-
-			return t.SetCache(hash, txMeta)
+			return t.Delete(ctx, hash)
 		})
 	}
 
@@ -773,17 +772,13 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-// appendHeightToValue appends the current block height to the end of the txMetaBytes.
-// This allows for height-based expiration of cache entries, enabling the cache to automatically
-// discard entries that are no longer relevant as the blockchain grows.
+// appendHeightToValue appends the current block height to the end of the
+// txMetaBytes. Kept for compatibility with the existing ImprovedCache plumbing
+// (the v2 receiver in #912 uses the same pattern). PointerCache's bridge
+// tolerates the trailing 4 bytes — NewMetaDataFromBytes reads forward by
+// declared lengths and ignores the suffix.
 //
-// Parameters:
-// - txMetaBytes: The serialized transaction metadata
-//
-// Returns:
-// - A new byte slice containing the original metadata followed by the current block height
-//
-// The height is encoded as a little-endian uint32 in the last 4 bytes of the returned slice.
+// The height is encoded as a big-endian uint32 in the last 4 bytes.
 func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
 	height := t.utxoStore.GetBlockHeight()
 	valueWithHeight := make([]byte, len(txMetaBytes)+4)
@@ -803,6 +798,7 @@ func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
 // cache performance data via Prometheus, but can also be used for debugging or diagnostics.
 func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	s := &Stats{}
+
 	t.cache.UpdateStats(s)
 
 	return &CacheStats{

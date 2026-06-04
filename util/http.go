@@ -289,6 +289,11 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 
+	// Sign the request if a signer is configured (silently skip on error)
+	if signer := loadHTTPRequestSigner(); signer != nil {
+		_ = signer.SignRequest(req)
+	}
+
 	var resp *http.Response
 	resp, err = httpClient.Do(req)
 	if err != nil {
