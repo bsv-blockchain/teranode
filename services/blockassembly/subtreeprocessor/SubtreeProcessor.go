@@ -315,6 +315,13 @@ type SubtreeProcessor struct {
 
 	cancelPtr atomic.Pointer[cancelHolder]
 
+	// processorCtx holds the processor goroutine's lifecycle context, stored so
+	// that paths sending on newSubtreeChan from outside the Start() select loop
+	// (e.g. processCompleteSubtree) can abort the send when the processor is
+	// shutting down instead of blocking forever on a stalled or exited listener.
+	// nil until Start() runs; processorContext() falls back to context.Background().
+	processorCtx atomic.Pointer[context.Context]
+
 	// stopOnce ensures Stop() is only executed once
 	stopOnce sync.Once
 
@@ -604,6 +611,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 		// Create a child context with cancel for managing the processor lifecycle
 		processorCtx, cancel := context.WithCancel(ctx)
 		stp.cancelPtr.Store(&cancelHolder{f: cancel})
+
+		// Publish the lifecycle context so newSubtreeChan sends outside this
+		// goroutine's select loop can honour cancellation (see processorContext).
+		ctxToStore := processorCtx
+		stp.processorCtx.Store(&ctxToStore)
 
 		stp.setCurrentRunningState(StateRunning)
 
@@ -2071,6 +2083,32 @@ func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, skipNotif
 	return nil
 }
 
+// processorContext returns the processor's lifecycle context, or
+// context.Background() if Start() has not yet run (e.g. AddDirectly is used to
+// seed transactions before the processor goroutine is started). The fallback
+// preserves the historical blocking-send behaviour in that pre-Start case.
+func (stp *SubtreeProcessor) processorContext() context.Context {
+	if p := stp.processorCtx.Load(); p != nil {
+		return *p
+	}
+
+	return context.Background()
+}
+
+// sendNewSubtree delivers req on newSubtreeChan while honouring ctx
+// cancellation, so a stalled, backpressured, or shut-down listener cannot wedge
+// the single subtree-processor goroutine. Returns ctx.Err() if cancelled before
+// the send completes, nil on success. Mirrors the context-aware sends in the
+// Start() select loop and reorgBlocks.
+func (stp *SubtreeProcessor) sendNewSubtree(ctx context.Context, req NewSubtreeRequest) error {
+	select {
+	case stp.newSubtreeChan <- req:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err error) {
 	currentSubtree := stp.currentSubtree.Load()
 
@@ -2124,10 +2162,12 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	}
 	stp.currentSubtree.Store(newSubtree)
 
-	// Send the subtree to the newSubtreeChan, including a reference to the parent transactions map
-	errCh := make(chan error)
+	// Send the subtree to the newSubtreeChan, including a reference to the parent transactions map.
+	// Buffer the error channel (size 1) so the storage worker can always report its result without
+	// blocking, even if the drain goroutine below has already returned on shutdown.
+	errCh := make(chan error, 1)
 
-	stp.newSubtreeChan <- NewSubtreeRequest{
+	req := NewSubtreeRequest{
 		Subtree:          oldSubtree,
 		ParentTxMap:      stp.currentTxMap,
 		DeletedTxs:       stp.deletedTxs,
@@ -2138,10 +2178,23 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 		},
 	}
 
-	// wait for the writing of the subtree to complete in a separate goroutine
+	// Respect processor context cancellation while sending: a full newSubtreeChan buffer with a
+	// stalled or shut-down listener must not block the processor goroutine forever. Matches the
+	// context-aware sends in the Start() select loop and reorgBlocks.
+	ctx := stp.processorContext()
+	if err := stp.sendNewSubtree(ctx, req); err != nil {
+		return errors.NewProcessingError("[%s] cancelled while sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
+	}
+
+	// wait for the writing of the subtree to complete in a separate goroutine, abandoning the
+	// wait if the processor is cancelled so this goroutine cannot leak during shutdown
 	go func() {
-		if err := <-errCh; err != nil {
-			stp.logger.Errorf("[%s] error sending subtree to newSubtreeChan: %v", oldSubtreeHash.String(), err)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				stp.logger.Errorf("[%s] error sending subtree to newSubtreeChan: %v", oldSubtreeHash.String(), err)
+			}
+		case <-ctx.Done():
 		}
 	}()
 
@@ -5107,9 +5160,11 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 
 		stp.subtreesInBlock++
 
-		errCh := make(chan error)
+		// Buffer the error channel (size 1) so the storage worker can always report its result
+		// without blocking, even if the drain goroutine below has returned on shutdown.
+		errCh := make(chan error, 1)
 
-		stp.newSubtreeChan <- NewSubtreeRequest{
+		req := NewSubtreeRequest{
 			Subtree:           oldSubtree,
 			ParentTxMap:       stp.currentTxMap,
 			DeletedTxs:        stp.deletedTxs,
@@ -5118,9 +5173,19 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 			OnStorageComplete: func() { stp.cleanupDeletedTxs(oldSubtree) },
 		}
 
+		// Respect context cancellation while sending: a full newSubtreeChan buffer during a large
+		// reorg must not block this goroutine forever if the consumer has been cancelled.
+		if err := stp.sendNewSubtree(ctx, req); err != nil {
+			return errors.NewProcessingError("[%s] cancelled while sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
+		}
+
 		go func(hash *chainhash.Hash) {
-			if err := <-errCh; err != nil {
-				stp.logger.Errorf("[%s] error sending subtree to newSubtreeChan: %v", hash.String(), err)
+			select {
+			case err := <-errCh:
+				if err != nil {
+					stp.logger.Errorf("[%s] error sending subtree to newSubtreeChan: %v", hash.String(), err)
+				}
+			case <-ctx.Done():
 			}
 		}(oldSubtreeHash)
 

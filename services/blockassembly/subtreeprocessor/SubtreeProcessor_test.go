@@ -4089,3 +4089,90 @@ func TestProcessRemainderTransactionsAndDequeueBenchmark(t *testing.T) {
 		fmt.Printf("\nNote: processRemainderTransactionsAndDequeue returned error: %v\n", result.BenchErr)
 	}
 }
+
+// TestNewSubtreeChanContextCancellation verifies that the newSubtreeChan send
+// paths outside the Start() select loop honour processor context cancellation
+// instead of blocking forever on a stalled or shut-down listener. Without the
+// context-aware sends these calls would deadlock the single subtree-processor
+// goroutine when newSubtreeChan is unconsumed.
+func TestNewSubtreeChanContextCancellation(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+	// cancelledStp returns a processor with an unbuffered, unconsumed
+	// newSubtreeChan and an already-cancelled processor context stored, as if
+	// Start() had run and then the service began shutting down.
+	cancelledStp := func() *SubtreeProcessor {
+		newSubtreeChan := make(chan NewSubtreeRequest) // unbuffered, no consumer
+		stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
+		require.NoError(t, err)
+
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stored := context.Context(cancelledCtx)
+		stp.processorCtx.Store(&stored)
+
+		return stp
+	}
+
+	// waitForReturn runs fn in a goroutine and fails the test if it does not
+	// return promptly (i.e. it blocked on the unconsumed channel).
+	waitForReturn := func(t *testing.T, name string, fn func() error) {
+		t.Helper()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- fn()
+		}()
+
+		select {
+		case err := <-done:
+			require.Error(t, err, "%s should return an error on cancellation, not succeed", name)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s blocked on unconsumed newSubtreeChan after context cancellation", name)
+		}
+	}
+
+	t.Run("sendNewSubtree", func(t *testing.T) {
+		stp := cancelledStp()
+		waitForReturn(t, "sendNewSubtree", func() error {
+			return stp.sendNewSubtree(stp.processorContext(), NewSubtreeRequest{})
+		})
+	})
+
+	t.Run("processCompleteSubtree (complete-subtree rotation)", func(t *testing.T) {
+		stp := cancelledStp()
+
+		// Set up a current subtree to rotate.
+		st, err := stp.newSubtree(4)
+		require.NoError(t, err)
+		require.NoError(t, st.AddCoinbaseNode())
+		require.NoError(t, st.AddSubtreeNode(makeNode(1)))
+		stp.currentSubtree.Store(st)
+
+		waitForReturn(t, "processCompleteSubtree", func() error {
+			return stp.processCompleteSubtree(true)
+		})
+	})
+
+	t.Run("parallelBuildRemainderSubtrees (reorg announcement)", func(t *testing.T) {
+		stp := cancelledStp()
+
+		// currentSubtree holds only the coinbase placeholder; the three kept
+		// nodes fill it to its leaf count of 4, completing one subtree and
+		// triggering exactly one newSubtreeChan announcement.
+		st, err := stp.newSubtree(4)
+		require.NoError(t, err)
+		require.NoError(t, st.AddCoinbaseNode())
+		stp.currentSubtree.Store(st)
+
+		kept := []subtreepkg.Node{makeNode(1), makeNode(2), makeNode(3)}
+
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		waitForReturn(t, "parallelBuildRemainderSubtrees", func() error {
+			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, true)
+		})
+	})
+}
