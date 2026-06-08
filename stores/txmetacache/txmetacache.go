@@ -827,6 +827,14 @@ func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, stri
 	return t.utxoStore.Health(ctx, checkLiveness)
 }
 
+// Close delegates to the wrapped UTXO store so its in-flight batched writes
+// are drained on shutdown. The cache itself holds only in-memory state; no
+// extra teardown is required here beyond letting it be garbage-collected
+// alongside the wrapped store.
+func (t *TxMetaCache) Close(ctx context.Context) error {
+	return t.utxoStore.Close(ctx)
+}
+
 // GetSpend retrieves information about a specific UTXO spend attempt.
 // This method delegates directly to the underlying UTXO store without caching.
 //

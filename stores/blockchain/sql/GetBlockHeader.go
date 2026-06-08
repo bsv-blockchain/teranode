@@ -204,7 +204,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			s.logger.Debugf("failed to extract miner in GetBlockHeader (block may be invalid): %v", err)
 		} else {

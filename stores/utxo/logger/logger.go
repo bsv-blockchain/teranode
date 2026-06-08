@@ -128,6 +128,11 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 	return s.store.Health(ctx, checkLiveness)
 }
 
+func (s *Store) Close(ctx context.Context) error {
+	s.logger.Debugf("[UTXOStore][logger][Close] : %s", caller())
+	return s.store.Close(ctx)
+}
+
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	data, err := s.store.Create(ctx, tx, blockHeight, opts...)
 	inputDetails := make([]string, len(tx.Inputs))

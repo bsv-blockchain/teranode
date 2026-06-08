@@ -255,6 +255,10 @@ func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs [
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
 
+func (c *LocalClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	return c.store.OffChainBlockIDs(ctx)
+}
+
 func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	return c.store.CheckBlockIsAncestorOfBlock(ctx, blockIDs, blockHash)
 }

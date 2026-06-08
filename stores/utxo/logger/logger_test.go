@@ -57,6 +57,11 @@ func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+func (m *MockStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	args := m.Called(ctx, tx, blockHeight, opts)
 	return args.Get(0).(*meta.Data), args.Error(1)

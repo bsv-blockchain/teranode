@@ -860,6 +860,44 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 		}
 	}
 
+	// User-protection absurd-fee ceiling. The ceiling exists only to catch a
+	// fat-fingered fee on the RPC entry point — it is NOT consensus or policy
+	// (a miner would happily include an absurd-fee tx). The check is therefore
+	// confined to this handler and never visible to the validator or the P2P
+	// path. AllowHighFees=true on the per-call command bypasses it; a global
+	// MaxRawTxFee of 0 disables it entirely (operator opt-out).
+	allowHighFees := c.AllowHighFees != nil && *c.AllowHighFees
+	if !allowHighFees && s.settings.Policy.MaxRawTxFee > 0 {
+		// Extend the tx so PreviousTxSatoshis is populated; PreviousOutputsDecorate
+		// populates the input fields but does not flip tx.IsExtended() on its own
+		// (go-bt requires an explicit SetExtended call). We mark it explicitly so
+		// the validator's own IsExtended() guard skips re-decoration, and so the
+		// gRPC client serialises the extended bytes instead of wire bytes.
+		if !tx.IsExtended() {
+			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCVerify,
+					Message: "TX rejected: " + err.Error(),
+				}
+			}
+			tx.SetExtended(true)
+		}
+
+		inputSats := tx.TotalInputSatoshis()
+		outputSats := tx.TotalOutputSatoshis()
+		if inputSats > outputSats {
+			fee := inputSats - outputSats
+			if fee > s.settings.Policy.MaxRawTxFee {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCVerify,
+					Message: fmt.Sprintf("absurdly-high-fee %d > %d (use allowhighfees=true to bypass)", fee, s.settings.Policy.MaxRawTxFee),
+				}
+			}
+		}
+		// inputSats <= outputSats means fee is zero or negative; the validator
+		// will reject on its own (consensus check). Don't pre-empt.
+	}
+
 	// Validate the transaction synchronously
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)

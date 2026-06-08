@@ -116,7 +116,7 @@ func TestProcessRecordChunk_SkipsParentsInPrunedSet(t *testing.T) {
 		parentB[i] = 0xBB
 	}
 
-	prunedSet := NewPrunedTxSet(4, 0)
+	prunedSet := NewPrunedTxSet(4, 4096)
 	prunedSet.Add(parentA)
 	prunedSet.Add(parentB)
 	require.Equal(t, 2, prunedSet.Len())
@@ -136,7 +136,11 @@ func TestProcessRecordChunk_SkipsParentsInPrunedSet(t *testing.T) {
 	require.Equal(t, float64(2), after-before,
 		"each input whose parent is in the set must increment the skipped-pruned metric")
 
-	require.Equal(t, 0, prunedSet.Len(), "both parents should have been removed by CheckAndRemove")
+	// Both parents removed via CheckAndRemove (Len -= 2), and the chunk's
+	// own TXID was Added by the up-front loop at the start of
+	// processRecordChunk (Len += 1). Net: 1 entry (the child).
+	require.Equal(t, 1, prunedSet.Len(),
+		"parents removed, child TXID added by the up-front Add loop")
 }
 
 // TestProcessRecordChunk_EmptyPrunedSetIsNoOp verifies that an empty
@@ -170,7 +174,7 @@ func TestProcessRecordChunk_EmptyPrunedSetIsNoOp(t *testing.T) {
 		},
 	}
 
-	prunedSet := NewPrunedTxSet(4, 0)
+	prunedSet := NewPrunedTxSet(4, 4096)
 
 	before := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
 

@@ -57,6 +57,16 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return nil
 	}
 
+	// The sync peer's association just delivered a full block. Refresh its
+	// last-block time now, at receipt, so the minutes-long validation that
+	// follows (extend/createUtxos/validate/subtree writes for a multi-GB block)
+	// is not mistaken for a stall — which would rotate the sync peer
+	// mid-processing. Association-aware: the block arrives on the DATA1 stream,
+	// a different Peer from the GENERAL sync peer.
+	if sps, ok := sm.syncPeerStateFor(peer); ok {
+		sps.updateLastBlockTime()
+	}
+
 	block := bsvutil.NewBlock(msgBlock)
 
 	// Lookup previous block height from blockchain

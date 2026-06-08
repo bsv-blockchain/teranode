@@ -209,12 +209,12 @@ func newStoreWithInMemoryChainCheck(t *testing.T) *SQL {
 // deterministic behaviour from the fast-path (guard == 0) or that call Close()
 // and want to avoid noisy "database is closed" logs from the still-running
 // startup goroutine.
-func waitForStartupRebuild(t *testing.T, s *SQL) {
-	t.Helper()
+func waitForStartupRebuild(tb testing.TB, s *SQL) {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for s.mainChainRebuilding.Load() > 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("startup rebuild did not complete within 5 seconds")
+			tb.Fatal("startup rebuild did not complete within 5 seconds")
 		}
 		time.Sleep(time.Millisecond)
 	}

@@ -26,8 +26,10 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -38,6 +40,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -1614,6 +1617,144 @@ func Test_ValidateBlock(t *testing.T) {
 	})
 }
 
+// TestServer_ValidateBlock_TransientMissingParent_ReturnsIncomplete drives the gRPC
+// Server.ValidateBlock handler with a block whose only non-coinbase tx spends an EXTERNAL
+// parent (the parentTx fixture) absent from the utxo store. block.Valid's parent-existence
+// check hits ErrTxNotFound which is mapped to ErrBlockIncomplete (a transient catchup state,
+// not a consensus violation). The gRPC handler must surface a BLOCK_INCOMPLETE error and must
+// NOT report BLOCK_INVALID. This guards the Task 3 fix in Server.ValidateBlock. See issue #1031.
+//
+// This mirrors the synchronous TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid
+// but exercises the gRPC entry point. blockAssemblyClient is left nil so
+// WaitForBlockAssemblyReady is a no-op.
+func TestServer_ValidateBlock_TransientMissingParent_ReturnsIncomplete(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase paying exactly the block subsidy so checkBlockRewardAndFees passes.
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	require.NoError(t, err)
+
+	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
+	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
+	childTx := newTx(7, parentTx.TxIDChainHash())
+	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	require.NoError(t, err)
+
+	// Subtree: coinbase + childTx.
+	st, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+	require.NoError(t, st.AddNode(*childTx.TxIDChainHash(), 100, 0))
+
+	subtreeMeta := subtree.NewSubtreeMeta(st)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	nodeBytes, err := st.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := st.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	subtreeHashes := []*chainhash.Hash{st.RootHash()}
+
+	// Merkle root with coinbase swapped into the placeholder position.
+	replicatedSubtree := st.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	// Use the regtest expected target so the difficulty gate accepts the block and we reach block.Valid.
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(st.Length()), //nolint:gosec
+		uint64(coinbaseTx.Size()+childTx.Size()), //nolint:gosec
+		100, 0,
+	)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	server := &Server{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockValidation:  blockValidation,
+		blockchainClient: blockchainClient,
+		subtreeStore:     subtreeStore,
+		utxoStore:        utxoStore,
+		stats:            gocore.NewStat("test"),
+		// blockAssemblyClient intentionally nil → WaitForBlockAssemblyReady is a no-op.
+	}
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	req := &blockvalidation_api.ValidateBlockRequest{
+		Block:  blockBytes,
+		Height: 1,
+	}
+
+	resp, err := server.ValidateBlock(context.Background(), req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+
+	// The handler returns errors.WrapGRPC(...); unwrap to recover the typed error code.
+	// A transient missing parent must surface as ErrBlockIncomplete and must NOT be
+	// reported as ErrBlockInvalid (which would poison the DB on the catchup path).
+	unwrapped := errors.UnwrapGRPC(err)
+	require.NotNil(t, unwrapped)
+	require.True(t, errors.Is(unwrapped, errors.ErrBlockIncomplete),
+		"transient missing parent must surface as BLOCK_INCOMPLETE, got: %v", unwrapped)
+	require.False(t, errors.Is(unwrapped, errors.ErrBlockInvalid),
+		"transient missing parent must NOT be reported as BLOCK_INVALID, got: %v", unwrapped)
+}
+
 func Test_consumerMessageHandler(t *testing.T) {
 	initPrometheusMetrics()
 	ctx := context.Background()
@@ -1842,4 +1983,19 @@ func TestCatchup_SuccessRateCalculation(t *testing.T) {
 			assert.Equal(t, tc.expectedRate, successRate)
 		})
 	}
+}
+
+func TestIsUnvalidatablePeerError(t *testing.T) {
+	// Genuine consensus failures — the peer served a block we can prove is invalid.
+	require.True(t, isUnvalidatablePeerError(errors.NewBlockInvalidError("bad block")))
+	require.True(t, isUnvalidatablePeerError(errors.NewTxInvalidError("bad tx")))
+
+	// Transient catchup-state — our store hasn't caught up; the peer is not at fault.
+	require.False(t, isUnvalidatablePeerError(errors.NewTxMissingParentError("parent not yet present")))
+	require.False(t, isUnvalidatablePeerError(errors.NewTxNotFoundError("tx not yet present")))
+	require.False(t, isUnvalidatablePeerError(errors.NewBlockIncompleteError("incomplete")))
+
+	// Unrelated errors are not peer-malicious either.
+	require.False(t, isUnvalidatablePeerError(errors.NewServiceError("service down")))
+	require.False(t, isUnvalidatablePeerError(nil))
 }

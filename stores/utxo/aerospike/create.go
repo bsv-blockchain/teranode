@@ -57,6 +57,7 @@ package aerospike
 import (
 	"context"
 	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -176,7 +177,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
-	errCh := make(chan error)
+	// Buffered-1, matching every other completion channel in the package: now
+	// that the wait below can time out / cancel, Create may depart before
+	// sendStoreBatch sends. A buffered channel lets that send land in the buffer
+	// instead of relying on the deferred close turning it into a recovered
+	// send-on-closed (the resultHandledElsewhere guard ensures at most one send).
+	errCh := make(chan error, 1)
 	defer close(errCh)
 
 	var txHash *chainhash.Hash
@@ -220,10 +226,28 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	s.storeBatcher.PutCtx(ctx, item)
 
-	err = <-errCh
-	if err != nil {
-		// return raw err, should already be wrapped
-		return nil, err
+	// Bound the wait: the store dispatch fn signals via util.SafeSend (panic-safe
+	// against the deferred close above), so a wedged batcher cannot pin this
+	// caller forever. A nil timeout channel disables the arm (Store built without New).
+	var timeoutCh <-chan time.Time
+
+	if s.batcherWait > 0 {
+		timer := time.NewTimer(s.batcherWait)
+		defer timer.Stop()
+
+		timeoutCh = timer.C
+	}
+
+	select {
+	case err = <-errCh:
+		if err != nil {
+			// return raw err, should already be wrapped
+			return nil, err
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timeoutCh:
+		return nil, errors.NewServiceUnavailableError("aerospike store batch did not complete within %s", s.batcherWait)
 	}
 
 	prometheusUtxostoreCreate.Inc()
@@ -256,6 +280,36 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 // Parameters:
 //   - batch: Array of BatchStoreItems to process
 func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
+	// resultHandledElsewhere[idx] == true means batch[idx].done has already been
+	// notified by this iteration of sendStoreBatch (either directly via SafeSend
+	// below or via a goroutine that takes ownership of the result), so subsequent
+	// error/success loops MUST NOT send a second notification on the same channel.
+	// Declared up front so the panic guard below can skip already-handled items.
+	resultHandledElsewhere := make([]bool, len(batch))
+
+	// go-batcher recovers panics raised in this fn; without re-signalling the
+	// not-yet-handled done channels, a panic (e.g. a nil tx) would orphan every
+	// remaining waiting caller and leak their goroutines permanently.
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("Batch", "PanicRecovered").Inc()
+		}
+
+		s.logger.Errorf("[sendStoreBatch] recovered panic, failing batch items: %v\n%s", r, debug.Stack())
+
+		var err error = errors.NewProcessingError("panic in sendStoreBatch: %v", r)
+		for idx, bItem := range batch {
+			if !resultHandledElsewhere[idx] {
+				util.SafeSend(bItem.done, err, batchSignalTimeout)
+			}
+		}
+	}()
+
 	start := time.Now()
 
 	stat := gocore.NewStat("sendStoreBatch")
@@ -276,14 +330,6 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
-	// resultHandledElsewhere[idx] = true means bItem.done has already been notified by
-	// this iteration of sendStoreBatch (either directly via SafeSend below or via a
-	// goroutine that takes ownership of the result), so subsequent error/success
-	// loops MUST NOT send a second notification on the same channel. Without this,
-	// items that were notified pre-BatchOperate would receive a duplicate from the
-	// per-record loop, and items that hit specific aerospike result codes would
-	// silently fall through unnotified.
-	resultHandledElsewhere := make([]bool, len(batch))
 
 	if s.settings.UtxoStore.VerboseDebug {
 		s.logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
@@ -462,12 +508,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 	batchID := s.batchID.Add(1)
 
-	batchOperate := s.batchOperateFn
-	if batchOperate == nil {
-		batchOperate = s.client.BatchOperate
-	}
-
-	err = batchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		var aErr *aerospike.AerospikeError
 
@@ -1026,12 +1067,7 @@ func (s *Store) storeExternallyWithLock(
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	batchOperate := s.batchOperateFn
-	if batchOperate == nil {
-		batchOperate = s.client.BatchOperate
-	}
-
-	if err := batchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 		util.SafeSend[error](bItem.done, errors.NewProcessingError("[%s] BatchOperate failed for tx %s", funcName, bItem.txHash, err))
 		return
 	}
@@ -1266,7 +1302,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 	// Phase 1: Clear child records first (indices 1, 2, ..., N-1)
 	if len(childWrites) > 0 {
-		err := s.client.BatchOperate(batchPolicy, childWrites)
+		err := s.batchOperate(batchPolicy, childWrites)
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock child records", err)
 		}
@@ -1293,7 +1329,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 	// Phase 2: Clear master record last (index 0)
 	// Only executed if children succeeded - master's creating flag becomes atomic completion indicator
 	if masterWrite != nil {
-		err := s.client.BatchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
+		err := s.batchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock master record", err)
 		}

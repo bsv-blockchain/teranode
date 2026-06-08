@@ -454,6 +454,16 @@ func (m *Mock) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32
 	return args.Bool(0), args.Error(1)
 }
 
+// OffChainBlockIDs mocks the OffChainBlockIDs method
+func (m *Mock) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	args := m.Called(ctx)
+	var ids []uint32
+	if v := args.Get(0); v != nil {
+		ids = v.([]uint32)
+	}
+	return ids, uint32(args.Int(1)), args.Bool(2), args.Error(3)
+}
+
 // CheckBlockIsAncestorOfBlock mocks the CheckBlockIsAncestorOfBlock method
 func (m *Mock) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, blockIDs, blockHash)

@@ -272,7 +272,7 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, ha
 		if blockHeaderMeta.Miner == "" && len(coinbaseBytes) > 0 {
 			coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 			if err == nil {
-				extractedMiner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+				extractedMiner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 				if err == nil && extractedMiner != "" {
 					blockHeaderMeta.Miner = extractedMiner
 				}

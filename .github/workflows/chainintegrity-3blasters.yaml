@@ -14,7 +14,9 @@ env:
 jobs:
   chainintegrity:
     name: Chain Integrity Test
-    runs-on: teranode-runner-16-core
+    # arm64: no SV-node; all images arm64-capable (teranode multi-arch,
+    # aerospike-server:8.1 arm64, postgres + redpanda arm64).
+    runs-on: teranode-runner-16-core-arm
     timeout-minutes: 30
     steps:
       - name: Checkout code
@@ -25,6 +27,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+
+      # Plain go build (no -race): module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3

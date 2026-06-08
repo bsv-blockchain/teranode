@@ -149,6 +149,20 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	// scripts is pure overhead. The caller is responsible for ensuring the block
 	// is actually trusted (see SyncManager.quickValidationAllowed).
 	if validationOptions.SkipScriptValidation {
+		// The normal path leans on BDK to reject MEMPOOL_HEIGHT in consensus mode
+		// (bdk/core/txvalidator.cpp:779), but skipping script validation bypasses
+		// BDK entirely. Without this guard the unconfirmedParentHeight sentinel
+		// would propagate to BIP68 (height conversion produces -1 from 0xFFFFFFFF
+		// in sequenceLocks; MTP lookup in Validator.readMTPsLocked clamps to
+		// blockMTP) and the tx would be silently accepted. Mirror BDK's
+		// UnconfirmedInputInBlock rejection here.
+		if validationOptions.SkipPolicyChecks {
+			for _, h := range utxoHeights {
+				if h == unconfirmedParentHeight {
+					return errors.NewTxInvalidError("bad-txns-unconfirmed-input-in-block")
+				}
+			}
+		}
 		return nil
 	}
 

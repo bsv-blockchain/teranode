@@ -25,7 +25,8 @@ env:
 jobs:
   golangci-lint:
     name: golangci-lint
-    runs-on: teranode-runner-8-core
+    # arm64-safe: pure Go analysis, no containers (golangci-lint ships arm64).
+    runs-on: teranode-runner-8-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -34,13 +35,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # golangci typechecks (no -race) and the action caches its own build
+      # artifacts, so restore the module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
         with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+          build_cache: 'false'
 
       - name: golangci-lint with checkstyle report
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
@@ -58,7 +58,12 @@ jobs:
 
   test:
     name: test
-    runs-on: teranode-runner-16-core
+    # ARM runner: the x86 16-core runner OOM-killed the `go test -race
+    # -coverpkg=./...` compile (~13GB peak) — arm64 runners have ample RAM
+    # (~64GB on 16-core; telemetry showed ~70GB peak at 32 cores, and 32-core
+    # gave no speedup, so 16-core is the cost/perf sweet spot). Runs `make test`
+    # natively: postgres testcontainers (arm64) + testtxmetacache (no aerospike).
+    runs-on: teranode-runner-16-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -76,13 +81,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run Go tests
         run: make test

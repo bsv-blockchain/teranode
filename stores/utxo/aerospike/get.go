@@ -379,6 +379,21 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		}()
 	}
 
+	// Bound the wait so a wedged batcher (e.g. a stuck v8 batch op, or a dispatch
+	// fn that failed to signal) cannot pin this goroutine for the life of the
+	// process. The legacy/validation callers thread a deadline-less context down
+	// here, so ctx.Done() alone is not enough. A nil timeout channel (batcherWait
+	// == 0, e.g. a Store built without New) disables the arm and preserves the
+	// original behaviour.
+	var timeoutCh <-chan time.Time
+
+	if s.batcherWait > 0 {
+		timer := time.NewTimer(s.batcherWait)
+		defer timer.Stop()
+
+		timeoutCh = timer.C
+	}
+
 	select {
 	case data := <-done:
 		if data.Err != nil {
@@ -394,6 +409,9 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	case <-ctx.Done():
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "ContextCanceled").Inc()
 		return nil, ctx.Err()
+	case <-timeoutCh:
+		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "BatchTimeout").Inc()
+		return nil, errors.NewServiceUnavailableError("aerospike get batch did not complete within %s", s.batcherWait)
 	}
 }
 
@@ -590,7 +608,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		return nil
 	}
 
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		s.logger.Errorf("error in aerospike map store batch records:\n%v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
@@ -1200,10 +1218,25 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 		})
 	}
 
-	// Wait for all error channels to receive a result
+	// Wait for all error channels to receive a result, bounded so a wedged
+	// outpoint batcher cannot pin this goroutine for the life of the process.
+	var timeoutCh <-chan time.Time
+
+	if s.batcherWait > 0 {
+		timer := time.NewTimer(s.batcherWait)
+		defer timer.Stop()
+
+		timeoutCh = timer.C
+	}
+
 	for _, errChan := range errChans {
-		if err := <-errChan; err != nil {
-			return err
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+		case <-timeoutCh:
+			return errors.NewServiceUnavailableError("aerospike outpoint batch did not complete within %s", s.batcherWait)
 		}
 	}
 
@@ -1241,6 +1274,14 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
+	// go-batcher recovers panics in this fn; re-signal every errCh on panic so a
+	// crash mid-decoration cannot orphan the waiting submitters.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendOutpointBatch", s.logger, func(it *batchOutpoint, err error) {
+			util.SafeSend(it.errCh, err, batchSignalTimeout)
+		})
+	}()
+
 	start := gocore.CurrentTime()
 	defer func() {
 		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
@@ -1286,7 +1327,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	}
 
 	// send the batch to aerospike
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
 			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records", err))
@@ -1349,8 +1390,17 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			continue
 		}
 
-		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].Satoshis
-		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].LockingScript
+		// Guard the output index: a corrupt/short Outputs slice (or a nil-padded
+		// entry from OP_RETURN removal) would otherwise panic here and, because
+		// go-batcher recovers the panic, orphan every remaining errCh in the batch.
+		outIdx := batchItem.outpoint.PreviousTxOutIndex
+		if int(outIdx) >= len(previousTx.Outputs) || previousTx.Outputs[outIdx] == nil {
+			sendErrorAndClose(batchItem.errCh, errors.NewTxInvalidError("previous tx %s has no output at index %d", batchItem.outpoint.PreviousTxID, outIdx))
+			continue
+		}
+
+		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[outIdx].Satoshis
+		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[outIdx].LockingScript
 		batchItem.errCh <- nil
 		close(batchItem.errCh)
 	}
@@ -1524,6 +1574,16 @@ func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chain
 
 // sendGetBatch processes a batch of get requests efficiently
 func (s *Store) sendGetBatch(batch []*batchGetItem) {
+	// go-batcher recovers panics raised in this fn, so without re-signalling the
+	// per-item done channels a panic (e.g. a malformed bin tripping an unchecked
+	// type assertion in getTxFromBins) would orphan every waiter in this batch
+	// and leak their goroutines permanently.
+	defer func() {
+		signalBatchPanic(recover(), batch, "sendGetBatch", s.logger, func(it *batchGetItem, err error) {
+			trySignal(it.done, batchGetItemData{Err: err})
+		})
+	}()
+
 	items := make([]*utxo.UnresolvedMetaData, 0, len(batch))
 
 	for idx, item := range batch {
@@ -1534,30 +1594,19 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 		})
 	}
 
-	retries := 0
+	// BatchDecorate already retries internally up to the batch policy MaxRetries
+	// within its TotalTimeout. The previous extra 3x retry-with-sleep loop here
+	// stacked on top of that (worst case ~3 x TotalTimeout, observed ~15m),
+	// turning a transient stall into a multi-minute pin of every waiting
+	// submitter. Make a single attempt and surface the error.
+	if err := s.BatchDecorate(s.ctx, items); err != nil {
+		s.logger.Errorf("failed to get batch of txmeta: %v", err)
 
-	for {
-		if err := s.BatchDecorate(s.ctx, items); err != nil {
-			if retries < 3 {
-				retries++
-
-				s.logger.Errorf("failed to get batch of txmeta: %v", err)
-				time.Sleep(time.Duration(retries) * time.Second)
-
-				continue
-			}
-
-			// mark all items as errored
-			for _, bItem := range batch {
-				bItem.done <- batchGetItemData{
-					Err: err,
-				}
-			}
-
-			return
+		for _, bItem := range batch {
+			bItem.done <- batchGetItemData{Err: err}
 		}
 
-		break
+		return
 	}
 
 	for _, item := range items {

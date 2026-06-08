@@ -58,7 +58,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestProcessConflicting_FrozenTxError(t *testing.T) {
 	conflictingTxHashes := []chainhash.Hash{subtree.CoinbasePlaceholderHashValue}
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -98,7 +98,7 @@ func TestProcessConflicting_TxNotConflictingError(t *testing.T) {
 	}, nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -118,7 +118,7 @@ func TestProcessConflicting_GetTxError(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(nil, errors.NewProcessingError("database error"))
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -145,7 +145,7 @@ func TestProcessConflicting_GetCounterConflictingError(t *testing.T) {
 		Return([]chainhash.Hash{}, errors.NewProcessingError("counter conflicting error"))
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -184,7 +184,7 @@ func TestProcessConflicting_UnspendError(t *testing.T) {
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)
@@ -241,7 +241,7 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	// Assertions
 	assert.Nil(t, result)

@@ -38,6 +38,12 @@ func (m *MockUtxostore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+// Close mocks store shutdown. Returns the configured mock error or nil.
+func (m *MockUtxostore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.
 func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error) {

@@ -81,7 +81,7 @@ services:
 
   aerospike-{{ .Index }}:
     container_name: aerospike-{{ .Index }}-multinode
-    image: aerospike/aerospike-server:8.0
+    image: aerospike/aerospike-server:8.1
     networks:
       - teranode-network
     command: --config-file /etc/aerospike.conf

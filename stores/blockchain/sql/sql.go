@@ -85,6 +85,8 @@ type SQL struct {
 	cacheTTL time.Duration
 	// chainParams contains the blockchain network parameters (mainnet, testnet, etc.)
 	chainParams *chaincfg.Params
+	// rawMinerTag controls whether miner tags are returned raw (true) or sanitized (false)
+	rawMinerTag bool
 	// offChainBlockIDs holds the set of block IDs known to NOT be on the main chain
 	// (fork/orphan blocks). This set is tiny (a few hundred entries on all of mainnet)
 	// and allows CheckBlockIsInCurrentChain to answer with a pure in-memory lookup
@@ -233,6 +235,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		responseCache:         NewGenerationalCache(),
 		cacheTTL:              2 * time.Minute,
 		chainParams:           tSettings.ChainCfgParams,
+		rawMinerTag:           tSettings.BlockChain.RawMinerTag,
 		useInMemoryChainCheck: useInMemory,
 		blockTimestampCache:   newBlockTimestampCache(),
 	}

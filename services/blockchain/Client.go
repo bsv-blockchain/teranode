@@ -689,6 +689,20 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	return resp.GetIsPartOfCurrentChain(), nil
 }
 
+// OffChainBlockIDs returns the complete in-memory off-chain (forked) block ID set
+// plus the highest known block ID, so callers can prefetch the negative set once
+// and resolve main-chain membership locally (id <= maxBlockID AND not in the set).
+// rebuilding is true when the set is stale and callers must fall back to per-block
+// CheckBlockIsInCurrentChain checks.
+func (c *Client) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	resp, err := c.client.GetOffChainBlockIDs(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, 0, false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetOffChainBlockIds(), resp.GetMaxBlockId(), resp.GetRebuilding(), nil
+}
+
 // CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
 // This is used for double-spend detection on fork blocks where we need to check against
 // the fork's ancestor chain rather than the main chain.

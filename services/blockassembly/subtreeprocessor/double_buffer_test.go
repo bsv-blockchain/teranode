@@ -137,39 +137,6 @@ func TestSplitMapBuckets_ConfigClampingAndDefault(t *testing.T) {
 	}
 }
 
-// TestFlatIndexToSubtreeNode_SkipsEmptySubtrees mirrors the iteration shape
-// used by addMoveBackBlockNodesToSubtrees' Stage A worker. The pre-fix code
-// only stepped a single subtree on overflow and panicked if the next
-// subtree slice happened to be empty. This test asserts that the start-of-
-// chunk lookup AND the increment loop both correctly skip empty subtrees.
-func TestFlatIndexToSubtreeNode_SkipsEmptySubtrees(t *testing.T) {
-	nodes := [][]subtreepkg.Node{
-		{makeNode(1), makeNode(2)},
-		{},
-		{},
-		{makeNode(3)},
-		{},
-		{makeNode(4), makeNode(5)},
-	}
-
-	// Walk the flat index space and confirm flatIndexToSubtreeNode lines up
-	// each flat position with a non-empty inner slice (or end-of-input).
-	want := []struct{ sIdx, i int }{
-		{0, 0}, // tree[0][0]
-		{0, 1}, // tree[0][1]
-		{3, 0}, // tree[3][0] — skipped tree[1] and tree[2]
-		{5, 0}, // tree[5][0] — skipped tree[4]
-		{5, 1}, // tree[5][1]
-		{6, 0}, // past-the-end (== len(nodes))
-	}
-
-	for flat, exp := range want {
-		gotS, gotI := flatIndexToSubtreeNode(nodes, flat)
-		require.Equalf(t, exp.sIdx, gotS, "flat=%d sIdx", flat)
-		require.Equalf(t, exp.i, gotI, "flat=%d i", flat)
-	}
-}
-
 // TestTxMapPool_GrowsOnLargerBlock simulates the
 // "first block was small, later block is large" scenario flagged in code
 // review: the pool should be reallocated (not auto-rehashed by swiss.Map)

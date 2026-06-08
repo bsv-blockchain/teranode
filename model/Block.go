@@ -1126,14 +1126,20 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
+			// Parent tx is not in our store yet. During catchup this is a transient ordering
+			// state (we have not absorbed the parent's block), NOT a consensus violation.
+			// Return incomplete so callers retry instead of persisting the block as invalid.
+			// See issue #1031.
+			return nil, errors.NewBlockIncompleteError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 		}
 
 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
 	}
 
 	if len(parentTxMeta.BlockIDs) == 0 {
-		return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
+		// Parent tx exists but is not yet mined into a block we know about — also a
+		// catchup-ordering state, not a consensus violation. See issue #1031.
+		return nil, errors.NewBlockIncompleteError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 	}
 
 	return parentTxMeta, nil

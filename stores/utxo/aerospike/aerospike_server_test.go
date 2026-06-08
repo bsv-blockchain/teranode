@@ -1762,6 +1762,83 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.Equal(t, 11, response.Bins[fields.DeleteAtHeight.String()])
 }
 
+// TestAerospikeOutpointBatcherDrainMode is a happy-path smoke test for the
+// utxostore_outpointBatcherDrainMode toggle: with drain mode enabled at store
+// construction, the single-tx PreviousOutputsDecorate and the concurrent
+// BatchPreviousOutputsDecorate paths must still populate every input
+// correctly. The toggle has no observable getter from outside the package; if
+// it were silently dropped from the constructor (e.g. a missing branch in
+// aerospike.go) the decorate paths would still pass, so this test exists to
+// catch the wiring being deleted or misnamed, not to prove a perf claim.
+func TestAerospikeOutpointBatcherDrainMode(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.OutpointBatcherDrainMode = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	cleanDB(t, client)
+
+	_, createErr := store.Create(ctx, tx, 0)
+	require.NoError(t, createErr)
+
+	// Per-tx path: PreviousOutputsDecorate. Drain mode means the single push
+	// into the outpoint batcher dispatches immediately instead of waiting on
+	// the timer; the populated inputs must still match the parent fixture.
+	singleChild := &bt.Tx{}
+	addInput := func(child *bt.Tx, vout uint32) {
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		_ = in.PreviousTxIDAdd(tx.TxIDChainHash())
+		child.Inputs = append(child.Inputs, in)
+	}
+	addInput(singleChild, 0)
+	addInput(singleChild, 4)
+	require.NoError(t, store.PreviousOutputsDecorate(ctx, singleChild))
+
+	expected := map[uint32]uint64{
+		0: 5_000_000,
+		1: 2_000_000,
+		2: 20_000,
+		3: 20_000,
+		4: 2_817_689,
+	}
+	for i, in := range singleChild.Inputs {
+		require.NotNil(t, in.PreviousTxScript, "input %d not decorated", i)
+		require.Len(t, *in.PreviousTxScript, 25)
+		require.Equal(t, expected[in.PreviousTxOutIndex], in.PreviousTxSatoshis)
+	}
+
+	// Concurrent path: BatchPreviousOutputsDecorate fans per-tx calls out via
+	// errgroup, so drain mode here causes many small dispatches instead of one
+	// wide one. Functionally the result must still be identical.
+	newChild := func(vout1, vout2 uint32) *bt.Tx {
+		child := &bt.Tx{}
+		addInput(child, vout1)
+		addInput(child, vout2)
+		return child
+	}
+
+	child1 := newChild(0, 4)
+	child2 := newChild(1, 2)
+	child3 := newChild(3, 0)
+
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{child1, child2, child3}))
+
+	for _, child := range []*bt.Tx{child1, child2, child3} {
+		for i, in := range child.Inputs {
+			require.NotNil(t, in.PreviousTxScript, "input %d not decorated", i)
+			require.Len(t, *in.PreviousTxScript, 25)
+			require.Equal(t, expected[in.PreviousTxOutIndex], in.PreviousTxSatoshis,
+				"wrong satoshis for vout %d", in.PreviousTxOutIndex)
+		}
+	}
+}
+
 func TestAerospikeWithBatchSize(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 

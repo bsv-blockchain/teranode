@@ -94,6 +94,12 @@ service BlockchainAPI {
   // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
 
+  // GetOffChainBlockIDs returns the complete set of block IDs known NOT to be
+  // on the current main chain (the in-memory off-chain set). Lets callers
+  // prefetch the negative set once and answer main-chain membership locally,
+  // instead of issuing one CheckBlockIsInCurrentChain RPC per candidate set.
+  rpc GetOffChainBlockIDs(google.protobuf.Empty) returns (GetOffChainBlockIDsResponse) {}
+
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
 
@@ -416,6 +422,13 @@ message FindBlocksContainingSubtreeResponse {
 // GetBlockHeaderIDsResponse contains block header identifiers.
 message GetBlockHeaderIDsResponse {
   repeated uint32 ids = 1;  // List of block header IDs
+}
+
+// GetOffChainBlockIDsResponse contains the in-memory off-chain (forked) block ID set.
+message GetOffChainBlockIDsResponse {
+  repeated uint32 off_chain_block_ids = 1;  // Block IDs known NOT to be on the main chain
+  bool rebuilding = 2;                       // True when the set is stale (reorg/startup); callers must fall back to per-set checks
+  uint32 max_block_id = 3;                   // Highest known block ID; IDs above this cannot be on the main chain (mirrors CheckBlockIsInCurrentChain's guard)
 }
 
 // GetMedianTimeResponse contains block timestamp information.

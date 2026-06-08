@@ -64,6 +64,17 @@ message ValidateTransactionRequest {
   optional bool skip_txmeta_publishing = 7; // Skip publishing txmeta to Kafka
   optional uint32 candidate_block_time = 8; // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
   optional uint32 candidate_parent_median_time = 9; // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. REQUIRED on every post-CSV consensus request — selectFinalityComparisonTime returns a ProcessingError when this field is missing. The server provides no tip-MTP soft-fall because blockState.MedianTime is updated asynchronously from blockchain notifications and would race with tip advance / reorg during validation.
+  repeated ParentTxMetadata parent_metadata = 10; // Per in-block parent metadata: parent tx hash + block height (the candidate block height at the time the metadata was built). Empty when not running in block-validation context. The validator consults this map BEFORE the UTXO store fallback: when a parent appears here, the height is set from this entry and the UTXO-store BlockHeights branch is bypassed — this is what prevents the unconfirmedParentHeight sentinel from clobbering a legitimate in-block parent. Senders pass only the entries the current tx's inputs reference (per-tx filtering), not the full block-scoped accumulator.
+}
+
+// ParentTxMetadata carries the (parent hash, block height) pair used by the
+// validator's in-block-parent height-resolution path. parent_hash is the
+// chainhash.Hash internal byte order (32 bytes), passed as-is — no hex
+// encoding, no display-order conversion. Internal-order bytes round-trip
+// directly between client and server with no encoding step.
+message ParentTxMetadata {
+  bytes parent_hash = 1;     // chainhash.Hash internal byte order (32 bytes).
+  uint32 block_height = 2;   // Block height stamped at metadata-build time.
 }
 
 // ValidateTransactionResponse provides transaction validation results

@@ -32,7 +32,9 @@ env:
 jobs:
   sonarqube:
     name: SonarQube Analysis
-    runs-on: teranode-runner-4-core
+    # arm64-safe: only downloads coverage artifacts + runs the sonar scanner CLI
+    # (arm64-available); no Go build, no containers.
+    runs-on: teranode-runner-4-core-arm
     # Only run if:
     # 1. The triggering workflow succeeded (ensures all artifacts were generated)
     # 2. It was triggered by a pull_request event (not push to main)

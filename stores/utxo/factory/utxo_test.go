@@ -29,6 +29,11 @@ func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+func (m *MockUTXOStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockUTXOStore) SetBlockHeight(height uint32) error {
 	args := m.Called(height)
 	return args.Error(0)

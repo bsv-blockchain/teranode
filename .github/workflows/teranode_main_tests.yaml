@@ -19,7 +19,9 @@ permissions:
 jobs:
   go-test:
     name: Go test
-    runs-on: teranode-runner-16-core
+    # ARM runner (see teranode_pr_tests.yaml): more headroom for the heavy
+    # `make test` -race+coverage compile; runs natively on arm64.
+    runs-on: teranode-runner-16-core-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -36,17 +38,25 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # Authoritative cache saver: the only job that WRITES the Go caches, and
+      # it runs on the default branch — so every PR job can read them back.
+      - name: Restore and save Go caches
+        uses: ./.github/actions/go-cache
         with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+          # Save only on the default branch. GitHub scopes caches by branch, so
+          # only main's cache is readable by every PR. staging/release/tag builds
+          # restore but don't write, leaving the 10 GB repo budget to main.
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run Go tests
         run: make test
         continue-on-error: false
+
+      # Drop build-cache objects unused for 90+ min before the post-job save,
+      # keeping the uploaded tarball under the 10 GB repo cache cap.
+      - name: Trim Go build cache
+        if: always()
+        run: find ~/.cache/go-build -type f -mmin +90 -delete 2>/dev/null || true
 
       - name: Upload coverage report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -76,13 +86,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run Smoke tests
         run: make smoketest
@@ -100,7 +105,8 @@ jobs:
 
   prunertest:
     name: prunertest
-    runs-on: teranode-runner-8-core
+    # arm64: aerospike (8.1, arm64), no SV-node (see teranode_pr_smoketests.yaml).
+    runs-on: teranode-runner-8-core-arm
     continue-on-error: true
     steps:
       - name: Login to Docker Hub
@@ -118,13 +124,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run Pruner tests
         run: make prunertest
@@ -166,13 +167,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
-      - name: Restore Go module cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # golangci typechecks (no -race) and Sonar reads prebuilt reports, so
+      # restore the module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
         with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            gomod-${{ runner.os }}-
+          build_cache: 'false'
 
       # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint

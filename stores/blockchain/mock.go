@@ -45,6 +45,9 @@ type MockStore struct {
 	BlockIsMined map[chainhash.Hash]bool
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
+	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
+	// return ok=false so callers exercise the per-height walk fallback (test hook).
+	MainChainFastPathDisabled bool
 	// mu provides thread-safe access to all MockStore fields
 	mu sync.RWMutex
 }
@@ -203,6 +206,38 @@ func (m *MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint
 	}
 
 	return block, false, nil
+}
+
+// MainChainBlockHashesByHeights returns the hash of the block at each requested
+// height from the height index. Returns ok=false when disabled, when inputs are
+// empty, or when any height is missing or above the start block's own height,
+// mirroring the SQL store's fallback contract.
+func (m *MockStore) MainChainBlockHashesByHeights(ctx context.Context, startHash *chainhash.Hash, heights []uint32) (map[uint32]*chainhash.Hash, bool, error) {
+	if m.MainChainFastPathDisabled || startHash == nil || len(heights) == 0 {
+		return nil, false, nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	startBlock, ok := m.Blocks[*startHash]
+	if !ok {
+		return nil, false, nil
+	}
+	startHeight := startBlock.Height
+
+	result := make(map[uint32]*chainhash.Hash, len(heights))
+
+	for _, h := range heights {
+		block, ok := m.BlockByHeight[h]
+		if !ok || h > startHeight {
+			return nil, false, nil
+		}
+
+		result[h] = block.Hash()
+	}
+
+	return result, true, nil
 }
 
 func (m *MockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
@@ -690,6 +725,10 @@ func (m *MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*f
 
 func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return true, nil
+}
+
+func (m *MockStore) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	return nil, 0, true, nil
 }
 
 func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {

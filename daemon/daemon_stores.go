@@ -546,6 +546,12 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 // Cleanup resets all singleton stores. This is particularly important for tests
 // where stores may persist between test runs.
 func (d *Stores) Cleanup() {
+	// closeStores (the daemon's deferred shutdown drain) reads these store
+	// pointers under globalStoreMutex.RLock and can run concurrently with test
+	// teardown, which calls Cleanup. Take the write lock so the two are
+	// synchronised — otherwise the -race detector flags a read/write data race
+	// on the store fields during daemon shutdown.
+	globalStoreMutex.Lock()
 	d.mainBlockPersisterStore = nil
 	d.mainBlockStore = nil
 	d.mainBlockValidationClient = nil
@@ -557,6 +563,7 @@ func (d *Stores) Cleanup() {
 	d.mainValidatorClient = nil
 	d.mainP2PClient = nil
 	d.mainPeerRegistryClient = nil
+	globalStoreMutex.Unlock()
 
 	// Reset the Aerospike cleanup service singleton if it exists
 	// This prevents state leakage between test runs

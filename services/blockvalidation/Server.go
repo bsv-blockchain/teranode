@@ -498,6 +498,16 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 	return resp, nil
 }
 
+// isUnvalidatablePeerError reports whether err means the peer served a block that is
+// genuinely invalid (a consensus failure), which justifies giving up on alternative
+// sources and flagging the peer. Transient catchup-state errors (ErrTxMissingParent /
+// ErrTxNotFound / ErrBlockIncomplete) are deliberately excluded: they mean our store
+// hasn't caught up yet, not that the peer is faulty, so they must fall through to
+// alternative-peer retry. See issue #1031.
+func isUnvalidatablePeerError(err error) bool {
+	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
+}
+
 // Init initializes the block validation server with required dependencies and services.
 // It establishes connections to subtree validation services, configures UTXO store access,
 // and starts background processing components. This method must be called before Start().
@@ -638,14 +648,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						// Block is expected to be added to the block store as invalid somewhere else
 						// Note: ErrBlockIncomplete intentionally falls through to retry with alternative peers,
 						// since incomplete blocks (e.g. from seeded peers) may be available from other peers
-						if errors.Is(err, errors.ErrBlockInvalid) ||
-							errors.Is(err, errors.ErrTxMissingParent) ||
-							errors.Is(err, errors.ErrTxNotFound) ||
-							errors.Is(err, errors.ErrTxInvalid) {
+						if isUnvalidatablePeerError(err) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
 
-							// Mark peer as malicious for providing unvalidatable block
-							// All these errors indicate the peer is sending blocks we can't validate
+							// Mark peer as malicious only for a genuinely invalid (consensus-failing)
+							// block. Transient catchup-state errors fall through to alternative-peer
+							// retry, same as ErrBlockIncomplete. See issue #1031.
 							u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
 
 							// Clean up the processing notification for this block
@@ -1322,6 +1330,11 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
 	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
 	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+		// Transient catchup-state (e.g. parent tx not yet in our store) must not be
+		// reported as a consensus failure to the caller. See issue #1031.
+		if errors.Is(err, errors.ErrBlockIncomplete) {
+			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
+		}
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 

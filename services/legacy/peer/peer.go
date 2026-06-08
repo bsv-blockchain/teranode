@@ -76,6 +76,27 @@ const (
 	// wait for a block message to be received after sending a getdata
 	// message.
 	stallResponseTimeoutBlocks = 5 * time.Minute
+
+	// minBlockDownloadBytesPerSec is the association-wide read throughput, in
+	// bytes/sec, above which a pending block response is considered to be
+	// actively downloading rather than stalled. A multi-GB block can take
+	// longer than stallResponseTimeoutBlocks to arrive; while bytes keep
+	// flowing this fast its deadline is extended instead of disconnecting a
+	// peer that is making real progress. Mirrors the netsync default
+	// minSyncPeerNetworkSpeed (50 KiB/s) — comfortably above ping/inv chatter,
+	// far below real block-transfer rates.
+	minBlockDownloadBytesPerSec = 51200
+
+	// MaxBlockDownloadTime is the absolute wall-clock ceiling on how long a
+	// single block fetch may be kept alive by throughput-based deadline
+	// extension. Without a cap, a malicious peer could dribble bytes at just
+	// above minBlockDownloadBytesPerSec indefinitely — never completing a valid
+	// block — and hold the single sync-peer slot, stalling IBD. Past this cap
+	// the block deadline is enforced (and, in netsync, the sync peer rotated)
+	// regardless of throughput. Generous for honest fat blocks: a 4 GB block
+	// need only average ~2.3 MB/s to finish inside the window. Shared with the
+	// netsync sync-peer rotation cap so both layers agree.
+	MaxBlockDownloadTime = 30 * time.Minute
 )
 
 var (
@@ -463,11 +484,16 @@ type HostToNetAddrFunc func(host string, port uint16,
 type Peer struct {
 	// The following variables must only be used atomically.
 	bytesReceived uint64
-	bytesSent     uint64
-	lastRecv      int64
-	lastSend      int64
-	connected     int32
-	disconnect    int32
+	// readBytes counts bytes read off the wire at byte granularity (updated per
+	// underlying conn Read, not only on whole-message completion). It is the
+	// progress signal used to detect an actively-streaming large block; see
+	// activityConn.
+	readBytes  uint64
+	bytesSent  uint64
+	lastRecv   int64
+	lastSend   int64
+	connected  int32
+	disconnect int32
 
 	conn net.Conn
 
@@ -881,6 +907,27 @@ func (p *Peer) BytesSent() uint64 {
 // This function is safe for concurrent access.
 func (p *Peer) BytesReceived() uint64 {
 	return atomic.LoadUint64(&p.bytesReceived)
+}
+
+// ReadBytes returns the number of bytes read off the wire at byte granularity.
+// Unlike BytesReceived (updated per completed message) this advances while a
+// large message is still streaming in, so it can distinguish an actively
+// downloading peer from a stalled one.
+//
+// This function is safe for concurrent access.
+func (p *Peer) ReadBytes() uint64 {
+	return atomic.LoadUint64(&p.readBytes)
+}
+
+// AssociationReadBytes returns the byte-granular read total across all streams
+// of the peer's association, or just this peer's own count when it is not part
+// of a multistream association.
+func (p *Peer) AssociationReadBytes() uint64 {
+	if assoc := p.AssociationRef(); assoc != nil {
+		return assoc.ReadBytes()
+	}
+
+	return p.ReadBytes()
 }
 
 // TimeConnected returns the time at which the peer connected.
@@ -1405,6 +1452,187 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 	}
 }
 
+// signalReceived notifies stall handlers that a response message arrived so the
+// matching pending-response deadline can be cleared.
+//
+// Under a multistream association (e.g. BlockPriority) a request and its
+// response travel on different streams: teranode sends getheaders/getdata on
+// the GENERAL stream — which arms the response deadline on the GENERAL stream's
+// peer — while the svnode delivers the headers/block reply on DATA1, a separate
+// Peer with its own stall handler. Clearing only the receiving peer's deadline
+// leaves the GENERAL peer's deadline armed forever, so it eventually
+// false-disconnects with a spurious "<cmd> timeout" (observed live: a 90s
+// "headers timeout" while a fat block was legitimately downloading on DATA1).
+// Fan the clear signal out to every stream peer in the association so the
+// deadline clears regardless of which stream delivered the response. Peers that
+// are not part of an association notify only themselves, preserving the
+// original single-stream behaviour. Each send is guarded by the target peer's
+// quit channel so a stream that is tearing down cannot block the reader.
+//
+// Note: the (buffered-1) sends lightly couple the receiving stream's inHandler
+// to each sibling stall handler's scheduling. There is no deadlock risk — stall
+// handlers never send back on these channels — at most a brief wait for a
+// sibling handler to drain one message.
+func (p *Peer) signalReceived(rmsg wire.Message) {
+	msg := stallControlMsg{sccReceiveMessage, rmsg}
+
+	notify := func(sp *Peer) {
+		select {
+		case sp.stallControl <- msg:
+		case <-sp.quit:
+		}
+	}
+
+	// Always notify self first, even if this peer is mid-teardown and no longer
+	// present in the association's stream set (RemoveStream); its own deadlines
+	// must still clear.
+	notify(p)
+
+	assoc := p.AssociationRef()
+	if assoc == nil {
+		return
+	}
+
+	// Fan out to the sibling streams so a response delivered on one stream
+	// clears the deadline armed on another.
+	for _, sp := range assoc.StreamPeers() {
+		if sp == nil || sp == p {
+			continue
+		}
+
+		notify(sp)
+	}
+}
+
+// isBlockResponseCommand reports whether cmd is one of the responses expected
+// after a getdata for a block. These can take minutes to arrive for multi-GB
+// blocks.
+func isBlockResponseCommand(cmd string) bool {
+	switch cmd {
+	case wire.CmdBlock, wire.CmdMerkleBlock, wire.CmdTx, wire.CmdNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+// blockResponsePending reports whether a block-family response is currently
+// awaited.
+func blockResponsePending(pending map[string]time.Time) bool {
+	for cmd := range pending {
+		if isBlockResponseCommand(cmd) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldExtendBlockDeadline reports whether an expired block-response deadline
+// should be extended (because the block is still actively arriving) rather than
+// treated as a stall. Extension is allowed only while throughput is healthy AND
+// the fetch has been in flight for less than MaxBlockDownloadTime — the
+// wall-clock cap that stops a peer dribbling bytes forever from holding the
+// sync slot indefinitely. blockFetchStart is the zero value when no block fetch
+// is in flight.
+func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchStart, now time.Time) bool {
+	if !isBlockResponseCommand(command) || !healthyDownload {
+		return false
+	}
+
+	if blockFetchStart.IsZero() {
+		return false
+	}
+
+	return now.Sub(blockFetchStart) < MaxBlockDownloadTime
+}
+
+// responseStallBudget returns the deadline allowance a pending response of the
+// given command is granted, mirroring maybeAddDeadline. It is used to restore a
+// response's full budget when deadlines are refreshed after a block fetch
+// completes, so e.g. a queued headers reply keeps its 90s allowance rather than
+// being cut to the 30s base. CmdInv maps to the longer block budget since the
+// only inv worth refreshing here follows a getblocks; that is conservative
+// (never shorter) for the rare mempool-inv case.
+func responseStallBudget(cmd string) time.Duration {
+	switch cmd {
+	case wire.CmdHeaders:
+		// Headers can take a while for the remote peer to load.
+		return stallResponseTimeout * 3
+	case wire.CmdBlock, wire.CmdMerkleBlock, wire.CmdTx, wire.CmdNotFound, wire.CmdInv:
+		return stallResponseTimeoutBlocks
+	default:
+		return stallResponseTimeout
+	}
+}
+
+// expiredStallResponse returns the pending-response command whose deadline has
+// passed and that should cause the peer to be disconnected for stalling, or
+// ("", false) if no disconnect is warranted.
+//
+// While a block-family response is still pending, deadlines for non-block
+// responses (e.g. headers, inv) are NOT treated as stalls. A multi-GB block can
+// take minutes to download and, under the BlockPriority stream policy, blocks
+// and headers share the DATA1 stream — a follow-on getheaders reply is
+// head-of-line blocked behind the in-flight block, so its shorter (90s)
+// deadline would otherwise fire mid-download and disconnect a perfectly healthy
+// sync peer. Liveness during a block fetch is gated instead by the block's own
+// (much longer) deadline.
+func expiredStallResponse(pending map[string]time.Time, now time.Time, offset time.Duration) (string, bool) {
+	blockPending := blockResponsePending(pending)
+
+	for command, deadline := range pending {
+		if now.Before(deadline.Add(offset)) {
+			continue
+		}
+
+		// Suppress non-block stalls while a block is legitimately in flight.
+		if blockPending && !isBlockResponseCommand(command) {
+			continue
+		}
+
+		return command, true
+	}
+
+	return "", false
+}
+
+// clearBlockResponseGroup removes the getdata response group (block,
+// merkleblock, tx, notfound) from pending and reports whether any of them was
+// actually awaited. When one was — i.e. a block fetch genuinely completed — the
+// remaining deadlines are refreshed (extend-only) to their full per-command
+// budget so a response that was head-of-line blocked behind the block on a
+// shared stream is not judged stalled the instant the block stops suppressing
+// it (see expiredStallResponse).
+//
+// The refresh is gated on a block having actually been pending: an unsolicited
+// relayed tx (a CmdTx that was not a response to our getdata) clears the group
+// as before but must NOT refresh other deadlines, otherwise ambient tx traffic
+// would perpetually defer a genuinely stalled getheaders.
+func clearBlockResponseGroup(pending map[string]time.Time, now time.Time) bool {
+	blockWasPending := false
+
+	for _, cmd := range []string{wire.CmdBlock, wire.CmdMerkleBlock, wire.CmdTx, wire.CmdNotFound} {
+		if _, ok := pending[cmd]; ok {
+			blockWasPending = true
+		}
+
+		delete(pending, cmd)
+	}
+
+	if !blockWasPending {
+		return false
+	}
+
+	for cmd, deadline := range pending {
+		if refreshed := now.Add(responseStallBudget(cmd)); refreshed.After(deadline) {
+			pending[cmd] = refreshed
+		}
+	}
+
+	return true
+}
+
 // stallHandler handles stall detection for the peer.  This entails keeping
 // track of expected responses and assigning them deadlines while accounting for
 // the time spent in callbacks.  It must be run as a goroutine.
@@ -1432,6 +1660,15 @@ func (p *Peer) stallHandler() {
 	// ioStopped is used to detect when both the input and output handler
 	// goroutines are done.
 	var ioStopped bool
+
+	// lastAssocReadBytes samples association-wide read progress between ticks so
+	// an actively-downloading block can be told apart from a stalled peer.
+	lastAssocReadBytes := p.AssociationReadBytes()
+
+	// blockFetchStart records when the current block fetch first went in flight.
+	// It bounds how long throughput-based extension can keep a block alive
+	// (MaxBlockDownloadTime); zero when no block fetch is outstanding.
+	var blockFetchStart time.Time
 out:
 	for {
 		select {
@@ -1441,6 +1678,12 @@ out:
 				// Add a deadline for the expected response
 				// message if needed.
 				p.maybeAddDeadline(pendingResponses, msg.message.Command())
+
+				// Start the block-fetch wall-clock window when a block first
+				// goes in flight, so throughput-based extension is bounded.
+				if blockFetchStart.IsZero() && blockResponsePending(pendingResponses) {
+					blockFetchStart = time.Now()
+				}
 
 			case sccReceiveMessage:
 				// Remove received messages from the expected
@@ -1455,10 +1698,11 @@ out:
 				case wire.CmdTx:
 					fallthrough
 				case wire.CmdNotFound:
-					delete(pendingResponses, wire.CmdBlock)
-					delete(pendingResponses, wire.CmdMerkleBlock)
-					delete(pendingResponses, wire.CmdTx)
-					delete(pendingResponses, wire.CmdNotFound)
+					// If a block fetch actually completed, close its wall-clock
+					// window so the next fetch starts a fresh one.
+					if clearBlockResponseGroup(pendingResponses, time.Now()) {
+						blockFetchStart = time.Time{}
+					}
 				default:
 					delete(pendingResponses, msgCmd)
 				}
@@ -1505,16 +1749,48 @@ out:
 				offset += now.Sub(handlersStartTime)
 			}
 
-			// Disconnect the peer if any of the pending responses
-			// don't arrive by their adjusted deadline.
-			for command, deadline := range pendingResponses {
-				if now.Before(deadline.Add(offset)) {
-					continue
-				}
+			// Sample association-wide read throughput since the last tick. A
+			// multi-GB block streams in on the DATA1 stream, so the GENERAL
+			// peer (which armed the block deadline) sees no whole-message
+			// receipt — but readBytes advances byte-by-byte across the
+			// association, revealing an active download.
+			curAssocReadBytes := p.AssociationReadBytes()
 
-				reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
-				p.DisconnectWithInfo(reason)
-				break
+			// AssociationReadBytes sums over the streams present at sample time;
+			// if a stream was removed between ticks the sum drops. Guard the
+			// unsigned subtraction so a decrease reads as zero progress (not a
+			// wrapped-around "healthy" value) — a dying stream must not extend a
+			// block deadline.
+			var recvDelta uint64
+			if curAssocReadBytes >= lastAssocReadBytes {
+				recvDelta = curAssocReadBytes - lastAssocReadBytes
+			}
+
+			lastAssocReadBytes = curAssocReadBytes
+			healthyDownload := recvDelta/uint64(stallTickInterval.Seconds()) >= minBlockDownloadBytesPerSec
+
+			// Disconnect the peer if a pending response has not arrived by
+			// its adjusted deadline. While a block fetch is in flight,
+			// non-block deadlines are suppressed (see expiredStallResponse).
+			if command, stalled := expiredStallResponse(pendingResponses, now, offset); stalled {
+				if shouldExtendBlockDeadline(command, healthyDownload, blockFetchStart, now) {
+					// The block is still actively arriving at a healthy rate and
+					// within the wall-clock cap; extend the whole block-response
+					// group (armed together) rather than disconnect a peer
+					// making real progress on a large (multi-GB) block.
+					refreshed := now.Add(stallResponseTimeoutBlocks)
+					for cmd := range pendingResponses {
+						if isBlockResponseCommand(cmd) {
+							pendingResponses[cmd] = refreshed
+						}
+					}
+
+					p.logger.Debugf("Extending block deadline for %s: downloading at %d B/s (%.0fs into fetch, cap %s)",
+						p, recvDelta/uint64(stallTickInterval.Seconds()), now.Sub(blockFetchStart).Seconds(), MaxBlockDownloadTime)
+				} else {
+					reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
+					p.DisconnectWithInfo(reason)
+				}
 			}
 
 			// Reset the deadline offset for the next tick.
@@ -1658,7 +1934,7 @@ out:
 		processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
 
 		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
-		p.stallControl <- stallControlMsg{sccReceiveMessage, rmsg}
+		p.signalReceived(rmsg)
 
 		// Handle each supported message type.
 		p.stallControl <- stallControlMsg{sccHandlerStart, rmsg}
@@ -2550,6 +2826,27 @@ func (p *Peer) sendVerack() error {
 	return nil
 }
 
+// activityConn wraps a net.Conn to record byte-level read progress. Each
+// successful Read advances the peer's byte-granular readBytes counter and
+// refreshes lastRecv, so progress/liveness checks reflect a large message
+// (e.g. a multi-GB block) that is actively streaming in but has not yet
+// completed — not just whole-message receipts. Only Read is overridden; all
+// other net.Conn methods delegate to the embedded conn.
+type activityConn struct {
+	net.Conn
+	peer *Peer
+}
+
+func (c *activityConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		atomic.AddUint64(&c.peer.readBytes, uint64(n))
+		atomic.StoreInt64(&c.peer.lastRecv, time.Now().Unix())
+	}
+
+	return n, err
+}
+
 // AssociateConnection associates the given conn to the peer.   Calling this
 // function when the peer is already connected will have no effect.
 func (p *Peer) AssociateConnection(conn net.Conn) {
@@ -2558,7 +2855,9 @@ func (p *Peer) AssociateConnection(conn net.Conn) {
 		return
 	}
 
-	p.conn = conn
+	// Wrap the connection so reads advance the byte-granular progress counters
+	// even while a single large message (a fat block) is still streaming in.
+	p.conn = &activityConn{Conn: conn, peer: p}
 	p.timeConnected = time.Now()
 
 	if p.inbound {
