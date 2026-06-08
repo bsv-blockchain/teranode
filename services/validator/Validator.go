@@ -517,6 +517,16 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 		return
 	}
 
+	// Skip oversized transactions before serializing (tx.Size() is computed, not
+	// allocated): the broker rejects messages over message.max.bytes, and consumers
+	// skip txs over maxCachedTxBytes anyway. Skipping is lossless — subtree validation
+	// falls back to the HTTP fetch path on a cache miss. Same pattern as propagation's
+	// large-tx HTTP fallback (see PropagationServer.ProcessTransaction).
+	if maxBytes := v.settings.Validator.KafkaMaxMessageBytes; maxBytes > 0 && tx.Size() > maxBytes {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] skipping tx %s: size %d exceeds validator_kafka_maxMessageBytes %d", tx.TxIDChainHash().String(), tx.Size(), maxBytes)
+		return
+	}
+
 	txHash := tx.TxIDChainHash()
 
 	m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{

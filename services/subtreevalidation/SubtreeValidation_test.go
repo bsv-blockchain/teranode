@@ -318,7 +318,7 @@ func TestValidateSubtreeInternal_RetryBackoffAndMetrics(t *testing.T) {
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	retryCounterStart := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry)

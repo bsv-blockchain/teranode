@@ -331,7 +331,7 @@ func TestValidator_ValidateTransactionScripts_NotExtended(t *testing.T) {
 	v := validator.(*Validator)
 	options := &Options{}
 
-	err = v.validateTransactionScripts(ctx, tx, 100, []uint32{99}, options)
+	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
 	// Should error trying to extend transaction since parent doesn't exist
 	assert.Error(t, err)
 }

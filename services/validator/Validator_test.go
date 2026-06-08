@@ -364,7 +364,7 @@ func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing
 	)
 	require.NotEqual(t, txA.TxID(), txB.TxID())
 
-	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, server.Init(ctx))
 
 	createConflicting := true
