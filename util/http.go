@@ -16,15 +16,15 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// ssrfSafeDialer wraps the default dialer and rejects connections to private/loopback IPs
-// after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal check
-// in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
-// hostname resolves to 10.x or 127.x only at dial time.
+// ssrfSafeDialer wraps the default dialer and rejects connections to link-local/loopback
+// IPs after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal
+// check in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
+// hostname resolves to 169.254.169.254 (the cloud metadata endpoint) only at dial time.
 //
-// Loopback and RFC1918 ranges are intentionally blocked here because the dialer-level check
-// is specifically for hostnames that resolve to private IPs (SSRF via DNS). The static
-// ValidateURL check still allows explicit private-IP literals for backwards compatibility
-// with direct peer-IP URLs; if that policy changes, update isBlockedIP.
+// Only link-local and loopback are blocked — see isBlockedDialIP for the rationale. RFC1918
+// ranges are deliberately allowed because teranode peers, k8s pods, and private miner
+// interconnects all communicate over private networks in real deployments; this matches the
+// static ValidateURL/isBlockedIP policy.
 var ssrfSafeDialer = &net.Dialer{
 	Timeout:   30 * time.Second,
 	KeepAlive: 30 * time.Second,
@@ -36,17 +36,17 @@ var ssrfSafeDialer = &net.Dialer{
 var ssrfLookupHost = net.DefaultResolver.LookupHost
 
 // ssrfDialContext wraps ssrfSafeDialer.DialContext and rejects resolved addresses that
-// fall into loopback or RFC1918 ranges. It is installed as the Transport.DialContext for
-// httpClient so that every outgoing connection is checked, including those that follow
-// HTTP redirects.
+// fall into link-local or loopback ranges (see isBlockedDialIP). It is installed as the
+// Transport.DialContext for httpClient so that every outgoing connection is checked,
+// including those that follow HTTP redirects.
 //
 // Critically, after validating the resolved addresses we dial those exact IPs rather than
 // the hostname. Dialing by hostname would let net.Dialer perform a SECOND, independent DNS
 // resolution at connect time — the classic DNS-rebinding TOCTOU bypass: a peer-controlled
 // authoritative server with TTL=0 can return a public IP for our validation lookup and
-// 127.0.0.1 / 10.x for the dialer's lookup. Connecting to the already-validated IP closes
-// that window. (The Transport still derives the TLS ServerName and Host header from the
-// original URL, so dialing by IP does not break virtual hosting or HTTPS.)
+// 169.254.169.254 / 127.0.0.1 for the dialer's lookup. Connecting to the already-validated
+// IP closes that window. (The Transport still derives the TLS ServerName and Host header
+// from the original URL, so dialing by IP does not break virtual hosting or HTTPS.)
 func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	if !ssrfProtectionEnabled.Load() {
 		return ssrfSafeDialer.DialContext(ctx, network, addr)
@@ -95,44 +95,24 @@ func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	return nil, lastErr
 }
 
-// blockedDialCIDRs are the private/internal IP ranges a peer-supplied hostname must never
-// resolve to. Parsed once at package load because ssrfDialContext is on the hot path
-// (128+ concurrent fetches per peer during catchup); re-parsing on every dial was wasteful.
-var blockedDialCIDRs = func() []*net.IPNet {
-	ranges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"fc00::/7",  // IPv6 unique-local
-		"fe80::/10", // IPv6 link-local
-	}
-	nets := make([]*net.IPNet, 0, len(ranges))
-	for _, cidrStr := range ranges {
-		_, cidr, err := net.ParseCIDR(cidrStr)
-		if err != nil {
-			continue
-		}
-		nets = append(nets, cidr)
-	}
-	return nets
-}()
-
 // isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
-// came from a peer-controlled URL. Unlike isBlockedIP (which only guards link-local for
-// the static ValidateURL pre-check), this also blocks loopback and RFC1918 ranges because
-// a peer should never be able to make us dial cluster-internal services.
+// came from a peer-controlled URL, evaluated after DNS resolution to close the
+// DNS-rebinding gap that the static ValidateURL pre-check cannot cover.
+//
+// It blocks only:
+//   - link-local (169.254.0.0/16, fe80::/10) — the real SSRF target, since the cloud
+//     metadata endpoint 169.254.169.254 lives here;
+//   - loopback (127.0.0.0/8, ::1) — a peer should never make us dial our own localhost
+//     admin/RPC services, and no legitimate peer advertises a loopback fetch source;
+//   - unspecified (0.0.0.0, ::).
+//
+// RFC1918 ranges (10/8, 172.16/12, 192.168/16) and IPv6 ULA (fc00::/7) are intentionally
+// NOT blocked: teranode peers, k8s pods, and privately-routed miner interconnects all
+// communicate over private networks in real deployments. Blocking them here would reject
+// legitimate peer traffic and contradicts isBlockedIP, which allows the same ranges for
+// the static ValidateURL check.
 func isBlockedDialIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-
-	for _, cidr := range blockedDialCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 var (

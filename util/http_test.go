@@ -914,18 +914,15 @@ func TestValidateURL_RejectsUserinfo(t *testing.T) {
 
 func TestIsBlockedDialIP(t *testing.T) {
 	// isBlockedDialIP is a pure function; no SSRF toggle needed.
+	// Only link-local (incl. the metadata endpoint), loopback and unspecified are blocked.
 	blocked := []string{
 		"127.0.0.1",
 		"::1",
-		"10.0.0.1",
-		"10.255.255.255",
-		"172.16.0.1",
-		"172.31.255.255",
-		"192.168.0.1",
-		"192.168.255.255",
 		"169.254.1.1",
-		"fc00::1",
+		"169.254.169.254", // cloud metadata endpoint
 		"fe80::1",
+		"0.0.0.0",
+		"::",
 	}
 	for _, ipStr := range blocked {
 		t.Run("blocked_"+ipStr, func(t *testing.T) {
@@ -935,11 +932,20 @@ func TestIsBlockedDialIP(t *testing.T) {
 		})
 	}
 
+	// RFC1918 / ULA ranges are intentionally allowed: teranode peers, k8s pods and
+	// private miner interconnects all live on private networks.
 	allowed := []string{
 		"8.8.8.8",
 		"1.1.1.1",
 		"203.0.113.1",
 		"2001:db8::1",
+		"10.0.0.1",
+		"10.255.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"fc00::1",
 	}
 	for _, ipStr := range allowed {
 		t.Run("allowed_"+ipStr, func(t *testing.T) {
@@ -998,16 +1004,17 @@ func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
 	assert.Contains(t, err.Error(), "blocked IP")
 }
 
-// TestSSRFDialContext_RejectsMixedPublicPrivate ensures a resolver answer mixing a public
-// and a private address is rejected outright, so failover cannot smuggle in the internal IP.
-func TestSSRFDialContext_RejectsMixedPublicPrivate(t *testing.T) {
+// TestSSRFDialContext_RejectsMixedPublicBlocked ensures a resolver answer mixing a public
+// and a blocked (link-local metadata) address is rejected outright, so failover cannot
+// smuggle in the internal IP.
+func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
 	SetSSRFProtection(true)
 	defer SetSSRFProtection(false)
 
 	orig := ssrfLookupHost
 	defer func() { ssrfLookupHost = orig }()
 	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
-		return []string{"8.8.8.8", "10.0.0.5"}, nil
+		return []string{"8.8.8.8", "169.254.169.254"}, nil
 	}
 
 	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
