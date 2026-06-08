@@ -34,6 +34,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -54,6 +55,7 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -555,6 +557,12 @@ func TestServer_catchup(t *testing.T) {
 
 		subtreeStore := blobmemory.New()
 
+		testAFCfg := adaptivefetch.DefaultConfig()
+		testAFCfg.BootstrapMode = adaptivefetch.ModePessimistic
+		testAF, err := adaptivefetch.New(testAFCfg, "test", prometheus.NewRegistry())
+		require.NoError(t, err)
+		require.NotNil(t, testAF)
+
 		server := &Server{
 			logger:              logger,
 			settings:            tSettings,
@@ -565,7 +573,9 @@ func TestServer_catchup(t *testing.T) {
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 			headerChainCache:    catchup.NewHeaderChainCache(logger),
 			subtreeStore:        subtreeStore,
+			adaptiveFetch:       testAF,
 		}
+		server.fetchSubtreeDataForBlockFn = server.fetchSubtreeDataForBlock
 
 		// Create a chain of test blocks
 		blocks := testhelpers.CreateTestBlockChain(t, 100)
@@ -1007,6 +1017,9 @@ func Test_Start(t *testing.T) {
 	// Create mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+	// Start launches a best-effort goroutine that waits for FSM RUNNING to arm
+	// the adaptive-fetch gate; stub it (Maybe — it races with shutdown).
+	mockBlockchainClient.On("WaitForFSMtoTransitionToGivenState", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Create mock kafka consumer
 	mockKafkaConsumer := &mockKafkaConsumer{}
@@ -1050,6 +1063,7 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 	// Create mock blockchain client that returns error
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(errors.New(errors.ERR_BLOCK_NOT_FOUND, "FSM not ready"))
+	mockBlockchainClient.On("WaitForFSMtoTransitionToGivenState", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// set the GRPC listen address to a random local port to avoid conflicts during testing
 	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
@@ -1080,6 +1094,7 @@ func Test_Start_FSMContextCancellation(t *testing.T) {
 
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+	mockBlockchainClient.On("WaitForFSMtoTransitionToGivenState", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
 
