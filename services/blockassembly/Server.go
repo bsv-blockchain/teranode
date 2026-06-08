@@ -105,6 +105,12 @@ type BlockAssembly struct {
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
 
+	// blockSubmissionListenerDone is closed when runBlockSubmissionListener
+	// exits (i.e. the service context was cancelled). SubmitMiningSolution
+	// selects on it so queued or in-flight submissions fail fast on shutdown
+	// instead of blocking forever on blockSubmissionChan / responseChan.
+	blockSubmissionListenerDone chan struct{}
+
 	// skipWaitForPendingBlocks stores the flag value for tests
 	skipWaitForPendingBlocks bool
 
@@ -267,9 +273,14 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	}
 
 	// start background processors
+	// Create a fresh done channel per Init so each listener closes the one it
+	// owns; this keeps repeated Init calls (e.g. in tests) from double-closing.
+	listenerDone := make(chan struct{})
+	ba.blockSubmissionListenerDone = listenerDone
+
 	go ba.runSubtreeRetryProcessor(ctx, subtreeRetryChan)
 	go ba.runNewSubtreeListener(ctx, newSubtreeChan, subtreeRetryChan)
-	go ba.runBlockSubmissionListener(ctx)
+	go ba.runBlockSubmissionListener(ctx, listenerDone)
 
 	go func() {
 		for {
@@ -486,7 +497,13 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 
 // runBlockSubmissionListener handles incoming block submission requests.
 // It processes mining solutions and submits validated blocks to the blockchain.
-func (ba *BlockAssembly) runBlockSubmissionListener(ctx context.Context) {
+func (ba *BlockAssembly) runBlockSubmissionListener(ctx context.Context, done chan struct{}) {
+	// Signal SubmitMiningSolution that no further submissions will be processed
+	// once this listener exits, so it can fail fast instead of blocking. Each
+	// listener closes the channel it was given (created per Init) to avoid
+	// double-closing a shared channel across repeated Init calls.
+	defer close(done)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1303,6 +1320,13 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	)
 	defer endSpan()
 
+	// Fail fast if the service has not been initialised yet (Init starts the
+	// block submission listener). Without this, the send below would block on a
+	// channel that has no receiver.
+	if ba.blockAssembler == nil {
+		return nil, errors.WrapGRPC(errors.NewServiceUnavailableError("[SubmitMiningSolution] service not initialised"))
+	}
+
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
@@ -1312,8 +1336,12 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	var responseChan chan error
 
 	if ba.settings.BlockAssembly.SubmitMiningSolutionWaitForResponse {
-		responseChan = make(chan error)
-		defer close(responseChan)
+		// Buffered by 1 so the listener's send never blocks, even if this
+		// handler has already returned (e.g. its context was cancelled). This
+		// keeps a stuck/abandoned caller from backing up the serialized
+		// submission listener. The channel is garbage collected; no close
+		// needed (and closing would risk a send-on-closed panic in the listener).
+		responseChan = make(chan error, 1)
 	}
 
 	// we don't have the processing to handle multiple huge blocks at the same time, so we limit it to 1
@@ -1323,12 +1351,36 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		responseChan:                responseChan,
 	}
 
-	ba.blockSubmissionChan <- request
+	// Context-aware send: block submission is intentionally serialized, so this
+	// can wait while a previous submission is processed. Abandon the send if the
+	// caller's context is cancelled or the listener has stopped, instead of
+	// blocking the gRPC handler indefinitely.
+	select {
+	case ba.blockSubmissionChan <- request:
+	case <-ctx.Done():
+		return nil, errors.WrapGRPC(errors.NewServiceError("[SubmitMiningSolution] context cancelled before queuing submission", ctx.Err()))
+	case <-ba.blockSubmissionListenerDone:
+		return nil, errors.WrapGRPC(errors.NewServiceUnavailableError("[SubmitMiningSolution] block submission listener not running"))
+	}
 
 	var err error
 
 	if ba.settings.BlockAssembly.SubmitMiningSolutionWaitForResponse {
-		err = <-request.responseChan
+		// Context-aware receive: don't block forever if the caller's context is
+		// cancelled or the listener stops (service shutdown) before responding.
+		select {
+		case err = <-request.responseChan:
+		case <-ctx.Done():
+			return nil, errors.WrapGRPC(errors.NewServiceError("[SubmitMiningSolution] context cancelled while waiting for response", ctx.Err()))
+		case <-ba.blockSubmissionListenerDone:
+			// The listener may have delivered the response just before exiting;
+			// the response (buffered) takes precedence over the shutdown signal.
+			select {
+			case err = <-request.responseChan:
+			default:
+				return nil, errors.WrapGRPC(errors.NewServiceUnavailableError("[SubmitMiningSolution] block submission listener stopped before responding"))
+			}
+		}
 	}
 
 	if err != nil {
