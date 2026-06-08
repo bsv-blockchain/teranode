@@ -885,8 +885,8 @@ func TestValidateURL(t *testing.T) {
 
 func TestValidateURL_Disabled(t *testing.T) {
 	// Verify that disabling SSRF protection allows all URLs
-	ssrfProtectionEnabled = false
-	defer func() { ssrfProtectionEnabled = true }()
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(true)
 
 	err := ValidateURL("http://127.0.0.1:8080/path")
 	require.NoError(t, err)
@@ -962,8 +962,8 @@ func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
 }
 
 func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
-	ssrfProtectionEnabled = false
-	defer func() { ssrfProtectionEnabled = true }()
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(true)
 
 	// With protection disabled the dialer should attempt the connection normally.
 	// Use a closed port so we get a connection-refused rather than hanging.
@@ -976,39 +976,43 @@ func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
 	}
 }
 
-func TestHTTPClient_RejectsRedirectToPrivateIP(t *testing.T) {
-	// Inner server sits at 127.0.0.1 and is the redirect target.
-	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("private data"))
-	}))
-	defer inner.Close()
+// TestSSRFDialContext_RejectsDNSRebinding reproduces the DNS-rebinding TOCTOU attack and
+// proves the dial guard blocks it. A peer-controlled name "looks" public but resolves to a
+// private/loopback address; the guard must reject the dial rather than connect to the
+// internal target. We inject the resolver because the real attack relies on a hostile
+// authoritative server we cannot stand up in a unit test.
+func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
 
-	// Outer server redirects to inner.
-	outer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, inner.URL+"/secret", http.StatusFound)
-	}))
-	defer outer.Close()
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// Resolver returns a loopback address for a "public-looking" hostname.
+	ssrfLookupHost = func(_ context.Context, host string) ([]string, error) {
+		require.Equal(t, "evil.example.com", host)
+		return []string{"127.0.0.1"}, nil
+	}
 
-	// Both servers are on loopback; disable SSRF so the outer request succeeds,
-	// but the redirect to the "private" inner server should still be blocked by
-	// ValidateURL inside CheckRedirect once ssrfProtection is re-evaluated there.
-	// In practice the outer request itself would also be blocked, so we need to
-	// disable protection for the outer call and simulate redirect-only rejection.
-	//
-	// Because both test servers are on 127.0.0.1 and ssrfProtectionEnabled governs
-	// all checks, we verify the redirect policy logic directly via CheckRedirect
-	// rather than through a live multi-server flow (which would need DNS tricks).
-	innerURL, err := url.Parse(inner.URL + "/secret")
-	require.NoError(t, err)
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
 
-	redirectReq := &http.Request{URL: innerURL}
-	checkErr := httpClient.CheckRedirect(redirectReq, []*http.Request{{}})
-	// 127.0.0.1 is loopback — isBlockedIP does NOT block loopback in ValidateURL
-	// (only link-local), so the redirect check passes at the ValidateURL level.
-	// The DialContext guard will catch it at connection time instead.
-	// This test just ensures CheckRedirect does not panic and handles the call.
-	_ = checkErr
+// TestSSRFDialContext_RejectsMixedPublicPrivate ensures a resolver answer mixing a public
+// and a private address is rejected outright, so failover cannot smuggle in the internal IP.
+func TestSSRFDialContext_RejectsMixedPublicPrivate(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"8.8.8.8", "10.0.0.5"}, nil
+	}
+
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
 }
 
 func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {

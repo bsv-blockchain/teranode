@@ -1272,6 +1272,13 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		baseURL = "legacy" // default to legacy if not provided
 	}
 
+	// baseURL is peer-supplied; reject obvious SSRF targets early for a clean error.
+	// The "legacy" sentinel is a non-HTTP scheme and passes through. The dial-time guard
+	// in util.ssrfDialContext remains the backstop for DNS-resolved private addresses.
+	if err = util.ValidateURL(baseURL); err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid base URL", err))
+	}
+
 	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
