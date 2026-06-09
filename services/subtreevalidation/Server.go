@@ -15,6 +15,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -32,6 +33,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -130,6 +132,10 @@ type Server struct {
 
 	// quorum manages distributed locking for subtree validation
 	quorum *Quorum
+
+	// adaptiveFetch tracks whether subtreeData downloads should be skipped
+	// when transactions are expected to already be in the local UTXO store via propagation.
+	adaptiveFetch *adaptivefetch.State
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -189,6 +195,42 @@ func New(
 	}
 
 	var err error
+
+	// Initialize adaptive fetch state machine
+	bootstrap, bootstrapErr := adaptivefetch.ParseBootstrapMode(tSettings.AdaptiveFetch.BootstrapMode)
+	if bootstrapErr != nil {
+		// Fall back to pessimistic (always fetch, no auto-transition) rather
+		// than auto — a config typo must not silently enable optimistic mode.
+		logger.Warnf("[SubtreeValidation] unknown adaptive_fetch_bootstrap_mode %q, falling back to pessimistic: %v",
+			tSettings.AdaptiveFetch.BootstrapMode, bootstrapErr)
+		bootstrap = adaptivefetch.ModePessimistic
+	}
+	af, afErr := adaptivefetch.New(adaptivefetch.Config{
+		WindowSize:                tSettings.AdaptiveFetch.WindowSize,
+		PessToOptHitRateThreshold: tSettings.AdaptiveFetch.PessToOptHitRateThreshold,
+		OptToPessMissThreshold:    tSettings.AdaptiveFetch.OptToPessMissThreshold,
+		OptToPessAvgMissThreshold: tSettings.AdaptiveFetch.OptToPessAvgMissThreshold,
+		BootstrapMode:             bootstrap,
+	}, "subtreevalidation", prometheus.DefaultRegisterer)
+	if afErr != nil {
+		// Fall back to hardcoded defaults but force BootstrapMode to
+		// ModePessimistic — a typo in numeric adaptive_fetch_* values
+		// must not silently re-enable optimistic skipping just because
+		// DefaultConfig() ships with ModeAuto for direct package callers.
+		safeFallback := adaptivefetch.DefaultConfig()
+		safeFallback.BootstrapMode = adaptivefetch.ModePessimistic
+		logger.Errorf("[SubtreeValidation] adaptive_fetch config invalid (%v) — using hardcoded defaults pinned to pessimistic", afErr)
+
+		var fallbackErr error
+		if af, fallbackErr = adaptivefetch.New(safeFallback, "subtreevalidation", prometheus.DefaultRegisterer); fallbackErr != nil {
+			// DefaultConfig() always passes validation, so this is unreachable
+			// in practice — but never swallow it. af stays nil; the gate's
+			// nil-receiver methods are safe and behave pessimistically (always
+			// fetch subtreeData), so the service degrades safely.
+			logger.Errorf("[SubtreeValidation] adaptive_fetch fallback construction failed (%v) — adaptive fetch disabled, always fetching subtreeData", fallbackErr)
+		}
+	}
+	u.adaptiveFetch = af
 
 	quorumPath := tSettings.SubtreeValidation.QuorumPath
 	if quorumPath == "" {
@@ -499,6 +541,21 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		u.logger.Errorf("[Subtree Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
+
+	// Arm the adaptive-fetch gate the first time the node reaches RUNNING.
+	// Until then the gate stays pinned pessimistic so a cold-start IBD never
+	// skips subtreeData. Once RUNNING the configured bootstrap behaviour
+	// applies and the latch never re-locks (a later catch-up burst may use
+	// optimistic mode). Best-effort: on shutdown (ctx cancelled) we leave it
+	// pessimistic. FSM knowledge lives here so pkg/adaptivefetch stays FSM-free.
+	go func() {
+		if err := u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING); err != nil {
+			u.logger.Infof("[SubtreeValidation] adaptive-fetch staying pessimistic; FSM did not reach RUNNING: %v", err)
+			return
+		}
+		u.logger.Infof("[SubtreeValidation] FSM reached RUNNING; arming adaptive-fetch (optimism now permitted per bootstrap mode)")
+		u.adaptiveFetch.Arm()
+	}()
 
 	// start kafka consumers
 	u.subtreeConsumerClient.Start(ctx, u.subtreeMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())

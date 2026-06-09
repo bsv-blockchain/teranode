@@ -43,6 +43,9 @@ type MockStore struct {
 	BlockChainWork map[chainhash.Hash][]byte
 	// BlockIsMined maps block hashes to their mined status for mined status checks
 	BlockIsMined map[chainhash.Hash]bool
+	// blockIDReservations holds reserved block IDs for hashes not yet committed,
+	// so that repeated calls to AssignBlockID for the same hash return the same id.
+	blockIDReservations map[chainhash.Hash]uint64
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
@@ -59,12 +62,13 @@ type MockStore struct {
 //   - *MockStore: A new, initialized MockStore instance with empty block maps and IDLE state
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Blocks:         map[chainhash.Hash]*model.Block{},
-		BlockExists:    map[chainhash.Hash]bool{},
-		BlockByHeight:  map[uint32]*model.Block{},
-		BlockChainWork: map[chainhash.Hash][]byte{},
-		BlockIsMined:   map[chainhash.Hash]bool{},
-		state:          "IDLE",
+		Blocks:              map[chainhash.Hash]*model.Block{},
+		BlockExists:         map[chainhash.Hash]bool{},
+		BlockByHeight:       map[uint32]*model.Block{},
+		BlockChainWork:      map[chainhash.Hash][]byte{},
+		BlockIsMined:        map[chainhash.Hash]bool{},
+		blockIDReservations: map[chainhash.Hash]uint64{},
+		state:               "IDLE",
 	}
 }
 
@@ -276,6 +280,46 @@ func (m *MockStore) GetNextBlockID(_ context.Context) (uint64, error) {
 	}
 
 	return maxID + 1, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash: repeated
+// calls for the same hash return the same id, and a committed block returns its
+// authoritative id.
+//
+// Resolution order (mirrors the SQL store contract):
+//  1. If the block is already stored (committed), return its authoritative id.
+//  2. If an id is already reserved for this hash, return it.
+//  3. Otherwise allocate a new id the same way GetNextBlockID does and reserve it.
+func (m *MockStore) AssignBlockID(_ context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 1. Committed block — return its authoritative id.
+	if block, ok := m.Blocks[*blockHash]; ok {
+		return uint64(block.ID), nil
+	}
+
+	// 2. Already reserved — return the same id.
+	if id, ok := m.blockIDReservations[*blockHash]; ok {
+		return id, nil
+	}
+
+	// 3. Allocate a fresh id (same logic as GetNextBlockID) and reserve it.
+	maxID := uint64(0)
+	for _, block := range m.Blocks {
+		if uint64(block.ID) > maxID {
+			maxID = uint64(block.ID)
+		}
+	}
+	for _, reserved := range m.blockIDReservations {
+		if reserved > maxID {
+			maxID = reserved
+		}
+	}
+
+	id := maxID + 1
+	m.blockIDReservations[*blockHash] = id
+	return id, nil
 }
 
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {

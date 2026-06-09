@@ -14,6 +14,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/util"
@@ -208,8 +209,40 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 				return nil
 			}
 
-			// Fetch subtree data for this block
-			contributingPeers, err := u.fetchSubtreeDataForBlock(ctx, work.block, peerID, baseURL)
+			// Fetch subtree data for this block — adaptive-fetch state may skip it
+			// entirely when the node is receiving txs via a distributor.
+			//
+			// What the skip actually costs: this fetch is only a prewarm. It
+			// pulls subtreeData ahead of time so the later block-validation step
+			// finds everything already in the store. Skipping it does NOT skip
+			// validation — when the block is validated, subtree validation still
+			// runs and recovers any genuinely-missing txs from peers on demand
+			// (see services/subtreevalidation getSubtreeMissingTxs). So an
+			// optimistic skip that turns out to be wrong costs extra bandwidth
+			// later (the txs get fetched then instead of now); it does not risk
+			// accepting an unvalidated block or losing data.
+			//
+			// Capture the live mode (not just the boolean) so we can later
+			// record the observation against the snapshot. Workers run
+			// concurrently and the mode can transition between this point
+			// and the Record call below; the snapshot lets the state machine
+			// drop any observation whose underlying work was performed in a
+			// different mode.
+			modeAtSample := u.adaptiveFetch.Mode()
+			optimistic := modeAtSample == adaptivefetch.ModeOptimistic
+
+			var contributingPeers map[string]struct{}
+			var err error
+			if optimistic {
+				contributingPeers, err = nil, nil
+			} else {
+				fetchFn := u.fetchSubtreeDataForBlockFn
+				if fetchFn == nil {
+					fetchFn = u.fetchSubtreeDataForBlock
+				}
+				contributingPeers, err = fetchFn(ctx, work.block, peerID, baseURL)
+			}
+
 			if err != nil {
 				// Send result (even if error occurred)
 				result := resultItem{
@@ -226,6 +259,18 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 
 				continue
 			}
+
+			// Record a synthetic warm-up observation for the adaptive-fetch
+			// state machine. The rationale (why MissingFetches is 0 today, why
+			// that is safe, and the TODO to plumb real counts) lives once on
+			// adaptivefetch.State.RecordSyntheticWarmup. This gate is only
+			// consulted during catch-up; the State is armed on first FSM
+			// RUNNING (see Server), so a cold-start IBD stays pessimistic.
+			txCount := 0
+			if work.block != nil {
+				txCount = int(work.block.TransactionCount)
+			}
+			u.adaptiveFetch.RecordSyntheticWarmup(modeAtSample, txCount, 0)
 
 			// Send result
 			result := resultItem{

@@ -58,12 +58,13 @@ jobs:
 
   test:
     name: test
-    # ARM runner: the x86 16-core runner OOM-killed the `go test -race
-    # -coverpkg=./...` compile (~13GB peak) — arm64 runners have ample RAM
-    # (~64GB on 16-core; telemetry showed ~70GB peak at 32 cores, and 32-core
-    # gave no speedup, so 16-core is the cost/perf sweet spot). Runs `make test`
-    # natively: postgres testcontainers (arm64) + testtxmetacache (no aerospike).
-    runs-on: teranode-runner-16-core-arm
+    # TEMPORARY: 32-core/128GB arm to stop intermittent OOM (exit 143). `make test`
+    # runs `go test -race -coverpkg=./...` over the whole repo; a few test binaries
+    # peak very high (sql ~34G, blockassembly ~31G, subtreeprocessor ~20G) and at
+    # -p=16 enough overlap to exhaust a 16-core/64GB runner intermittently. Job-wide
+    # peak measured ~110GB+. This is a stopgap until per-package memory is reduced —
+    # tracked in #1051. Revert to teranode-runner-16-core-arm once that lands.
+    runs-on: teranode-runner-32-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -85,7 +86,48 @@ jobs:
         uses: ./.github/actions/go-cache
 
       - name: Run Go tests
-        run: make test
+        # Tracks each test binary's peak RSS (VmHWM — the kernel's monotonic
+        # high-water mark) silently in the background, then prints a top-10
+        # peak-memory table plus the job-wide peak at the END of the run. Lets us
+        # watch unit-test memory come down as #1051 is worked, and justifies the
+        # temporary 32-core runner above. No deps; survives a SIGTERM (the summary
+        # also runs from the EXIT trap). Sampler runs under `set +e` so a
+        # SIGPIPE/no-match can't trip the step's `set -e`; `make test` keeps it.
+        run: |
+          TRACK="$(mktemp)"
+          track() {
+            set +e
+            local st pid hwm cmd name
+            while :; do
+              for st in /proc/[0-9]*/status; do
+                hwm="$(awk '/^VmHWM:/{print $2; exit}' "$st" 2>/dev/null)"
+                [ -n "$hwm" ] || continue
+                pid="${st#/proc/}"; pid="${pid%/status}"
+                cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+                name="${cmd%% *}"; name="${name##*/}"
+                case "$name" in *.test) echo "$hwm $name" >> "$TRACK" ;; esac
+              done
+              sleep 10
+            done
+          }
+          track & TRACK_PID=$!
+          job_peak() {
+            local f
+            for f in /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; do
+              if [ -r "$f" ]; then awk -v b="$(<"$f")" 'BEGIN{printf "%.1fG", b/1073741824}'; return; fi
+            done
+            awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%.1fG",(t-a)/1048576}' /proc/meminfo
+          }
+          summary() {
+            set +e
+            kill "$TRACK_PID" 2>/dev/null
+            echo "::group::Peak memory  (job peak=$(job_peak))"
+            awk '$1>m[$2]{m[$2]=$1} END{for (k in m) printf "%d %s\n", m[k], k}' "$TRACK" 2>/dev/null \
+              | sort -rn | head -10 | awk '{printf "PEAKMEM %.1fG %s\n", $1/1048576, $2}'
+            echo "::endgroup::"
+          }
+          trap summary EXIT
+          make test
         continue-on-error: false
 
       - name: Upload coverage report

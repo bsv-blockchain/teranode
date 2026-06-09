@@ -702,6 +702,20 @@ func TestGetBlockAssemblyTxsCoverage(t *testing.T) {
 	})
 }
 
+func TestGetBlockAssemblyTxsReturnsWhenContextCancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	resp, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // TestRetryFunctionsCoverage tests the retry-related functions coverage
 func TestRetryFunctionsCoverage(t *testing.T) {
 	server, _, subtree, _ := setup(t)
@@ -1228,6 +1242,33 @@ func TestStartStopIntensive(t *testing.T) {
 		err := server.Stop(context.Background())
 		assert.NoError(t, err)
 	})
+}
+
+func TestStartReturnsErrorWhenGRPCFailsBeforeReady(t *testing.T) {
+	server, _ := setupServer(t)
+	server.settings.BlockAssembly.GRPCListenAddress = "invalid-address:xyz"
+
+	readyCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- server.Start(t.Context(), readyCh)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "GRPC server failed to listen")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start blocked waiting for grpc readiness after startup failure")
+	}
+
+	select {
+	case <-readyCh:
+		// readyCh should always be closed on return (success or error)
+	default:
+		t.Fatal("readyCh was not closed when Start returned")
+	}
 }
 
 // TestAddTxIntensive tests AddTx method with comprehensive scenarios

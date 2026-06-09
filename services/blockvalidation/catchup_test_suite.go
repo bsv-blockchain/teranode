@@ -11,6 +11,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
@@ -22,6 +23,7 @@ import (
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +126,15 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		circuitBreakers = catchup.NewPeerCircuitBreakers(catchup.DefaultCircuitBreakerConfig())
 	}
 
+	// Build a minimal adaptive-fetch state (pessimistic, never transitions in tests)
+	// so that blockWorker can safely sample u.adaptiveFetch.Mode() and compare it
+	// to adaptivefetch.ModeOptimistic when deciding whether to fetch subtreeData.
+	afCfg := adaptivefetch.DefaultConfig()
+	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	af, err := adaptivefetch.New(afCfg, "test", prometheus.NewRegistry())
+	require.NoError(t, err)
+	require.NotNil(t, af)
+
 	// Create server
 	s.Server = &Server{
 		logger:              s.Logger,
@@ -140,11 +151,13 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		stats:               gocore.NewStat("test"),
 		peerCircuitBreakers: circuitBreakers,
 		headerChainCache:    catchup.NewHeaderChainCache(s.Logger),
+		adaptiveFetch:       af,
 		isCatchingUp:        atomic.Bool{},
 		catchupAttempts:     atomic.Int64{},
 		catchupSuccesses:    atomic.Int64{},
 		catchupStatsMu:      sync.RWMutex{},
 	}
+	s.Server.fetchSubtreeDataForBlockFn = s.Server.fetchSubtreeDataForBlock
 
 	// Add cleanup for channels
 	s.AddCleanup(func() {

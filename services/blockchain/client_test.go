@@ -5439,3 +5439,34 @@ func TestHeartbeatStaleSetsFSMToIdle(t *testing.T) {
 		require.Equal(t, FSMStateRUNNING, *currentState, "FSM state should remain RUNNING with fresh heartbeat")
 	})
 }
+
+// mockAssignBlockIDClient is a minimal gRPC client stub for AssignBlockID. It
+// embeds the generated interface so only the method under test is implemented.
+type mockAssignBlockIDClient struct {
+	blockchain_api.BlockchainAPIClient
+	resp *blockchain_api.AssignBlockIDResponse
+	err  error
+}
+
+func (m *mockAssignBlockIDClient) AssignBlockID(_ context.Context, _ *blockchain_api.AssignBlockIDRequest, _ ...grpc.CallOption) (*blockchain_api.AssignBlockIDResponse, error) {
+	return m.resp, m.err
+}
+
+// TestClientAssignBlockID covers the gRPC client wrapper: it returns the id from
+// a successful response and surfaces (unwrapped) a transport error.
+func TestClientAssignBlockID(t *testing.T) {
+	h := chainhash.HashH([]byte("assign-block-id-client"))
+
+	t.Run("success", func(t *testing.T) {
+		c := &Client{client: &mockAssignBlockIDClient{resp: &blockchain_api.AssignBlockIDResponse{BlockId: 42}}}
+		id, err := c.AssignBlockID(context.Background(), &h)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(42), id)
+	})
+
+	t.Run("grpc error", func(t *testing.T) {
+		c := &Client{client: &mockAssignBlockIDClient{err: errors.NewProcessingError("grpc failure")}}
+		_, err := c.AssignBlockID(context.Background(), &h)
+		require.Error(t, err)
+	})
+}
