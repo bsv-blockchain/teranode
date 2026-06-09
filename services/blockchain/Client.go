@@ -399,6 +399,15 @@ func (c *Client) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return resp.NextBlockId, nil
 }
 
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	resp, err := c.client.AssignBlockID(ctx, &blockchain_api.AssignBlockIDRequest{BlockHash: blockHash[:]})
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+	return resp.BlockId, nil
+}
+
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
 // This helper method deserializes the various components of a block response
 // from the blockchain service and reconstructs them into the internal Block model.

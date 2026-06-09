@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
@@ -33,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -599,6 +602,106 @@ func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
 		return existsErr == nil && exists
 	}, 2*time.Second, 20*time.Millisecond,
 		"subtreeA's FileTypeSubtreeData must be stored even after sibling B's failure cancelled the batch")
+}
+
+// TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData verifies that when the
+// adaptive-fetch gate is in optimistic mode the per-subtree subtreeData prewarm
+// fetch (GET /subtree_data/<hash>) is skipped. This is the subtreevalidation
+// analogue of blockvalidation's TestBlockWorker_Optimistic_SkipsFetchSubtreeData
+// and is the coverage the PR #745 review asked for: the optimistic branch at
+// check_block_subtrees.go must actually be exercised.
+//
+// Discriminator design: the /subtree_data endpoint is hit both by the pessimistic
+// PREWARM and by the downstream on-demand RECOVERY (getSubtreeMissingTxs) when a
+// subtree has genuinely-missing txs. So a subtree with missing txs would fetch in
+// BOTH modes (prewarm vs recovery) and prove nothing. We therefore use a
+// coinbase-only subtree: the missing-tx scan skips the coinbase placeholder, so
+// there are zero missing txs and recovery never runs. The only thing that can
+// fetch /subtree_data is then the prewarm itself — present in pessimistic, absent
+// in optimistic. The test runs BOTH modes against identical inputs and asserts
+// pessimistic fetches while optimistic does not, so it cannot pass trivially.
+func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
+	run := func(t *testing.T, bootstrap adaptivefetch.Mode) int32 {
+		t.Helper()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
+		afCfg := adaptivefetch.DefaultConfig()
+		afCfg.BootstrapMode = bootstrap
+		af, err := adaptivefetch.New(afCfg, "test-"+bootstrap.String(), prometheus.NewRegistry())
+		require.NoError(t, err)
+		af.Arm()
+		require.Equal(t, bootstrap, af.Mode(), "armed mode must match bootstrap")
+		server.adaptiveFetch = af
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+			mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{1, 2, 3}, nil).Maybe()
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil).Maybe()
+
+		// Coinbase-only subtree (no recoverable txs). Pre-store as
+		// FileTypeSubtreeToCheck so the /subtree fetch is skipped and we reach
+		// the prewarm gate; do NOT store FileTypeSubtreeData so a pessimistic
+		// prewarm must fetch it over HTTP.
+		s, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, s.AddCoinbaseNode())
+		subtreeSer, err := s.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, server.subtreeStore.Set(context.Background(),
+			s.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeSer))
+
+		baseURL := testPeerURL
+
+		var subtreeDataFetches atomic.Int32
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, s.RootHash().String()),
+			func(_ *http.Request) (*http.Response, error) {
+				subtreeDataFetches.Add(1)
+				return httpmock.NewBytesResponse(http.StatusOK, []byte{}), nil
+			})
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{s.RootHash()}, 1, 500, 0, 0)
+		require.NoError(t, err)
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: baseURL,
+		}
+
+		// Result intentionally ignored — the skip is the contract under test.
+		_, _ = server.CheckBlockSubtrees(context.Background(), request)
+		return subtreeDataFetches.Load()
+	}
+
+	// Control: pessimistic mode MUST prewarm-fetch the subtreeData, proving the
+	// setup actually reaches the gate (guards against a trivially-passing test).
+	pessimisticFetches := run(t, adaptivefetch.ModePessimistic)
+	require.Positive(t, pessimisticFetches,
+		"pessimistic control must fetch subtree_data (gate reached)")
+
+	// Subject: optimistic mode MUST skip the prewarm fetch.
+	optimisticFetches := run(t, adaptivefetch.ModeOptimistic)
+	require.Zero(t, optimisticFetches,
+		"optimistic mode must skip the subtree_data prewarm fetch")
 }
 
 // TestCheckBlockSubtrees_OversizedBody verifies that the peer-fetch fallback at
@@ -2302,6 +2405,12 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
 		Return(&currentState, nil).Maybe()
 
+	afCfg := adaptivefetch.DefaultConfig()
+	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	af, err := adaptivefetch.New(afCfg, "test", prometheus.NewRegistry())
+	require.NoError(t, err)
+	require.NotNil(t, af)
+
 	server := &Server{
 		logger:           logger,
 		settings:         testSettings,
@@ -2310,6 +2419,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		utxoStore:        mockUtxoStore,
 		validatorClient:  mockValidatorClient,
 		blockchainClient: mockBlockchainClient,
+		adaptiveFetch:    af,
 	}
 
 	return server, func() {
@@ -2360,6 +2470,11 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 			blockBytes, _ := block.Bytes()
 
 			// Create server
+			testAfCfg := adaptivefetch.DefaultConfig()
+			testAfCfg.BootstrapMode = adaptivefetch.ModePessimistic
+			testAf, err := adaptivefetch.New(testAfCfg, "test", prometheus.NewRegistry())
+			require.NoError(t, err)
+			require.NotNil(t, testAf)
 			server := &Server{
 				settings:         testSettings,
 				logger:           ulogger.TestLogger{},
@@ -2367,6 +2482,7 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 				subtreeStore:     mockSubtreeStore,
 				txStore:          mockTxStore,
 				utxoStore:        mockUTXOStore,
+				adaptiveFetch:    testAf,
 			}
 
 			// Create request

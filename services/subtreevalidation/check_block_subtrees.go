@@ -14,6 +14,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -363,76 +364,122 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					}
 				}
 
-				// PHASE 2: Exact pre-allocation
-				subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, subtreeToCheck.Length())
+				// Adaptive-fetch gate: when optimistic, skip subtreeData entirely.
+				//
+				// What this skip is: the work below is only a prewarm. It bulk-loads
+				// the subtree's txs from subtreeData so the real validation step
+				// (ValidateSubtreeInternal, run for every subtree further down) finds
+				// them already cached. Skipping it leaves subtreeTxs[subtreeIdx] nil,
+				// so the bulk processTransactionsInLevels does nothing for this subtree.
+				//
+				// What this skip is NOT: it does not skip validation. Every subtree
+				// still goes through ValidateSubtreeInternal below, which checks the
+				// UTXO store for each tx and fetches anything genuinely missing from
+				// peers on demand (getSubtreeMissingTxs → processMissingTransactions).
+				// So if the optimistic assumption is wrong — a tx was not delivered by
+				// propagation — that tx is still recovered and validated normally. The
+				// only cost of a wrong guess is bandwidth (the tx is fetched during
+				// validation instead of being prewarmed here); correctness and data
+				// integrity are never at risk.
+				//
+				// Capture the live mode (not just the boolean) so the
+				// observation we record below can be tagged with the mode
+				// the work was actually performed in. Subtree workers run
+				// concurrently via the errgroup and the mode can transition
+				// between sample and Record; tagging the observation lets
+				// the state machine drop cross-mode samples instead of
+				// applying them to the wrong window.
+				modeAtSample := u.adaptiveFetch.Mode()
+				optimistic := modeAtSample == adaptivefetch.ModeOptimistic
 
-				// Allocate a per-subtree arena for zero-copy script decoding.
-				// The arena is stored in batchArenas[subtreeIdx] so it can be released
-				// after processTransactionsInLevels consumes the batch's txs.
-				arena := getSubtreeArena()
-				batchArenas[subtreeIdx] = arena
+				if !optimistic {
+					// PHASE 2: Exact pre-allocation. Only sized when we will actually
+					// populate the slice (pessimistic path). In optimistic mode we
+					// leave subtreeTxs[subtreeIdx] as nil to avoid allocating a
+					// large *bt.Tx-pointer backing array that would never be filled —
+					// downstream consolidation handles nil/empty entries naturally.
+					subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, subtreeToCheck.Length())
 
-				subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
-				}
+					// Allocate a per-subtree arena for zero-copy script decoding.
+					// The arena is stored in batchArenas[subtreeIdx] so it can be released
+					// after processTransactionsInLevels consumes the batch's txs.
+					// Only allocated on the pessimistic path; in optimistic mode no
+					// subtreeData is fetched, so no arena is needed and
+					// batchArenas[subtreeIdx] stays nil (the release loops guard on nil).
+					arena := getSubtreeArena()
+					batchArenas[subtreeIdx] = arena
 
-				if !subtreeDataExists {
-					// get the subtree data from the peer and process it directly
-					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
-
-					// Retry on 503 — peer's asset service may reject under admission control
-					// while it generates the file on-demand from Aerospike.
-					//
-					// IMPORTANT: pass the parent ctx, NOT gCtx, to the HTTP fetch and the
-					// stream processor. gCtx is the errgroup's cancellable context — using
-					// it here means a single sibling failure cancels every in-flight
-					// subtree_data download in this batch. Because each cancellation closes
-					// the upstream connection, the peer aborts its on-demand creation
-					// (storer.Abort), discarding work that was already paid for in Aerospike
-					// reads. Detaching from gCtx lets each fetch complete (or hit its own
-					// http_streaming_timeout) so the peer can finish writing its subtreeData
-					// file — converting wasted Aerospike work into a pre-warmed cache for
-					// the next retry. The trade-off is that batch failure detection waits
-					// for in-flight peers instead of cancelling early; acceptable here
-					// because the per-fetch streaming timeout still bounds it.
-					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
-					if subtreeDataErr != nil {
-						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
+					subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+					if err != nil {
+						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
 					}
 
-					// Wrap with counting reader to track bytes downloaded
-					var bytesRead uint64
-					countingBody := &countingReadCloser{
-						reader:    body,
-						bytesRead: &bytesRead,
-					}
+					if !subtreeDataExists {
+						// get the subtree data from the peer and process it directly
+						url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
 
-					// Process transactions directly from the stream while storing to disk.
-					// Same rationale as above for using ctx instead of gCtx.
-					err = u.processSubtreeDataStream(ctx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
-					_ = countingBody.Close()
+						// Retry on 503 — peer's asset service may reject under admission control
+						// while it generates the file on-demand from Aerospike.
+						//
+						// IMPORTANT: pass the parent ctx, NOT gCtx, to the HTTP fetch and the
+						// stream processor. gCtx is the errgroup's cancellable context — using
+						// it here means a single sibling failure cancels every in-flight
+						// subtree_data download in this batch. Because each cancellation closes
+						// the upstream connection, the peer aborts its on-demand creation
+						// (storer.Abort), discarding work that was already paid for in Aerospike
+						// reads. Detaching from gCtx lets each fetch complete (or hit its own
+						// http_streaming_timeout) so the peer can finish writing its subtreeData
+						// file — converting wasted Aerospike work into a pre-warmed cache for
+						// the next retry. The trade-off is that batch failure detection waits
+						// for in-flight peers instead of cancelling early; acceptable here
+						// because the per-fetch streaming timeout still bounds it.
+						body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
+						if subtreeDataErr != nil {
+							return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
+						}
 
-					// Track bytes downloaded from peer after stream is consumed
-					// Decouple the context to ensure tracking completes even if parent context is cancelled
-					if u.p2pClient != nil && peerID != "" {
-						trackCtx, _, deferFn := tracing.DecoupleTracingSpan(gCtx, "subtreevalidation", "recordBytesDownloaded")
-						defer deferFn()
-						if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
-							u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
+						// Wrap with counting reader to track bytes downloaded
+						var bytesRead uint64
+						countingBody := &countingReadCloser{
+							reader:    body,
+							bytesRead: &bytesRead,
+						}
+
+						// Process transactions directly from the stream while storing to disk.
+						// Same rationale as above for using ctx instead of gCtx.
+						err = u.processSubtreeDataStream(ctx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah, arena)
+						_ = countingBody.Close()
+
+						// Track bytes downloaded from peer after stream is consumed
+						// Decouple the context to ensure tracking completes even if parent context is cancelled
+						if u.p2pClient != nil && peerID != "" {
+							trackCtx, _, deferFn := tracing.DecoupleTracingSpan(gCtx, "subtreevalidation", "recordBytesDownloaded")
+							defer deferFn()
+							if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+								u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
+							}
+						}
+
+						if err != nil {
+							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
+						}
+					} else {
+						// SubtreeData exists, extract transactions from stored file
+						err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx], arena)
+						if err != nil {
+							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
 						}
 					}
-
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
-					}
-				} else {
-					// SubtreeData exists, extract transactions from stored file
-					err = u.extractAndCollectTransactions(gCtx, subtreeToCheck, &subtreeTxs[subtreeIdx], arena)
-					if err != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
-					}
 				}
+
+				// Record a synthetic warm-up observation for the adaptive-fetch
+				// state machine. The rationale (why MissingFetches is 0 today,
+				// why that is safe, and the TODO to plumb real counts) lives
+				// once on adaptivefetch.State.RecordSyntheticWarmup. The State is
+				// armed on first FSM RUNNING (see Server), so a node stays
+				// pessimistic through cold-start IBD and only earns optimism once
+				// proven synced.
+				u.adaptiveFetch.RecordSyntheticWarmup(modeAtSample, subtreeToCheck.Length(), 0)
 
 				return nil
 			})

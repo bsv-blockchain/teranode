@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -485,4 +487,31 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 			tc.fn()
 		})
 	}
+}
+
+// TestLocalClient_AssignBlockID covers the LocalClient delegation to the store:
+// it returns a stable id per hash, idempotent across calls.
+func TestLocalClient_AssignBlockID(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	store, err := sql.New(logger, storeURL, tSettings)
+	require.NoError(t, err)
+	defer store.Close()
+
+	client, err := NewLocalClient(logger, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	h := chainhash.HashH([]byte("assign-block-id-local"))
+
+	id, err := client.AssignBlockID(context.Background(), &h)
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	id2, err := client.AssignBlockID(context.Background(), &h)
+	require.NoError(t, err)
+	require.Equal(t, id, id2, "same hash must return the same id")
 }

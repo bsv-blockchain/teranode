@@ -33,6 +33,11 @@ service BlockchainAPI {
   // GetNextBlockID retrieves the next available block ID.
   rpc GetNextBlockID (google.protobuf.Empty) returns (GetNextBlockIDResponse) {}
 
+  // AssignBlockID returns a stable block ID for a given block hash (idempotent
+  // per hash). Used by ingestion paths so UTXO mined-info and the committed
+  // block share one id.
+  rpc AssignBlockID (AssignBlockIDRequest) returns (AssignBlockIDResponse) {}
+
   // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
 
@@ -289,6 +294,16 @@ message GetBlockByIDRequest {
 // GetNextBlockIDResponse represents the response containing the next available block ID.
 message GetNextBlockIDResponse {
   uint64 next_block_id = 1;  // Next available block ID
+}
+
+// AssignBlockIDRequest carries the block hash to assign/reserve an id for.
+message AssignBlockIDRequest {
+  bytes block_hash = 1; // 32-byte block hash
+}
+
+// AssignBlockIDResponse carries the stable block ID for the requested hash.
+message AssignBlockIDResponse {
+  uint64 block_id = 1;
 }
 
 // GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.

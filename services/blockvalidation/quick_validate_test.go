@@ -25,7 +25,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		defer suite.Cleanup()
 
 		// Mock blockchain AddBlock and check how it was called
-		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Once()
+		suite.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Once()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
@@ -35,7 +35,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		assert.NoError(t, err, "Should successfully quick validate an empty block")
 
 		// Verify AddBlock was called with correct parameters
-		suite.MockBlockchain.AssertCalled(t, "GetNextBlockID", mock.Anything)
+		suite.MockBlockchain.AssertCalled(t, "AssignBlockID", mock.Anything, mock.Anything)
 		suite.MockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 		arguments := suite.MockBlockchain.Calls[1].Arguments
@@ -63,7 +63,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		defer suite.Cleanup()
 
 		// Mock blockchain AddBlock and check how it was called
-		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Maybe()
+		suite.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 		suite.MockBlockchain.On("RevalidateBlock", mock.Anything, mock.Anything).Return(nil).Maybe()

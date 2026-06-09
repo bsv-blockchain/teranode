@@ -18,6 +18,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -27,6 +28,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -3394,6 +3397,78 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 	})
 }
 
+func TestBlockWorker_Pessimistic_CallsFetchSubtreeData(t *testing.T) {
+	afStateCfg := adaptivefetch.DefaultConfig()
+	afStateCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	afState, err := adaptivefetch.New(afStateCfg, "test-pess", prometheus.NewRegistry())
+	require.NoError(t, err)
+
+	var fetchCalls atomic.Int32
+	server := &Server{
+		logger:        ulogger.TestLogger{},
+		stats:         gocore.NewStat("test-pess"),
+		adaptiveFetch: afState,
+	}
+	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
+		fetchCalls.Add(1)
+		return nil, nil
+	}
+
+	workQueue := make(chan workItem, 1)
+	resultQueue := make(chan resultItem, 1)
+
+	// Use a real test block — blockWorker calls blockUpTo.Hash() for tracing,
+	// which dereferences b.Header. A bare &model.Block{} would panic.
+	blocks := testhelpers.CreateTestBlockChain(t, 2)
+	realBlock := blocks[1]
+	realBlock.TransactionCount = 100
+	workQueue <- workItem{block: realBlock, index: 0}
+	close(workQueue)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, server.blockWorker(ctx, 0, workQueue, resultQueue, "peer", "http://peer/", realBlock))
+	require.Equal(t, int32(1), fetchCalls.Load(), "pessimistic mode must call fetchSubtreeDataForBlock")
+}
+
+func TestBlockWorker_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
+	afStateOptCfg := adaptivefetch.DefaultConfig()
+	afStateOptCfg.BootstrapMode = adaptivefetch.ModeOptimistic
+	afState, err := adaptivefetch.New(afStateOptCfg, "test-opt", prometheus.NewRegistry())
+	require.NoError(t, err)
+	// State starts pinned pessimistic; arm it (simulating first FSM RUNNING)
+	// so the optimistic bootstrap mode takes effect.
+	afState.Arm()
+	require.Equal(t, adaptivefetch.ModeOptimistic, afState.Mode())
+
+	var fetchCalls atomic.Int32
+	server := &Server{
+		logger:        ulogger.TestLogger{},
+		stats:         gocore.NewStat("test-opt"),
+		adaptiveFetch: afState,
+	}
+	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
+		fetchCalls.Add(1)
+		return nil, nil
+	}
+
+	workQueue := make(chan workItem, 1)
+	resultQueue := make(chan resultItem, 1)
+	// Use a real test block — blockWorker calls blockUpTo.Hash() for tracing.
+	blocks := testhelpers.CreateTestBlockChain(t, 2)
+	realBlock := blocks[1]
+	realBlock.TransactionCount = 100
+	workQueue <- workItem{block: realBlock, index: 0}
+	close(workQueue)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, server.blockWorker(ctx, 0, workQueue, resultQueue, "peer", "http://peer/", realBlock))
+	require.Zero(t, fetchCalls.Load(), "optimistic mode must not call fetchSubtreeDataForBlock")
+}
+
 // TestFetchBlocksConcurrently_BlockHeightIsSet verifies that block.Height is set correctly
 // during catchup block fetching (Issue #4464)
 func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
@@ -3460,4 +3535,36 @@ func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestBlockvalidation_AdaptiveFetch_PessToOptToPess(t *testing.T) {
+	// Exercises the full Auto lifecycle (start pessimistic, transition to
+	// optimistic on perfect window, trip back to pessimistic on observed
+	// misses). Pinned ModePessimistic no longer transitions — that
+	// invariant is covered by TestBootstrapMode_PinnedPessimisticDoesNotTransition
+	// in pkg/adaptivefetch.
+	afE2ECfg := adaptivefetch.DefaultConfig()
+	afE2ECfg.BootstrapMode = adaptivefetch.ModeAuto
+	af, err := adaptivefetch.New(afE2ECfg, "test-e2e", prometheus.NewRegistry())
+	require.NoError(t, err)
+	// State starts pinned pessimistic and unarmed; arm it (simulating first FSM
+	// RUNNING) so the auto Pess→Opt transition is enabled.
+	af.Arm()
+
+	// 10 pessimistic blocks with perfect hit rate (simulates pessimistic-mode
+	// "fake-perfect" observations emitted by blockWorker).
+	for i := 0; i < 10; i++ {
+		af.Record(adaptivefetch.Observation{
+			TotalTxs: 1000, LocalHits: 1000, MissingFetches: 0,
+		})
+	}
+	require.Equal(t, adaptivefetch.ModeOptimistic, af.Mode(),
+		"10 perfect pessimistic blocks must transition to optimistic")
+
+	// Single optimistic block with 500 missing-tx recoveries — immediate trip.
+	af.Record(adaptivefetch.Observation{
+		TotalTxs: 10000, LocalHits: 9500, MissingFetches: 500,
+	})
+	require.Equal(t, adaptivefetch.ModePessimistic, af.Mode(),
+		"single 500-miss optimistic block must trip back to pessimistic")
 }

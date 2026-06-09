@@ -2005,7 +2005,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	require.NoError(t, err)
 
 	// Verify the transaction was (incorrectly) re-added to the assembler
-	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 	assert.True(t, containsHash(hashes, *txHash),
 		"mined tx with incorrect unmined_since should have been reloaded into assembler")
 }
@@ -2052,7 +2052,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	require.NoError(t, err)
 
 	// The mined tx should now be present in the assembler due to the incorrect flip
-	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 	assert.True(t, containsHash(hashes, *txHash),
 		"tx incorrectly marked not-on-longest should be reloaded into assembler")
 }
@@ -2124,7 +2124,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	require.NoError(t, err)
 
 	// Verify results
-	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 
 	// tx1 should NOT be in the assembler (it's on the current chain)
 	assert.False(t, containsHash(hashes, *txHash1), "transaction already on current chain should be skipped during loadUnminedTransactions")
@@ -2987,7 +2987,7 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 	err = items.blockAssembler.reset(ctx, true)
 	require.NoError(t, err)
 
-	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 	require.False(t, containsHash(hashes, *txAHash),
 		"after reset(validateInputs=true), a tx whose input is spent by another tx must NOT be in block assembly")
 }

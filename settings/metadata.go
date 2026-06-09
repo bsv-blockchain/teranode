@@ -46,6 +46,7 @@ const (
 	CategoryAlert             = "Alert"
 	CategoryPostgres          = "Postgres"
 	CategoryDebug             = "Debug"
+	CategoryAdaptiveFetch     = "AdaptiveFetch"
 )
 
 // AllCategories returns all available setting categories in display order.
@@ -74,5 +75,6 @@ func AllCategories() []string {
 		CategoryAlert,
 		CategoryPostgres,
 		CategoryDebug,
+		CategoryAdaptiveFetch,
 	}
 }

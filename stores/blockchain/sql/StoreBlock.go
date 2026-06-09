@@ -168,6 +168,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// Reset response cache to invalidate cached best block ID and headers
 	s.ResetResponseCache()
 
+	// The block is now committed under newBlockID; drop any reservation so the
+	// in-memory map does not grow and future AssignBlockID calls resolve via the
+	// blocks table.
+	s.blockIDReservations.Delete(*block.Hash())
+
 	// Fast path: the block was inserted with onMainChain=true (its parent is the
 	// pre-insert best block) AND we won the race for the highest ID. In this
 	// case we can skip the post-insert getBestBlockID query entirely — the new
