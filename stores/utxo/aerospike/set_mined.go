@@ -67,8 +67,10 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
 // batchRecordsPool pools slices of aerospike.BatchRecordIfc to reduce allocations
@@ -231,7 +233,17 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	}
 
 	// Process batch results
-	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
+	blockIDs, work, err := s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
+
+	// #1037: clear the lock on the pagination records of successfully-mined
+	// external txs. Done here (not inside the result processor) so the processor
+	// stays free of follow-up I/O. Runs even when err != nil so a tx mined
+	// successfully is fully unlocked despite a sibling failure in the same batch.
+	if clearErr := s.applyLockClearWork(ctx, work); clearErr != nil {
+		err = errors.Join(err, clearErr)
+	}
+
+	return blockIDs, err
 }
 
 // prepareBatchRecordsForSetMined populates batch records for the setMined operation.
@@ -296,9 +308,13 @@ func (s *Store) executeBatchOperation(batchRecords []aerospike.BatchRecordIfc) e
 	return nil
 }
 
-// processBatchResultsForSetMined processes the results of the batch operation
+// processBatchResultsForSetMined processes the results of the batch operation.
+// It returns the per-tx blockID map and the set of records whose `locked` flag
+// must be cleared (#1037). The lock-clearing I/O is performed by the caller
+// (SetMinedMulti) so this function stays free of follow-up writes for the
+// lock-clear path — keeping it unit-testable without a live client.
 func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords []aerospike.BatchRecordIfc,
-	hashes []*chainhash.Hash, thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	hashes []*chainhash.Hash, thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, lockClearWork, error) {
 	var errs error
 	okUpdates := 0
 	nrErrors := 0
@@ -316,6 +332,10 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		ChildCount     int
 		DeleteAtHeight uint32
 	}, 0)
+	// #1037: pagination/extra records of successfully-mined external txs whose
+	// `locked` flag must be cleared (the master-keyed setMined only clears the
+	// master). Populated from the setMined response's childCount (= totalExtraRecs).
+	var work lockClearWork
 	// DAH timing assumption:
 	// - thisBatch operates under a fixed block-processing context.
 	// - thisBlockHeight and retention are immutable for the duration of SetMinedMulti() execution.
@@ -350,6 +370,14 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			nrErrors++
 		} else if result {
 			okUpdates++
+
+			// #1037: a freshly-mined external tx may still have `locked` set on its
+			// pagination records. Clear them (the master's lock is cleared by the
+			// UDF itself). childCount == totalExtraRecs is surfaced by setMined on a
+			// mine; UnsetMined never reaches here as a clear (childCount only on mine).
+			if res != nil && !minedBlockInfo.UnsetMined && res.ChildCount > 0 {
+				work.items = append(work.items, lockClearItem{txID: hashes[idx], childCount: res.ChildCount})
+			}
 		}
 
 		if res != nil && res.BlockIDs != nil {
@@ -398,9 +426,12 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
+	// work (pagination records of successfully-mined external txs) is returned to
+	// the caller for clearing, so a tx that was mined successfully is fully
+	// unlocked even if a sibling record in the same batch errored below.
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return blockIDs, errors.NewError("aerospike batchRecord errors", errs)
+		return blockIDs, work, errors.NewError("aerospike batchRecord errors", errs)
 	}
 
 	// Execute aggregated follow-ups in batches
@@ -428,10 +459,10 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	// setDAHExternalTransactionMulti removed as it would no-op
 
 	if postErr != nil {
-		return blockIDs, errors.NewError("aerospike setMined follow-up batch errors", postErr)
+		return blockIDs, work, errors.NewError("aerospike setMined follow-up batch errors", postErr)
 	}
 
-	return blockIDs, nil
+	return blockIDs, work, nil
 }
 
 // processSingleBatchRecord processes a single batch record result, allocating a
@@ -529,4 +560,142 @@ func (s *Store) handleSetMinedSignal(ctx context.Context, signal LuaSignal, hash
 	}
 
 	return errs
+}
+
+// lockClearItem identifies a transaction whose pagination/extra records must
+// have the `locked` flag cleared as part of marking the transaction mined. The
+// master record's lock is cleared by the setMined UDF / expression write itself.
+type lockClearItem struct {
+	txID       *chainhash.Hash
+	childCount int // number of pagination/extra records, cleared at indices 1..childCount
+}
+
+// lockClearWork is the lock-clearing follow-up that a setMined result processor
+// hands back to its public caller (#1037). The processors stay free of follow-up
+// I/O so they remain unit-testable without a live client.
+type lockClearWork struct {
+	// items: pagination records to unlock directly (childCount known from the
+	// setMined response / totalExtraRecs bin; the master is already unlocked).
+	items []lockClearItem
+	// fullUnlock: transactions whose record state is unknown from the batch (the
+	// expression write was FILTERED_OUT, so the child count and even the master's
+	// lock state were not returned). SetLocked(false) reads the child count from
+	// the master and clears every record (master + all pagination records).
+	fullUnlock []chainhash.Hash
+}
+
+// applyLockClearWork performs the lock-clearing follow-up I/O collected by a
+// setMined result processor. Safe to call with empty work (no-op).
+func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) error {
+	// Assign the first non-nil error directly rather than errors.Join(nil, err),
+	// which would wrap it in a stdlib joinError and drop the rich *errors.Error type.
+	var err error
+
+	if clearErr := s.clearLockedOnRecordsMulti(work.items); clearErr != nil {
+		err = clearErr
+	}
+
+	if len(work.fullUnlock) > 0 {
+		if unlockErr := s.SetLocked(ctx, work.fullUnlock, false); unlockErr != nil {
+			if err == nil {
+				err = unlockErr
+			} else {
+				err = errors.Join(err, unlockErr)
+			}
+		}
+	}
+
+	return err
+}
+
+// clearLockedOnRecordsMulti clears the `locked` flag on the requested records in
+// a single unfiltered BatchOperate.
+//
+// Why this exists (issue #1037): a transaction created WithLocked(true) — by the
+// block-validation quick-validate pipeline (services/blockvalidation/quick_validate.go)
+// or the validator's 2-phase commit — has the `locked` flag set on EVERY record:
+// the master record AND every pagination/extra record of an external (paginated)
+// transaction. The mined-status update (the setMined UDF and the expression batch)
+// is keyed on the master record only, so it clears the master's lock but never the
+// pagination records'. If the 2PC / quick-validate unlock then fails to run (its
+// documented "locked UTXOs remain ... rolled back on error" path), the pagination
+// records stay locked forever. Because mining a transaction makes ALL of its
+// outputs spendable, SetMinedMulti must clear the lock on every record — otherwise
+// a child spending an output that lives on a pagination record (vout >=
+// utxoBatchSize) fails permanently with TX_LOCKED, wedging legacy sync.
+//
+// A KEY_NOT_FOUND on any record is treated as benign: a record that does not exist
+// cannot be holding a lock.
+func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
+	total := 0
+	for _, it := range items {
+		if it.childCount > 0 {
+			total += it.childCount
+		}
+	}
+
+	if total == 0 {
+		return nil
+	}
+
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	clearOp := aerospike.PutOp(aerospike.NewBin(fields.Locked.String(), false))
+
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
+
+	appendRecord := func(txID *chainhash.Hash, idx uint32) error {
+		keySource := uaerospike.CalculateKeySourceInternal(txID, idx)
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			return errors.NewProcessingError("[clearLockedOnRecordsMulti][%s] failed to create key for record %d", txID.String(), idx, err)
+		}
+
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearOp))
+
+		return nil
+	}
+
+	for _, it := range items {
+		// Guard against a non-positive childCount: uint32(negative) would wrap to
+		// ~4e9 and blow up the batch. Both producers only ever append childCount > 0,
+		// so this is belt-and-suspenders for self-consistency with the sizing loop.
+		if it.childCount <= 0 {
+			continue
+		}
+
+		for i := uint32(1); i <= uint32(it.childCount); i++ { // nolint:gosec
+			if err := appendRecord(it.txID, i); err != nil {
+				return err
+			}
+		}
+	}
+
+	// A non-nil top-level error here is a transport/batch-level failure, surfaced
+	// hard. The benign per-record KEY_NOT_FOUND tolerance below relies on Aerospike
+	// reporting missing records per-record (BatchRecord.Err), not as a top-level
+	// error — consistent with the rest of this package's batch handling.
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear locked flag", err)
+	}
+
+	var aggErr error
+
+	for _, br := range batchRecords {
+		recErr := br.BatchRec().Err
+		if recErr == nil {
+			continue
+		}
+
+		// A missing record cannot be holding a lock — tolerate it.
+		var aErr *aerospike.AerospikeError
+		if errors.As(recErr, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+			continue
+		}
+
+		aggErr = errors.Join(aggErr, recErr)
+	}
+
+	return aggErr
 }

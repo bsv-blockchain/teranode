@@ -92,6 +92,12 @@ type Store interface {
 	// Returns: next block ID and any error encountered
 	GetNextBlockID(ctx context.Context) (uint64, error)
 
+	// AssignBlockID returns a stable block ID for the given block hash: repeated
+	// calls for the same hash (and concurrent callers) return the same id, and a
+	// committed block returns its authoritative id. Used by ingestion paths so a
+	// block's UTXO mined-info and its committed row share one id.
+	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
 	// GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash. This is useful for getting the block at a given height in a chain that may have a different tip.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -99,6 +105,21 @@ type Store interface {
 	//   - startHash: Hash determining the chain
 	// Returns: Block, boolean indicating success, and any error encountered
 	GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, bool, error)
+
+	// MainChainBlockHashesByHeights returns the hash of the main-chain block at
+	// each requested height, but only when startHash is itself on the main
+	// chain. The height ceiling is derived from startHash's own height (results
+	// are constrained to ancestors-of-or-equal-to startHash), so the result
+	// matches a recursive walk anchored at startHash. Returns ok=false (nil
+	// error) when startHash is a fork tip, the store is mid-rebuild, unknown, or
+	// any requested height is missing, so the caller can fall back to a
+	// per-height chain walk.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - startHash: Hash identifying the chain (must be on the main chain for the fast path)
+	//   - heights: Heights to fetch (must be <= startHash's height)
+	// Returns: map of height to block hash, ok flag, and any error encountered
+	MainChainBlockHashesByHeights(ctx context.Context, startHash *chainhash.Hash, heights []uint32) (map[uint32]*chainhash.Hash, bool, error)
 
 	// GetBlockStats retrieves statistical information about blocks.
 	// Parameters:
@@ -383,6 +404,22 @@ type Store interface {
 	//   - blockIDs: Slice of block IDs to check
 	// Returns: Boolean indicating if blocks are in current chain and any error encountered
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+
+	// OffChainBlockIDs returns the complete set of block IDs known NOT to be on the
+	// current main chain (the in-memory off-chain/forked set). It lets callers
+	// prefetch the negative set once and answer main-chain membership locally.
+	// Parameters:
+	//   - ctx: Context for the operation
+	// Returns:
+	//   - the off-chain block IDs (nil when none)
+	//   - maxBlockID: the highest known block ID. IDs above this cannot be on the
+	//     main chain, so callers must apply the same id > maxBlockID skip that
+	//     CheckBlockIsInCurrentChain enforces, to stay consensus-equivalent
+	//   - rebuilding: true when the in-memory set is unavailable or stale (in-memory
+	//     check disabled, or a reorg/startup rebuild is in progress); callers must
+	//     fall back to per-block CheckBlockIsInCurrentChain checks
+	//   - any error encountered
+	OffChainBlockIDs(ctx context.Context) (offChainBlockIDs []uint32, maxBlockID uint32, rebuilding bool, err error)
 
 	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
 	// This is used for double-spend detection on fork blocks where we need to check against

@@ -371,6 +371,22 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		waitErr <- sm.Wait()
 	}()
 
+	// closeStores must run on BOTH shutdown paths (OS-signal via waitErr,
+	// daemon.Stop() via doneCh) and MUST run after every service has
+	// finished using the stores. The defer is registered here, before the
+	// select below, but runs when this function returns — i.e. after the
+	// select has observed service exit on either path. This gives us a
+	// single ordered teardown point that runs even if the body returns
+	// through a signal-driven exit rather than an explicit Stop() call.
+	//
+	// The UTXO store in particular owns background batched-write workers
+	// whose Close drains in-channel items before returning. Skipping this
+	// drain corrupts UTXO state: callers will have received successful
+	// acks for writes still queued in the batcher, the parent blocks get
+	// committed elsewhere, and on restart subsequent blocks fail with
+	// missing-parent errors.
+	defer d.closeStores(logger)
+
 	// Wait for either services to complete or doneCh to be closed
 	select {
 	case err = <-waitErr:
@@ -380,13 +396,9 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	case <-d.doneCh:
 		logger.Infof("daemon shutdown requested")
 
-		err = server.Shutdown(sm.Ctx)
-		if err != nil {
-			logger.Errorf("error shutting down server: %v", err)
+		if shutErr := server.Shutdown(sm.Ctx); shutErr != nil {
+			logger.Errorf("error shutting down server: %v", shutErr)
 		}
-
-		// Close stores safely
-		d.closeStores(logger, sm)
 
 		sm.ForceShutdown()
 
@@ -404,29 +416,53 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 }
 
 // closeStores safely closes the main stores used by the Daemon.
-func (d *Daemon) closeStores(logger ulogger.Logger, sm *servicemanager.ServiceManager) {
+//
+// Uses a fresh context with a 30 s deadline rather than the daemon's
+// service-manager context: by the time this runs, the SM context has
+// almost certainly been cancelled (that's what caused the services to
+// exit), and we still want the underlying drains — especially the UTXO
+// batcher drain — to run with real time available, not return
+// immediately with context.Canceled.
+func (d *Daemon) closeStores(logger ulogger.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	globalStoreMutex.RLock()
 	txStoreToClose := d.daemonStores.mainTxStore
 	subtreeStoreToClose := d.daemonStores.mainSubtreeStore
 	tempStoreToClose := d.daemonStores.mainTempStore
+	utxoStoreToClose := d.daemonStores.mainUtxoStore
 	globalStoreMutex.RUnlock()
+
+	// Drain the UTXO store first so any background-batched writes commit
+	// before we tear down adjacent blob stores. UTXO writes can reference
+	// subtree-data writes indirectly via height bookkeeping, so finishing
+	// UTXO work before subtree teardown keeps the relationship
+	// consistent.
+	if utxoStoreToClose != nil {
+		logger.Debugf("closing utxo store")
+
+		if err := utxoStoreToClose.Close(ctx); err != nil {
+			logger.Errorf("error closing utxo store: %v", err)
+		}
+	}
 
 	if txStoreToClose != nil {
 		logger.Debugf("closing tx store")
 
-		_ = txStoreToClose.Close(sm.Ctx)
+		_ = txStoreToClose.Close(ctx)
 	}
 
 	if subtreeStoreToClose != nil {
 		logger.Debugf("closing subtree store")
 
-		_ = subtreeStoreToClose.Close(sm.Ctx)
+		_ = subtreeStoreToClose.Close(ctx)
 	}
 
 	if tempStoreToClose != nil {
 		logger.Debugf("closing temp store")
 
-		_ = tempStoreToClose.Close(sm.Ctx)
+		_ = tempStoreToClose.Close(ctx)
 	}
 }
 

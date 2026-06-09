@@ -100,6 +100,34 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	return client, nil
 }
 
+// CloseAerospikeClient closes the cached aerospike client for the given host and
+// removes it from the process-wide connection cache. GetAerospikeClient hands
+// out a shared client per host, so closing the client without evicting it would
+// leave a closed client in the cache: a subsequent store for the same host (for
+// example an in-process daemon restart that reuses the same Aerospike container)
+// would "reuse" the closed client and fail with INVALID_NODE_ERROR. Evicting
+// here forces the next GetAerospikeClient to build a fresh client.
+//
+// host MUST be the exact key GetAerospikeClient cached under — i.e. url.Host
+// (which may include a port and is not just a hostname); pass the same
+// url.Host, not a bare hostname, or the eviction silently no-ops.
+//
+// IMPORTANT — assumes sole ownership of the host's client. Because the cache is
+// keyed per host with no reference counting, this closes the client for ALL
+// users of that host. That is correct for the current single-UTXO-store daemon
+// (one store owns the host), but if more than one store/namespace on the same
+// host ever shares this client, closing it here would break the others. Add
+// reference counting before relying on shared ownership.
+func CloseAerospikeClient(host string) {
+	aerospikeConnectionMutex.Lock()
+	defer aerospikeConnectionMutex.Unlock()
+
+	if client, found := aerospikeConnections[host]; found {
+		client.Close()
+		delete(aerospikeConnections, host)
+	}
+}
+
 func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings.Settings) (*uaerospike.Client, error) {
 	if len(url.Path) < 1 {
 		return nil, errors.NewConfigurationError("aerospike namespace not found")

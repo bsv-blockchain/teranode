@@ -101,7 +101,7 @@ func (s *SQL) scanBlockRow(rows *sql.Rows) (*model.BlockInfo, error) {
 		}
 
 		// Extract miner information - handle errors gracefully for invalid blocks
-		info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
+		info.Miner, err = util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
 		if err != nil {
 			// For invalid blocks, the coinbase may be malformed, so we just log and continue
 			s.logger.Debugf("failed to extract miner (block may be invalid): %v", err)

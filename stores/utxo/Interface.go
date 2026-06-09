@@ -247,6 +247,26 @@ type Store interface {
 	// Returns status code, status message and any error encountered.
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
+	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
+	// or any other batched operations the implementation owns) and releases
+	// backing resources (connection pools, file handles, batcher workers).
+	//
+	// After Close returns, no further Store operations are valid.
+	//
+	// Unless the supplied context expires first, implementations MUST wait
+	// for outstanding batched writes to complete before returning. Returning
+	// before pending writes have committed risks silently losing UTXO state:
+	// callers (block validation, legacy sync) will have already received
+	// successful responses for those writes and will have committed the
+	// parent block, but on restart the UTXOs will be missing — breaking
+	// subsequent blocks that spend them.
+	//
+	// The context bounds the drain. If it expires before the drain completes,
+	// implementations should return its error; the underlying drain and
+	// resource release may continue best-effort in the background, but the
+	// caller must treat a context error as "drain not confirmed complete".
+	Close(ctx context.Context) error
+
 	// Create stores a new transaction's outputs as UTXOs and returns associated metadata.
 	// The blockHeight parameter is used to determine coinbase maturity.
 	// Additional options can be specified using CreateOption functions.

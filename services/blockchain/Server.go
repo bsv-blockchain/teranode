@@ -1309,6 +1309,27 @@ func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blo
 	}, nil
 }
 
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest) (*blockchain_api.AssignBlockIDResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "AssignBlockID",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[AssignBlockID] called"),
+	)
+	defer deferFn()
+
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[AssignBlockID] invalid block hash", err))
+	}
+
+	id, err := b.store.AssignBlockID(ctx, hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
+}
+
 // GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockStats",
@@ -1586,6 +1607,26 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 
 	return &blockchain_api.CheckBlockIsCurrentChainResponse{
 		IsPartOfCurrentChain: result,
+	}, nil
+}
+
+// GetOffChainBlockIDs returns the in-memory off-chain (forked) block ID set so callers
+// can prefetch the negative set once and resolve main-chain membership locally.
+func (b *Blockchain) GetOffChainBlockIDs(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetOffChainBlockIDsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetOffChainBlockIDs",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	ids, maxBlockID, rebuilding, err := b.store.OffChainBlockIDs(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetOffChainBlockIDsResponse{
+		OffChainBlockIds: ids,
+		Rebuilding:       rebuilding,
+		MaxBlockId:       maxBlockID,
 	}, nil
 }
 
@@ -3130,39 +3171,53 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
 	}
 
-	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-	// Calculate the max number of entries that will ultimately be in the
-	// block locator. See the description of the algorithm for how these
-	// numbers are derived.
-	var maxEntries uint8
+	heights := computeLocatorHeights(blockHeaderHeight)
 
-	if blockHeaderHeight <= 12 {
-		blockHeaderHeightUint8, err := safeconversion.Uint32ToUint8(blockHeaderHeight)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
-
-		maxEntries = blockHeaderHeightUint8 + 1
-	} else {
-		// Requested hash itself + previous 10 entries + genesis block.
-		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := blockHeaderHeight - 10
-		maxEntries = 12 + fastLog2Floor(adjustedHeight)
+	// Fast path: when blockHeaderHash is on the main chain, fetch every locator
+	// height in a single indexed query instead of one recursive-CTE walk per
+	// entry. ok=false means the store could not safely satisfy the fast path
+	// (fork tip, mid-rebuild, or a missing height) — fall back to the walk.
+	hashesByHeight, ok, err := store.MainChainBlockHashesByHeights(ctx, blockHeaderHash, heights)
+	if err != nil {
+		return nil, err
 	}
 
-	locator := make([]*chainhash.Hash, 0, maxEntries)
-	step := uint32(1)
-	height := blockHeaderHeight
-	hash := blockHeaderHash
-
-	for {
-		block, _, err := store.GetBlockInChainByHeightHash(ctx, height, hash)
-		if err != nil {
-			return nil, err
+	if ok {
+		locator := make([]*chainhash.Hash, 0, len(heights))
+		for _, h := range heights {
+			// The store guarantees a complete result set when ok is true.
+			locator = append(locator, hashesByHeight[h])
 		}
 
-		hash = block.Header.Hash()
-		locator = append(locator, hash)
+		return locator, nil
+	}
+
+	return getBlockLocatorByWalk(ctx, store, blockHeaderHash, heights)
+}
+
+// computeLocatorHeights returns the descending list of heights that make up a
+// block locator anchored at blockHeaderHeight: the height itself, the previous
+// 10, then heights at exponentially doubling gaps, ending at genesis (0). The
+// progression is pure arithmetic and does not depend on any stored block, so
+// the full set is known before any database access.
+func computeLocatorHeights(blockHeaderHeight uint32) []uint32 {
+	// Pre-allocate: at most 1 (the height itself) + 10 + floor(log2(height-10))
+	// for the doubling-skip portion + 1 (genesis) entries.
+	var maxEntries uint8
+	if blockHeaderHeight <= 12 {
+		maxEntries = uint8(blockHeaderHeight) + 1
+	} else {
+		// Requested height + previous 10 + genesis, then floor(log2(height-10))
+		// entries for the doubling-skip portion.
+		maxEntries = 12 + fastLog2Floor(blockHeaderHeight-10)
+	}
+
+	heights := make([]uint32, 0, maxEntries)
+	step := uint32(1)
+	height := blockHeaderHeight
+
+	for {
+		heights = append(heights, height)
 
 		if height == 0 {
 			break
@@ -3174,9 +3229,31 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 		height -= step
 
-		if len(locator) > 10 {
+		if len(heights) > 10 {
 			step *= 2
 		}
+	}
+
+	return heights
+}
+
+// getBlockLocatorByWalk builds a locator by walking the chain identified by
+// startHash, fetching the block at each height with a recursive-CTE lookup.
+// Each call uses the hash returned by the previous call as its new start, so
+// the walk hops forward through the height schedule. This is the original
+// behavior, retained as the fallback for fork tips.
+func getBlockLocatorByWalk(ctx context.Context, store blockchain_store.Store, startHash *chainhash.Hash, heights []uint32) ([]*chainhash.Hash, error) {
+	locator := make([]*chainhash.Hash, 0, len(heights))
+	hash := startHash
+
+	for _, h := range heights {
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, h, hash)
+		if err != nil {
+			return nil, err
+		}
+
+		hash = block.Header.Hash()
+		locator = append(locator, hash)
 	}
 
 	return locator, nil

@@ -161,7 +161,7 @@ func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	// go through moveForwardBlockChan and the event-loop goroutine, which
 	// would race against our enqueue. Calling the unexported method here
 	// keeps the test deterministic.
-	processedConflictingHashesMap := make(map[chainhash.Hash]bool)
+	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 	_, _, mfbErr := stp.moveForwardBlock(ctx, block, false, processedConflictingHashesMap, false, true)
 	require.Error(t, mfbErr, "moveForwardBlock must surface the Create failure injected by the wrapper")
 	require.ErrorIs(t, mfbErr, sentinelErr, "the error chain must mention the sentinel from errOnCreateUtxoStore")

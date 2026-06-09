@@ -54,6 +54,15 @@ func ensurePrometheusMetrics() {
 		prometheusUtxoParentsSkippedPruned = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_utxo_pruner_parents_skipped_pruned_total",
 		})
+		prometheusUtxoPrunedSetSize = prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_utxo_pruner_pruned_set_size",
+		})
+		prometheusUtxoPrunedSetSaturated = prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_utxo_pruner_pruned_set_saturated",
+		})
+		prometheusUtxoPrunedSetRotations = prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_utxo_pruner_pruned_set_rotations",
+		})
 	})
 }
 

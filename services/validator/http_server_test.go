@@ -98,10 +98,15 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
 		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method which may be called regardless of skipUtxoCreation
+		// Add expectation for the Get method which may be called regardless of skipUtxoCreation.
+		// BlockHeights must be non-empty so the validator does not take the fallback path
+		// (which stamps the unconfirmedParentHeight sentinel — BDK then rejects with
+		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
+		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:         32279815860,
-			SizeInBytes: 245,
+			Fee:          32279815860,
+			SizeInBytes:  245,
+			BlockHeights: []uint32{999},
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
@@ -148,10 +153,15 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
 		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method
+		// Add expectation for the Get method. BlockHeights must be non-empty so the
+		// validator does not take the fallback path (which stamps the
+		// unconfirmedParentHeight sentinel — BDK then rejects with
+		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
+		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:         32279815860,
-			SizeInBytes: 245,
+			Fee:          32279815860,
+			SizeInBytes:  245,
+			BlockHeights: []uint32{999},
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 

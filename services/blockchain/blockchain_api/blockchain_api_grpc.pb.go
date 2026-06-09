@@ -30,6 +30,7 @@ const (
 	BlockchainAPI_GetBlockByHeight_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
 	BlockchainAPI_GetBlockByID_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetBlockByID"
 	BlockchainAPI_GetNextBlockID_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetNextBlockID"
+	BlockchainAPI_AssignBlockID_FullMethodName                        = "/blockchain_api.BlockchainAPI/AssignBlockID"
 	BlockchainAPI_GetBlockStats_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetBlockStats"
 	BlockchainAPI_GetBlockGraphData_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
 	BlockchainAPI_GetLastNBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
@@ -50,6 +51,7 @@ const (
 	BlockchainAPI_GetBlocksByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlocksByHeight"
 	BlockchainAPI_FindBlocksContainingSubtree_FullMethodName          = "/blockchain_api.BlockchainAPI/FindBlocksContainingSubtree"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_GetOffChainBlockIDs_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetOffChainBlockIDs"
 	BlockchainAPI_GetBestBlockHeader_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName           = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
 	BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsAncestorOfBlock"
@@ -115,6 +117,10 @@ type BlockchainAPIClient interface {
 	GetBlockByID(ctx context.Context, in *GetBlockByIDRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
 	// GetNextBlockID retrieves the next available block ID.
 	GetNextBlockID(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetNextBlockIDResponse, error)
+	// AssignBlockID returns a stable block ID for a given block hash (idempotent
+	// per hash). Used by ingestion paths so UTXO mined-info and the committed
+	// block share one id.
+	AssignBlockID(ctx context.Context, in *AssignBlockIDRequest, opts ...grpc.CallOption) (*AssignBlockIDResponse, error)
 	// GetBlockStats retrieves statistical information about the blockchain.
 	GetBlockStats(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*model.BlockStats, error)
 	// GetBlockGraphData retrieves data points for blockchain visualization.
@@ -156,6 +162,11 @@ type BlockchainAPIClient interface {
 	FindBlocksContainingSubtree(ctx context.Context, in *FindBlocksContainingSubtreeRequest, opts ...grpc.CallOption) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
+	// GetOffChainBlockIDs returns the complete set of block IDs known NOT to be
+	// on the current main chain (the in-memory off-chain set). Lets callers
+	// prefetch the negative set once and answer main-chain membership locally,
+	// instead of issuing one CheckBlockIsInCurrentChain RPC per candidate set.
+	GetOffChainBlockIDs(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetOffChainBlockIDsResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -318,6 +329,16 @@ func (c *blockchainAPIClient) GetNextBlockID(ctx context.Context, in *emptypb.Em
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNextBlockIDResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetNextBlockID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) AssignBlockID(ctx context.Context, in *AssignBlockIDRequest, opts ...grpc.CallOption) (*AssignBlockIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssignBlockIDResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_AssignBlockID_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +539,16 @@ func (c *blockchainAPIClient) GetBlockHeaderIDs(ctx context.Context, in *GetBloc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeaderIDsResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeaderIDs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetOffChainBlockIDs(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetOffChainBlockIDsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOffChainBlockIDsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetOffChainBlockIDs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -974,6 +1005,10 @@ type BlockchainAPIServer interface {
 	GetBlockByID(context.Context, *GetBlockByIDRequest) (*GetBlockResponse, error)
 	// GetNextBlockID retrieves the next available block ID.
 	GetNextBlockID(context.Context, *emptypb.Empty) (*GetNextBlockIDResponse, error)
+	// AssignBlockID returns a stable block ID for a given block hash (idempotent
+	// per hash). Used by ingestion paths so UTXO mined-info and the committed
+	// block share one id.
+	AssignBlockID(context.Context, *AssignBlockIDRequest) (*AssignBlockIDResponse, error)
 	// GetBlockStats retrieves statistical information about the blockchain.
 	GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error)
 	// GetBlockGraphData retrieves data points for blockchain visualization.
@@ -1015,6 +1050,11 @@ type BlockchainAPIServer interface {
 	FindBlocksContainingSubtree(context.Context, *FindBlocksContainingSubtreeRequest) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
+	// GetOffChainBlockIDs returns the complete set of block IDs known NOT to be
+	// on the current main chain (the in-memory off-chain set). Lets callers
+	// prefetch the negative set once and answer main-chain membership locally,
+	// instead of issuing one CheckBlockIsInCurrentChain RPC per candidate set.
+	GetOffChainBlockIDs(context.Context, *emptypb.Empty) (*GetOffChainBlockIDsResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -1134,6 +1174,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockByID(context.Context, *GetBlockB
 func (UnimplementedBlockchainAPIServer) GetNextBlockID(context.Context, *emptypb.Empty) (*GetNextBlockIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNextBlockID not implemented")
 }
+func (UnimplementedBlockchainAPIServer) AssignBlockID(context.Context, *AssignBlockIDRequest) (*AssignBlockIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AssignBlockID not implemented")
+}
 func (UnimplementedBlockchainAPIServer) GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockStats not implemented")
 }
@@ -1193,6 +1236,9 @@ func (UnimplementedBlockchainAPIServer) FindBlocksContainingSubtree(context.Cont
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockHeaderIDs not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetOffChainBlockIDs(context.Context, *emptypb.Empty) (*GetOffChainBlockIDsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOffChainBlockIDs not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBestBlockHeader not implemented")
@@ -1463,6 +1509,24 @@ func _BlockchainAPI_GetNextBlockID_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetNextBlockID(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_AssignBlockID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssignBlockIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).AssignBlockID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_AssignBlockID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).AssignBlockID(ctx, req.(*AssignBlockIDRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1823,6 +1887,24 @@ func _BlockchainAPI_GetBlockHeaderIDs_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeaderIDs(ctx, req.(*GetBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetOffChainBlockIDs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetOffChainBlockIDs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetOffChainBlockIDs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetOffChainBlockIDs(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2612,6 +2694,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetNextBlockID_Handler,
 		},
 		{
+			MethodName: "AssignBlockID",
+			Handler:    _BlockchainAPI_AssignBlockID_Handler,
+		},
+		{
 			MethodName: "GetBlockStats",
 			Handler:    _BlockchainAPI_GetBlockStats_Handler,
 		},
@@ -2690,6 +2776,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeaderIDs",
 			Handler:    _BlockchainAPI_GetBlockHeaderIDs_Handler,
+		},
+		{
+			MethodName: "GetOffChainBlockIDs",
+			Handler:    _BlockchainAPI_GetOffChainBlockIDs_Handler,
 		},
 		{
 			MethodName: "GetBestBlockHeader",

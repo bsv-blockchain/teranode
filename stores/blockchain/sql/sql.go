@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -39,6 +40,9 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/lib/pq"
 	"golang.org/x/sync/singleflight"
 	_ "modernc.org/sqlite"
 )
@@ -47,6 +51,11 @@ import (
 // GetBlockHeaders). Set to 10 minutes because block validation in production can take
 // several minutes, and the cached results (parent_id walks) are immutable.
 const chainWalkCacheTTL = 10 * time.Minute
+
+// blockIDReservationTTL bounds how long a block-id reservation (AssignBlockID)
+// survives without a commit. Reservations are normally cleared on commit; the
+// TTL only reclaims entries for blocks that are fetched but never committed.
+const blockIDReservationTTL = 10 * time.Minute
 
 // rebuildOffChainSetTimeout bounds the duration of rebuildOffChainSet calls made with
 // context.Background() (in InvalidateBlock, RevalidateBlock). This prevents the rebuild
@@ -85,6 +94,8 @@ type SQL struct {
 	cacheTTL time.Duration
 	// chainParams contains the blockchain network parameters (mainnet, testnet, etc.)
 	chainParams *chaincfg.Params
+	// rawMinerTag controls whether miner tags are returned raw (true) or sanitized (false)
+	rawMinerTag bool
 	// offChainBlockIDs holds the set of block IDs known to NOT be on the main chain
 	// (fork/orphan blocks). This set is tiny (a few hundred entries on all of mainnet)
 	// and allows CheckBlockIsInCurrentChain to answer with a pure in-memory lookup
@@ -97,6 +108,18 @@ type SQL struct {
 	// false without consulting the off-chain set. This prevents non-existent/garbage
 	// block IDs from being incorrectly treated as on-chain.
 	maxBlockID atomic.Uint64
+	// blockIDReservations maps a not-yet-committed block hash to the block ID
+	// reserved for it. Two ingestion paths (legacy netsync + blockvalidation
+	// catchup) can race on the same block during IBD; without a shared authority
+	// each calls nextval and gets a DIFFERENT id, one of which is written into the
+	// block's UTXO mined-info while the block commits under the other — orphaning
+	// the first id (a phantom that later fails checkOldBlockIDs and wedges sync).
+	// This cache makes assignment idempotent per hash. Entries are deleted on
+	// commit (StoreBlock) and auto-expire to bound growth from abandoned blocks.
+	blockIDReservations *ttlcache.Cache[chainhash.Hash, uint64]
+	// blockIDReservationMu serializes the check-then-reserve critical section so
+	// concurrent callers for the same hash converge on one id.
+	blockIDReservationMu sync.Mutex
 	// chainWalkCache is a dedicated cache for chain-walking queries (GetBlockHeaderIDs,
 	// GetBlockHeaders) that follow parent_id links. Unlike responseCache, this is only
 	// invalidated on chain reorganizations (InvalidateBlock/RevalidateBlock), because
@@ -233,11 +256,22 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		responseCache:         NewGenerationalCache(),
 		cacheTTL:              2 * time.Minute,
 		chainParams:           tSettings.ChainCfgParams,
+		rawMinerTag:           tSettings.BlockChain.RawMinerTag,
 		useInMemoryChainCheck: useInMemory,
 		blockTimestampCache:   newBlockTimestampCache(),
 	}
 
 	s.backgroundDone = make(chan struct{})
+
+	s.blockIDReservations = ttlcache.New[chainhash.Hash, uint64](
+		ttlcache.WithTTL[chainhash.Hash, uint64](blockIDReservationTTL),
+		// Do not extend the TTL on lookups: a reservation must expire a fixed time
+		// after it was created, so a repeatedly-polled-but-never-committed hash is
+		// reclaimed instead of being kept alive by reads (bounds map growth).
+		ttlcache.WithDisableTouchOnHit[chainhash.Hash, uint64](),
+	)
+	go s.blockIDReservations.Start() // janitor
+
 	if useInMemory {
 		s.chainWalkCache = NewGenerationalCache()
 		s.offChainBlockIDs = make(map[uint32]struct{})
@@ -245,6 +279,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 
 	err = s.insertGenesisTransaction(logger, s.chainParams)
 	if err != nil {
+		s.blockIDReservations.Stop() // avoid leaking the janitor goroutine on the error path
 		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
@@ -351,6 +386,9 @@ func (s *SQL) Close() error {
 	s.responseCache.Stop()
 	if s.chainWalkCache != nil {
 		s.chainWalkCache.Stop()
+	}
+	if s.blockIDReservations != nil {
+		s.blockIDReservations.Stop()
 	}
 	return s.db.Close()
 }
@@ -1342,12 +1380,86 @@ func (s *SQL) reconcileOnMainChain(ctx context.Context) error {
 // mainChainRebuilding is incremented for the duration of the call so concurrent
 // queries fall back to the authoritative CTE rather than reading partially-updated
 // flags. The counter-based guard is safe under reentrant/overlapping callers.
-func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error) {
+func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) error {
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
+	// The transaction below runs at REPEATABLE READ (see rebuildOnMainChainFlagTx)
+	// so all of its statements share one snapshot. On Postgres a snapshot-isolated
+	// transaction can abort with 40001 (serialization_failure) or 40P01
+	// (deadlock_detected) if a concurrent committed transaction modified a row it
+	// writes. The only caller that runs without slowPathMu held is the startup
+	// goroutine (see New); Invalidate/Revalidate hold slowPathMu and StoreBlock
+	// holds it for its whole duration, so they cannot conflict. The startup window
+	// can, however, race a slow-path StoreBlock UPDATE — so retry the whole
+	// transaction (begin → reads → UPDATEs → commit) as a unit on those codes.
+	// tx.ExecContext / tx.QueryRowContext are stdlib *sql.Tx methods and do NOT
+	// go through usql's per-statement retry, so the retry has to live here.
+	//
+	// On SQLite the modernc driver ignores the isolation option and never returns
+	// 40001/40P01, so isSerializationRetry is always false and the loop runs once.
+	const (
+		maxRebuildAttempts = 3
+		retryBaseDelay     = 100 * time.Millisecond
+	)
+
+	var err error
+	for attempt := 0; attempt < maxRebuildAttempts; attempt++ {
+		err = s.rebuildOnMainChainFlagTx(ctx, full)
+		if err == nil || !s.isSerializationRetry(err) {
+			return err
+		}
+
+		// On the final attempt, stop here and fall through to the exhaustion log +
+		// return below — logging "retrying" when no retry follows would be misleading.
+		if attempt == maxRebuildAttempts-1 {
+			break
+		}
+
+		// Exponential backoff (100ms, 200ms, ...) to match util/usql house style,
+		// aborting early if the context is cancelled.
+		backoff := retryBaseDelay << uint(attempt)
+		s.logger.Warnf("rebuildOnMainChainFlag: serialization conflict (attempt %d/%d), retrying in %s: %v", attempt+1, maxRebuildAttempts, backoff, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+
+	// Retries exhausted on a serialization conflict. Return the raw typed driver
+	// error (not wrapped) so callers can still classify it via errors.As; log here
+	// for visibility since the error is otherwise only surfaced by the caller.
+	s.logger.Warnf("rebuildOnMainChainFlag: serialization conflict persisted after %d attempts: %v", maxRebuildAttempts, err)
+
+	return err
+}
+
+// isSerializationRetry reports whether err is a Postgres serialization_failure
+// (40001) or deadlock_detected (40P01) — the two codes a REPEATABLE READ
+// transaction can raise on a write-write conflict and which are safe to retry by
+// re-running the whole transaction. SQLite never produces these codes.
+func (*SQL) isSerializationRetry(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		code := string(pqErr.Code)
+		return code == usql.PgErrSerializationFail || code == usql.PgErrDeadlockDetected
+	}
+
+	return false
+}
+
+// rebuildOnMainChainFlagTx runs one attempt of the on_main_chain rebuild inside a
+// single REPEATABLE READ transaction. See rebuildOnMainChainFlag for the retry
+// wrapper and the snapshot-isolation rationale.
+func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool) (err error) {
 	var tx *sql.Tx
-	tx, err = s.db.BeginTx(ctx, nil)
+	tx, err = s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to begin transaction", err)
 	}
@@ -1364,6 +1476,12 @@ func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error)
 	if err = tx.QueryRowContext(ctx, bestQ).Scan(&bestBlockID, &bestHeight); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // empty DB — nothing to rebuild
+		}
+		// Return the raw driver error on a serialization/deadlock abort so the
+		// retry wrapper can classify it: errors.NewStorageError captures only the
+		// message string of a non-*Error cause, discarding the typed *pgconn.PgError.
+		if s.isSerializationRetry(err) {
+			return err
 		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to get best block", err)
 	}
@@ -1394,6 +1512,9 @@ func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error)
 		WHERE on_main_chain = true AND height >= $2 AND id NOT IN (SELECT id FROM main_chain)
 	`
 	if _, err = tx.ExecContext(ctx, q1, bestBlockID, windowBottom); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to clear stale on_main_chain flags", err)
 	}
 
@@ -1412,10 +1533,16 @@ func (s *SQL) rebuildOnMainChainFlag(ctx context.Context, full bool) (err error)
 		WHERE on_main_chain = false AND height >= $2 AND id IN (SELECT id FROM main_chain)
 	`
 	if _, err = tx.ExecContext(ctx, q2, bestBlockID, windowBottom); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to set on_main_chain flags", err)
 	}
 
 	if err = tx.Commit(); err != nil {
+		if s.isSerializationRetry(err) {
+			return err
+		}
 		return errors.NewStorageError("rebuildOnMainChainFlag: failed to commit transaction", err)
 	}
 

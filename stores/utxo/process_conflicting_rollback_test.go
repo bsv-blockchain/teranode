@@ -66,7 +66,7 @@ func TestProcessConflictingRollback_Step3Failure(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -122,7 +122,7 @@ func TestProcessConflictingRollback_RollbackAlsoFails(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -172,7 +172,7 @@ func TestProcessConflictingRollback_Step5RetrySucceeds(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -218,7 +218,7 @@ func TestProcessConflictingRollback_Step5RetryExhausted(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return(errors.NewProcessingError("persistent lock failure")).Times(3)
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -284,7 +284,7 @@ func TestProcessConflictingRollback_PartialStep3Spend(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -363,7 +363,7 @@ func TestProcessConflictingRollback_CascadeDescendants(t *testing.T) {
 		return seen[losingTxHash] && seen[descendantHash]
 	}), false).Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]struct{}{})
 
 	require.Nil(t, result)
 	require.Error(t, err)

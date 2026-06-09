@@ -259,9 +259,16 @@ type Interface interface {
 	// This provides a complete list of transactions in the processor's queue.
 	// NOTE: This can be a very large list, so use with caution.
 	//
+	// Returns nil if ctx is cancelled before the SubtreeProcessor's main loop
+	// services the request.
+	//
+	// Parameters:
+	//   - ctx: Cancellation context; returning early on cancel never leaks
+	//     a goroutine because the underlying response channel is buffered.
+	//
 	// Returns:
-	//   - []chainhash.Hash: Array of transaction hashes
-	GetTransactionHashes() []chainhash.Hash
+	//   - []chainhash.Hash: Array of transaction hashes (nil if cancelled)
+	GetTransactionHashes(ctx context.Context) []chainhash.Hash
 
 	// GetUtxoStore returns the UTXO store used by the processor.
 	// This provides access to the underlying UTXO validation system.

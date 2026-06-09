@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
@@ -26,7 +27,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
@@ -6504,4 +6508,129 @@ func (m *mockMessage) Command() string {
 // MaxPayloadLength implements wire.Message interface
 func (m *mockMessage) MaxPayloadLength(pver uint32) uint64 {
 	return 1000
+}
+
+// ---------------------------------------------------------------------------
+// T11_teranode: absurd-fee user-protection ceiling on sendrawtransaction.
+// The check lives only in handleSendRawTransaction; tests prove (1) below
+// ceiling accepted, (2) above ceiling rejected with the bitcoin-sv-style
+// error string, (3) allowhighfees=true bypasses, (4) MaxRawTxFee=0
+// disables, and (5) the help text no longer claims the flag has no effect.
+// ---------------------------------------------------------------------------
+
+// rejectingValidator panics if Validate is called — used to prove the
+// absurd-fee rejection short-circuits before the validator is invoked.
+type rejectingValidator struct{ validator.Interface }
+
+func (rejectingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	panic("validator must not be called when absurd-fee rejection fires")
+}
+
+// acceptingValidator returns success — used when the test expects the
+// handler to proceed past the absurd-fee gate.
+type acceptingValidator struct{ validator.Interface }
+
+func (acceptingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...validator.Option) (*meta.Data, error) {
+	return &meta.Data{}, nil
+}
+
+// decoratingUtxoStore stamps a fixed input-satoshis value on every input of
+// every tx passed to PreviousOutputsDecorate. RPC-arriving txs are wire-format
+// only (no PreviousTxSatoshis), so the handler always invokes decoration; this
+// stub stands in for what the real UTXO store would do, giving us a known
+// inputSats value to compute fee against.
+type decoratingUtxoStore struct {
+	utxo.Store
+	inputSats uint64
+}
+
+func (d *decoratingUtxoStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
+	for _, in := range tx.Inputs {
+		in.PreviousTxSatoshis = d.inputSats
+	}
+	return nil
+}
+
+// buildSendRawTxCmd constructs a one-input, one-output tx with the given
+// outputSats and returns its wire-format hex (the form sendrawtransaction
+// receives over JSON-RPC).
+func buildSendRawTxCmd(t *testing.T, outputSats uint64, allowHighFees *bool) *bsvjson.SendRawTransactionCmd {
+	t.Helper()
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(
+		"a000000000000000000000000000000000000000000000000000000000000001",
+		0,
+		"76a914000000000000000000000000000000000000000088ac",
+		1, // placeholder; the handler's UTXO-store mock supplies the real value
+	))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", outputSats))
+	return &bsvjson.SendRawTransactionCmd{
+		HexTx:         hex.EncodeToString(tx.Bytes()),
+		AllowHighFees: allowHighFees,
+	}
+}
+
+func newRPCServerForAbsurdFeeTest(t *testing.T, maxRawTxFee, decoratedInputSats uint64, validatorClient validator.Interface) *RPCServer {
+	t.Helper()
+	return &RPCServer{
+		logger: mocklogger.NewTestLogger(),
+		settings: &settings.Settings{
+			ChainCfgParams: &chaincfg.MainNetParams,
+			Policy: &settings.PolicySettings{
+				MaxRawTxFee: maxRawTxFee,
+			},
+		},
+		utxoStore:       &decoratingUtxoStore{inputSats: decoratedInputSats},
+		validatorClient: validatorClient,
+		// txStore left nil — handler nil-guards it.
+	}
+}
+
+func TestHandleSendRawTransaction_AbsurdFee_BelowCeiling_Accepted(t *testing.T) {
+	// inputs = 100M sats, outputs = 99.999M → fee = 1000 sats, well below 10M ceiling.
+	s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, acceptingValidator{})
+	cmd := buildSendRawTxCmd(t, 99_999_000, nil)
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.NoError(t, err)
+}
+
+func TestHandleSendRawTransaction_AbsurdFee_AboveCeiling_Rejected(t *testing.T) {
+	// inputs = 100M, outputs = 50M → fee = 50M sats > 10M ceiling.
+	s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, rejectingValidator{})
+	cmd := buildSendRawTxCmd(t, 50_000_000, nil)
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.Error(t, err)
+	rpcErr, ok := err.(*bsvjson.RPCError)
+	require.True(t, ok, "expected an RPC error type")
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+	require.Contains(t, rpcErr.Message, "absurdly-high-fee")
+	require.Contains(t, rpcErr.Message, "50000000")
+	require.Contains(t, rpcErr.Message, "10000000")
+}
+
+func TestHandleSendRawTransaction_AbsurdFee_AllowHighFees_Bypasses(t *testing.T) {
+	allow := true
+	s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, acceptingValidator{})
+	cmd := buildSendRawTxCmd(t, 50_000_000, &allow) // would otherwise reject
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.NoError(t, err)
+}
+
+func TestHandleSendRawTransaction_AbsurdFee_DisabledByConfig(t *testing.T) {
+	// MaxRawTxFee=0 → check disabled globally; the otherwise-rejected fee passes.
+	s := newRPCServerForAbsurdFeeTest(t, 0, 100_000_000, acceptingValidator{})
+	cmd := buildSendRawTxCmd(t, 50_000_000, nil)
+
+	_, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+	require.NoError(t, err)
+}
+
+func TestSendRawTransactionAllowHighFeesHelp_NoLongerSaysNoEffect(t *testing.T) {
+	help := helpDescsEnUS["sendrawtransaction-allowhighfees"]
+	require.NotEmpty(t, help)
+	require.NotContains(t, help, "no effect",
+		"help text must be updated to describe the new behaviour after T11")
 }

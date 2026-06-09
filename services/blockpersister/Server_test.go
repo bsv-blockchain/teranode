@@ -640,6 +640,9 @@ func (m *MockBlockchainClient) AddBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 func (m *MockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) { return 0, nil }
+func (m *MockBlockchainClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	return 0, nil
+}
 func (m *MockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	return nil
 }
@@ -781,6 +784,10 @@ func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
 	return true, nil
+}
+func (m *MockBlockchainClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	// Report rebuilding so callers fall back to per-block CheckBlockIsInCurrentChain.
+	return nil, 0, true, nil
 }
 func (m *MockBlockchainClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	// Default to false - blocks are not ancestors unless specifically testing reorg scenarios
@@ -966,6 +973,8 @@ func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, st
 	}
 	return http.StatusOK, "OK", nil
 }
+
+func (m *MockUTXOStore) Close(context.Context) error { return nil }
 
 // Required interface methods for utxo.Store
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

@@ -399,6 +399,15 @@ func (c *Client) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return resp.NextBlockId, nil
 }
 
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	resp, err := c.client.AssignBlockID(ctx, &blockchain_api.AssignBlockIDRequest{BlockHash: blockHash[:]})
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+	return resp.BlockId, nil
+}
+
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
 // This helper method deserializes the various components of a block response
 // from the blockchain service and reconstructs them into the internal Block model.
@@ -687,6 +696,20 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	}
 
 	return resp.GetIsPartOfCurrentChain(), nil
+}
+
+// OffChainBlockIDs returns the complete in-memory off-chain (forked) block ID set
+// plus the highest known block ID, so callers can prefetch the negative set once
+// and resolve main-chain membership locally (id <= maxBlockID AND not in the set).
+// rebuilding is true when the set is stale and callers must fall back to per-block
+// CheckBlockIsInCurrentChain checks.
+func (c *Client) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	resp, err := c.client.GetOffChainBlockIDs(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, 0, false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetOffChainBlockIds(), resp.GetMaxBlockId(), resp.GetRebuilding(), nil
 }
 
 // CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.

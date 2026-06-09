@@ -56,9 +56,9 @@ func TestProcessConflictingTransactions_ReverseCascadeSurfacing(t *testing.T) {
 		}
 
 		conflictingNodes := []chainhash.Hash{preProcessedA, preProcessedB}
-		processedMap := map[chainhash.Hash]bool{
-			preProcessedA: true,
-			preProcessedB: true,
+		processedMap := map[chainhash.Hash]struct{}{
+			preProcessedA: {},
+			preProcessedB: {},
 		}
 
 		losing, conflictingSet, err := stp.processConflictingTransactions(
@@ -96,7 +96,7 @@ func TestProcessConflictingTransactions_ReverseCascadeSurfacing(t *testing.T) {
 			context.Background(),
 			&model.Block{Header: dummyHeader()},
 			[]chainhash.Hash{hashA},
-			map[chainhash.Hash]bool{hashA: true},
+			map[chainhash.Hash]struct{}{hashA: {}},
 		)
 		require.NoError(t, err)
 		assert.Nil(t, losing, "no cascade → no losers")
@@ -114,7 +114,7 @@ func TestProcessConflictingTransactions_ReverseCascadeSurfacing(t *testing.T) {
 			context.Background(),
 			&model.Block{Header: dummyHeader()},
 			nil,
-			map[chainhash.Hash]bool{},
+			map[chainhash.Hash]struct{}{},
 		)
 		require.NoError(t, err)
 		assert.Nil(t, losing)

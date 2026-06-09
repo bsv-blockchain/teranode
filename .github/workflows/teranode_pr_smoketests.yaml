@@ -46,6 +46,9 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
       - name: Run Smoke tests
         run: make smoketest SHARD=${{ matrix.shard }} TOTAL=3
         env:
@@ -61,7 +64,9 @@ jobs:
 
   prunertest:
     name: prunertest
-    runs-on: teranode-runner-8-core
+    # arm64: TestPruner/TestBlobDeletion use aerospike (8.1, arm64) but no
+    # SV-node, so this moves to arm unlike smoketest/legacy-sync/sequential.
+    runs-on: teranode-runner-8-core-arm
     steps:
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
@@ -78,6 +83,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run Pruner tests
         run: make prunertest
@@ -113,6 +121,9 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
       - name: Run Legacy Sync tests
         run: make legacy-sync
         continue-on-error: false
@@ -129,7 +140,9 @@ jobs:
 
   chainintegrity:
     name: chainintegrity
-    runs-on: teranode-runner-8-core
+    # arm64: no SV-node; images all arm64-capable (teranode multi-arch,
+    # aerospike-server:8.1 arm64, postgres + redpanda arm64).
+    runs-on: teranode-runner-8-core-arm
     steps:
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
@@ -146,6 +159,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run Chain Integrity tests
         run: make chainintegrity
@@ -184,6 +200,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
 
       - name: Run sequential shard
         run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7

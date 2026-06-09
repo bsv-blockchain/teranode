@@ -17,6 +17,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -32,6 +33,7 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -3101,6 +3103,12 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
 
+	testAFCfg := adaptivefetch.DefaultConfig()
+	testAFCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	testAF, err := adaptivefetch.New(testAFCfg, "test", prometheus.NewRegistry())
+	require.NoError(t, err)
+	require.NotNil(t, testAF)
+
 	server := &Server{
 		logger:              ulogger.TestLogger{},
 		settings:            tSettings,
@@ -3118,7 +3126,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		catchupAttempts:     atomic.Int64{},
 		catchupSuccesses:    atomic.Int64{},
 		catchupStatsMu:      sync.RWMutex{},
+		adaptiveFetch:       testAF,
 	}
+	server.fetchSubtreeDataForBlockFn = server.fetchSubtreeDataForBlock
 
 	cleanup := func() {
 		// Only stop the TTL cache if it was started
@@ -3206,6 +3216,12 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		circuitBreakers = catchup.NewPeerCircuitBreakers(*config.CircuitBreakerConfig)
 	}
 
+	testAFWithConfigCfg := adaptivefetch.DefaultConfig()
+	testAFWithConfigCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	testAFWithConfig, err := adaptivefetch.New(testAFWithConfigCfg, "test", prometheus.NewRegistry())
+	require.NoError(t, err)
+	require.NotNil(t, testAFWithConfig)
+
 	server := &Server{
 		logger:              ulogger.TestLogger{},
 		settings:            tSettings,
@@ -3223,7 +3239,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		catchupAttempts:     atomic.Int64{},
 		catchupSuccesses:    atomic.Int64{},
 		catchupStatsMu:      sync.RWMutex{},
+		adaptiveFetch:       testAFWithConfig,
 	}
+	server.fetchSubtreeDataForBlockFn = server.fetchSubtreeDataForBlock
 
 	cleanup := func() {
 		// Only stop the TTL cache if it was started

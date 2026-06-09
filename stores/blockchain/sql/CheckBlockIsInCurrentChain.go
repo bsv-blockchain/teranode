@@ -46,20 +46,37 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 	s.offChainBlockIDsMu.RUnlock()
 
 	// ANY-of semantics: return true if at least one block is on the main chain.
-	// This matches the old CTE behavior and is required by callers like
-	// BlockValidation.checkOldBlockIDs which passes candidate block IDs for a
-	// transaction across forks and needs true if any candidate is on-chain.
+	//
+	// The off-chain set + maxID give a fast NEGATIVE only: an id above the highest
+	// known id, or one in the off-chain set, definitely is NOT on the main chain.
+	// A surviving candidate is NOT positively on-chain, though — the off-chain set
+	// tracks only blocks that EXIST off-chain, so a *non-existent* (phantom /
+	// id-sequence gap) id <= maxID survives this filter despite having no row.
+	// Treating a survivor as on-chain (the previous behaviour) disagreed with the
+	// authoritative SQL route (checkBlockIsInCurrentChainSQL requires a real
+	// on_main_chain=true row) and could split a useInMemoryChainCheck=on node from
+	// an off node on a dangling id. So confirm survivors against the authoritative
+	// on_main_chain flag instead of assuming membership.
+	survivors := make([]uint32, 0, len(blockIDs))
 	for _, id := range blockIDs {
-		// IDs above the highest known block cannot exist in the database.
 		if id > maxID {
 			continue
 		}
-		if _, isOffChain := offChain[id]; !isOffChain {
-			return true, nil
+		if _, isOffChain := offChain[id]; isOffChain {
+			continue
 		}
+		survivors = append(survivors, id)
 	}
 
-	return false, nil
+	if len(survivors) == 0 {
+		return false, nil
+	}
+
+	// We reach here only when mainChainRebuilding == 0, so checkBlockIsInCurrentChainSQL
+	// takes its indexed fast path (SELECT 1 ... WHERE id IN (...) AND on_main_chain=true),
+	// never the recursive CTE. A non-existent id matches no row and is rejected,
+	// identically to the always-SQL route — closing the toggled/untoggled split.
+	return s.checkBlockIsInCurrentChainSQL(ctx, survivors)
 }
 
 // checkBlockIsInCurrentChainSQL is the SQL fallback implementation used when

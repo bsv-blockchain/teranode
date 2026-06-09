@@ -182,57 +182,180 @@ func (s *SplitSwissMap) Clear() {
 	wg.Wait()
 }
 
+type txInpointsBucket struct {
+	mu sync.Mutex
+	m  *swiss.Map[chainhash.Hash, *subtreepkg.TxInpoints]
+}
+
 type SplitTxInpointsMap struct {
-	m           map[uint16]*txmap.SyncedMap[chainhash.Hash, *subtreepkg.TxInpoints]
+	buckets     []txInpointsBucket
 	nrOfBuckets uint16
 }
 
 func NewSplitTxInpointsMap(nrOfBuckets uint16) *SplitTxInpointsMap {
-	m := make(map[uint16]*txmap.SyncedMap[chainhash.Hash, *subtreepkg.TxInpoints], nrOfBuckets)
+	buckets := make([]txInpointsBucket, nrOfBuckets)
 	for i := uint16(0); i < nrOfBuckets; i++ {
-		m[i] = txmap.NewSyncedMap[chainhash.Hash, *subtreepkg.TxInpoints]()
+		buckets[i].m = swiss.NewMap[chainhash.Hash, *subtreepkg.TxInpoints](64)
 	}
 
 	return &SplitTxInpointsMap{
-		m:           m,
+		buckets:     buckets,
 		nrOfBuckets: nrOfBuckets,
 	}
 }
 
 func (s *SplitTxInpointsMap) Delete(hash chainhash.Hash) bool {
-	return s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].Delete(hash)
+	b := &s.buckets[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)]
+	b.mu.Lock()
+	ok := b.m.Has(hash)
+	if ok {
+		b.m.Delete(hash)
+	}
+	b.mu.Unlock()
+	return ok
 }
 
 func (s *SplitTxInpointsMap) Exists(hash chainhash.Hash) bool {
-	return s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].Exists(hash)
+	b := &s.buckets[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)]
+	b.mu.Lock()
+	ok := b.m.Has(hash)
+	b.mu.Unlock()
+	return ok
 }
 
 func (s *SplitTxInpointsMap) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
-	return s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].Get(hash)
+	b := &s.buckets[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)]
+	b.mu.Lock()
+	v, ok := b.m.Get(hash)
+	b.mu.Unlock()
+	return v, ok
 }
 
 func (s *SplitTxInpointsMap) Length() int {
 	length := 0
-
-	for _, syncedMap := range s.m {
-		length += syncedMap.Length()
+	for i := uint16(0); i < s.nrOfBuckets; i++ {
+		b := &s.buckets[i]
+		b.mu.Lock()
+		length += b.m.Count()
+		b.mu.Unlock()
 	}
-
 	return length
 }
 
 func (s *SplitTxInpointsMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
-	s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].Set(hash, inpoints)
+	b := &s.buckets[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)]
+	b.mu.Lock()
+	b.m.Put(hash, inpoints)
+	b.mu.Unlock()
 }
 
 func (s *SplitTxInpointsMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool) {
-	return s.m[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)].SetIfNotExists(hash, inpoints)
+	b := &s.buckets[txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)]
+	b.mu.Lock()
+	if existing, ok := b.m.Get(hash); ok {
+		b.mu.Unlock()
+		return existing, false
+	}
+	b.m.Put(hash, inpoints)
+	b.mu.Unlock()
+	return inpoints, true
 }
 
+// Clear empties every bucket in place via swiss.Map.Clear, which zeroes the
+// existing control/group arrays and retains capacity, rather than discarding
+// each bucket map. This matches the pool-reuse approach of SplitSwissMap.Clear
+// and avoids per-Clear reallocation + rehashing on the next refill, which
+// matters because SplitTxInpointsMap.Clear is on the currentTxMap double-buffer
+// reuse path.
 func (s *SplitTxInpointsMap) Clear() {
-	for _, syncedMap := range s.m {
-		syncedMap.Clear()
+	for i := uint16(0); i < s.nrOfBuckets; i++ {
+		b := &s.buckets[i]
+		b.mu.Lock()
+		b.m.Clear()
+		b.mu.Unlock()
 	}
+}
+
+// ParallelBulkSetIfNotExists inserts multiple entries in parallel, grouped by bucket.
+// Each bucket is processed by a separate goroutine with a single lock acquisition.
+// wasSet[i] is set to true if hashes[i] was newly inserted (not already present).
+func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
+	hashes []chainhash.Hash,
+	inpoints []*subtreepkg.TxInpoints,
+	wasSet []bool,
+) {
+	n := len(hashes)
+	if n == 0 {
+		return
+	}
+
+	if len(inpoints) != n {
+		panic("SplitTxInpointsMap.ParallelBulkSetIfNotExists: len(inpoints) must equal len(hashes)")
+	}
+	if wasSet == nil || len(wasSet) != n {
+		panic("SplitTxInpointsMap.ParallelBulkSetIfNotExists: len(wasSet) must equal len(hashes)")
+	}
+
+	// Phase 1: Group indices by bucket (O(N), no locks)
+	bucketIndices := make([][]int, s.nrOfBuckets)
+	for i := 0; i < n; i++ {
+		bucket := txmap.Bytes2Uint16Buckets(hashes[i], s.nrOfBuckets)
+		bucketIndices[bucket] = append(bucketIndices[bucket], i)
+	}
+
+	// Phase 2: Process buckets with a bounded pool of stride workers. Spawning
+	// one goroutine per non-empty bucket would create up to nrOfBuckets (default
+	// 16*1024) goroutines for a large bulk insert, where scheduler churn and
+	// memory spikes can dominate. Cap fan-out at GOMAXPROCS (matching
+	// SplitSwissMap.Clear / bulkBuildSubtrees); each worker strides over buckets.
+	numWorkers := runtime.GOMAXPROCS(0)
+	if numWorkers > int(s.nrOfBuckets) {
+		numWorkers = int(s.nrOfBuckets)
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	processBucket := func(bIdx uint16) {
+		indices := bucketIndices[bIdx]
+		if len(indices) == 0 {
+			return
+		}
+		b := &s.buckets[bIdx]
+		b.mu.Lock()
+		for _, idx := range indices {
+			if !b.m.Has(hashes[idx]) {
+				b.m.Put(hashes[idx], inpoints[idx])
+				wasSet[idx] = true
+			} else {
+				// Explicitly record the existing-key result so the contract
+				// (wasSet[i] reflects the outcome for hashes[i]) holds even if
+				// the caller reuses a slice with stale true values.
+				wasSet[idx] = false
+			}
+		}
+		b.mu.Unlock()
+	}
+
+	if numWorkers == 1 {
+		for bIdx := uint16(0); bIdx < s.nrOfBuckets; bIdx++ {
+			processBucket(bIdx)
+		}
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	for w := 0; w < numWorkers; w++ {
+		start := uint16(w)
+		go func() {
+			defer wg.Done()
+			for bIdx := start; bIdx < s.nrOfBuckets; bIdx += uint16(numWorkers) {
+				processBucket(bIdx)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // Buckets returns the configured bucket count.
@@ -247,21 +370,30 @@ func (s *SplitTxInpointsMap) BucketFor(hash chainhash.Hash) uint16 {
 }
 
 // PutMultiBucketTxInpoints inserts a batch of (hash, inpoints) pairs that all
-// belong to the same bucket. Delegates to the underlying SyncedMap's
-// SetIfNotExistsMulti, which takes the per-bucket lock exactly once for the
-// whole batch instead of once per entry — eliminating the per-call
-// Lock/Unlock overhead that profiling showed at ~17 % of every
-// SetIfNotExists call in the hot path.
+// belong to the same bucket. Takes the per-bucket lock exactly once for the
+// whole batch instead of once per entry.
 //
 // All entries MUST belong to the named bucket; callers are expected to have
-// partitioned by BucketFor beforehand. keys and values are walked in
-// parallel up to min(len(keys), len(values)); the returned slice has that
-// length. wasInserted[i] is true if keys[i] was newly added, false if it
-// already existed.
-//
-// Designed to be called from bucket-affinity worker pools where each worker
-// owns one or more buckets exclusively, so the per-bucket RWMutex is
-// uncontended across worker calls.
+// partitioned by BucketFor beforehand. The returned slice has length
+// min(len(keys), len(values)); wasInserted[i] is true if keys[i] was newly
+// added, false if it already existed.
 func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, keys []chainhash.Hash, values []*subtreepkg.TxInpoints) []bool {
-	return s.m[bucket].SetIfNotExistsMulti(keys, values)
+	n := len(keys)
+	if len(values) < n {
+		n = len(values)
+	}
+	wasInserted := make([]bool, n)
+	if n == 0 {
+		return wasInserted
+	}
+	b := &s.buckets[bucket]
+	b.mu.Lock()
+	for i := 0; i < n; i++ {
+		if !b.m.Has(keys[i]) {
+			b.m.Put(keys[i], values[i])
+			wasInserted[i] = true
+		}
+	}
+	b.mu.Unlock()
+	return wasInserted
 }

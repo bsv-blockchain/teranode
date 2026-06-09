@@ -43,8 +43,14 @@ type MockStore struct {
 	BlockChainWork map[chainhash.Hash][]byte
 	// BlockIsMined maps block hashes to their mined status for mined status checks
 	BlockIsMined map[chainhash.Hash]bool
+	// blockIDReservations holds reserved block IDs for hashes not yet committed,
+	// so that repeated calls to AssignBlockID for the same hash return the same id.
+	blockIDReservations map[chainhash.Hash]uint64
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
+	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
+	// return ok=false so callers exercise the per-height walk fallback (test hook).
+	MainChainFastPathDisabled bool
 	// mu provides thread-safe access to all MockStore fields
 	mu sync.RWMutex
 }
@@ -56,12 +62,13 @@ type MockStore struct {
 //   - *MockStore: A new, initialized MockStore instance with empty block maps and IDLE state
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Blocks:         map[chainhash.Hash]*model.Block{},
-		BlockExists:    map[chainhash.Hash]bool{},
-		BlockByHeight:  map[uint32]*model.Block{},
-		BlockChainWork: map[chainhash.Hash][]byte{},
-		BlockIsMined:   map[chainhash.Hash]bool{},
-		state:          "IDLE",
+		Blocks:              map[chainhash.Hash]*model.Block{},
+		BlockExists:         map[chainhash.Hash]bool{},
+		BlockByHeight:       map[uint32]*model.Block{},
+		BlockChainWork:      map[chainhash.Hash][]byte{},
+		BlockIsMined:        map[chainhash.Hash]bool{},
+		blockIDReservations: map[chainhash.Hash]uint64{},
+		state:               "IDLE",
 	}
 }
 
@@ -205,6 +212,38 @@ func (m *MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint
 	return block, false, nil
 }
 
+// MainChainBlockHashesByHeights returns the hash of the block at each requested
+// height from the height index. Returns ok=false when disabled, when inputs are
+// empty, or when any height is missing or above the start block's own height,
+// mirroring the SQL store's fallback contract.
+func (m *MockStore) MainChainBlockHashesByHeights(ctx context.Context, startHash *chainhash.Hash, heights []uint32) (map[uint32]*chainhash.Hash, bool, error) {
+	if m.MainChainFastPathDisabled || startHash == nil || len(heights) == 0 {
+		return nil, false, nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	startBlock, ok := m.Blocks[*startHash]
+	if !ok {
+		return nil, false, nil
+	}
+	startHeight := startBlock.Height
+
+	result := make(map[uint32]*chainhash.Hash, len(heights))
+
+	for _, h := range heights {
+		block, ok := m.BlockByHeight[h]
+		if !ok || h > startHeight {
+			return nil, false, nil
+		}
+
+		result[h] = block.Hash()
+	}
+
+	return result, true, nil
+}
+
 func (m *MockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	panic(implementMe)
 }
@@ -241,6 +280,46 @@ func (m *MockStore) GetNextBlockID(_ context.Context) (uint64, error) {
 	}
 
 	return maxID + 1, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash: repeated
+// calls for the same hash return the same id, and a committed block returns its
+// authoritative id.
+//
+// Resolution order (mirrors the SQL store contract):
+//  1. If the block is already stored (committed), return its authoritative id.
+//  2. If an id is already reserved for this hash, return it.
+//  3. Otherwise allocate a new id the same way GetNextBlockID does and reserve it.
+func (m *MockStore) AssignBlockID(_ context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 1. Committed block — return its authoritative id.
+	if block, ok := m.Blocks[*blockHash]; ok {
+		return uint64(block.ID), nil
+	}
+
+	// 2. Already reserved — return the same id.
+	if id, ok := m.blockIDReservations[*blockHash]; ok {
+		return id, nil
+	}
+
+	// 3. Allocate a fresh id (same logic as GetNextBlockID) and reserve it.
+	maxID := uint64(0)
+	for _, block := range m.Blocks {
+		if uint64(block.ID) > maxID {
+			maxID = uint64(block.ID)
+		}
+	}
+	for _, reserved := range m.blockIDReservations {
+		if reserved > maxID {
+			maxID = reserved
+		}
+	}
+
+	id := maxID + 1
+	m.blockIDReservations[*blockHash] = id
+	return id, nil
 }
 
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -690,6 +769,10 @@ func (m *MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*f
 
 func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return true, nil
+}
+
+func (m *MockStore) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	return nil, 0, true, nil
 }
 
 func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {

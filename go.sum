@@ -170,8 +170,8 @@ github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv3 h1:gMqILIz4FPInYy/C
 github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv3/go.mod h1:t4MjZ6nitI84mr/KhpPGFCCeCT4+y4hq0di8qOHIIGk=
 github.com/bsv-blockchain/go-alert-system v0.1.6 h1:pXJqJZVJw4ha46CircxOhcV0iNzohf2nt1l4O3TNtSI=
 github.com/bsv-blockchain/go-alert-system v0.1.6/go.mod h1:3Pwm4O0GcGiYFuofRml7UEWBWt0a4kKLCsvisyOpQps=
-github.com/bsv-blockchain/go-batcher/v2 v2.0.3 h1:UKKHJRfCtBx1MJd2OiPxb/ADzm+QAN2HFD+SME7b2Q4=
-github.com/bsv-blockchain/go-batcher/v2 v2.0.3/go.mod h1:7Q3E4JR2+HT1Bi007hTs9W8FTDISMYGOiBGTMBW4ZDo=
+github.com/bsv-blockchain/go-batcher/v2 v2.0.4 h1:u3mEx4W8rufC3W/G3MlJ8Al0pnYsKHe0CZwZAhk6lqs=
+github.com/bsv-blockchain/go-batcher/v2 v2.0.4/go.mod h1:7Q3E4JR2+HT1Bi007hTs9W8FTDISMYGOiBGTMBW4ZDo=
 github.com/bsv-blockchain/go-bc v1.1.5 h1:G9hioz7yz6ARS5YHYJhA4c0xCU5EnRm6PsjDM8C6DTA=
 github.com/bsv-blockchain/go-bc v1.1.5/go.mod h1:g0ZjqK5pNMvgIQpeN0QXchAKEzl15ro3Fm0LG/8PFyI=
 github.com/bsv-blockchain/go-bn v1.1.4 h1:mEOqX7NwBScGbxq5icxbDI0GOQYtjJBz+xC27xwWQFI=

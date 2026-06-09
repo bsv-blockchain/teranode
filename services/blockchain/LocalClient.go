@@ -170,6 +170,10 @@ func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return c.store.GetNextBlockID(ctx)
 }
 
+func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	return c.store.AssignBlockID(ctx, blockHash)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
@@ -253,6 +257,10 @@ func (c *LocalClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom
 
 func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
+}
+
+func (c *LocalClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
+	return c.store.OffChainBlockIDs(ctx)
 }
 
 func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
@@ -33,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -599,6 +602,106 @@ func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
 		return existsErr == nil && exists
 	}, 2*time.Second, 20*time.Millisecond,
 		"subtreeA's FileTypeSubtreeData must be stored even after sibling B's failure cancelled the batch")
+}
+
+// TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData verifies that when the
+// adaptive-fetch gate is in optimistic mode the per-subtree subtreeData prewarm
+// fetch (GET /subtree_data/<hash>) is skipped. This is the subtreevalidation
+// analogue of blockvalidation's TestBlockWorker_Optimistic_SkipsFetchSubtreeData
+// and is the coverage the PR #745 review asked for: the optimistic branch at
+// check_block_subtrees.go must actually be exercised.
+//
+// Discriminator design: the /subtree_data endpoint is hit both by the pessimistic
+// PREWARM and by the downstream on-demand RECOVERY (getSubtreeMissingTxs) when a
+// subtree has genuinely-missing txs. So a subtree with missing txs would fetch in
+// BOTH modes (prewarm vs recovery) and prove nothing. We therefore use a
+// coinbase-only subtree: the missing-tx scan skips the coinbase placeholder, so
+// there are zero missing txs and recovery never runs. The only thing that can
+// fetch /subtree_data is then the prewarm itself — present in pessimistic, absent
+// in optimistic. The test runs BOTH modes against identical inputs and asserts
+// pessimistic fetches while optimistic does not, so it cannot pass trivially.
+func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
+	run := func(t *testing.T, bootstrap adaptivefetch.Mode) int32 {
+		t.Helper()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
+		afCfg := adaptivefetch.DefaultConfig()
+		afCfg.BootstrapMode = bootstrap
+		af, err := adaptivefetch.New(afCfg, "test-"+bootstrap.String(), prometheus.NewRegistry())
+		require.NoError(t, err)
+		af.Arm()
+		require.Equal(t, bootstrap, af.Mode(), "armed mode must match bootstrap")
+		server.adaptiveFetch = af
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+			mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{1, 2, 3}, nil).Maybe()
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil).Maybe()
+
+		// Coinbase-only subtree (no recoverable txs). Pre-store as
+		// FileTypeSubtreeToCheck so the /subtree fetch is skipped and we reach
+		// the prewarm gate; do NOT store FileTypeSubtreeData so a pessimistic
+		// prewarm must fetch it over HTTP.
+		s, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, s.AddCoinbaseNode())
+		subtreeSer, err := s.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, server.subtreeStore.Set(context.Background(),
+			s.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeSer))
+
+		baseURL := testPeerURL
+
+		var subtreeDataFetches atomic.Int32
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, s.RootHash().String()),
+			func(_ *http.Request) (*http.Response, error) {
+				subtreeDataFetches.Add(1)
+				return httpmock.NewBytesResponse(http.StatusOK, []byte{}), nil
+			})
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{s.RootHash()}, 1, 500, 0, 0)
+		require.NoError(t, err)
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: baseURL,
+		}
+
+		// Result intentionally ignored — the skip is the contract under test.
+		_, _ = server.CheckBlockSubtrees(context.Background(), request)
+		return subtreeDataFetches.Load()
+	}
+
+	// Control: pessimistic mode MUST prewarm-fetch the subtreeData, proving the
+	// setup actually reaches the gate (guards against a trivially-passing test).
+	pessimisticFetches := run(t, adaptivefetch.ModePessimistic)
+	require.Positive(t, pessimisticFetches,
+		"pessimistic control must fetch subtree_data (gate reached)")
+
+	// Subject: optimistic mode MUST skip the prewarm fetch.
+	optimisticFetches := run(t, adaptivefetch.ModeOptimistic)
+	require.Zero(t, optimisticFetches,
+		"optimistic mode must skip the subtree_data prewarm fetch")
 }
 
 // TestCheckBlockSubtrees_OversizedBody verifies that the peer-fetch fallback at
@@ -1509,7 +1612,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.NoError(t, err)
 	})
 
@@ -1533,7 +1636,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.NoError(t, err)
 	})
 
@@ -1560,7 +1663,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.Error(t, err)
 	})
 
@@ -1584,7 +1687,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// Missing-parent errors are deferred (not fatal) so the caller's
 		// sequential revalidation pass can re-run the failed subtrees in
 		// block order and resolve cross-subtree parent dependencies.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.NoError(t, err)
 	})
 
@@ -1597,7 +1700,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1632,7 +1735,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.NoError(t, err)
 	})
 
@@ -1665,8 +1768,82 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, nil)
 		require.Error(t, err)
+	})
+
+	// Regression test for the seed-already-known consensus gap: a parent
+	// tx that is already accepted into the UTXO store or cache BEFORE
+	// block validation (e.g. validated earlier via the peer-announced
+	// subtree path) was never seeded into the block-scoped accumulator.
+	// A child in the same candidate block referencing such a parent would
+	// then see empty ParentMetadata, fall through to the UTXO-store
+	// BlockHeights path, find it empty (the parent's blocks_transactions
+	// row is only written by SetMinedMulti AFTER this block is accepted),
+	// and the validator would stamp unconfirmedParentHeight — triggering
+	// bad-txns-unconfirmed-input-in-block on a legitimate block.
+	t.Run("SeedsAlreadyKnownTxsIntoAccumulator", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		tx, err := createTestTransaction("tx1")
+		require.NoError(t, err)
+		txHash := *tx.TxIDChainHash()
+
+		// Override BatchDecorate so this tx is reported as found in the
+		// store (Data populated). This is the "parent already in store"
+		// half of the bug scenario above.
+		mockStore := server.utxoStore.(*utxo.MockUtxostore)
+		mockStore.ExpectedCalls = nil
+		mockStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(&utxometa.Data{}, nil).Maybe()
+		mockStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+		mockStore.On("GetMeta", mock.Anything, mock.Anything).
+			Return(&utxometa.Data{}, nil).Maybe()
+		mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				slice := args.Get(1).([]*utxo.UnresolvedMetaData)
+				for _, item := range slice {
+					if item.Hash.Equal(txHash) {
+						// Empty BlockHeights — this is the bug-triggering shape:
+						// the tx is "known to the store" but unmined. Without
+						// seeding, the child's validator would stamp
+						// unconfirmedParentHeight here.
+						item.Data = &utxometa.Data{
+							Fee:         1,
+							SizeInBytes: 100,
+						}
+					}
+				}
+			}).
+			Return(nil).Maybe()
+
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil).Maybe()
+
+		accumulator := &parentMetadataAccumulator{
+			delta: make(map[chainhash.Hash]*validator.ParentTxMetadata),
+		}
+		const candidateHeight = uint32(150)
+
+		err = server.processTransactionsInLevels(context.Background(),
+			[]*bt.Tx{tx},
+			chainhash.Hash{}, chainhash.Hash{},
+			candidateHeight, 0, 0,
+			make(map[uint32]bool), accumulator)
+		require.NoError(t, err)
+
+		// Pin: the already-known tx is seeded into the block-scoped
+		// accumulator with the candidate block's height. A sibling/child in
+		// the same block referencing this tx via filterParentMetadataForInputs
+		// now resolves the parent through the accumulator instead of falling
+		// back to the UTXO-store BlockHeights path.
+		seeded := accumulator.lookup(txHash)
+		require.NotNil(t, seeded,
+			"already-known candidate-block tx must be seeded into the block-scoped accumulator")
+		require.Equal(t, candidateHeight, seeded.BlockHeight,
+			"seeding height must be the candidate block height — the height this tx is being mined at in this block")
 	})
 }
 
@@ -2228,6 +2405,12 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
 		Return(&currentState, nil).Maybe()
 
+	afCfg := adaptivefetch.DefaultConfig()
+	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	af, err := adaptivefetch.New(afCfg, "test", prometheus.NewRegistry())
+	require.NoError(t, err)
+	require.NotNil(t, af)
+
 	server := &Server{
 		logger:           logger,
 		settings:         testSettings,
@@ -2236,6 +2419,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		utxoStore:        mockUtxoStore,
 		validatorClient:  mockValidatorClient,
 		blockchainClient: mockBlockchainClient,
+		adaptiveFetch:    af,
 	}
 
 	return server, func() {
@@ -2286,6 +2470,11 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 			blockBytes, _ := block.Bytes()
 
 			// Create server
+			testAfCfg := adaptivefetch.DefaultConfig()
+			testAfCfg.BootstrapMode = adaptivefetch.ModePessimistic
+			testAf, err := adaptivefetch.New(testAfCfg, "test", prometheus.NewRegistry())
+			require.NoError(t, err)
+			require.NotNil(t, testAf)
 			server := &Server{
 				settings:         testSettings,
 				logger:           ulogger.TestLogger{},
@@ -2293,6 +2482,7 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 				subtreeStore:     mockSubtreeStore,
 				txStore:          mockTxStore,
 				utxoStore:        mockUTXOStore,
+				adaptiveFetch:    testAf,
 			}
 
 			// Create request

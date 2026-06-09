@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
@@ -157,6 +159,52 @@ func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {
 
 	// Non-decodable IDs (hostname-like) are not skipped.
 	require.False(t, s.shouldSkipUnhealthyPeer("not-an-id", "test"))
+}
+
+// TestServerHelpers_HandleBlockTopic_LowReputationPeerStillForwarded is a
+// regression test: block announcements must NOT be filtered by peer reputation.
+// A node that is behind may only have low-reputation peers available, and these
+// announcements are what trigger catchup — dropping them would stop catchup from
+// ever starting. Block validation is the gatekeeper for bad blocks. If a
+// shouldSkipUnhealthyPeer filter were (re)introduced into handleBlockTopic, the
+// Kafka publish asserted below would never happen.
+func TestServerHelpers_HandleBlockTopic_LowReputationPeerStillForwarded(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+
+	self := mustNewPeerID(t)
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = self
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 1)
+
+	producer := kafka.NewKafkaAsyncProducerMock()
+	s.blocksKafkaProducerClient = producer
+
+	// Register the originating peer and pin its reputation to 5.0 (well below the
+	// 20.0 unhealthy threshold) via a malicious-interaction metric, which does not
+	// ban the peer.
+	lowRep := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: lowRep.String()})
+	reg.UpdateMetrics(lowRep.String(), 0, 0, 0, false, false, true, 0)
+
+	require.True(t, s.shouldSkipUnhealthyPeer(lowRep.String(), "precondition"),
+		"precondition: peer must be below the unhealthy threshold")
+	require.False(t, s.shouldSkipBannedPeer(lowRep.String(), "precondition"),
+		"precondition: peer must be unhealthy but not banned")
+
+	const blockHash = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+	msg := fmt.Sprintf(`{"Hash":"%s","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`,
+		blockHash, lowRep.String())
+
+	s.handleBlockTopic(context.Background(), []byte(msg), lowRep.String())
+
+	select {
+	case published := <-producer.PublishChannel():
+		require.Equal(t, blockHash, string(published.Key),
+			"low-reputation peer's block must be forwarded to Kafka")
+	default:
+		t.Fatal("block from low-reputation peer was not published to Kafka (filtered?)")
+	}
 }
 
 func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {

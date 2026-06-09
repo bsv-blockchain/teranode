@@ -1,0 +1,77 @@
+name: 'Go cache'
+description: >
+  Restore (and on the authoritative saver, save) the Go module cache
+  (~/go/pkg/mod) and build cache (~/.cache/go-build).
+
+  GitHub Actions caches are branch-scoped: only caches written on the default
+  branch are readable by all PRs. So exactly ONE job — the main-branch unit
+  test job — runs with save: 'true'. Every other job restores only.
+
+  The build cache key rotates daily (GO_CACHE_DATE) so it never goes stale for
+  weeks at a time; restore-keys fall back to the most recent dated entry, then
+  to any build cache for this OS.
+
+inputs:
+  save:
+    description: >
+      'true' on the single authoritative saver (main-branch unit tests).
+      'false' (default) everywhere else — restore only, no upload.
+    default: 'false'
+  build_cache:
+    description: >
+      Whether to include the build cache (~/.cache/go-build). The saver builds
+      it with -race, and Go keys the build cache by build flags, so jobs that do
+      NOT run -race (plain go build/test, golangci typecheck, benchmarks) get
+      near-zero hits and just waste bandwidth on a multi-GB tarball. Set 'false'
+      for those — the module cache (~/go/pkg/mod) is always restored regardless.
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Compute Go cache date
+      shell: bash
+      run: echo "GO_CACHE_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+    # --- restore-only path (PR jobs, every non-main job) ---
+    - name: Restore Go module cache
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/go/pkg/mod
+        key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gomod-${{ runner.os }}-
+
+    - name: Restore Go build cache
+      if: inputs.save != 'true' && inputs.build_cache == 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/go-build
+        key: gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
+        restore-keys: |
+          gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
+          gobuild-${{ runner.os }}-
+
+    # --- save path (authoritative saver only: main-branch unit tests) ---
+    # actions/cache registers a post-job step that uploads at job end, AFTER
+    # the trim step in the caller has run. Saves only on a key miss (new day or
+    # new go.sum/go.mod), so same-day reruns are no-ops.
+    - name: Save Go module cache
+      if: inputs.save == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/go/pkg/mod
+        key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gomod-${{ runner.os }}-
+
+    - name: Save Go build cache
+      if: inputs.save == 'true' && inputs.build_cache == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/go-build
+        key: gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
+        restore-keys: |
+          gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
+          gobuild-${{ runner.os }}-

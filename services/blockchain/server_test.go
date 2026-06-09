@@ -270,7 +270,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes := make([]*chainhash.Hash, 0, 1)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 
 	blockHeader := &model.BlockHeader{
@@ -386,6 +386,23 @@ func Test_getBlockLocator(t *testing.T) {
 			assert.Equal(t, store.BlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
 		}
 	})
+}
+
+func Test_computeLocatorHeights(t *testing.T) {
+	require.Equal(t, []uint32{0}, computeLocatorHeights(0))
+	require.Equal(t, []uint32{1, 0}, computeLocatorHeights(1))
+	require.Equal(t,
+		[]uint32{12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+		computeLocatorHeights(12))
+	require.Equal(t,
+		[]uint32{13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 0},
+		computeLocatorHeights(13))
+	require.Equal(t,
+		[]uint32{255, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245, 244, 242, 238, 230, 214, 182, 118, 0},
+		computeLocatorHeights(255))
+	require.Equal(t,
+		[]uint32{1000, 999, 998, 997, 996, 995, 994, 993, 992, 991, 990, 989, 987, 983, 975, 959, 927, 863, 735, 479, 0},
+		computeLocatorHeights(1000))
 }
 
 func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
@@ -3886,4 +3903,71 @@ func Test_HeartbeatSenderStopsOnContextCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Heartbeat sender did not stop when context was cancelled")
 	}
+}
+
+func Test_getBlockLocator_FastPathMatchesWalk(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tipHeight := range []uint32{0, 5, 12, 13, 255, 1000} {
+		store := blockchain_store.NewMockStore()
+
+		var prevHash *chainhash.Hash
+		for i := uint32(0); i <= tipHeight; i++ {
+			prev := &chainhash.Hash{}
+			if prevHash != nil {
+				prev = prevHash
+			}
+
+			block := &model.Block{
+				Height: i,
+				Header: &model.BlockHeader{
+					Version:        i,
+					HashPrevBlock:  prev,
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      i,
+					Bits:           model.NBit{},
+					Nonce:          i,
+				},
+			}
+			_, _, err := store.StoreBlock(ctx, block, "")
+			require.NoError(t, err)
+
+			prevHash = block.Hash()
+		}
+
+		start := store.BlockByHeight[tipHeight].Hash()
+
+		store.MainChainFastPathDisabled = false
+		fast, err := getBlockLocator(ctx, store, start, tipHeight)
+		require.NoError(t, err)
+
+		store.MainChainFastPathDisabled = true
+		walk, err := getBlockLocator(ctx, store, start, tipHeight)
+		require.NoError(t, err)
+
+		require.Equal(t, len(walk), len(fast), "tip=%d length mismatch", tipHeight)
+		for i := range walk {
+			require.Equal(t, walk[i].String(), fast[i].String(), "tip=%d idx=%d hash mismatch", tipHeight, i)
+		}
+	}
+}
+
+// TestServerAssignBlockID covers the gRPC AssignBlockID handler: a stable id is
+// returned per hash (idempotent across calls), and a malformed hash is rejected.
+func TestServerAssignBlockID(t *testing.T) {
+	ctx := setup(t)
+	c := context.Background()
+
+	h := chainhash.HashH([]byte("assign-block-id-server"))
+
+	resp, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.NotZero(t, resp.BlockId)
+
+	resp2, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.Equal(t, resp.BlockId, resp2.BlockId, "same hash must return the same id")
+
+	_, err = ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: []byte{0x01, 0x02}})
+	require.Error(t, err, "a non-32-byte hash must be rejected as invalid argument")
 }

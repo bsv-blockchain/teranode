@@ -808,6 +808,12 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 
 		// grpcReady channel signals when the gRPC server is ready to accept requests
 		grpcReady = make(chan struct{})
+
+		// grpcStartErr receives startup errors that happen before readiness
+		grpcStartErr = make(chan error, 1)
+
+		// grpcReadyOnce ensures readiness is signaled exactly once
+		grpcReadyOnce sync.Once
 	)
 
 	// Defer closing readyCh to ensure it's always closed, even if startup fails
@@ -821,18 +827,35 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 	g.Go(func() error {
 		// StartGRPCServer blocks until the server shuts down or encounters an error
 		// The server setup includes registering the BlockAssemblyAPI service
-		return util.StartGRPCServer(gCtx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
+		startErr := util.StartGRPCServer(gCtx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
 			// Register the BlockAssembly service with the gRPC server
 			// This makes all BlockAssembly API methods available to clients
 			blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
 
 			// Signal that the service is ready to accept requests
 			// This is called once the gRPC server is successfully listening
-			grpcReady <- struct{}{}
+			grpcReadyOnce.Do(func() { close(grpcReady) })
 		}, nil)
+		if startErr != nil {
+			// Surface early startup errors to the readiness gate to avoid
+			// hanging forever on <-grpcReady when StartGRPCServer exits
+			// before invoking the registration callback.
+			select {
+			case grpcStartErr <- startErr:
+			default:
+			}
+		}
+
+		return startErr
 	})
 
-	<-grpcReady
+	select {
+	case <-grpcReady:
+	case startErr := <-grpcStartErr:
+		return startErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	// This must succeed for the service to be functional
 	if err = ba.blockAssembler.Start(ctx); err != nil {
@@ -1007,6 +1030,10 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	storeTxInpoints := ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
 
 	for i, req := range requests {
+		if len(req.Txid) != 32 {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid)))
+		}
+
 		nodes[i] = subtreepkg.Node{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
@@ -1917,9 +1944,20 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 	)
 	defer deferFn()
 
-	txHashes := ba.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	txHashes := ba.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
+	if txHashes == nil && ctx.Err() != nil {
+		return nil, errors.WrapGRPC(ctx.Err())
+	}
+
 	txHashesStrings := make([]string, 0, len(txHashes))
-	for _, hash := range txHashes {
+	for i, hash := range txHashes {
+		if i%1024 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, errors.WrapGRPC(ctx.Err())
+			default:
+			}
+		}
 		txHashesStrings = append(txHashesStrings, hash.String())
 	}
 

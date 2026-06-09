@@ -349,7 +349,11 @@ func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing
 		transactions.WithCoinbaseData(1, "/duplicate spend batch test/"),
 		transactions.WithP2PKHOutputs(1, 100_000, publicKey),
 	)
-	_, err = utxoStore.Create(ctx, parentTx, 1)
+	// Attach mined-block info so the parent appears as a confirmed tx with
+	// recorded BlockHeights; without this, the validator's consensus-mode
+	// rejection (bad-txns-unconfirmed-input-in-block) would fire before
+	// reaching the conflicting-spend code path this test exercises.
+	_, err = utxoStore.Create(ctx, parentTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
 	require.NoError(t, err)
 
 	txA := transactions.Create(t,
@@ -446,7 +450,11 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	//nolint:gosec
 	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
-	_, err = utxoStore.Create(context.Background(), parentTx, 257726)
+	// Attach mined-block info so the parent appears as a confirmed tx with
+	// recorded BlockHeights; without this, the validator's consensus-mode
+	// rejection (bad-txns-unconfirmed-input-in-block) would fire before the
+	// block-assembly error path this test wants to exercise.
+	_, err = utxoStore.Create(context.Background(), parentTx, 257726, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 257726, SubtreeIdx: 0}))
 	require.NoError(t, err)
 
 	initPrometheusMetrics()
@@ -480,6 +488,63 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	// check the kafka channels, nothing should have been sent, since the tx never was sent correctly to the block assembly
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
 	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
+}
+
+// TestValidate_ConsensusRejectsUnconfirmedParent: a tx whose parent exists in
+// the UTXO store but has no recorded BlockHeights (i.e. parent UTXO is not yet
+// confirmed) must be rejected in consensus mode with
+// bad-txns-unconfirmed-input-in-block. Exercises the full path:
+// getUtxoBlockHeightAndExtendForParentTx → unconfirmedParentHeight sentinel →
+// ScriptVerifierGoBDK.substituteUnconfirmedHeights → BDK MEMPOOL_HEIGHT →
+// DoSError(UnconfirmedInputInBlock).
+func TestValidate_ConsensusRejectsUnconfirmedParent(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parentTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parentTx, err := bt.NewTxFromString(parentTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_t13_consensus_reject")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix())) //nolint:gosec
+
+	// Create the parent WITHOUT WithMinedBlockInfo so its BlockHeights stays
+	// empty — this is the "parent UTXO not yet confirmed" case under test.
+	_, err = utxoStore.Create(ctx, parentTx, 257726)
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                &MockBlockAssemblyStore{},
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	txMetaData, err := v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
+	require.Error(t, err)
+	require.Nil(t, txMetaData)
+	require.Contains(t, err.Error(), "bad-txns-unconfirmed-input-in-block",
+		"consensus-mode validation must surface the BDK UnconfirmedInputInBlock rejection for unconfirmed parents")
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
@@ -887,7 +952,10 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
-		expected := []uint32{1001, 1001, 1001}
+		// Fallback writes the unconfirmedParentHeight sentinel instead of
+		// blockState.Height+1; the BDK adapter translates it at the call boundary
+		// (MEMPOOL_HEIGHT in consensus, candidate height in policy).
+		expected := []uint32{unconfirmedParentHeight, unconfirmedParentHeight, unconfirmedParentHeight}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -925,7 +993,9 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1001, 768}
+		// Middle slot is the unconfirmed-parent fallback: writes the sentinel
+		// rather than blockState.Height+1.
+		expected := []uint32{125, unconfirmedParentHeight, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -992,7 +1062,9 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1001, 768}
+		// Middle slot is the unconfirmed-parent fallback: writes the sentinel
+		// rather than blockState.Height+1.
+		expected := []uint32{125, unconfirmedParentHeight, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -1679,6 +1751,193 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T)
 
 	// Verify UTXO store was not called
 	mockUtxoStore.AssertNotCalled(t, "Get")
+}
+
+// The fallback path writes the unconfirmedParentHeight sentinel when the
+// parent transaction is found in the UTXO store but has no block heights
+// recorded — i.e. the parent UTXO is not yet confirmed. The BDK adapter
+// (ScriptVerifierGoBDK.go) translates this sentinel outward —
+// MEMPOOL_HEIGHT in consensus mode (BDK rejects with
+// bad-txns-unconfirmed-input-in-block), or the candidate height in policy
+// mode (matching svnode's GetInputScriptBlockHeight).
+func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentinel(t *testing.T) {
+	ctx := context.Background()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+
+	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
+
+	// UTXO store returns a metadata record with empty BlockHeights — the
+	// "parent exists but not yet confirmed" case that triggers the fallback.
+	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockHeights: []uint32{},
+	}, nil)
+
+	v := &Validator{
+		utxoStore: &mockUtxoStore,
+	}
+
+	// Explicitly empty Options.ParentMetadata: the fallback path is only the
+	// authoritative source of utxoHeights[i] when no ParentMetadata covers
+	// this parent. ParentMetadata-supplied heights are preserved through the
+	// extend fallthrough by the cameFromParentMetadata gate in the function
+	// under test; this test pins the complementary case (no ParentMetadata
+	// at all → sentinel fires).
+	opts := &Options{}
+	require.Nil(t, opts.ParentMetadata, "this test exercises the no-ParentMetadata code path")
+
+	utxoHeights := make([]uint32, 1)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, opts)
+	require.NoError(t, err)
+	require.Equal(t, unconfirmedParentHeight, utxoHeights[0],
+		"fallback must write the teranode-internal sentinel, not blockState.Height+1")
+
+	// Regression pin: with the sentinel approach, GetBlockState is no longer
+	// consulted on the fallback path — the adapter substitutes from blockHeight.
+	mockUtxoStore.AssertNotCalled(t, "GetBlockState")
+}
+
+// TestGetUtxoBlockHeightAndExtendForParentTx_ParentMetadataPreservedThroughExtendFallthrough
+// is the positive pin for the cameFromParentMetadata gate. When extend==true,
+// the function must still call utxoStore.Get to fetch the parent tx body
+// for input-extension — but it must NOT let the post-Get height-stamping
+// block overwrite the candidate height that ParentMetadata supplied.
+//
+// Without the gate, the post-Get block fires unconditionally, and an
+// in-block parent (Get returns empty BlockHeights because Create writes the
+// tx row without populating blocks_transactions until SetMinedMulti runs)
+// has its correct candidate height clobbered with unconfirmedParentHeight.
+// BDK then rejects with bad-txns-unconfirmed-input-in-block on a perfectly
+// legitimate block — chain-split risk in consensus mode.
+//
+// With the gate, cameFromParentMetadata records that ParentMetadata
+// supplied the height; the post-Get block is skipped for those indices.
+// The Get call still happens, only the height stamping is bypassed.
+func TestGetUtxoBlockHeightAndExtendForParentTx_ParentMetadataPreservedThroughExtendFallthrough(t *testing.T) {
+	ctx := context.Background()
+
+	// Build the child tx with one placeholder input value. tx.From sets both
+	// the prevout pointer AND a PreviousTxSatoshis placeholder; that
+	// placeholder must NOT match the parent output value below, otherwise
+	// the extension assertion is satisfied even if extension never ran.
+	const (
+		childInputPlaceholderSats uint64 = 1000  // value tx.From stamps on the input
+		parentOutputSats          uint64 = 73824 // distinct value the parent tx body actually carries
+	)
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", childInputPlaceholderSats))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+
+	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
+
+	// Construct a parent tx with one output. The locking script is a
+	// distinctive non-P2PKH byte sequence so the PreviousTxScript assertion
+	// below cannot be satisfied by any incidental script the child carries.
+	parentTx := bt.NewTx()
+	parentLockingScriptBytes := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe}
+	parentScript := bscript.NewFromBytes(parentLockingScriptBytes)
+	parentTx.Outputs = append(parentTx.Outputs, &bt.Output{
+		Satoshis:      parentOutputSats,
+		LockingScript: parentScript,
+	})
+
+	// UTXO store returns a metadata record with empty BlockHeights AND a
+	// populated Tx body — the exact shape that triggers the bug without
+	// the cameFromParentMetadata gate: the in-block parent is in the store
+	// (Create has run) but its blocks_transactions join row hasn't been
+	// written yet (SetMinedMulti hasn't run). Without the gate, the
+	// empty-BlockHeights branch fires and overwrites the correct height
+	// with unconfirmedParentHeight.
+	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockHeights: []uint32{},
+		Tx:           parentTx,
+	}, nil)
+
+	v := &Validator{
+		utxoStore: &mockUtxoStore,
+	}
+
+	const candidateHeight uint32 = 12345
+	validationOptions := &Options{
+		ParentMetadata: map[chainhash.Hash]*ParentTxMetadata{
+			parentTxHash: {BlockHeight: candidateHeight},
+		},
+	}
+
+	utxoHeights := make([]uint32, 1)
+	// extend == true → must call utxoStore.Get for the tx body AND preserve
+	// the ParentMetadata-supplied height.
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, true, validationOptions)
+	require.NoError(t, err)
+	require.Equal(t, candidateHeight, utxoHeights[0],
+		"ParentMetadata-supplied height must survive the extend==true fallthrough; the post-Get fallback must not overwrite it")
+	require.NotEqual(t, unconfirmedParentHeight, utxoHeights[0],
+		"the sentinel must NOT be written when ParentMetadata covers the parent")
+
+	// Extension must have populated the input from the parent tx body —
+	// asserted against the distinctive parent values, not the placeholder.
+	// A test that compared against `childInputPlaceholderSats` could pass
+	// even if extension never ran.
+	require.Equal(t, parentOutputSats, tx.Inputs[0].PreviousTxSatoshis,
+		"extend==true must overwrite the input placeholder with the parent tx body's output value")
+	require.NotNil(t, tx.Inputs[0].PreviousTxScript)
+	require.Equal(t, parentLockingScriptBytes, tx.Inputs[0].PreviousTxScript.Bytes(),
+		"extend==true must overwrite PreviousTxScript with the parent tx body's locking script (distinctive non-P2PKH bytes)")
+
+	// Get must have been called — this is the extend path, not the
+	// metadata-only fast path.
+	mockUtxoStore.AssertCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestGetUtxoBlockHeightAndExtendForParentTx_UnconfirmedSentinelOnlyAppliedWhenNoParentMetadata
+// is the negative drift pin complementing the preservation pin above. Same
+// setup that pre-pt.2 produced the consensus-rejection shape (empty
+// BlockHeights + ParentMetadata + extend==true), but asserted with a
+// sharp != sentinel check rather than a positive == candidateHeight check.
+//
+// A future refactor that re-introduces an unconditional height-stamping
+// block (or "factors out" the cameFromParentMetadata gate) will fail this
+// test immediately, before any silent consensus rejection can ship.
+func TestGetUtxoBlockHeightAndExtendForParentTx_UnconfirmedSentinelOnlyAppliedWhenNoParentMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+
+	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
+
+	parentTx := bt.NewTx()
+	parentScript, err := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
+	require.NoError(t, err)
+	parentTx.Outputs = append(parentTx.Outputs, &bt.Output{
+		Satoshis:      500,
+		LockingScript: parentScript,
+	})
+
+	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockHeights: []uint32{},
+		Tx:           parentTx,
+	}, nil)
+
+	v := &Validator{utxoStore: &mockUtxoStore}
+
+	validationOptions := &Options{
+		ParentMetadata: map[chainhash.Hash]*ParentTxMetadata{
+			parentTxHash: {BlockHeight: 42},
+		},
+	}
+
+	utxoHeights := make([]uint32, 1)
+	err = v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, true, validationOptions)
+	require.NoError(t, err)
+	require.NotEqual(t, unconfirmedParentHeight, utxoHeights[0],
+		"unconfirmedParentHeight must NOT be applied when ParentMetadata covers the parent — drift pin against future refactors that reintroduce the unconditional post-Get overwrite")
 }
 
 // CorruptMetaUtxoStore wraps a real UTXO store but corrupts the meta.Data returned

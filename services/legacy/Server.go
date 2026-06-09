@@ -699,7 +699,13 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Parameters:
 //   - _: Context parameter (unused in the current implementation)
 //
-// Returns an error if the shutdown process encounters problems, or nil on successful shutdown
+// Returns an error if the shutdown process encounters problems, or nil on successful shutdown.
+// Returns nil immediately if the inner server was never initialized (e.g. when Init failed
+// before newServer succeeded), so the daemon error path cannot dereference a nil server.
 func (s *Server) Stop(_ context.Context) error {
+	if s.server == nil {
+		return nil
+	}
+
 	return s.server.Stop()
 }

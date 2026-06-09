@@ -70,24 +70,29 @@ type Settings struct {
 	BlockAssembly                BlockAssemblySettings
 	BlockChain                   BlockChainSettings
 	BlockValidation              BlockValidationSettings
-	Validator                    ValidatorSettings
-	Region                       RegionSettings
-	Advertising                  AdvertisingSettings
-	UtxoStore                    UtxoStoreSettings
-	P2P                          P2PSettings
-	Coinbase                     CoinbaseSettings
-	SubtreeValidation            SubtreeValidationSettings
-	Legacy                       LegacySettings
-	Propagation                  PropagationSettings
-	RPC                          RPCSettings
-	Faucet                       FaucetSettings
-	Dashboard                    DashboardSettings
-	Pruner                       PrunerSettings
-	GCTuning                     GCTuningSettings
-	GRPC                         GRPCSettings
-	GlobalBlockHeightRetention   uint32 `key:"global_blockHeightRetention" desc:"Number of blocks to retain data for (default: ~2 days)" default:"288" category:"Global" usage:"Higher values use more storage but allow deeper reorgs" type:"uint32" longdesc:"### Purpose\nControls the default number of blocks to retain data for across all services before pruning.\n\n### How It Works\nUsed as base value for service-specific retention calculations via UtxoStore.BlockHeightRetentionAdjustment and SubtreeValidation.BlockHeightRetentionAdjustment. Services call GetUtxoStoreBlockHeightRetention() and GetSubtreeValidationBlockHeightRetention() which add adjustments to this global value. Affects old blocks, transactions, UTXO history, and Merkle tree data.\n\n### Values\n- **288** (default) - Approximately 2 days of blockchain history (with 10-minute block target)\n- Higher values for deeper reorg support\n\n### Trade-offs\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Higher | Deeper reorg handling, longer data availability | More storage consumption |\n| Lower | Reduced storage requirements | Limited reorg depth |\n\n### Recommendations\n- **288** (default) - Suitable for most deployments\n- Increase for archive nodes or environments requiring deeper history"`
-	BatcherDrainMode             bool   `key:"batcher_drainMode" desc:"Enable drain mode for all go-batcher instances" default:"false" category:"Global" usage:"Reduces per-item latency by draining all available items immediately" type:"bool" longdesc:"### Purpose\nEnables drain mode across all go-batcher instances in the system, fundamentally changing batching behavior for lower latency.\n\n### How It Works\nWhen enabled, the batcher worker drains all currently-available items from the channel (up to the size cap) and fires immediately, instead of accumulating to the size threshold or waiting for the timeout. This produces adaptive batch sizes that naturally scale with throughput: at low throughput, batches are small with near-zero latency; at high throughput, batches grow larger as more items queue during processing.\n\n### Values\n- **false** (default) - Standard batching: waits for size or timeout\n- **true** - Drain mode: processes all available items immediately\n\n### Recommendations\n- Enable for high-throughput deployments where per-item latency matters\n- Size becomes a max cap, timeout becomes an irrelevant safety net"`
-	BatcherBackground            bool   `key:"batcher_background" desc:"Enable background (async) batch callback execution" default:"true" category:"Global" usage:"Batch callbacks run in goroutines, worker never blocks on I/O" type:"bool" longdesc:"### Purpose\nControls whether batch callbacks execute asynchronously in separate goroutines (true) or synchronously in the single worker goroutine (false).\n\n### How It Works\nWhen true, the batcher worker spawns a goroutine (or dispatches to a worker pool) for each batch callback, then immediately starts assembling the next batch. When false, the worker blocks until the callback completes before processing more items.\n\n### Values\n- **true** (default) - Concurrent batch execution; worker never blocks on Aerospike/gRPC round-trips\n- **false** - Serial execution; only one batch in-flight at a time per batcher\n\n### Recommendations\n- Keep true for production. Pair with utxostore_batcherMaxConcurrent to cap parallelism.\n- Only set false for debugging or when strict ordering of batch callbacks is required."`
+	// AdaptiveFetch is a single, top-level configuration shared by both
+	// blockvalidation and subtreevalidation. It is deliberately defined once
+	// at the root of Settings (rather than embedded in each service's struct)
+	// so that ExportMetadata() emits each adaptive_fetch_* key exactly once.
+	AdaptiveFetch              AdaptiveFetchSettings
+	Validator                  ValidatorSettings
+	Region                     RegionSettings
+	Advertising                AdvertisingSettings
+	UtxoStore                  UtxoStoreSettings
+	P2P                        P2PSettings
+	Coinbase                   CoinbaseSettings
+	SubtreeValidation          SubtreeValidationSettings
+	Legacy                     LegacySettings
+	Propagation                PropagationSettings
+	RPC                        RPCSettings
+	Faucet                     FaucetSettings
+	Dashboard                  DashboardSettings
+	Pruner                     PrunerSettings
+	GCTuning                   GCTuningSettings
+	GRPC                       GRPCSettings
+	GlobalBlockHeightRetention uint32 `key:"global_blockHeightRetention" desc:"Number of blocks to retain data for (default: ~2 days)" default:"288" category:"Global" usage:"Higher values use more storage but allow deeper reorgs" type:"uint32" longdesc:"### Purpose\nControls the default number of blocks to retain data for across all services before pruning.\n\n### How It Works\nUsed as base value for service-specific retention calculations via UtxoStore.BlockHeightRetentionAdjustment and SubtreeValidation.BlockHeightRetentionAdjustment. Services call GetUtxoStoreBlockHeightRetention() and GetSubtreeValidationBlockHeightRetention() which add adjustments to this global value. Affects old blocks, transactions, UTXO history, and Merkle tree data.\n\n### Values\n- **288** (default) - Approximately 2 days of blockchain history (with 10-minute block target)\n- Higher values for deeper reorg support\n\n### Trade-offs\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Higher | Deeper reorg handling, longer data availability | More storage consumption |\n| Lower | Reduced storage requirements | Limited reorg depth |\n\n### Recommendations\n- **288** (default) - Suitable for most deployments\n- Increase for archive nodes or environments requiring deeper history"`
+	BatcherDrainMode           bool   `key:"batcher_drainMode" desc:"Enable drain mode for all go-batcher instances" default:"false" category:"Global" usage:"Reduces per-item latency by draining all available items immediately" type:"bool" longdesc:"### Purpose\nEnables drain mode across all go-batcher instances in the system, fundamentally changing batching behavior for lower latency.\n\n### How It Works\nWhen enabled, the batcher worker drains all currently-available items from the channel (up to the size cap) and fires immediately, instead of accumulating to the size threshold or waiting for the timeout. This produces adaptive batch sizes that naturally scale with throughput: at low throughput, batches are small with near-zero latency; at high throughput, batches grow larger as more items queue during processing.\n\n### Values\n- **false** (default) - Standard batching: waits for size or timeout\n- **true** - Drain mode: processes all available items immediately\n\n### Recommendations\n- Enable for high-throughput deployments where per-item latency matters\n- Size becomes a max cap, timeout becomes an irrelevant safety net"`
+	BatcherBackground          bool   `key:"batcher_background" desc:"Enable background (async) batch callback execution" default:"true" category:"Global" usage:"Batch callbacks run in goroutines, worker never blocks on I/O" type:"bool" longdesc:"### Purpose\nControls whether batch callbacks execute asynchronously in separate goroutines (true) or synchronously in the single worker goroutine (false).\n\n### How It Works\nWhen true, the batcher worker spawns a goroutine (or dispatches to a worker pool) for each batch callback, then immediately starts assembling the next batch. When false, the worker blocks until the callback completes before processing more items.\n\n### Values\n- **true** (default) - Concurrent batch execution; worker never blocks on Aerospike/gRPC round-trips\n- **false** - Serial execution; only one batch in-flight at a time per batcher\n\n### Recommendations\n- Keep true for production. Pair with utxostore_batcherMaxConcurrent to cap parallelism.\n- Only set false for debugging or when strict ordering of batch callbacks is required."`
 }
 
 // GetUtxoStoreBlockHeightRetention calculates the effective block height retention for UTXO store

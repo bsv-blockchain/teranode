@@ -57,6 +57,16 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return nil
 	}
 
+	// The sync peer's association just delivered a full block. Refresh its
+	// last-block time now, at receipt, so the minutes-long validation that
+	// follows (extend/createUtxos/validate/subtree writes for a multi-GB block)
+	// is not mistaken for a stall — which would rotate the sync peer
+	// mid-processing. Association-aware: the block arrives on the DATA1 stream,
+	// a different Peer from the GENERAL sync peer.
+	if sps, ok := sm.syncPeerStateFor(peer); ok {
+		sps.updateLastBlockTime()
+	}
+
 	block := bsvutil.NewBlock(msgBlock)
 
 	// Lookup previous block height from blockchain
@@ -382,17 +392,24 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// AddBlock(WithID, WithMinedSet(true)) and cause the setMinedChan worker to
 		// skip setTxMinedStatus (MinedSet guard in BlockValidation.go).
 		//
-		// Note on ID gaps: GetNextBlockID advances the sequence atomically. If anything
-		// fails after this point (createUtxos error, network error, context cancellation),
-		// the ID is consumed and a gap appears in block IDs. This is acceptable — the
-		// blockchain store tolerates non-contiguous IDs; the sequence is used only as a
-		// monotonic counter, not a contiguous index.
-		id, idErr := sm.blockchainClient.GetNextBlockID(ctx)
-		if idErr != nil {
-			return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to get next block ID", idErr)
+		// Restart-safety + cross-path consistency: if this block's transactions were
+		// already created in a prior attempt (or by the blockvalidation catchup path),
+		// reuse the block id recorded in the UTXO store so the committed block matches
+		// the existing UTXO mined-info. Otherwise fall back to the idempotent per-hash
+		// AssignBlockID. Both paths converging on one id is what prevents orphaned
+		// (phantom) block ids that wedge sync in checkOldBlockIDs.
+		if reused, ok := sm.reuseBlockIDFromUTXO(ctx, block); ok {
+			blockID = reused
+		} else {
+			id, idErr := sm.blockchainClient.AssignBlockID(ctx, block.Hash())
+			if idErr != nil {
+				return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to assign block ID", idErr)
+			}
+			blockID, idErr = safeconversion.Uint64ToUint32(id)
+			if idErr != nil {
+				return nil, 0, errors.NewProcessingError("[prepareSubtrees] assigned block id %d exceeds uint32", id, idErr)
+			}
 		}
-
-		blockID = uint32(id) // nolint:gosec
 
 		// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order
 		// first we create all the utxos, then we spend them
@@ -1006,6 +1023,41 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	}
 
 	return nil
+}
+
+// reuseBlockIDFromUTXO returns an already-recorded block id for this block by
+// reading the BlockIDs of its first non-coinbase transaction from the UTXO
+// store. This recovers the id after a restart (when the blockchain service's
+// in-memory reservation is gone) or when another ingestion path created the
+// UTXOs first, keeping the committed block id consistent with the UTXO
+// mined-info. Returns ok=false when nothing is recorded yet.
+func (sm *SyncManager) reuseBlockIDFromUTXO(ctx context.Context, block *bsvutil.Block) (uint32, bool) {
+	txs := block.Transactions()
+	if len(txs) < 2 { // index 0 is the coinbase; need a real tx
+		return 0, false
+	}
+	// Use the same tx-hash key shape the UTXO store is keyed by. createUtxos
+	// creates entries from bt.Tx via its TxIDChainHash; bsvutil.Tx.Hash() and
+	// bt.Tx.TxIDChainHash() both resolve to the same 32-byte txid, and both
+	// return *chainhash.Hash from github.com/bsv-blockchain/go-bt/v2/chainhash
+	// — the type utxoStore.Get expects.
+	// We trust BlockIDs[0] as this block's id: the first non-coinbase tx of a
+	// block is created by that block during sync, so the first recorded mined-in
+	// id is this block's. (blockvalidation's quick path keys the same recovery on
+	// its first non-coinbase tx — keep the two in sync if this assumption changes.)
+	meta, err := sm.utxoStore.Get(ctx, txs[1].Hash(), fields.BlockIDs)
+	if err != nil || meta == nil || len(meta.BlockIDs) == 0 {
+		return 0, false
+	}
+	if len(meta.BlockIDs) > 1 {
+		// Normal sync records exactly one mined-in block per fresh tx. More than
+		// one means this tx is referenced by multiple blocks (reorg / re-mine), so
+		// BlockIDs[0] may not be THIS block — surface it loudly rather than risk a
+		// silent mis-assignment that could re-create the phantom-id wedge.
+		sm.logger.Warnf("[reuseBlockIDFromUTXO] tx %s has %d mined-in block ids %v; reusing [0] for block %s — verify if sync stalls",
+			txs[1].Hash().String(), len(meta.BlockIDs), meta.BlockIDs, block.Hash().String())
+	}
+	return meta.BlockIDs[0], true
 }
 
 // PreValidateTransactions pre-validates all the transactions in the block before

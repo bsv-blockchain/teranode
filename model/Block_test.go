@@ -1414,7 +1414,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.True(t, errors.Is(err, errors.ErrBlockIncomplete))
 	})
 
 	t.Run("test parent is not in store so assume is in a previous block", func(t *testing.T) {
@@ -1426,9 +1426,9 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) == 0)
-		// After bug fix, missing parent now returns BLOCK_INVALID error instead of nil
+		// Missing parent is a transient catchup-state condition: returns BLOCK_INCOMPLETE, not invalid. See issue #1031.
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.True(t, errors.Is(err, errors.ErrBlockIncomplete))
 	})
 
 	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {
@@ -4976,4 +4976,21 @@ func buildBlockWithFinalSubtreeLargerThanFirst(t *testing.T) *Block {
 		Subtrees:      []*chainhash.Hash{first.RootHash(), second.RootHash()},
 		SubtreeSlices: []*subtreepkg.Subtree{first, second},
 	}
+}
+
+func TestGetParentTxMetaBlockIDs_MissingParentIsTransient(t *testing.T) {
+	txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+	parentHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+
+	parentTxStruct := missingParentTx{
+		parentTxHash: *parentHash,
+		txHash:       *txHash,
+	}
+
+	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockIncomplete),
+		"missing parent tx is a catchup-state condition and must be transient (incomplete)")
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid),
+		"missing parent tx must NOT be classified as a consensus violation")
 }

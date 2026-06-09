@@ -27,6 +27,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
@@ -45,6 +46,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -165,6 +167,15 @@ type Server struct {
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 
+	// adaptiveFetch controls whether subtreeData is pre-fetched during catchup
+	// or skipped because the tx distributor is keeping the UTXO store up to date.
+	adaptiveFetch *adaptivefetch.State
+
+	// fetchSubtreeDataForBlockFn is the function used by blockWorker to fetch
+	// subtree data for a block. Production code always uses the real method;
+	// tests override this field before dispatching work to blockWorker.
+	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error)
+
 	// peerCircuitBreakers manages circuit breakers for each peer to prevent
 	// cascading failures and protect against misbehaving peers
 	peerCircuitBreakers *catchup.PeerCircuitBreakers
@@ -282,6 +293,49 @@ func New(
 		logger.Infof("Fork %s resolved to %s at height %d with %d blocks", resolution.ForkID, resolution.ResolvedTo, resolution.FinalHeight, resolution.BlocksInFork)
 	})
 
+	// Construct adaptive-fetch state machine. The gate decides whether to
+	// pre-fetch subtreeData during catchup or skip it because the tx
+	// distributor is keeping our UTXO store up to date. Transitions are
+	// driven purely by counts observed during normal work — no FSM state,
+	// no wall-clock time. See pkg/adaptivefetch for the full design.
+	bootstrap, bootstrapErr := adaptivefetch.ParseBootstrapMode(tSettings.AdaptiveFetch.BootstrapMode)
+	if bootstrapErr != nil {
+		// Fall back to pessimistic (always fetch, no auto-transition) rather
+		// than auto — a config typo must not silently enable optimistic mode.
+		logger.Warnf("[BlockValidation] unknown adaptive_fetch_bootstrap_mode %q, falling back to pessimistic: %v",
+			tSettings.AdaptiveFetch.BootstrapMode, bootstrapErr)
+		bootstrap = adaptivefetch.ModePessimistic
+	}
+	af, afErr := adaptivefetch.New(adaptivefetch.Config{
+		WindowSize:                tSettings.AdaptiveFetch.WindowSize,
+		PessToOptHitRateThreshold: tSettings.AdaptiveFetch.PessToOptHitRateThreshold,
+		OptToPessMissThreshold:    tSettings.AdaptiveFetch.OptToPessMissThreshold,
+		OptToPessAvgMissThreshold: tSettings.AdaptiveFetch.OptToPessAvgMissThreshold,
+		BootstrapMode:             bootstrap,
+	}, "blockvalidation", prometheus.DefaultRegisterer)
+	if afErr != nil {
+		// New returns an error only on invalid Config. The defaults we
+		// provide in settings/adaptivefetch_settings.go pass validation,
+		// so this branch triggers only if an operator sets a nonsense
+		// numeric value in settings_local.conf. Fall back to hardcoded
+		// defaults but force BootstrapMode to ModePessimistic — a typo in
+		// adaptive_fetch_window_size (etc.) must not silently re-enable
+		// optimistic skipping just because DefaultConfig() ships with
+		// ModeAuto for direct package callers.
+		safeFallback := adaptivefetch.DefaultConfig()
+		safeFallback.BootstrapMode = adaptivefetch.ModePessimistic
+		logger.Errorf("[BlockValidation] adaptive_fetch config invalid (%v) — using hardcoded defaults pinned to pessimistic", afErr)
+
+		var fallbackErr error
+		if af, fallbackErr = adaptivefetch.New(safeFallback, "blockvalidation", prometheus.DefaultRegisterer); fallbackErr != nil {
+			// DefaultConfig() always passes validation, so this is unreachable
+			// in practice — but never swallow it. af stays nil; the gate's
+			// nil-receiver methods are safe and behave pessimistically (always
+			// fetch subtreeData), so the service degrades safely.
+			logger.Errorf("[BlockValidation] adaptive_fetch fallback construction failed (%v) — adaptive fetch disabled, always fetching subtreeData", fallbackErr)
+		}
+	}
+
 	bVal := &Server{
 		logger:              logger,
 		settings:            tSettings,
@@ -298,12 +352,15 @@ func New(
 		catchupCh:           make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
+		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
 		kafkaConsumerClient: kafkaConsumerClient,
 		peerCircuitBreakers: catchup.NewPeerCircuitBreakers(*cbConfig),
 		headerChainCache:    catchup.NewHeaderChainCache(logger),
 		p2pClient:           p2pClient,
 	}
+
+	bVal.fetchSubtreeDataForBlockFn = bVal.fetchSubtreeDataForBlock
 
 	return bVal
 }
@@ -498,6 +555,16 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 	return resp, nil
 }
 
+// isUnvalidatablePeerError reports whether err means the peer served a block that is
+// genuinely invalid (a consensus failure), which justifies giving up on alternative
+// sources and flagging the peer. Transient catchup-state errors (ErrTxMissingParent /
+// ErrTxNotFound / ErrBlockIncomplete) are deliberately excluded: they mean our store
+// hasn't caught up yet, not that the peer is faulty, so they must fall through to
+// alternative-peer retry. See issue #1031.
+func isUnvalidatablePeerError(err error) bool {
+	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
+}
+
 // Init initializes the block validation server with required dependencies and services.
 // It establishes connections to subtree validation services, configures UTXO store access,
 // and starts background processing components. This method must be called before Start().
@@ -638,14 +705,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						// Block is expected to be added to the block store as invalid somewhere else
 						// Note: ErrBlockIncomplete intentionally falls through to retry with alternative peers,
 						// since incomplete blocks (e.g. from seeded peers) may be available from other peers
-						if errors.Is(err, errors.ErrBlockInvalid) ||
-							errors.Is(err, errors.ErrTxMissingParent) ||
-							errors.Is(err, errors.ErrTxNotFound) ||
-							errors.Is(err, errors.ErrTxInvalid) {
+						if isUnvalidatablePeerError(err) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
 
-							// Mark peer as malicious for providing unvalidatable block
-							// All these errors indicate the peer is sending blocks we can't validate
+							// Mark peer as malicious only for a genuinely invalid (consensus-failing)
+							// block. Transient catchup-state errors fall through to alternative-peer
+							// retry, same as ErrBlockIncomplete. See issue #1031.
 							u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
 
 							// Clean up the processing notification for this block
@@ -1056,6 +1121,24 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		}, nil)
 	})
 
+	// Arm the adaptive-fetch gate the first time the node reaches RUNNING.
+	// Until then the gate stays pinned pessimistic so a cold-start IBD never
+	// skips subtreeData (when the node is least likely to have txs locally).
+	// Once RUNNING the configured bootstrap behaviour applies, and the latch
+	// never re-locks — a later catch-up burst after RUNNING may use optimistic
+	// mode. Best-effort and FSM-knowledge lives here, not in pkg/adaptivefetch:
+	// on shutdown (ctx cancelled) we simply leave it pessimistic and return nil
+	// so this goroutine never tears down the service.
+	g.Go(func() error {
+		if err := u.blockchainClient.WaitForFSMtoTransitionToGivenState(gctx, blockchain.FSMStateRUNNING); err != nil {
+			u.logger.Infof("[BlockValidation] adaptive-fetch staying pessimistic; FSM did not reach RUNNING: %v", err)
+			return nil
+		}
+		u.logger.Infof("[BlockValidation] FSM reached RUNNING; arming adaptive-fetch (optimism now permitted per bootstrap mode)")
+		u.adaptiveFetch.Arm()
+		return nil
+	})
+
 	return g.Wait()
 }
 
@@ -1322,6 +1405,11 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
 	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
 	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+		// Transient catchup-state (e.g. parent tx not yet in our store) must not be
+		// reported as a consensus failure to the caller. See issue #1031.
+		if errors.Is(err, errors.ErrBlockIncomplete) {
+			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
+		}
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
