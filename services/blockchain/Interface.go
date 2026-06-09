@@ -93,6 +93,9 @@ type ClientI interface {
 	// - Error if the retrieval fails
 	GetNextBlockID(ctx context.Context) (uint64, error)
 
+	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
+	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
 	// SendNotification broadcasts a notification to subscribers.
 	//
 	// This method publishes a notification message to all active subscribers of the

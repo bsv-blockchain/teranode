@@ -101,6 +101,15 @@ func (m *Mock) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return args.Get(0).(uint64), args.Error(1)
 }
 
+// AssignBlockID mocks the AssignBlockID method
+func (m *Mock) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+	return args.Get(0).(uint64), nil
+}
+
 // GetBlockStats mocks the GetBlockStats method
 func (m *Mock) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	args := m.Called(ctx)
@@ -652,6 +661,11 @@ func (e *errorStore) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return 0, args.Error(1)
 }
 
+func (e *errorStore) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	args := e.Called(ctx, blockHash)
+	return 0, args.Error(1)
+}
+
 func (e *errorStore) GetLatestBlockHeaderFromBlockLocator(
 	ctx context.Context,
 	bestBlockHash *chainhash.Hash,
@@ -988,6 +1002,15 @@ func (m *mockBlockClient) GetNextBlockID(ctx context.Context, req *emptypb.Empty
 		return nil, m.err
 	}
 	return m.responseGetNextBlockID, nil
+}
+
+func (m *mockBlockClient) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest, opts ...grpc.CallOption) (*blockchain_api.AssignBlockIDResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Mirror the configured GetNextBlockID id so callers that wire up an id get a
+	// consistent, non-zero value here too (getter is nil-safe → 0 when unset).
+	return &blockchain_api.AssignBlockIDResponse{BlockId: m.responseGetNextBlockID.GetNextBlockId()}, nil
 }
 
 func (m *mockBlockClient) GetBlockStats(

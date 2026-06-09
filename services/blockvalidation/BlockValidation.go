@@ -2303,11 +2303,17 @@ func (u *BlockValidation) checkOldBlockIDsOffChainPrefetch(ctx context.Context,
 		u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route: prefetched %d off-chain block IDs (maxBlockID=%d), checking %d old block ID entries", block.Hash().String(), len(offChain), maxBlockID, oldBlockIDsMap.Length())
 	}
 
-	// ANY-of, inverted, mirroring CheckBlockIsInCurrentChain exactly: a tx's
-	// parent set is on the main chain if at least one of its parent block IDs is
-	// (id <= maxBlockID) AND NOT in the off-chain set. IDs above maxBlockID
-	// cannot exist yet, so they are skipped here (not treated as on-chain) and
-	// fall through to the authoritative RPC — never short-circuited to accept.
+	// NOTE (Option C / consensus): this local fast path treats a candidate absent
+	// from the off-chain set as on-chain. That is UNSOUND for a non-existent
+	// (phantom / id-sequence gap) id <= maxBlockID, which is absent from the
+	// off-chain set yet has no on_main_chain row — the authoritative store route
+	// (CheckBlockIsInCurrentChain, now fixed) rejects it. This toggle-on
+	// optimization therefore still carries the latent split for dangling ids.
+	// Making it sound removes the positive short-circuit (every survivor would
+	// need an authoritative confirm), which obsoletes this profiled prefetch — a
+	// perf/design call left for the team. Phantom CREATION is already prevented by
+	// the idempotent AssignBlockID fix, so this is latent, not reachable in normal
+	// operation.
 	fastPath := func(blockIDs []uint32) bool {
 		for _, blockID := range blockIDs {
 			if blockID > maxBlockID {

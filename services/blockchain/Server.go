@@ -1309,6 +1309,27 @@ func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blo
 	}, nil
 }
 
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest) (*blockchain_api.AssignBlockIDResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "AssignBlockID",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[AssignBlockID] called"),
+	)
+	defer deferFn()
+
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[AssignBlockID] invalid block hash", err))
+	}
+
+	id, err := b.store.AssignBlockID(ctx, hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
+}
+
 // GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockStats",

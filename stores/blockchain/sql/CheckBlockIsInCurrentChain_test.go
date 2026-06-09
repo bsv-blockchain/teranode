@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -96,10 +97,18 @@ func TestCheckBlockIsInCurrentChain_InMemory_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// The off-chain set lookup is fully in-memory — cancelled context has no effect.
-	result, err := s.CheckBlockIsInCurrentChain(ctx, []uint32{uint32(blockID)})
+	// The NEGATIVE fast path is fully in-memory: an id above maxBlockID is rejected
+	// without any query, so a cancelled context has no effect.
+	result, err := s.CheckBlockIsInCurrentChain(ctx, []uint32{999999})
 	assert.NoError(t, err)
-	assert.True(t, result, "In-memory lookup should succeed even with cancelled context")
+	assert.False(t, result)
+
+	// A would-be-positive (a real on-chain id) is now confirmed against the
+	// authoritative on_main_chain flag so a non-existent id can't be mistaken for
+	// on-chain. That confirmation is a DB query, so a cancelled context surfaces as
+	// an error rather than an unverified true.
+	_, err = s.CheckBlockIsInCurrentChain(ctx, []uint32{uint32(blockID)})
+	assert.Error(t, err)
 }
 
 func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
@@ -111,10 +120,44 @@ func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
 
 	s.Close()
 
-	// The off-chain set lookup is fully in-memory — closed DB has no effect.
-	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
+	// Negative fast path is in-memory: an above-maxBlockID id is rejected without
+	// touching the (now closed) DB.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{999999})
 	assert.NoError(t, err)
-	assert.True(t, result, "In-memory lookup should succeed even with closed DB")
+	assert.False(t, result)
+
+	// A positive candidate is confirmed against on_main_chain, which needs the DB;
+	// with the DB closed this surfaces an error instead of an unverified true.
+	_, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
+	assert.Error(t, err)
+}
+
+func TestCheckBlockIsInCurrentChain_InMemory_PhantomBelowMaxID(t *testing.T) {
+	s := newStoreWithInMemoryChainCheck(t)
+	defer s.Close()
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	// Commit block2 under a high explicit id, leaving a large gap of non-existent
+	// ids below maxBlockID (simulating an orphaned/phantom id-sequence gap).
+	const highID = 100000
+	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+	require.NoError(t, err)
+	require.Equal(t, uint64(highID), committed)
+
+	// A phantom id (<= maxBlockID, no row, not in the off-chain set) must be
+	// rejected: it has no on_main_chain=true row, identical to the SQL route.
+	// Pre-fix the in-memory path wrongly returned true here — a toggled/untoggled
+	// consensus split.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+	require.NoError(t, err)
+	assert.False(t, result, "non-existent id below maxBlockID must not be treated as on-chain")
+
+	// Sanity: the real committed on-chain id still resolves true.
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID})
+	require.NoError(t, err)
+	assert.True(t, result)
 }
 
 func TestCheckBlockIsInCurrentChain_MixedOnChainAndOffChain(t *testing.T) {

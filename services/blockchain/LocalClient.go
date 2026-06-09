@@ -170,6 +170,10 @@ func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return c.store.GetNextBlockID(ctx)
 }
 
+func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	return c.store.AssignBlockID(ctx, blockHash)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }

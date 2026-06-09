@@ -3951,3 +3951,23 @@ func Test_getBlockLocator_FastPathMatchesWalk(t *testing.T) {
 		}
 	}
 }
+
+// TestServerAssignBlockID covers the gRPC AssignBlockID handler: a stable id is
+// returned per hash (idempotent across calls), and a malformed hash is rejected.
+func TestServerAssignBlockID(t *testing.T) {
+	ctx := setup(t)
+	c := context.Background()
+
+	h := chainhash.HashH([]byte("assign-block-id-server"))
+
+	resp, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.NotZero(t, resp.BlockId)
+
+	resp2, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.Equal(t, resp.BlockId, resp2.BlockId, "same hash must return the same id")
+
+	_, err = ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: []byte{0x01, 0x02}})
+	require.Error(t, err, "a non-32-byte hash must be rejected as invalid argument")
+}

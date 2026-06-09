@@ -92,6 +92,12 @@ type Store interface {
 	// Returns: next block ID and any error encountered
 	GetNextBlockID(ctx context.Context) (uint64, error)
 
+	// AssignBlockID returns a stable block ID for the given block hash: repeated
+	// calls for the same hash (and concurrent callers) return the same id, and a
+	// committed block returns its authoritative id. Used by ingestion paths so a
+	// block's UTXO mined-info and its committed row share one id.
+	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
 	// GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash. This is useful for getting the block at a given height in a chain that may have a different tip.
 	// Parameters:
 	//   - ctx: Context for the operation
