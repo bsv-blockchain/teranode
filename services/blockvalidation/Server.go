@@ -1273,8 +1273,10 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	// baseURL is peer-supplied; reject obvious SSRF targets early for a clean error.
-	// The "legacy" sentinel is a non-HTTP scheme and passes through. The dial-time guard
-	// in util.ssrfDialContext remains the backstop for DNS-resolved private addresses.
+	// The "legacy" sentinel has no http/https scheme, so ValidateURL returns nil for it
+	// (only http/https URLs are inspected) and the legacy default is unaffected. The
+	// dial-time guard in util.ssrfDialContext remains the backstop for DNS-resolved
+	// private addresses.
 	if err = util.ValidateURL(baseURL); err != nil {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid base URL", err))
 	}

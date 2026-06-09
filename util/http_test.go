@@ -892,6 +892,19 @@ func TestValidateURL_Disabled(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestValidateURL_NonHTTPSentinelsPassThrough guards the "legacy" baseURL default (and the
+// empty string) used by block/subtree validation: they have no http/https scheme, so
+// ValidateURL must return nil and never reject them. Regression test for the early
+// ValidateURL guards added to the peer-supplied baseURL entry points.
+func TestValidateURL_NonHTTPSentinelsPassThrough(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	for _, s := range []string{"legacy", ""} {
+		require.NoError(t, ValidateURL(s), "ValidateURL(%q) must pass through", s)
+	}
+}
+
 func TestValidateURL_RejectsUserinfo(t *testing.T) {
 	SetSSRFProtection(true)
 	defer SetSSRFProtection(false)

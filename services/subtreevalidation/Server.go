@@ -646,8 +646,9 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// BaseUrl is peer-supplied; reject obvious SSRF targets early for a clean error.
-	// The "legacy" sentinel is a non-HTTP scheme and passes through. The dial-time guard
-	// in util.ssrfDialContext remains the backstop for DNS-resolved private addresses.
+	// The "legacy" sentinel has no http/https scheme, so ValidateURL returns nil for it
+	// (only http/https URLs are inspected) and the legacy path is unaffected. The dial-time
+	// guard in util.ssrfDialContext remains the backstop for DNS-resolved private addresses.
 	if err := util.ValidateURL(request.BaseUrl); err != nil {
 		return false, errors.NewInvalidArgumentError("[CheckSubtree] invalid base URL", err)
 	}
