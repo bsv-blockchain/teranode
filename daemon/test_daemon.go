@@ -152,6 +152,13 @@ var testDaemonCounter uint64
 
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
+	// Test daemons run multiple nodes in-process on the same host, so peers advertise
+	// and fetch from each other over localhost (e.g. http://localhost:<assetPort>). The
+	// production SSRF dial guard blocks loopback, which would make catchup block/subtree
+	// fetches fail. These nodes are trusted, so disable SSRF protection for the test
+	// process. Production (cmd/teranode) never calls this and keeps protection enabled.
+	util.SetSSRFProtection(false)
+
 	ctx, cancel := context.WithCancel(t.Context())
 
 	var (
