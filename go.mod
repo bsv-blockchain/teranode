@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260526081552-cdfa7814ee5d
 	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv3
-	github.com/bsv-blockchain/go-bt/v2 v2.6.5
+	github.com/bsv-blockchain/go-bt/v2 v2.6.7
 	github.com/bsv-blockchain/go-chaincfg v1.5.8
 	github.com/bsv-blockchain/go-sdk v1.2.24
 	github.com/bsv-blockchain/go-subtree v1.4.2
@@ -53,12 +53,12 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/term v0.43.0
-	golang.org/x/text v0.37.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/term v0.44.0
+	golang.org/x/text v0.38.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -201,7 +201,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.17
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-tx-map v1.3.8
-	github.com/bsv-blockchain/go-wire v1.2.6
+	github.com/bsv-blockchain/go-wire v1.2.9
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
