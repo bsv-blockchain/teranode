@@ -104,7 +104,7 @@ jobs:
       - name: Run Claude Code Review
         if: steps.pr.outputs.is_draft == 'false'
         id: claude-review
-        uses: anthropics/claude-code-action@e8bad572273ce919ba15fec95aef0ce974464753 # v1
+        uses: anthropics/claude-code-action@11ba60486e4aec9ddfeafcf4bb3f00b028ac2c16 # v1.0.142
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -167,6 +167,7 @@ jobs:
               * If still broken: Leave unresolved, optionally add brief update to the thread
 
             **Review Guidelines:**
+            - Work fully autonomously: this is a non-interactive CI run, never pause to ask questions or offer follow-ups
             - DO NOT submit formal GitHub reviews using `gh pr review`
             - This is advisory/informational only - human reviewers make final decisions
             - Keep the sticky comment brief (max 3-4 short paragraphs when complete)
@@ -211,7 +212,7 @@ jobs:
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
-          claude_args: '--allowed-tools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*)"'
+          claude_args: '--model claude-opus-4-8 --allowed-tools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*)"'
 
       # If the Claude step failed (timeout, API error, runner death), any "In Progress" sticky
       # comment it created is now a zombie. Mark it Aborted so the PR doesn't show a stuck review.
