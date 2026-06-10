@@ -538,6 +538,22 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 		return
 	}
 
+	// Stay quiet while syncing or catching up, mirroring the rejected-tx producer above.
+	// During CATCHINGBLOCKS/LEGACYSYNCING the node replays large volumes of historical
+	// transactions; publishing a policy-rejected message for every one would flood the
+	// topic with cache entries that subtree validation does not need yet.
+	if v.blockchainClient != nil {
+		state, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			ctxLogger.Errorf("[publishPolicyRejectedTx] failed to get blockchain FSM state: %v", err)
+			return
+		}
+
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+			return
+		}
+	}
+
 	// Skip oversized transactions before serializing (tx.Size() is computed, not
 	// allocated): the broker rejects messages over message.max.bytes, and consumers
 	// skip txs over maxCachedTxBytes anyway. Skipping is lossless — subtree validation
@@ -562,10 +578,16 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 		return
 	}
 
-	v.policyRejectedTxKafkaProducerClient.Publish(&kafka.Message{
+	// Non-blocking publish: this runs on the validation hot path, and the
+	// policy-rejected cache is strictly best-effort (a drop just falls back to the HTTP
+	// fetch path on the consumer side). Blocking here on Kafka back-pressure would stall
+	// validateTransaction, so a full producer buffer drops the message instead.
+	if !v.policyRejectedTxKafkaProducerClient.TryPublish(&kafka.Message{
 		Key:   txHash.CloneBytes(),
 		Value: value,
-	})
+	}) {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] dropped tx %s: policy-rejected producer buffer full", txHash.String())
+	}
 }
 
 // validateInternal performs the core validation logic for a transaction.

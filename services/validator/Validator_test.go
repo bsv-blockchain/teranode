@@ -1681,6 +1681,8 @@ type fakeAsyncProducer struct {
 
 func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
 
+func (f *fakeAsyncProducer) TryPublish(m *kafka.Message) bool { f.publish(m); return true }
+
 func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
 	ctx := context.Background()
 

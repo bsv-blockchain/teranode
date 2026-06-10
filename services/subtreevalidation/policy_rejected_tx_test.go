@@ -40,11 +40,11 @@ func TestTxPolicyRejectedCache_MissReturnsNotFound(t *testing.T) {
 }
 
 func TestTxPolicyRejectedCache_EvictsWhenFull(t *testing.T) {
-	cache := newTxPolicyRejectedCache(1) // very small -> maxSize = 1024 (minimum)
-	cache.maxSize = 2                    // override for test
-
 	tx1, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
 	tx2, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
+
+	// tx1 and tx2 are identical in size; bound the cache to exactly two of them.
+	cache := newTxPolicyRejectedCache(2 * tx1.Size())
 
 	var hash1, hash2, hash3 chainhash.Hash
 	hash1[0] = 1
@@ -54,9 +54,33 @@ func TestTxPolicyRejectedCache_EvictsWhenFull(t *testing.T) {
 	cache.Set(hash1, tx1)
 	cache.Set(hash2, tx2)
 	require.Equal(t, 2, cache.Len())
+	require.Equal(t, 2*tx1.Size(), cache.Bytes())
 
 	cache.Set(hash3, tx1)
-	require.Equal(t, 2, cache.Len(), "cache should evict one entry to stay at max size")
+	require.Equal(t, 2, cache.Len(), "cache should evict one entry to stay within byte budget")
+	require.LessOrEqual(t, cache.Bytes(), 2*tx1.Size(), "byte usage must stay within budget")
+}
+
+// TestTxPolicyRejectedCache_BoundedByBytes is the regression guard for the eviction
+// bound being on cumulative tx bytes rather than entry count: a flood of distinct
+// transactions must never push memory usage past the configured byte budget.
+func TestTxPolicyRejectedCache_BoundedByBytes(t *testing.T) {
+	tx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
+	txSize := tx.Size()
+
+	budget := 5 * txSize
+	cache := newTxPolicyRejectedCache(budget)
+
+	for i := 0; i < 1000; i++ {
+		var h chainhash.Hash
+		h[0] = byte(i)
+		h[1] = byte(i >> 8)
+		cache.Set(h, tx)
+
+		require.LessOrEqual(t, cache.Bytes(), budget, "cache must never exceed the byte budget")
+	}
+
+	require.LessOrEqual(t, cache.Len(), 5, "entry count is implied by the byte budget, not assumed")
 }
 
 func TestLookupPolicyRejectedTxs(t *testing.T) {

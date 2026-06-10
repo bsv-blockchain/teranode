@@ -143,6 +143,13 @@ func (m *mockKafkaAsyncProducer) Publish(msg *kafka.Message) {
 	}
 }
 
+func (m *mockKafkaAsyncProducer) TryPublish(msg *kafka.Message) bool {
+	if m.publishFunc != nil {
+		m.publishFunc(msg)
+	}
+	return true
+}
+
 func (m *mockKafkaAsyncProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	if m.startFunc != nil {
 		m.startFunc(ctx, ch)
