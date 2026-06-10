@@ -24,6 +24,15 @@ p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
 # inter-service gRPC/HTTP addresses to dial the sibling container's DNS name
 # instead of the all-in-one default ({{ "${clientName}" }}:port) which would
 # resolve to the node-level container that doesn't exist in split mode.
+#
+# Also force useLocalValidator=false here: settings.conf ships with it set to
+# true (suitable for the all-in-one default), which makes the daemon build an
+# in-process validator and ignore validator_grpcAddress entirely. In split
+# mode the standalone teranode{N}-validator container would then be dead code
+# and per-service chaos against it (e.g. KillService on validator) would have
+# no observable effect. Flipping the override makes split mode actually go
+# through gRPC, which is the whole point of running a separate container.
+useLocalValidator.docker.teranode{{ .Index }}                  = false
 blockchain_grpcAddress.docker.teranode{{ .Index }}             = teranode{{ .Index }}-blockchain:${BLOCKCHAIN_GRPC_PORT}
 blockassembly_grpcAddress.docker.teranode{{ .Index }}          = teranode{{ .Index }}-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}
 blockvalidation_grpcAddress.docker.teranode{{ .Index }}        = teranode{{ .Index }}-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}

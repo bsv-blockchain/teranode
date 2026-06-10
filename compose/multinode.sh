@@ -650,11 +650,16 @@ chaos_pause() {
 chaos_unpause() {
   local node="${1:?usage: chaos unpause <node> [service]}"
   local svc="${2:-}"
+  # Suppress 'docker unpause' errors on every branch (matching the existing
+  # bulk-split branch below): tests routinely run a defensive defer-unpause
+  # alongside an explicit one on the happy path, and a bare 'docker unpause'
+  # exits non-zero on an already-running container, which MustRun turns into
+  # t.Fatalf. Idempotent semantics are what "chaos cleanup" actually wants.
   if [[ -n "$svc" ]]; then
     assert_known_service "$svc" "chaos unpause"
     local ctr="teranode${node}-${svc}-multinode"
     echo "unpausing $ctr..."
-    docker unpause "$ctr"
+    docker unpause "$ctr" 2>/dev/null || true
     echo "$ctr is unfrozen"
     return
   fi
@@ -671,7 +676,7 @@ chaos_unpause() {
   local ctr
   ctr=$(container_name "$node")
   echo "unpausing $ctr..."
-  docker unpause "$ctr"
+  docker unpause "$ctr" 2>/dev/null || true
   echo "teranode$node is unfrozen"
 }
 
