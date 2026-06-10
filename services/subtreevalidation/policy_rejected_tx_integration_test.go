@@ -157,23 +157,26 @@ func TestPolicyRejectedTxMultipleMessages(t *testing.T) {
 	txHashes := make([]chainhash.Hash, messageCount)
 
 	for i := 0; i < messageCount; i++ {
-		// Use a unique "hash" per message (the actual tx bytes are the same but the
-		// key/hash we publish is unique to simulate different txs)
-		var fakeHash chainhash.Hash
-		fakeHash[0] = byte(i)
-		fakeHash[1] = byte(i >> 8)
-		txHashes[i] = fakeHash
+		// Build a genuinely distinct transaction per message by varying the locktime,
+		// so each message's claimed hash matches its raw bytes. The handler rejects
+		// messages whose claimed hash differs from the parsed tx (cache-poisoning
+		// defense), so reusing one tx under fake hashes would be dropped, not cached.
+		tx := baseTx.Clone()
+		tx.LockTime = uint32(i + 1)
+
+		hash := *tx.TxIDChainHash()
+		txHashes[i] = hash
 
 		m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{
-			TxHash: fakeHash[:],
-			RawTx:  baseTx.SerializeBytes(),
+			TxHash: hash[:],
+			RawTx:  tx.SerializeBytes(),
 			Reason: fmt.Sprintf("policy-violation-%d", i),
 		}
 		value, err := proto.Marshal(m)
 		require.NoError(t, err)
 
 		producer.Publish(&kafka.Message{
-			Key:   fakeHash[:],
+			Key:   hash[:],
 			Value: value,
 		})
 	}
