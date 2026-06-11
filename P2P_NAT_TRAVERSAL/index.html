@@ -1120,6 +1120,8 @@
       
         
       
+        
+      
     
     
     
@@ -1208,6 +1210,34 @@
     
   
     Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../howto/miners/kubernetes/minersHowToExposeP2P/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Public Exposure (Kubernetes)
   
 
     
@@ -7147,7 +7177,7 @@
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>For Production</strong>: Always set explicit <code>p2p_advertise_addresses</code> with your public IP</li>
-<li><strong>For Cloud/Kubernetes</strong>: Use the load balancer or ingress IP in <code>p2p_advertise_addresses</code></li>
+<li><strong>For Cloud/Kubernetes</strong>: Use the load balancer or ingress IP in <code>p2p_advertise_addresses</code>. On AWS this requires an NLB with <code>externalTrafficPolicy: Local</code> — see <a href="../howto/miners/kubernetes/minersHowToExposeP2P/">How to Expose the P2P Service Publicly (Kubernetes)</a></li>
 <li><strong>For Development</strong>: Enable <code>p2p_enable_nat_service</code> for automatic address detection</li>
 <li><strong>For Home Networks</strong>: Enable <code>p2p_enable_nat_port_map</code> if your router supports it</li>
 </ol>

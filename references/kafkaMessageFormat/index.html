@@ -1120,6 +1120,8 @@
       
         
       
+        
+      
     
     
     
@@ -1208,6 +1210,34 @@
     
   
     Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../howto/miners/kubernetes/minersHowToExposeP2P/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Public Exposure (Kubernetes)
   
 
     
@@ -10390,7 +10420,7 @@
 <h2 id="transaction-metadata-message-format">Transaction Metadata Message Format<a class="headerlink" href="#transaction-metadata-message-format" title="Permanent link">&para;</a></h2>
 <h3 id="txmeta-topic">TxMeta Topic<a class="headerlink" href="#txmeta-topic" title="Permanent link">&para;</a></h3>
 <p><code>kafka_txmetaConfig</code> is the Kafka topic used for broadcasting transaction metadata for validated transactions. This topic allows the Validator to either add new transaction metadata or request deletion of previously shared metadata.</p>
-<p>Unlike the other Teranode Kafka topics, the txmeta topic does <strong>not</strong> use protobuf. Each Kafka record carries a custom, length-prefixed binary batch of many entries so the producer can amortise the per-record overhead at high transaction rates (the throughput target is well into the millions of transactions per second). The wire-format constants are defined once in <a href="../../stores/txmetacache/wire.go"><code>stores/txmetacache/wire.go</code></a> and imported by the producer (<code>services/validator</code>) and every consumer (<code>services/subtreevalidation</code>, <code>services/legacy/netsync</code>).</p>
+<p>Unlike the other Teranode Kafka topics, the txmeta topic does <strong>not</strong> use protobuf. Each Kafka record carries a custom, length-prefixed binary batch of many entries so the producer can amortise the per-record overhead at high transaction rates (the throughput target is well into the millions of transactions per second). The wire-format constants are defined once in <code>stores/txmetacache/wire.go</code> and imported by the producer (<code>services/validator</code>) and every consumer (<code>services/subtreevalidation</code>, <code>services/legacy/netsync</code>).</p>
 <h3 id="wire-format">Wire Format<a class="headerlink" href="#wire-format" title="Permanent link">&para;</a></h3>
 <p>Two batch formats coexist on the topic, distinguished at the receiver by a multi-byte signature at the start of the record. The producer chooses the format based on the <code>validator_txmeta_wireFormat</code> setting (<code>v1</code> by default; <code>v2</code> for partition-aligned writes).</p>
 <h4 id="v1-legacy">v1 (legacy)<a class="headerlink" href="#v1-legacy" title="Permanent link">&para;</a></h4>

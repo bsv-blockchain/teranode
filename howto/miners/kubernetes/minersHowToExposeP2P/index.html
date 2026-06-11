@@ -10,31 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/howto/developersHowToTeranodeCLI/">
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/howto/miners/kubernetes/minersHowToExposeP2P/">
       
       
-        <link rel="prev" href="../bugReporting/">
+        <link rel="prev" href="../minersHowToConfigureTheNode/">
       
       
-        <link rel="next" href="../miners/docker/minersHowToInstallation/">
+        <link rel="next" href="../../minersHowToAerospikeTuning/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/favicon.png">
+      <link rel="icon" href="../../../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Developer's Guide to Teranode-CLI - Teranode</title>
+        <title>P2P Public Exposure (Kubernetes) - Teranode</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -48,14 +48,14 @@
         
         
         
-        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
         <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="../../overrides/custom.css?v=8cf07571">
+      <link rel="stylesheet" href="../../../../overrides/custom.css?v=8cf07571">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#developers-guide-to-teranode-cli" class="md-skip">
+        <a href="#how-to-expose-the-p2p-service-publicly-kubernetes" class="md-skip">
           Skip to content
         </a>
       
@@ -96,9 +96,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../assets/bsv-logo.png" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -115,7 +115,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Developer's Guide to Teranode-CLI
+              P2P Public Exposure (Kubernetes)
             
           </span>
         </div>
@@ -227,7 +227,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../../.." class="md-tabs__link">
         
   
   
@@ -259,7 +259,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../developerSetup/" class="md-tabs__link">
+        <a href="../../../developerSetup/" class="md-tabs__link">
           
   
   
@@ -284,7 +284,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../topics/teranodeIntro/" class="md-tabs__link">
+        <a href="../../../../topics/teranodeIntro/" class="md-tabs__link">
           
   
   
@@ -306,7 +306,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../references/projectStructure/" class="md-tabs__link">
+        <a href="../../../../references/projectStructure/" class="md-tabs__link">
           
   
   
@@ -348,9 +348,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../assets/bsv-logo.png" alt="logo">
+  <img src="../../../../assets/bsv-logo.png" alt="logo">
 
     </a>
     Teranode
@@ -377,7 +377,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../../.." class="md-nav__link">
         
   
   
@@ -550,7 +550,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../developerSetup/" class="md-nav__link">
+      <a href="../../../developerSetup/" class="md-nav__link">
         
   
   
@@ -578,7 +578,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../forkAndPullRequestGuidelines/" class="md-nav__link">
+      <a href="../../../forkAndPullRequestGuidelines/" class="md-nav__link">
         
   
   
@@ -606,7 +606,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../locallyRunningServices/" class="md-nav__link">
+      <a href="../../../locallyRunningServices/" class="md-nav__link">
         
   
   
@@ -634,7 +634,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../howToRemoteDebugTeranode/" class="md-nav__link">
+      <a href="../../../howToRemoteDebugTeranode/" class="md-nav__link">
         
   
   
@@ -670,7 +670,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../generatingProtobuf/" class="md-nav__link">
+      <a href="../../../generatingProtobuf/" class="md-nav__link">
         
   
   
@@ -698,7 +698,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../addingNewProtobufServices/" class="md-nav__link">
+      <a href="../../../addingNewProtobufServices/" class="md-nav__link">
         
   
   
@@ -726,7 +726,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuringGrpcLogging/" class="md-nav__link">
+      <a href="../../../configuringGrpcLogging/" class="md-nav__link">
         
   
   
@@ -754,7 +754,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../runningTests/" class="md-nav__link">
+      <a href="../../../runningTests/" class="md-nav__link">
         
   
   
@@ -782,7 +782,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../automatedTestingHowTo/" class="md-nav__link">
+      <a href="../../../automatedTestingHowTo/" class="md-nav__link">
         
   
   
@@ -810,7 +810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../chain-integrity-testing/" class="md-nav__link">
+      <a href="../../../chain-integrity-testing/" class="md-nav__link">
         
   
   
@@ -838,7 +838,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../makefile/" class="md-nav__link">
+      <a href="../../../makefile/" class="md-nav__link">
         
   
   
@@ -866,7 +866,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../bugReporting/" class="md-nav__link">
+      <a href="../../../bugReporting/" class="md-nav__link">
         
   
   
@@ -891,37 +891,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Developer's Guide to Teranode-CLI
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../developersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -937,526 +910,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Overview
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#building-the-cli" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Building the CLI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#basic-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Basic Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Basic Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#important-settings-context" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Important Settings Context
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#available-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Available Commands
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Available Commands">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#fsm-state-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        FSM State Management
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="FSM State Management">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#getting-the-current-state" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Getting the Current State
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setting-a-new-state" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setting a New State
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#view-system-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        View System Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#data-management-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Data Management Commands
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Data Management Commands">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#aerospike-reader" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike Reader
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#file-reader" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        File Reader
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#bitcoin-to-utxo-set-conversion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bitcoin to UTXO Set Conversion
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-persister-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Persister Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#seeder" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Seeder
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#block-data-importexport" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Block Data Import/Export
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Block Data Import/Export">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#export-blockchain-to-csv" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Export Blockchain to CSV
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#import-blockchain-from-csv" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Import Blockchain from CSV
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#block-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Block Operations
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Block Operations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-block-template" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check Block Template
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#check-block" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check Block
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reconsider-block" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reconsider Block
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reset-block-assembly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reset Block Assembly
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#aerospike-kafka-connector" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike Kafka Connector
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-set-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Set Validation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#database-maintenance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Database Maintenance
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Database Maintenance">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#fix-chainwork" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fix Chainwork
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#benchmarking-tools" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Benchmarking Tools
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Benchmarking Tools">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#subtree-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subtree Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-unmined-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Unmined Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transaction-map-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transaction Map Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#remainder-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Remainder Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#interactive-monitoring-tools" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Interactive Monitoring Tools
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Interactive Monitoring Tools">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#log-viewer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Log Viewer
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#node-monitor" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Node Monitor
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#common-development-workflows" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Development Workflows
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Common Development Workflows">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#starting-a-fresh-development-node" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Starting a Fresh Development Node
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#debugging-tips" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Debugging Tips
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#extending-the-cli" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Extending the CLI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#further-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Further Resources
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1466,6 +919,8 @@
                 
   
   
+    
+  
   
   
     
@@ -1501,11 +956,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" checked>
         
           
           <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="">
@@ -1526,7 +981,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_11">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1602,7 +1057,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToInstallation/" class="md-nav__link">
+      <a href="../../docker/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1630,7 +1085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
+      <a href="../minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1663,8 +1118,10 @@
                 
   
   
+    
   
   
+  
     
     
       
@@ -1691,11 +1148,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_2" checked>
         
           
           <label class="md-nav__link" for="__nav_2_11_2" id="__nav_2_11_2_label" tabindex="0">
@@ -1716,7 +1173,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_11_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1734,7 +1191,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../../docker/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1762,7 +1219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1787,10 +1244,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToExposeP2P/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Public Exposure (Kubernetes)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1806,6 +1290,142 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why This Matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#awseks-network-load-balancer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AWS/EKS: Network Load Balancer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AWS/EKS: Network Load Balancer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-manifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Manifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-externaltrafficpolicy-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why externalTrafficPolicy: Local
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#advertise-the-load-balancer-address" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advertise the Load Balancer Address
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify-reachability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify Reachability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-a-dht-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing a DHT Mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#joining-the-dns-bootstrap-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining the DNS Bootstrap Pool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-cloud-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other Cloud Providers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1818,7 +1438,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToAerospikeTuning/" class="md-nav__link">
+      <a href="../../minersHowToAerospikeTuning/" class="md-nav__link">
         
   
   
@@ -1846,7 +1466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
+      <a href="../../minersHowToInteractWithAssetServer/" class="md-nav__link">
         
   
   
@@ -1874,7 +1494,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToInteractWithFSM/" class="md-nav__link">
+      <a href="../../minersHowToInteractWithFSM/" class="md-nav__link">
         
   
   
@@ -1902,7 +1522,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
+      <a href="../../minersHowToInteractWithRPCServer/" class="md-nav__link">
         
   
   
@@ -1996,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+      <a href="../../docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
         
   
   
@@ -2024,7 +1644,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+      <a href="../minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
         
   
   
@@ -2118,7 +1738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../../docker/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -2146,7 +1766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -2240,7 +1860,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../../docker/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -2268,7 +1888,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -2362,7 +1982,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../../docker/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2390,7 +2010,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2484,7 +2104,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../../docker/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2512,7 +2132,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2606,7 +2226,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../../docker/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2634,7 +2254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2734,7 +2354,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToBackup/" class="md-nav__link">
+      <a href="../../minersHowToBackup/" class="md-nav__link">
         
   
   
@@ -2762,7 +2382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToCPUMiner/" class="md-nav__link">
+      <a href="../../minersHowToCPUMiner/" class="md-nav__link">
         
   
   
@@ -2790,7 +2410,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../../minersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -2818,7 +2438,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersManagingDiskSpace/" class="md-nav__link">
+      <a href="../../minersManagingDiskSpace/" class="md-nav__link">
         
   
   
@@ -2846,7 +2466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../miners/minersHowToUseListenMode/" class="md-nav__link">
+      <a href="../../minersHowToUseListenMode/" class="md-nav__link">
         
   
   
@@ -2991,7 +2611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/teranodeIntro/" class="md-nav__link">
+      <a href="../../../../topics/teranodeIntro/" class="md-nav__link">
         
   
   
@@ -3019,7 +2639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
+      <a href="../../../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
         
   
   
@@ -3047,7 +2667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
+      <a href="../../../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
         
   
   
@@ -3075,7 +2695,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
+      <a href="../../../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
         
   
   
@@ -3103,7 +2723,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/transactionLifecycle/" class="md-nav__link">
+      <a href="../../../../topics/transactionLifecycle/" class="md-nav__link">
         
   
   
@@ -3131,7 +2751,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/architecture/stateManagement/" class="md-nav__link">
+      <a href="../../../../topics/architecture/stateManagement/" class="md-nav__link">
         
   
   
@@ -3159,7 +2779,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../state-machine.diagram/" class="md-nav__link">
+      <a href="../../../../state-machine.diagram/" class="md-nav__link">
         
   
   
@@ -3187,7 +2807,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
+      <a href="../../../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
         
   
   
@@ -3215,7 +2835,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/technologyStack/" class="md-nav__link">
+      <a href="../../../../topics/technologyStack/" class="md-nav__link">
         
   
   
@@ -3243,7 +2863,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/understandingTheTestingFramework/" class="md-nav__link">
+      <a href="../../../../topics/understandingTheTestingFramework/" class="md-nav__link">
         
   
   
@@ -3271,7 +2891,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/functionalRequirementTests/" class="md-nav__link">
+      <a href="../../../../topics/functionalRequirementTests/" class="md-nav__link">
         
   
   
@@ -3359,7 +2979,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/features/two_phase_commit/" class="md-nav__link">
+      <a href="../../../../topics/features/two_phase_commit/" class="md-nav__link">
         
   
   
@@ -3387,7 +3007,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/features/peer_registry_reputation/" class="md-nav__link">
+      <a href="../../../../topics/features/peer_registry_reputation/" class="md-nav__link">
         
   
   
@@ -3415,7 +3035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/features/utxo_lock_records/" class="md-nav__link">
+      <a href="../../../../topics/features/utxo_lock_records/" class="md-nav__link">
         
   
   
@@ -3451,7 +3071,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/dashboard/" class="md-nav__link">
+      <a href="../../../../topics/dashboard/" class="md-nav__link">
         
   
   
@@ -3479,7 +3099,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/tui_tools/" class="md-nav__link">
+      <a href="../../../../topics/tui_tools/" class="md-nav__link">
         
   
   
@@ -3577,7 +3197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/alert/" class="md-nav__link">
+      <a href="../../../../topics/services/alert/" class="md-nav__link">
         
   
   
@@ -3605,7 +3225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/assetServer/" class="md-nav__link">
+      <a href="../../../../topics/services/assetServer/" class="md-nav__link">
         
   
   
@@ -3633,7 +3253,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/blockAssembly/" class="md-nav__link">
+      <a href="../../../../topics/services/blockAssembly/" class="md-nav__link">
         
   
   
@@ -3661,7 +3281,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/blockValidation/" class="md-nav__link">
+      <a href="../../../../topics/services/blockValidation/" class="md-nav__link">
         
   
   
@@ -3689,7 +3309,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/blockchain/" class="md-nav__link">
+      <a href="../../../../topics/services/blockchain/" class="md-nav__link">
         
   
   
@@ -3717,7 +3337,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/propagation/" class="md-nav__link">
+      <a href="../../../../topics/services/propagation/" class="md-nav__link">
         
   
   
@@ -3745,7 +3365,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/subtreeValidation/" class="md-nav__link">
+      <a href="../../../../topics/services/subtreeValidation/" class="md-nav__link">
         
   
   
@@ -3773,7 +3393,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/validator/" class="md-nav__link">
+      <a href="../../../../topics/services/validator/" class="md-nav__link">
         
   
   
@@ -3877,7 +3497,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/blockPersister/" class="md-nav__link">
+      <a href="../../../../topics/services/blockPersister/" class="md-nav__link">
         
   
   
@@ -3905,7 +3525,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/p2p/" class="md-nav__link">
+      <a href="../../../../topics/services/p2p/" class="md-nav__link">
         
   
   
@@ -3933,7 +3553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
+      <a href="../../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
         
   
   
@@ -3961,7 +3581,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/pruner/" class="md-nav__link">
+      <a href="../../../../topics/services/pruner/" class="md-nav__link">
         
   
   
@@ -3989,7 +3609,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/legacy/" class="md-nav__link">
+      <a href="../../../../topics/services/legacy/" class="md-nav__link">
         
   
   
@@ -4017,7 +3637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/rpc/" class="md-nav__link">
+      <a href="../../../../topics/services/rpc/" class="md-nav__link">
         
   
   
@@ -4045,7 +3665,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/services/utxoPersister/" class="md-nav__link">
+      <a href="../../../../topics/services/utxoPersister/" class="md-nav__link">
         
   
   
@@ -4139,7 +3759,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/stores/blob/" class="md-nav__link">
+      <a href="../../../../topics/stores/blob/" class="md-nav__link">
         
   
   
@@ -4167,7 +3787,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/stores/utxo/" class="md-nav__link">
+      <a href="../../../../topics/stores/utxo/" class="md-nav__link">
         
   
   
@@ -4267,7 +3887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/datamodel/block_data_model/" class="md-nav__link">
+      <a href="../../../../topics/datamodel/block_data_model/" class="md-nav__link">
         
   
   
@@ -4295,7 +3915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/datamodel/block_header_data_model/" class="md-nav__link">
+      <a href="../../../../topics/datamodel/block_header_data_model/" class="md-nav__link">
         
   
   
@@ -4323,7 +3943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/datamodel/subtree_data_model/" class="md-nav__link">
+      <a href="../../../../topics/datamodel/subtree_data_model/" class="md-nav__link">
         
   
   
@@ -4351,7 +3971,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/datamodel/transaction_data_model/" class="md-nav__link">
+      <a href="../../../../topics/datamodel/transaction_data_model/" class="md-nav__link">
         
   
   
@@ -4379,7 +3999,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/datamodel/utxo_data_model/" class="md-nav__link">
+      <a href="../../../../topics/datamodel/utxo_data_model/" class="md-nav__link">
         
   
   
@@ -4471,7 +4091,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/kafka/kafka/" class="md-nav__link">
+      <a href="../../../../topics/kafka/kafka/" class="md-nav__link">
         
   
   
@@ -4563,7 +4183,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../topics/commands/seeder/" class="md-nav__link">
+      <a href="../../../../topics/commands/seeder/" class="md-nav__link">
         
   
   
@@ -4674,7 +4294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/projectStructure/" class="md-nav__link">
+      <a href="../../../../references/projectStructure/" class="md-nav__link">
         
   
   
@@ -4768,7 +4388,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/errorHandling/" class="md-nav__link">
+      <a href="../../../../references/errorHandling/" class="md-nav__link">
         
   
   
@@ -4796,7 +4416,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/glossary/" class="md-nav__link">
+      <a href="../../../../references/glossary/" class="md-nav__link">
         
   
   
@@ -4824,7 +4444,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/codingConventions/" class="md-nav__link">
+      <a href="../../../../references/codingConventions/" class="md-nav__link">
         
   
   
@@ -4852,7 +4472,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/kafkaMessageFormat/" class="md-nav__link">
+      <a href="../../../../references/kafkaMessageFormat/" class="md-nav__link">
         
   
   
@@ -4880,7 +4500,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/networkConsensusRules/" class="md-nav__link">
+      <a href="../../../../references/networkConsensusRules/" class="md-nav__link">
         
   
   
@@ -4984,7 +4604,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/alertProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/alertProto/" class="md-nav__link">
         
   
   
@@ -5012,7 +4632,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/assetProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/assetProto/" class="md-nav__link">
         
   
   
@@ -5040,7 +4660,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
   
@@ -5068,7 +4688,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
         
   
   
@@ -5096,7 +4716,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
         
   
   
@@ -5124,7 +4744,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
         
   
   
@@ -5152,7 +4772,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
         
   
   
@@ -5180,7 +4800,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/propagationProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
   
@@ -5208,7 +4828,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
         
   
   
@@ -5236,7 +4856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
         
   
   
@@ -5264,7 +4884,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/protobuf_docs/validatorProto/" class="md-nav__link">
+      <a href="../../../../references/protobuf_docs/validatorProto/" class="md-nav__link">
         
   
   
@@ -5378,7 +4998,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/alert_reference/" class="md-nav__link">
+      <a href="../../../../references/services/alert_reference/" class="md-nav__link">
         
   
   
@@ -5406,7 +5026,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/asset_reference/" class="md-nav__link">
+      <a href="../../../../references/services/asset_reference/" class="md-nav__link">
         
   
   
@@ -5434,7 +5054,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/blockassembly_reference/" class="md-nav__link">
+      <a href="../../../../references/services/blockassembly_reference/" class="md-nav__link">
         
   
   
@@ -5462,7 +5082,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/blockvalidation_reference/" class="md-nav__link">
+      <a href="../../../../references/services/blockvalidation_reference/" class="md-nav__link">
         
   
   
@@ -5490,7 +5110,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/blockchain_reference/" class="md-nav__link">
+      <a href="../../../../references/services/blockchain_reference/" class="md-nav__link">
         
   
   
@@ -5518,7 +5138,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/propagation_reference/" class="md-nav__link">
+      <a href="../../../../references/services/propagation_reference/" class="md-nav__link">
         
   
   
@@ -5546,7 +5166,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/subtreevalidation_reference/" class="md-nav__link">
+      <a href="../../../../references/services/subtreevalidation_reference/" class="md-nav__link">
         
   
   
@@ -5574,7 +5194,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/validator_reference/" class="md-nav__link">
+      <a href="../../../../references/services/validator_reference/" class="md-nav__link">
         
   
   
@@ -5676,7 +5296,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/blockpersister_reference/" class="md-nav__link">
+      <a href="../../../../references/services/blockpersister_reference/" class="md-nav__link">
         
   
   
@@ -5704,7 +5324,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/p2p_reference/" class="md-nav__link">
+      <a href="../../../../references/services/p2p_reference/" class="md-nav__link">
         
   
   
@@ -5732,7 +5352,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/legacy_reference/" class="md-nav__link">
+      <a href="../../../../references/services/legacy_reference/" class="md-nav__link">
         
   
   
@@ -5760,7 +5380,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/pruner_reference/" class="md-nav__link">
+      <a href="../../../../references/services/pruner_reference/" class="md-nav__link">
         
   
   
@@ -5788,7 +5408,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/rpc_reference/" class="md-nav__link">
+      <a href="../../../../references/services/rpc_reference/" class="md-nav__link">
         
   
   
@@ -5816,7 +5436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/services/utxopersister_reference/" class="md-nav__link">
+      <a href="../../../../references/services/utxopersister_reference/" class="md-nav__link">
         
   
   
@@ -5910,7 +5530,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/stores/blob_reference/" class="md-nav__link">
+      <a href="../../../../references/stores/blob_reference/" class="md-nav__link">
         
   
   
@@ -5938,7 +5558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/stores/utxo_reference/" class="md-nav__link">
+      <a href="../../../../references/stores/utxo_reference/" class="md-nav__link">
         
   
   
@@ -6042,7 +5662,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/" class="md-nav__link">
+      <a href="../../../../references/settings/" class="md-nav__link">
         
   
   
@@ -6070,7 +5690,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings_reference/" class="md-nav__link">
+      <a href="../../../../references/settings_reference/" class="md-nav__link">
         
   
   
@@ -6098,7 +5718,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/global_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/global_settings/" class="md-nav__link">
         
   
   
@@ -6126,7 +5746,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/policy_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/policy_settings/" class="md-nav__link">
         
   
   
@@ -6154,7 +5774,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/kafka_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
   
@@ -6264,7 +5884,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/alert_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/alert_settings/" class="md-nav__link">
         
   
   
@@ -6292,7 +5912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/asset_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/asset_settings/" class="md-nav__link">
         
   
   
@@ -6320,7 +5940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/blockassembly_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/blockassembly_settings/" class="md-nav__link">
         
   
   
@@ -6348,7 +5968,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/blockchain_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/blockchain_settings/" class="md-nav__link">
         
   
   
@@ -6376,7 +5996,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/blockpersister_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/blockpersister_settings/" class="md-nav__link">
         
   
   
@@ -6404,7 +6024,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
         
   
   
@@ -6432,7 +6052,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/legacy_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/legacy_settings/" class="md-nav__link">
         
   
   
@@ -6460,7 +6080,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/p2p_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/p2p_settings/" class="md-nav__link">
         
   
   
@@ -6488,7 +6108,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/propagation_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/propagation_settings/" class="md-nav__link">
         
   
   
@@ -6516,7 +6136,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/pruner_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/pruner_settings/" class="md-nav__link">
         
   
   
@@ -6544,7 +6164,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/rpc_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/rpc_settings/" class="md-nav__link">
         
   
   
@@ -6572,7 +6192,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
         
   
   
@@ -6600,7 +6220,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/utxopersister_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/utxopersister_settings/" class="md-nav__link">
         
   
   
@@ -6628,7 +6248,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/services/validator_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/services/validator_settings/" class="md-nav__link">
         
   
   
@@ -6724,7 +6344,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
         
   
   
@@ -6752,7 +6372,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/stores/blob_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/stores/blob_settings/" class="md-nav__link">
         
   
   
@@ -6780,7 +6400,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/settings/stores/utxo_settings/" class="md-nav__link">
+      <a href="../../../../references/settings/stores/utxo_settings/" class="md-nav__link">
         
   
   
@@ -6892,7 +6512,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../misc/BIP-239/" class="md-nav__link">
+      <a href="../../../../misc/BIP-239/" class="md-nav__link">
         
   
   
@@ -6920,7 +6540,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
+      <a href="../../../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
         
   
   
@@ -6948,7 +6568,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/licenseInformation/" class="md-nav__link">
+      <a href="../../../../references/licenseInformation/" class="md-nav__link">
         
   
   
@@ -6976,7 +6596,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/prometheusMetrics/" class="md-nav__link">
+      <a href="../../../../references/prometheusMetrics/" class="md-nav__link">
         
   
   
@@ -7004,7 +6624,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/teranodeDaemonReference/" class="md-nav__link">
+      <a href="../../../../references/teranodeDaemonReference/" class="md-nav__link">
         
   
   
@@ -7032,7 +6652,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/testingTechnicalReference/" class="md-nav__link">
+      <a href="../../../../references/testingTechnicalReference/" class="md-nav__link">
         
   
   
@@ -7060,7 +6680,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
+      <a href="../../../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
         
   
   
@@ -7123,10 +6743,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#why-this-matters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Why This Matters
       
     </span>
   </a>
@@ -7134,73 +6754,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#building-the-cli" class="md-nav__link">
+  <a href="#awseks-network-load-balancer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Building the CLI
+        AWS/EKS: Network Load Balancer
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#basic-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Basic Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Basic Usage">
+    <nav class="md-nav" aria-label="AWS/EKS: Network Load Balancer">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#important-settings-context" class="md-nav__link">
+  <a href="#service-manifest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Important Settings Context
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#available-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Available Commands
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Available Commands">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#fsm-state-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        FSM State Management
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="FSM State Management">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#getting-the-current-state" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Getting the Current State
+        Service Manifest
       
     </span>
   </a>
@@ -7208,26 +6777,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#setting-a-new-state" class="md-nav__link">
+  <a href="#why-externaltrafficpolicy-local" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Setting a New State
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#view-system-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        View System Configuration
+        Why externalTrafficPolicy: Local
       
     </span>
   </a>
@@ -7235,22 +6788,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#data-management-commands" class="md-nav__link">
+  <a href="#advertise-the-load-balancer-address" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Data Management Commands
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Data Management Commands">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#aerospike-reader" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike Reader
+        Advertise the Load Balancer Address
       
     </span>
   </a>
@@ -7258,337 +6799,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#file-reader" class="md-nav__link">
+  <a href="#verify-reachability" class="md-nav__link">
     <span class="md-ellipsis">
       
-        File Reader
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#bitcoin-to-utxo-set-conversion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bitcoin to UTXO Set Conversion
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-persister-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Persister Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#seeder" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Seeder
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#block-data-importexport" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Block Data Import/Export
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Block Data Import/Export">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#export-blockchain-to-csv" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Export Blockchain to CSV
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#import-blockchain-from-csv" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Import Blockchain from CSV
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#block-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Block Operations
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Block Operations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#check-block-template" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check Block Template
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#check-block" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Check Block
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reconsider-block" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reconsider Block
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reset-block-assembly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reset Block Assembly
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#aerospike-kafka-connector" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike Kafka Connector
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-set-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Set Validation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#database-maintenance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Database Maintenance
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Database Maintenance">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#fix-chainwork" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fix Chainwork
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#benchmarking-tools" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Benchmarking Tools
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Benchmarking Tools">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#subtree-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subtree Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-unmined-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Unmined Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transaction-map-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transaction Map Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#remainder-benchmark" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Remainder Benchmark
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#interactive-monitoring-tools" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Interactive Monitoring Tools
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Interactive Monitoring Tools">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#log-viewer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Log Viewer
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#node-monitor" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Node Monitor
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#common-development-workflows" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Development Workflows
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Common Development Workflows">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#starting-a-fresh-development-node" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Starting a Fresh Development Node
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#debugging-tips" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Debugging Tips
+        Verify Reachability
       
     </span>
   </a>
@@ -7601,10 +6815,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#extending-the-cli" class="md-nav__link">
+  <a href="#choosing-a-dht-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Extending the CLI
+        Choosing a DHT Mode
       
     </span>
   </a>
@@ -7612,10 +6826,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#further-resources" class="md-nav__link">
+  <a href="#joining-the-dns-bootstrap-pool" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Further Resources
+        Joining the DNS Bootstrap Pool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-cloud-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other Cloud Providers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
       
     </span>
   </a>
@@ -7647,7 +6883,7 @@
   
   
     <li class="md-path__item">
-      <a href="../.." class="md-path__link">
+      <a href="../../../.." class="md-path__link">
         
   <span class="md-ellipsis">
     Home
@@ -7670,7 +6906,7 @@
     
     
       <li class="md-path__item">
-        <a href="../developerSetup/" class="md-path__link">
+        <a href="../../../developerSetup/" class="md-path__link">
           
   <span class="md-ellipsis">
     How-To Guides
@@ -7681,6 +6917,50 @@
     
   
 
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../docker/minersHowToInstallation/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Miners
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../docker/minersHowToConfigureTheNode/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
     
   
 
@@ -7698,296 +6978,131 @@
   
 
 
-<h1 id="developers-guide-to-teranode-cli">Developer's Guide to Teranode-CLI<a class="headerlink" href="#developers-guide-to-teranode-cli" title="Permanent link">&para;</a></h1>
-<p>Last Modified: 21-May-2025</p>
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The Teranode-CLI is a command-line interface tool designed for developers to interact with Teranode services during development and testing. Unlike the production environment where you might access it through Docker containers, as a developer you'll build and run it directly on your machine.</p>
-<p>This guide provides a comprehensive walkthrough of using the Teranode-CLI in a development environment.</p>
-<h2 id="building-the-cli">Building the CLI<a class="headerlink" href="#building-the-cli" title="Permanent link">&para;</a></h2>
-<p>Before using Teranode-CLI, you need to build it from source:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>go<span class="w"> </span>build<span class="w"> </span>-o<span class="w"> </span>teranode-cli<span class="w"> </span>./cmd/teranodecli
+<h1 id="how-to-expose-the-p2p-service-publicly-kubernetes">How to Expose the P2P Service Publicly (Kubernetes)<a class="headerlink" href="#how-to-expose-the-p2p-service-publicly-kubernetes" title="Permanent link">&para;</a></h1>
+<p>Last modified: 11-June-2026</p>
+<h2 id="why-this-matters">Why This Matters<a class="headerlink" href="#why-this-matters" title="Permanent link">&para;</a></h2>
+<p>Teranode's P2P layer (libp2p) needs inbound TCP connections on the P2P port (<code>9905</code> in the shipped configuration) to accept direct peer connections. The port peers actually dial is whatever your <code>p2p_listen_addresses</code> / <code>p2p_advertise_addresses</code> multiaddrs specify — the load balancer listener port must match the port in your advertise multiaddr. A node that can only dial out still works, but it contributes far less to network health: it cannot be dialed by other peers, cannot serve as a DHT server, and cannot join the BSV Association bootstrap pool (see <a href="#joining-the-dns-bootstrap-pool">Joining the DNS Bootstrap Pool</a>).</p>
+<p>Inside Kubernetes this is not automatic. Pod IPs are not routable from the internet, and the default Service behaviour (<code>externalTrafficPolicy: Cluster</code>) breaks libp2p in subtle ways described below. This guide shows a working pattern for AWS/EKS; the principles carry over to other cloud providers.</p>
+<h2 id="awseks-network-load-balancer">AWS/EKS: Network Load Balancer<a class="headerlink" href="#awseks-network-load-balancer" title="Permanent link">&para;</a></h2>
+<p>Use a <strong>Network Load Balancer (NLB)</strong>, not an ALB or Classic ELB. libp2p speaks a raw TCP protocol with its own multiplexing and encryption — an L7 load balancer cannot proxy it. The NLB operates at L4 and passes TCP streams through untouched.</p>
+<h3 id="service-manifest">Service Manifest<a class="headerlink" href="#service-manifest" title="Permanent link">&para;</a></h3>
+<p>The example below uses <a href="https://kubernetes-sigs.github.io/aws-load-balancer-controller/">AWS Load Balancer Controller</a> annotations (<code>aws-load-balancer-type: "external"</code>, <code>aws-load-balancer-nlb-target-type</code>) — install the controller in your cluster as a prerequisite. Adapt the <code>selector</code> to whatever labels your peer pod actually carries.</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode-p2p-nlb</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="c1"># Use NLB for better performance with libp2p</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">service.beta.kubernetes.io/aws-load-balancer-type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;external&quot;</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">service.beta.kubernetes.io/aws-load-balancer-nlb-target-type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;instance&quot;</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">service.beta.kubernetes.io/aws-load-balancer-scheme</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;internet-facing&quot;</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nt">spec</span><span class="p">:</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">externalTrafficPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Local</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="c1"># With Local policy, the NLB only routes to nodes running a peer pod.</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="c1"># This prevents cross-node forwarding issues with libp2p.</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">peer</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9905</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9905</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">      </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">teranode-p2p</span>
 </span></code></pre></div>
-<p>This will create a <code>teranode-cli</code> executable in your current directory.</p>
-<h2 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># General format</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>&lt;command&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<h3 id="why-externaltrafficpolicy-local">Why <code>externalTrafficPolicy: Local</code><a class="headerlink" href="#why-externaltrafficpolicy-local" title="Permanent link">&para;</a></h3>
+<p>This setting is <strong>required</strong>, not an optimisation. With the default <code>Cluster</code> policy:</p>
+<ul>
+<li>The NLB routes incoming connections to <em>any</em> node in the cluster, and <code>kube-proxy</code> forwards them to the peer pod with source NAT applied.</li>
+<li>Peers connecting to your node appear to come from your own cluster node IPs, not their real addresses. This breaks libp2p's Identify/observed-address mechanism (see <a href="../../../../P2P_NAT_TRAVERSAL/">P2P NAT Traversal</a>), peer-level bans, and any source-IP-based diagnostics.</li>
+<li>The extra cross-node hop adds latency and a second failure point on every inbound stream.</li>
+</ul>
+<p>With <code>Local</code>:</p>
+<ul>
+<li>The NLB health checks fail on nodes without a peer pod, so traffic only ever lands on the node actually running the pod — no second hop, no SNAT.</li>
+<li>The peer pod sees the genuine source IP of every connecting peer.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Pod scheduling caveat</p>
+<p>With <code>Local</code> policy, a node passes NLB health checks only while it hosts a peer pod. If the pod is rescheduled, expect a brief window of failed health checks while the NLB target group converges. Keep the peer pod stable (e.g. node affinity or a dedicated node group) to avoid flapping.</p>
+</div>
+<p>The example above uses <code>aws-load-balancer-nlb-target-type: "instance"</code>. Target type <code>ip</code> (routing straight to the pod ENI, requires the AWS Load Balancer Controller) also works and likewise preserves source IPs; <code>instance</code> + <code>Local</code> is the simpler, proven combination.</p>
+<h3 id="advertise-the-load-balancer-address">Advertise the Load Balancer Address<a class="headerlink" href="#advertise-the-load-balancer-address" title="Permanent link">&para;</a></h3>
+<p>The pod listens on its pod IP, so left to its own devices it advertises an unroutable address. Point <code>p2p_advertise_addresses</code> at the NLB:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a># Using the NLB DNS name
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>p2p_advertise_addresses = /dns4/&lt;your-nlb-or-route53-name&gt;/tcp/9905
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Getting help</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>./teranode-cli
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a># Or, if you attached an Elastic IP to the NLB
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>p2p_advertise_addresses = /ip4/&lt;elastic-ip&gt;/tcp/9905
 </span></code></pre></div>
-<h3 id="important-settings-context">Important Settings Context<a class="headerlink" href="#important-settings-context" title="Permanent link">&para;</a></h3>
-<p>All commands require your <code>SETTINGS_CONTEXT</code> environment variable to be set correctly. This ensures the CLI uses your development settings:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Either set it for the session</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Or prefix each command</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>&lt;command&gt;
+<p>A stable DNS name (e.g. via external-dns and Route 53) or an Elastic IP attached to the NLB is strongly recommended — the auto-generated NLB DNS name changes if the Service is recreated, and a changed advertise address makes your node temporarily undialable until peers rediscover it.</p>
+<h3 id="verify-reachability">Verify Reachability<a class="headerlink" href="#verify-reachability" title="Permanent link">&para;</a></h3>
+<p>From a machine <strong>outside</strong> your VPC:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># TCP-level check: the NLB should accept the connection</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>nc<span class="w"> </span>-vz<span class="w"> </span>&lt;your-nlb-dns-name&gt;<span class="w"> </span><span class="m">9905</span>
 </span></code></pre></div>
-<p>Replace <code>[YOUR_CONTEXT]</code> with your specific development context (e.g., <code>dev.johndoe</code> or simply <code>dev</code>).</p>
-<h2 id="available-commands">Available Commands<a class="headerlink" href="#available-commands" title="Permanent link">&para;</a></h2>
-<h3 id="fsm-state-management">FSM State Management<a class="headerlink" href="#fsm-state-management" title="Permanent link">&para;</a></h3>
-<p>One of the most common uses of Teranode-CLI during development is managing the Finite State Machine (FSM) state of your Teranode instance.</p>
-<h4 id="getting-the-current-state">Getting the Current State<a class="headerlink" href="#getting-the-current-state" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
+<p>Then confirm peers are dialing in: inbound connections appear in the P2P service logs, and other nodes should list yours in their peer set. If outbound peering works but you never see inbound connections, re-check the NLB target health and that <code>p2p_advertise_addresses</code> matches the address that is actually reachable.</p>
+<h2 id="choosing-a-dht-mode">Choosing a DHT Mode<a class="headerlink" href="#choosing-a-dht-mode" title="Permanent link">&para;</a></h2>
+<p><code>p2p_dht_mode</code> controls how visible — and how expensive — your node is on the P2P layer:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behaviour</th>
+<th>Cost / implications</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>server</code></td>
+<td>Full DHT participation: advertises your node, stores provider records, routes queries for other peers</td>
+<td>Highest resource usage (memory, CPU, connection count). Maximises direct connections and network contribution. Only useful if your node is publicly dialable as described above.</td>
+</tr>
+<tr>
+<td><code>client</code></td>
+<td>Queries the DHT for discovery but does not advertise or store records</td>
+<td>Still connects to 100+ peers for DHT routing. Suitable for development and home networks.</td>
+</tr>
+<tr>
+<td><code>off</code></td>
+<td>No DHT. Topic-only network: connects to bootstrap peers and topic peers, exchanging addresses via the bootstrap servers</td>
+<td>Most lightweight — no DHT crawling, no random connections.</td>
+</tr>
+</tbody>
+</table>
+<p>Set <code>p2p_dht_mode = server</code> when you have completed the NLB setup above and want to strengthen the P2P layer with as many direct connections as possible.</p>
+<div class="admonition note">
+<p class="admonition-title">Operator-managed deployments</p>
+<p>Deployments managed by the teranode-operator use the <code>.operator</code> settings context, which already defaults to <code>p2p_dht_mode = server</code> (<code>p2p_dht_mode.operator = server</code> in <code>settings.conf</code>). You only need to set the mode explicitly to <em>opt out</em> of server mode on such deployments. A <code>server</code> node behind a broken or missing public exposure actively <em>harms</em> discovery: it advertises addresses into the DHT that nobody can dial.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Abuse-sensitive hosting providers (Hetzner, OVH, …)</p>
+<p><code>server</code> and <code>client</code> modes connect to 100+ semi-random IPs as part of normal DHT operation. Some hosting providers (notably Hetzner and OVH) flag this pattern as network scanning and may send abuse warnings or suspend the server. On such providers, run <code>p2p_dht_mode = off</code> — the node still participates fully in block and transaction propagation via topics, using peer address exchange through the bootstrap servers instead of DHT crawling.</p>
+</div>
+<p>In <code>server</code> mode, DHT maintenance overhead can be tuned with <code>p2p_dht_cleanup_interval</code> (default <code>24h</code>).</p>
+<h2 id="joining-the-dns-bootstrap-pool">Joining the DNS Bootstrap Pool<a class="headerlink" href="#joining-the-dns-bootstrap-pool" title="Permanent link">&para;</a></h2>
+<p>The default bootstrap peer list is resolved dynamically via DNS:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>p2p_bootstrap_peers = /dnsaddr/${network}.bootstrap.teranode.bsvb.tech
 </span></code></pre></div>
-<p>Typical output:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Current FSM State: IDLE
-</span></code></pre></div>
-<h4 id="setting-a-new-state">Setting a New State<a class="headerlink" href="#setting-a-new-state" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>&lt;state&gt;
-</span></code></pre></div>
-<p>Valid states you can issue are:</p>
-<ul>
-<li><code>running</code> - Normal operation mode (processes transactions and creates blocks)</li>
-<li><code>idle</code> - Idle mode (default startup state)</li>
-<li><code>catchingblocks</code> - Catching up on blocks from the network</li>
-<li><code>legacysyncing</code> - Syncing via legacy peer connections</li>
-</ul>
-<p>Example to switch to RUNNING state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
-</span></code></pre></div>
-<p>Expected output:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Setting FSM state to: running
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>FSM state successfully set to: RUNNING
-</span></code></pre></div>
-<h3 id="view-system-configuration">View System Configuration<a class="headerlink" href="#view-system-configuration" title="Permanent link">&para;</a></h3>
-<p>To inspect your current system settings:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>settings
-</span></code></pre></div>
-<p>This will display a comprehensive list of all settings currently in effect, including which specific settings are overridden by your <code>[YOUR_CONTEXT]</code> configuration.</p>
-<h3 id="data-management-commands">Data Management Commands<a class="headerlink" href="#data-management-commands" title="Permanent link">&para;</a></h3>
-<h4 id="aerospike-reader">Aerospike Reader<a class="headerlink" href="#aerospike-reader" title="Permanent link">&para;</a></h4>
-<p>Retrieve transaction data from Aerospike using a transaction ID:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>aerospikereader<span class="w"> </span>&lt;txid&gt;
-</span></code></pre></div>
-<p>The <code>&lt;txid&gt;</code> must be a valid 64-character transaction ID.</p>
-<h4 id="file-reader">File Reader<a class="headerlink" href="#file-reader" title="Permanent link">&para;</a></h4>
-<p>Inspect data files:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>filereader<span class="w"> </span><span class="o">[</span>path<span class="o">]</span><span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--verbose</code> - Enable verbose output</li>
-<li><code>--checkHeights</code> - Check heights in UTXO headers</li>
-<li><code>--useStore</code> - Use store</li>
-</ul>
-<h4 id="bitcoin-to-utxo-set-conversion">Bitcoin to UTXO Set Conversion<a class="headerlink" href="#bitcoin-to-utxo-set-conversion" title="Permanent link">&para;</a></h4>
-<p>Convert Bitcoin blockchain data to UTXO set format:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span>--bitcoinDir<span class="o">=</span>&lt;bitcoin-data-path&gt;<span class="w"> </span>--outputDir<span class="o">=</span>&lt;output-dir-path&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--bitcoinDir</code> - Location of Bitcoin data (required)</li>
-<li><code>--outputDir</code> - Output directory for UTXO set (required)</li>
-<li><code>--skipHeaders</code> - Skip processing headers</li>
-<li><code>--skipUTXOs</code> - Skip processing UTXOs</li>
-<li><code>--blockHash</code> - Block hash to start from</li>
-<li><code>--previousBlockHash</code> - Previous block hash</li>
-<li><code>--blockHeight</code> - Block height to start from</li>
-<li><code>--dumpRecords</code> - Dump records from index</li>
-</ul>
-<h4 id="utxo-persister-management">UTXO Persister Management<a class="headerlink" href="#utxo-persister-management" title="Permanent link">&para;</a></h4>
-<p>Manage UTXO persistence:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>utxopersister
-</span></code></pre></div>
-<h3 id="seeder">Seeder<a class="headerlink" href="#seeder" title="Permanent link">&para;</a></h3>
-<p>Seed initial blockchain data:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>seeder<span class="w"> </span>--inputDir<span class="o">=</span>&lt;input-dir&gt;<span class="w"> </span>--hash<span class="o">=</span>&lt;hash&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--inputDir</code> - Input directory for UTXO set and headers (required)</li>
-<li><code>--hash</code> - Hash of the UTXO set / headers to process (required)</li>
-<li><code>--skipHeaders</code> - Skip processing headers</li>
-<li><code>--skipUTXOs</code> - Skip processing UTXOs</li>
-<li><code>--force</code> - Force processing even if <code>lastProcessed.dat</code> exists</li>
-</ul>
-<h3 id="block-data-importexport">Block Data Import/Export<a class="headerlink" href="#block-data-importexport" title="Permanent link">&para;</a></h3>
-<h4 id="export-blockchain-to-csv">Export Blockchain to CSV<a class="headerlink" href="#export-blockchain-to-csv" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>export-blocks<span class="w"> </span>--file<span class="o">=</span>&lt;file-path&gt;
-</span></code></pre></div>
-<h4 id="import-blockchain-from-csv">Import Blockchain from CSV<a class="headerlink" href="#import-blockchain-from-csv" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>import-blocks<span class="w"> </span>--file<span class="o">=</span>&lt;file-path&gt;
-</span></code></pre></div>
-<h3 id="block-operations">Block Operations<a class="headerlink" href="#block-operations" title="Permanent link">&para;</a></h3>
-<h4 id="check-block-template">Check Block Template<a class="headerlink" href="#check-block-template" title="Permanent link">&para;</a></h4>
-<p>Check if the current block template is valid:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>checkblocktemplate
-</span></code></pre></div>
-<h4 id="check-block">Check Block<a class="headerlink" href="#check-block" title="Permanent link">&para;</a></h4>
-<p>Fetch and validate a specific block by its hash:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>checkblock<span class="w"> </span>&lt;blockhash&gt;
-</span></code></pre></div>
-<h4 id="reconsider-block">Reconsider Block<a class="headerlink" href="#reconsider-block" title="Permanent link">&para;</a></h4>
-<p>Re-validate a block that was previously marked as invalid:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>reconsiderblock<span class="w"> </span>&lt;blockhash&gt;
-</span></code></pre></div>
-<h4 id="reset-block-assembly">Reset Block Assembly<a class="headerlink" href="#reset-block-assembly" title="Permanent link">&para;</a></h4>
-<p>Reset block assembly state, useful for clearing stuck transactions or resetting mining state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>resetblockassembly<span class="w"> </span><span class="o">[</span>--full-reset<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--full-reset</code> - Perform a full reset including clearing mempool and unmined transactions</li>
-</ul>
-<h3 id="aerospike-kafka-connector">Aerospike Kafka Connector<a class="headerlink" href="#aerospike-kafka-connector" title="Permanent link">&para;</a></h3>
-<p>Read Aerospike CDC (Change Data Capture) from Kafka, optionally filtering by transaction ID:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>aerospikekafkaconnector<span class="w"> </span>--kafka-url<span class="o">=</span>&lt;kafka-url&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--kafka-url</code> - Kafka broker URL (required, e.g., <code>kafka://localhost:9092/aerospike-cdc</code>)</li>
-<li><code>--txid</code> - Filter by 64-character hex transaction ID</li>
-<li><code>--namespace</code> - Filter by Aerospike namespace</li>
-<li><code>--set</code> - Filter by Aerospike set (default: <code>txmeta</code>)</li>
-<li><code>--stats-interval</code> - Statistics logging interval in seconds (default: 30)</li>
-</ul>
-<h3 id="utxo-set-validation">UTXO Set Validation<a class="headerlink" href="#utxo-set-validation" title="Permanent link">&para;</a></h3>
-<p>Validate a UTXO set file for integrity and correctness:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>validate-utxo-set<span class="w"> </span><span class="o">[</span>--verbose<span class="o">]</span><span class="w"> </span>&lt;utxo-set-file-path&gt;
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--verbose</code> - Enable verbose output showing individual UTXOs</li>
-</ul>
-<h3 id="database-maintenance">Database Maintenance<a class="headerlink" href="#database-maintenance" title="Permanent link">&para;</a></h3>
-<h4 id="fix-chainwork">Fix Chainwork<a class="headerlink" href="#fix-chainwork" title="Permanent link">&para;</a></h4>
-<p>Fix incorrect chainwork values in the blockchain database:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>fix-chainwork<span class="w"> </span>--db-url<span class="o">=</span>&lt;database-url&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--db-url</code> - Database URL, e.g. <code>postgres://...</code> or <code>sqlite://...</code> (required)</li>
-<li><code>--dry-run</code> - Preview changes without updating database (default: true)</li>
-<li><code>--batch-size</code> - Number of updates to batch in a transaction (default: 1000)</li>
-<li><code>--start-height</code> - Starting block height (default: 650286)</li>
-<li><code>--end-height</code> - Ending block height, 0 for current tip (default: 0)</li>
-</ul>
-<p><strong>Warning</strong>: Always run with <code>--dry-run=true</code> first to preview changes.</p>
-<h3 id="benchmarking-tools">Benchmarking Tools<a class="headerlink" href="#benchmarking-tools" title="Permanent link">&para;</a></h3>
-<p>Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk.</p>
-<h4 id="subtree-benchmark">Subtree Benchmark<a class="headerlink" href="#subtree-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>subtreebench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--subtree-size</code> - Size of subtree (default: 1048576)</li>
-<li><code>--producers</code> - Number of producer goroutines (default: 16)</li>
-<li><code>--iterations</code> - Number of transactions to process (default: 10000000)</li>
-<li><code>--duration</code> - Duration in seconds, 0 for iteration-based (default: 0)</li>
-<li><code>--cpu-profile</code> - CPU profile output file (default: <code>cpu.prof</code>)</li>
-<li><code>--mem-profile</code> - Memory profile output file (default: <code>mem.prof</code>)</li>
-</ul>
-<h4 id="load-unmined-benchmark">Load Unmined Benchmark<a class="headerlink" href="#load-unmined-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>loadunminedbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--tx-count</code> - Number of transactions (default: 1000000)</li>
-<li><code>--full-scan</code> - Use full scan mode</li>
-<li><code>--aerospike-url</code> - Aerospike URL (empty uses testcontainer)</li>
-<li><code>--cpu-profile</code> - CPU profile output file (default: <code>loadunmined_cpu.prof</code>)</li>
-<li><code>--mem-profile</code> - Memory profile output file (default: <code>loadunmined_mem.prof</code>)</li>
-</ul>
-<h4 id="transaction-map-benchmark">Transaction Map Benchmark<a class="headerlink" href="#transaction-map-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>txmapbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--subtrees</code> - Number of subtrees (default: 100)</li>
-<li><code>--txs-per-subtree</code> - Transactions per subtree (default: 1048576)</li>
-<li><code>--cpu-profile</code> - CPU profile output file (default: <code>createtransactionmap_cpu.prof</code>)</li>
-<li><code>--mem-profile</code> - Memory profile output file (default: <code>createtransactionmap_mem.prof</code>)</li>
-</ul>
-<h4 id="remainder-benchmark">Remainder Benchmark<a class="headerlink" href="#remainder-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>remainderbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--subtrees</code> - Number of subtrees (default: 100)</li>
-<li><code>--txs-per-subtree</code> - Transactions per subtree (default: 1048576)</li>
-<li><code>--cpu-profile</code> - CPU profile output file (default: <code>processremaindertxanddequeue_cpu.prof</code>)</li>
-<li><code>--mem-profile</code> - Memory profile output file (default: <code>processremaindertxanddequeue_mem.prof</code>)</li>
-</ul>
-<h3 id="interactive-monitoring-tools">Interactive Monitoring Tools<a class="headerlink" href="#interactive-monitoring-tools" title="Permanent link">&para;</a></h3>
-<p>The CLI includes two TUI (Terminal User Interface) tools for real-time monitoring and debugging.</p>
-<h4 id="log-viewer">Log Viewer<a class="headerlink" href="#log-viewer" title="Permanent link">&para;</a></h4>
-<p>View and filter logs in real-time with the interactive log viewer:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>logs
-</span></code></pre></div>
-<p>Options:</p>
-<ul>
-<li><code>--file</code> - Path to log file (default: <code>./logs/teranode.log</code>)</li>
-<li><code>--buffer</code> - Number of log entries to keep in memory (default: 10000)</li>
-</ul>
-<p>Key features for debugging:</p>
-<ul>
-<li><strong>Service filtering</strong> (<code>s</code>): Filter logs by specific services (e.g., <code>p2p,validator</code>)</li>
-<li><strong>Log level filtering</strong> (<code>+</code>/<code>-</code>): Adjust minimum severity level</li>
-<li><strong>Text search</strong> (<code>/</code>): Search for specific text in messages</li>
-<li><strong>Transaction tracking</strong> (<code>t</code>): Track a transaction ID across all services</li>
-<li><strong>Error summary</strong> (<code>e</code>): View error counts by service</li>
-<li><strong>Pause/resume</strong> (<code>p</code> or <code>space</code>): Pause auto-scroll to examine specific entries</li>
-</ul>
-<p>Press <code>?</code> for full keyboard shortcuts or <code>q</code> to quit.</p>
-<h4 id="node-monitor">Node Monitor<a class="headerlink" href="#node-monitor" title="Permanent link">&para;</a></h4>
-<p>Monitor node status with a live dashboard:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>monitor
-</span></code></pre></div>
-<p>The monitor displays:</p>
-<ul>
-<li>Blockchain state (height, block count, transactions)</li>
-<li>FSM state with color-coded status</li>
-<li>Connected peers and their reputation scores</li>
-<li>Service health status with latency measurements</li>
-<li>Aerospike cluster statistics</li>
-</ul>
-<p>Views:</p>
-<ul>
-<li><strong>Dashboard</strong> (default): Overview of all node metrics</li>
-<li><strong>Settings</strong> (<code>s</code>): View current configuration</li>
-<li><strong>Health</strong> (<code>h</code>): Detailed service health table</li>
-<li><strong>Aerospike</strong> (<code>a</code>): Cluster and namespace statistics</li>
-</ul>
-<p>Press <code>r</code> to refresh manually or <code>q</code> to quit.</p>
-<h2 id="common-development-workflows">Common Development Workflows<a class="headerlink" href="#common-development-workflows" title="Permanent link">&para;</a></h2>
-<h3 id="starting-a-fresh-development-node">Starting a Fresh Development Node<a class="headerlink" href="#starting-a-fresh-development-node" title="Permanent link">&para;</a></h3>
+<p>For example, mainnet nodes bootstrap from <code>mainnet.bootstrap.teranode.bsvb.tech</code>.</p>
+<p>This pool is managed by the BSV Association. If your node:</p>
 <ol>
-<li>
-<p>Start your Teranode node:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
-</span></code></pre></div>
-</li>
-<li>
-<p>Check the initial FSM state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
-</span></code></pre></div>
-</li>
-<li>
-<p>Transition to RUNNING state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
-</span></code></pre></div>
-</li>
-<li>
-<p>Verify the FSM state change:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
-</span></code></pre></div>
-</li>
+<li>is publicly dialable on its P2P port (e.g. via the NLB setup above), and</li>
+<li>runs <code>p2p_dht_mode = server</code>,</li>
 </ol>
-<h3 id="debugging-tips">Debugging Tips<a class="headerlink" href="#debugging-tips" title="Permanent link">&para;</a></h3>
+<p>you can contact the BSV Association to have it added to the bootstrap pool. Bootstrap nodes are the entry points every new node uses to join the network — a larger, geographically diverse pool makes the network more resilient.</p>
+<h2 id="other-cloud-providers">Other Cloud Providers<a class="headerlink" href="#other-cloud-providers" title="Permanent link">&para;</a></h2>
+<p>The same principles apply outside AWS:</p>
 <ul>
-<li>If your teranode-cli commands aren't working, ensure your <code>SETTINGS_CONTEXT</code> is correctly set</li>
-<li>Verify the node is actually running before attempting to change its state</li>
-<li>Look for error messages in both the CLI output and your node's logs</li>
-<li>Use the <code>settings</code> command to confirm your configuration settings are applied correctly</li>
+<li>Use an <strong>L4 (TCP) load balancer</strong> — never an HTTP/L7 proxy — for the P2P port.</li>
+<li>Set <code>externalTrafficPolicy: Local</code> on the Service to preserve source IPs and avoid cross-node forwarding.</li>
+<li>Advertise the load balancer's stable public address via <code>p2p_advertise_addresses</code>.</li>
+<li>Verify inbound reachability from outside the provider's network before enabling <code>p2p_dht_mode = server</code>.</li>
 </ul>
-<h2 id="extending-the-cli">Extending the CLI<a class="headerlink" href="#extending-the-cli" title="Permanent link">&para;</a></h2>
-<p>Developers can extend the Teranode-CLI by adding new commands to the <code>cmd/teranodecli/teranodecli/cli.go</code> file. Follow the existing pattern for creating new commands and adding them to the command help map.</p>
-<h2 id="further-resources">Further Resources<a class="headerlink" href="#further-resources" title="Permanent link">&para;</a></h2>
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../developerSetup/">Developer Setup Guide</a></li>
-<li><a href="../locallyRunningServices/">Locally Running Services</a></li>
-<li><a href="../miners/minersHowToInteractWithFSM/">FSM State Management</a></li>
+<li><a href="../../../../P2P_NAT_TRAVERSAL/">P2P NAT Traversal and Address Filtering</a> — how libp2p address discovery works</li>
+<li><a href="../../../../references/settings/services/p2p_settings/">P2P Settings Reference</a> — all P2P configuration options</li>
+<li><a href="../minersSecurityBestPractices/">Security Best Practices (Kubernetes)</a> — firewall and port exposure guidance</li>
 </ul>
 
 
@@ -8026,7 +7141,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../bugReporting/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Bug Reporting">
+          <a href="../minersHowToConfigureTheNode/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Kubernetes">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -8036,20 +7151,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Bug Reporting
+                Kubernetes
               </div>
             </div>
           </a>
         
         
           
-          <a href="../miners/docker/minersHowToInstallation/" class="md-footer__link md-footer__link--next" aria-label="Next: Docker">
+          <a href="../../minersHowToAerospikeTuning/" class="md-footer__link md-footer__link--next" aria-label="Next: Aerospike Tuning">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Docker
+                Aerospike Tuning
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -8081,10 +7196,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
