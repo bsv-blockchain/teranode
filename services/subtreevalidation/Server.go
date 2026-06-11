@@ -826,6 +826,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// on tip-MTP snapshots.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
+			validator.WithInBlock(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
 			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
@@ -876,6 +877,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		request.BlockHeight,
 		blockIds,
 		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),

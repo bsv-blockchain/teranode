@@ -474,6 +474,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
 	}
 
+	if req.InBlock != nil {
+		opts.InBlock = *req.InBlock
+	}
+
 	if req.CandidateBlockTime != nil {
 		opts.CandidateBlockTime = *req.CandidateBlockTime
 	}
@@ -813,6 +817,10 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	if skipTxMetaPublishingStr := c.QueryParam("skipTxMetaPublishing"); skipTxMetaPublishingStr != "" {
 		boolVal := skipTxMetaPublishingStr == trueString || skipTxMetaPublishingStr == "1"
 		options.SkipTxMetaPublishing = boolVal
+	}
+
+	if inBlockStr := c.QueryParam("inBlock"); inBlockStr != "" {
+		options.InBlock = inBlockStr == trueString || inBlockStr == "1"
 	}
 
 	if candidateBlockTimeStr := c.QueryParam("candidateBlockTime"); candidateBlockTimeStr != "" {

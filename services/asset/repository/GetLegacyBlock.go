@@ -353,7 +353,7 @@ func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtree
 	defer cancel()
 
 	g, gCtx := errgroup.WithContext(fetchCtx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(repo.logger, g, concurrency)
 
 	var readErr error
 	for chunkIdx, offset := 0, 0; offset < totalTxs; chunkIdx, offset = chunkIdx+1, offset+chunkSize {
@@ -503,7 +503,7 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 	processSubtreeConcurrency := repo.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, processSubtreeConcurrency)
+	util.SafeSetLimit(repo.logger, g, processSubtreeConcurrency)
 
 	var missed atomic.Int32
 

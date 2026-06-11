@@ -734,8 +734,19 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			// RequestURI is intentionally omitted to keep query-string values out
 			// of the access log; any future endpoint adding sensitive query
 			// parameters won't accidentally leak them here.
-			logger.Infof("[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s",
-				method, path, ip, status, duration, size, tier)
+			//
+			// Level is chosen by status so healthy traffic (2xx/3xx, including the
+			// high-frequency /health probes) stays at DEBUG and does not flood the
+			// logs; only client (4xx) and server (5xx) errors surface by default.
+			const logFmt = "[Asset_http] %s %s client_ip=%s status=%d duration=%v size=%d tier=%s"
+			switch {
+			case status >= 500:
+				logger.Errorf(logFmt, method, path, ip, status, duration, size, tier)
+			case status >= 400:
+				logger.Warnf(logFmt, method, path, ip, status, duration, size, tier)
+			default:
+				logger.Debugf(logFmt, method, path, ip, status, duration, size, tier)
+			}
 
 			return nil
 		}

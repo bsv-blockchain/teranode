@@ -93,7 +93,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeader_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http] GetBlockHeader in %s for %s: %s", mode, c.RealIP(), hashParam),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockHeader in %s for %s: %s", mode, c.RealIP(), hashParam),
 		)
 
 		defer deferFn()

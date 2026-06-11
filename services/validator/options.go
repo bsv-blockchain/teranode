@@ -52,6 +52,14 @@ type Options struct {
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
 	SkipTxMetaPublishing bool
 
+	// InBlock marks provenance: the transaction arrived as part of a block or
+	// announced subtree (block validation, subtree validation, legacy sync)
+	// rather than via mempool submission. Published on the txmeta topic so
+	// relay consumers never announce such transactions. Explicit by design —
+	// not inferred from SkipPolicyChecks, which external submitters may set
+	// on genuinely fresh transactions.
+	InBlock bool
+
 	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
 	// When true, the validator skips the BDK ValidateTransaction call (script execution,
 	// sigops, standardness, consensus checks). Intended for legacy catchup
@@ -217,6 +225,22 @@ func WithIgnoreLocked(ignoreLocked bool) Option {
 func WithSkipTxMetaPublishing(skip bool) Option {
 	return func(o *Options) {
 		o.SkipTxMetaPublishing = skip
+	}
+}
+
+// WithInBlock creates an option marking the transaction as having arrived as
+// part of a block or announced subtree rather than via mempool submission.
+// Set this at every block-context validation call site; it controls whether
+// relay consumers of the txmeta Kafka topic may announce the transaction.
+//
+// Parameters:
+//   - inBlock: When true, the transaction is marked as block-originated
+//
+// Returns:
+//   - Option: Function that sets the inBlock option
+func WithInBlock(inBlock bool) Option {
+	return func(o *Options) {
+		o.InBlock = inBlock
 	}
 }
 

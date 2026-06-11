@@ -1490,7 +1490,7 @@ func (stp *SubtreeProcessor) getConflictingNodes(ctx context.Context, block *mod
 	conflictingNodesMu := sync.Mutex{}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// get the conflicting transactions from the block subtrees
 	for _, subtreeHash := range block.Subtrees {
@@ -3578,7 +3578,7 @@ func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, inv
 	// both MaxMinedRoutines and GetBatcherSize at 0) rather than letting g.Go
 	// deadlock on a zero-capacity semaphore. With defaults (MaxMinedRoutines=128)
 	// this is always >= 1.
-	util.SafeSetLimit(g, max(stp.settings.UtxoStore.MaxMinedRoutines, stp.settings.UtxoStore.GetBatcherSize*2))
+	util.SafeSetLimit(stp.logger, g, max(stp.settings.UtxoStore.MaxMinedRoutines, stp.settings.UtxoStore.GetBatcherSize*2))
 
 	// we need to check each transaction in the block we moved back and see if it is still on the longest chain or not
 	for idx, hash := range markNotOnLongestChain {
@@ -3903,7 +3903,7 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 	defer deferFn()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// get all the subtrees in parallel
 	subtreesNodes := make([][]subtreepkg.Node, len(block.Subtrees))
@@ -4825,7 +4825,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	g, _ := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
 	remainderSubtrees := make([][]subtreepkg.Node, len(chainedSubtrees))
@@ -5105,7 +5105,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	// chunk's ~100 ms of post-cancel work, which is below the typical block-
 	// movement wall-time floor.
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	for i := range chunks {
 		i := i
@@ -5333,7 +5333,7 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 	// gather parents from the old map, bulk-insert into the new map. No two
 	// goroutines ever touch the same destination bucket.
 	g, _ := errgroup.WithContext(context.Background())
-	util.SafeSetLimit(g, concurrencyLimit)
+	util.SafeSetLimit(stp.logger, g, concurrencyLimit)
 
 	for b := uint16(0); b < nrOfBuckets; b++ {
 		indices := perBucket[b]
@@ -5507,7 +5507,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
 
 	g, ctx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrentSubtreeReads)
+	util.SafeSetLimit(stp.logger, g, concurrentSubtreeReads)
 
 	// get all the subtrees from the block that we have not yet cleaned out
 	for subtreeHash, subtreeIdx := range blockSubtreesMap {
@@ -5635,7 +5635,7 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 	for blockID, txHashes := range blockIdsMap {

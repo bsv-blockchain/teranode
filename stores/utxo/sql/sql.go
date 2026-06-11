@@ -4025,7 +4025,7 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 
 	var missingInputs atomic.Int64
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(s.logger, g, concurrency)
 
 	for chunkStart := 0; chunkStart < len(pairs); chunkStart += chunkSize {
 		chunkEnd := chunkStart + chunkSize

@@ -496,7 +496,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 
 	g, gCtx := errgroup.WithContext(ctx)
 	// Limit to 3 concurrent writes (subtree, subtreeData, subtreeMeta)
-	util.SafeSetLimit(g, 3)
+	util.SafeSetLimit(sm.logger, g, 3)
 
 	g.Go(func() error {
 		subtreeBytes, err := subtree.Serialize()
@@ -914,7 +914,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	storeBatcherConcurrency := sm.settings.Legacy.StoreBatcherConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	util.SafeSetLimit(sm.logger, g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 	if err != nil {
@@ -1118,7 +1118,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 		}
 
 		g, _ := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, concurrencyLimit)
+		util.SafeSetLimit(sm.logger, g, concurrencyLimit)
 
 		var (
 			mu           sync.Mutex
@@ -1151,6 +1151,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithSkipUtxoCreation(true),
 					validator.WithAddTXToBlockAssembly(false),
 					validator.WithSkipPolicyChecks(true),
+					validator.WithInBlock(true),
 					validator.WithSkipTxMetaPublishing(true),
 					validator.WithCreateConflicting(true),
 					// PreValidateTransactions is only reached via the quickValidationMode
@@ -1295,7 +1296,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 				timeStart = time.Now()
 
-				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
+				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
 					classifyAndCountPrewarmError(sm.logger, validateErr)
 				}
 
@@ -1306,7 +1307,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		} else {
 			// process all the transactions on a certain level in parallel
 			g, gCtx := errgroup.WithContext(ctx)
-			util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+			util.SafeSetLimit(sm.logger, g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {
 				txIdx := txIdx
@@ -1323,7 +1324,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 					}
 
 					// send to validation, but only if the parent is not in the same block
-					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
+					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
 						classifyAndCountPrewarmError(sm.logger, validateErr)
 					}
 
@@ -1363,7 +1364,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	// are populated independently; this phase reads same-block parent outputs
 	// immediately and does not wait for the parent transaction to be extended first.
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, outpointBatcherSize)
+	util.SafeSetLimit(sm.logger, g, outpointBatcherSize)
 
 	// Blocks always include a coinbase, but guard against 0-tx edge cases
 	// (malformed/test blocks) where len-1 would produce a negative capacity.
@@ -1743,7 +1744,7 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *
 	g := errgroup.Group{}
 	// Limit goroutines to number of CPU cores to prevent scheduler thrashing
 	// This prevents spawning thousands of goroutines for transactions with many inputs
-	util.SafeSetLimit(&g, runtime.NumCPU()*2)
+	util.SafeSetLimit(sm.logger, &g, runtime.NumCPU()*2)
 
 	for i, input := range tx.Inputs {
 		i := i         // capture the loop variable

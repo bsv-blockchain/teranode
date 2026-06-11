@@ -330,7 +330,7 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 	blockHeight uint32, parentTxs *map[string]struct{}) (err error) {
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 32)
+	util.SafeSetLimit(ulogger.TestLogger{}, g, 32)
 
 	parentTxsMu := sync.Mutex{}
 

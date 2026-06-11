@@ -815,6 +815,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// been validated, spent, and created in the UTXO store — returning an error would
 	// cause callers to treat an accepted tx as failed and trigger duplicate retries.
 	if v.txmetaKafkaProducerClient != nil && !validationOptions.SkipTxMetaPublishing {
+		// InBlock is set explicitly by block-context callers (block validation,
+		// subtree validation, legacy sync) whose transactions arrived as part
+		// of a block or announced subtree rather than via mempool submission.
+		// Mark the published txmeta so relay consumers (legacy netsync) don't
+		// announce it as a fresh mempool tx.
+		txMetaData.InBlock = validationOptions.InBlock
+
 		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
 			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
@@ -874,7 +881,7 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
+	util.SafeSetLimit(v.logger, g, v.settings.UtxoStore.GetBatcherSize)
 
 	parentTxHashes := make(map[chainhash.Hash][]int)
 	utxoHeights := make([]uint32, len(tx.Inputs))
