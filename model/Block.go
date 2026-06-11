@@ -668,7 +668,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 	}
 
 	g := new(errgroup.Group)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(logger, g, concurrency)
 
 	transactionCountUint32, err := safeconversion.Uint64ToUint32(b.TransactionCount)
 	if err != nil {
@@ -813,7 +813,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(logger, g, concurrency)
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
@@ -897,7 +897,7 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 
 	// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
 	parentG := new(errgroup.Group)
-	util.SafeSetLimit(parentG, 1024*32)
+	util.SafeSetLimit(logger, parentG, 1024*32)
 
 	for _, parentTxStruct := range checkParentTxHashes {
 		parentTxStruct := parentTxStruct
@@ -1205,7 +1205,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(logger, g, concurrency)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i

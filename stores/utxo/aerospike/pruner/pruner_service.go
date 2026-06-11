@@ -601,7 +601,7 @@ func (s *Service) partitionWorker(
 	var mu sync.Mutex
 
 	chunkGroup := &errgroup.Group{}
-	util.SafeSetLimit(chunkGroup, s.chunkGroupLimit)
+	util.SafeSetLimit(s.logger, chunkGroup, s.chunkGroupLimit)
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
 		chunkGroup.Go(func() error {

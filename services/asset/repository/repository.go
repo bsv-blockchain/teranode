@@ -696,7 +696,7 @@ func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Conte
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtree",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
@@ -741,7 +741,7 @@ func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash
 // This is used internally to avoid nested semaphore acquisition.
 func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
 	)
 
 	st, err := repo.GetSubtree(ctx, hash)
@@ -776,7 +776,7 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 	defer releaseSemaphorePermit(repo.semGetSubtreeTransactions)
 
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeTransactions",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
 	)
 
 	// Call internal method to avoid nested semaphore acquisition

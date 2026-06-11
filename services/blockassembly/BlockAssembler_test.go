@@ -1244,22 +1244,37 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 
 		wg.Wait()
 
-		// Test with normal parameters - should get full subsidy + fees
-		miningCandidate, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.NoError(t, err, "Failed to get mining candidate")
-		assert.NotNil(t, miningCandidate)
-
 		expectedSubsidy := uint64(5000000000) // 50 BSV for early blocks
 		expectedTotal := totalExpectedFees + expectedSubsidy
 
-		assert.Equal(t, expectedTotal, miningCandidate.CoinbaseValue,
+		// Wait until the assembler has committed all 3 txs into the mining
+		// candidate before asserting on the coinbase value. AddTxBatch enqueues
+		// asynchronously (subtreeProcessor.AddBatch -> queue), so a candidate
+		// read too early reports NumTxs < 3 and a coinbase missing the
+		// not-yet-aggregated fees — the source of the CI flake where
+		// CoinbaseValue equalled the subsidy only. Mirrors the wait already used
+		// by the GetMiningCandidate test earlier in this file.
+		var coinbaseValue uint64
+
+		require.Eventually(t, func() bool {
+			mc, _, mcErr := testItems.blockAssembler.GetMiningCandidate(ctx)
+			if mcErr != nil || mc == nil || mc.NumTxs != 3 {
+				return false
+			}
+
+			coinbaseValue = mc.CoinbaseValue
+
+			return true
+		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include all 3 txs in time")
+
+		assert.Equal(t, expectedTotal, coinbaseValue,
 			"Normal scenario: should have fees (%d) + subsidy (%d) = %d",
 			totalExpectedFees, expectedSubsidy, expectedTotal)
 
 		t.Logf("NORMAL CASE: height=%d, fees=%d (%.8f BSV), subsidy=%d (%.8f BSV), total=%d (%.8f BSV)",
 			height, totalExpectedFees, float64(totalExpectedFees)/1e8,
 			expectedSubsidy, float64(expectedSubsidy)/1e8,
-			miningCandidate.CoinbaseValue, float64(miningCandidate.CoinbaseValue)/1e8)
+			coinbaseValue, float64(coinbaseValue)/1e8)
 
 		// Now test what happens if we could somehow corrupt the chain params
 		// (This demonstrates what the bug would look like)

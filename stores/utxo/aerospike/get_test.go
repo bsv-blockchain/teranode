@@ -240,7 +240,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
 	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
 
-	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil, nil)
+	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	mockBlockchain := &blockchain.MockStore{}
@@ -330,7 +330,7 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 	blockHeight uint32, parentTxs *map[string]struct{}) (err error) {
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 32)
+	util.SafeSetLimit(ulogger.TestLogger{}, g, 32)
 
 	parentTxsMu := sync.Mutex{}
 

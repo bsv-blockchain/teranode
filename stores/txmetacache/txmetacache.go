@@ -737,7 +737,7 @@ func (t *TxMetaCache) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockI
 //     the actual store update happens before this method is invoked.
 func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, _ uint32) error {
 	g := new(errgroup.Group)
-	util.SafeSetLimit(g, 100)
+	util.SafeSetLimit(t.logger, g, 100)
 
 	for _, hash := range hashes {
 		hash := hash

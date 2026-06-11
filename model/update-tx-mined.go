@@ -212,7 +212,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	maxMinedBatchSize := tSettings.UtxoStore.MaxMinedBatchSize
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, tSettings.UtxoStore.MaxMinedRoutines)
+	util.SafeSetLimit(logger, g, tSettings.UtxoStore.MaxMinedRoutines)
 
 	var (
 		blockInvalidError   error

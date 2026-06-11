@@ -930,7 +930,7 @@ func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtree
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 128)
+	util.SafeSetLimit(u.logger, g, 128)
 
 	for subtreeIdx, subtree := range subtrees {
 		if subtree == nil || len(subtree.Nodes) == 0 {
@@ -1046,7 +1046,7 @@ func (u *BlockValidation) processSubtreeBatch(
 
 	readerCtx, cancelReaders := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(readerCtx)
-	util.SafeSetLimit(g, 128)
+	util.SafeSetLimit(u.logger, g, 128)
 
 	for i := 0; i < batchSize; i++ {
 		globalIdx := batchStart + i
@@ -1151,7 +1151,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// Set concurrency to 8x StoreBatcherSize to allow sufficient parallelism while the
 	// UTXO store batches operations internally. This multiplier balances throughput with
 	// resource usage, allowing multiple batches to be in flight simultaneously.
-	util.SafeSetLimit(createG, u.settings.UtxoStore.StoreBatcherSize*8)
+	util.SafeSetLimit(u.logger, createG, u.settings.UtxoStore.StoreBatcherSize*8)
 
 	// Track transactions that already exist so we can update their mined info
 	var existingTxsMu sync.Mutex
@@ -1205,7 +1205,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	// Phase 2: Spend all transactions in parallel
 	spendG, spendCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(spendG, u.settings.UtxoStore.SpendBatcherSize*u.settings.UtxoStore.SpendBatcherConcurrency*2)
+	util.SafeSetLimit(u.logger, spendG, u.settings.UtxoStore.SpendBatcherSize*u.settings.UtxoStore.SpendBatcherConcurrency*2)
 
 	for _, tx := range batch.batchTxs {
 		tx := tx
@@ -1233,7 +1233,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 //   - error: If file writing fails
 func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch) error {
 	writeG, writeCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(writeG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
+	util.SafeSetLimit(u.logger, writeG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
 
 	batchSize := batch.batchEnd - batch.batchStart
 	for i := 0; i < batchSize; i++ {
@@ -1270,7 +1270,7 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, writeJobsChan chan<- *SubtreeWriteJob) error {
 	// Build subtrees in parallel (CPU-bound work)
 	buildG, buildCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(buildG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
+	util.SafeSetLimit(u.logger, buildG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
 
 	batchSize := batch.batchEnd - batch.batchStart
 	jobs := make([]*SubtreeWriteJob, batchSize)
@@ -1357,7 +1357,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 
 	readerCtx, cancelReaders := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(readerCtx)
-	util.SafeSetLimit(g, 128)
+	util.SafeSetLimit(u.logger, g, 128)
 
 	for i := 0; i < batchSize; i++ {
 		globalIdx := batchStart + i

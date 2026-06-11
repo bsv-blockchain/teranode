@@ -1217,7 +1217,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
+		util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
 
 		u.logger.Debugf("[processMissingTransactions][%s] processing level %d/%d with %d transactions", subtreeHash.String(), level+1, maxLevel+1, len(txsPerLevel[level]))
 
@@ -1489,11 +1489,41 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	}
 
 	if !subtreeDataExists || err != nil {
-		u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+		// Check the policy-rejected tx cache before requesting from peer over HTTP.
+		// Transactions here were consensus-valid but rejected by our local policy.
+		remainingHashes := missingTxHashes
 
-		missingTxs, err = u.getMissingTransactionsFromPeer(ctx, subtreeHash, missingTxHashes, baseURL)
-		if err != nil {
-			return nil, errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), err)
+		if u.policyRejectedTxCache != nil {
+			toCheck := make([]missingTxHash, len(missingTxHashes))
+			for i, h := range missingTxHashes {
+				toCheck[i] = missingTxHash{hash: h.Hash, idx: h.Idx}
+			}
+
+			cached, stillMissing := u.lookupPolicyRejectedTxs(toCheck)
+			if len(cached) > 0 {
+				u.logger.Debugf("[validateSubtree][%s] resolved %d missing txs from policy-rejected cache", subtreeHash.String(), len(cached))
+				missingTxs = append(missingTxs, cached...)
+			}
+
+			if len(stillMissing) > 0 {
+				remainingHashes = make([]utxo.UnresolvedMetaData, len(stillMissing))
+				for i, sm := range stillMissing {
+					remainingHashes[i] = utxo.UnresolvedMetaData{Hash: sm.hash, Idx: sm.idx}
+				}
+			} else {
+				remainingHashes = nil
+			}
+		}
+
+		if len(remainingHashes) > 0 {
+			u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs from peer", subtreeHash.String(), len(remainingHashes))
+
+			peerTxs, peerErr := u.getMissingTransactionsFromPeer(ctx, subtreeHash, remainingHashes, baseURL)
+			if peerErr != nil {
+				return nil, errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), peerErr)
+			}
+
+			missingTxs = append(missingTxs, peerTxs...)
 		}
 	}
 
@@ -1947,7 +1977,7 @@ func (u *Server) getMissingTransactionsFromPeer(ctx context.Context, subtreeHash
 	getMissingTransactionsConcurrency := u.settings.SubtreeValidation.GetMissingTransactions
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
+	util.SafeSetLimit(u.logger, g, getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
 	batchSize := u.settings.SubtreeValidation.MissingTransactionsBatchSize

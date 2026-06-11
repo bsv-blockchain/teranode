@@ -143,7 +143,19 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 	c.centrifugeNode, err = centrifuge.New(centrifuge.Config{
 		LogLevel: centrifuge.LogLevelDebug,
 		LogHandler: func(e centrifuge.LogEntry) {
-			c.logger.Infof("[Centrifuge] %s: %s", e.Message, e.Fields)
+			// Map the centrifuge entry's own level to ours. LogLevelDebug above
+			// means the library emits debug-level entries too; logging them all
+			// at INFO floods the asset logs, so respect the per-entry level.
+			switch e.Level {
+			case centrifuge.LogLevelError:
+				c.logger.Errorf("[Centrifuge] %s: %s", e.Message, e.Fields)
+			case centrifuge.LogLevelWarn:
+				c.logger.Warnf("[Centrifuge] %s: %s", e.Message, e.Fields)
+			case centrifuge.LogLevelInfo:
+				c.logger.Infof("[Centrifuge] %s: %s", e.Message, e.Fields)
+			default:
+				c.logger.Debugf("[Centrifuge] %s: %s", e.Message, e.Fields)
+			}
 		},
 	})
 	if err != nil {
@@ -164,14 +176,14 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 
 	c.centrifugeNode.OnConnect(func(client *centrifuge.Client) {
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
-			c.logger.Infof("user %s unsubscribed from %s", client.UserID(), e.Channel)
+			c.logger.Debugf("user %s unsubscribed from %s", client.UserID(), e.Channel)
 		})
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-			c.logger.Infof("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+			c.logger.Debugf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
 
 		transport := client.Transport()
-		c.logger.Infof("user %s connected via %s", client.UserID(), transport.Name())
+		c.logger.Debugf("user %s connected via %s", client.UserID(), transport.Name())
 
 		// Send cached current node status first (replicates p2p behavior)
 		c.statusMutex.RLock()

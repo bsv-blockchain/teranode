@@ -69,6 +69,7 @@ func setupRealValidator(t *testing.T, ctx context.Context) (validator.Interface,
 	validatorInstance, err := validator.New(ctx, logger, tSettings, utxoStore,
 		nil, // txMetaKafkaProducerClient - not needed for tests
 		nil, // rejectedTxKafkaProducerClient - not needed for tests
+		nil, // policyRejectedTxKafkaProducerClient - not needed for tests
 		nil, // blockAssemblyClient - disabled in settings
 		blockchainClient)
 	require.NoError(t, err)
@@ -696,7 +697,7 @@ func Test_handleMultipleTx(t *testing.T) {
 		_ = utxoStore.SetBlockHeight(101)
 		_ = utxoStore.SetMedianBlockTime(1700000000)
 
-		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, nil)
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		// Create a PropagationServer
@@ -866,7 +867,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		blockAssemblyClient := blockassembly.NewMock()
 		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
-		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// Create a PropagationServer
@@ -895,7 +896,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 		blockAssemblyClient := blockassembly.NewMock()
 		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
-		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// Create a PropagationServer

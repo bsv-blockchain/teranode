@@ -79,7 +79,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransactions_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http:GetTransactions] for %s", c.RealIP()),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http:GetTransactions] for %s", c.RealIP()),
 		)
 
 		defer deferFn()
@@ -131,7 +131,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		// Read the body into a 32 byte hashes one by one and stream the tx data back to the client
 		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, 1024)
+		util.SafeSetLimit(h.logger, g, 1024)
 
 		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
 		responseBytesMu := sync.Mutex{}
@@ -184,7 +184,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		prometheusAssetHTTPGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))
 
-		h.logger.Infof("[Asset_http:GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
+		h.logger.Debugf("[Asset_http:GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
 
 		return c.Blob(200, echo.MIMEOctetStream, responseBytes)
 	}
