@@ -3826,10 +3826,9 @@ func TestFindCommonAncestor_RejectsHeadersAboveUTXOHeight(t *testing.T) {
 		peerHeaders[i] = blocks[i].Header
 	}
 
-	// All headers exist in blockchain store
-	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
-
-	// But their heights are all above UTXO height (100) — this is the problem
+	// All headers exist in blockchain store, but their heights are all above UTXO
+	// height (100) — this is the problem. GetBlockHeader conveys both existence and
+	// height in a single RPC.
 	for i, header := range peerHeaders {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
 			header,
@@ -3871,18 +3870,19 @@ func TestFindCommonAncestor_AcceptsHeadersAtOrBelowUTXOHeight(t *testing.T) {
 		peerHeaders[i] = blocks[i].Header
 	}
 
-	// First two headers exist in our chain at heights within UTXO range
-	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[0].Hash()).Return(true, nil)
-	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[1].Hash()).Return(true, nil)
-	// Third header doesn't exist — this is where our chain diverges
-	mockBlockchainClient.On("GetBlockExists", mock.Anything, peerHeaders[2].Hash()).Return(false, nil)
-
-	// Heights are at or below UTXO height
+	// First two headers exist in our chain at heights within UTXO range.
+	// GetBlockHeader conveys both existence and height in a single RPC.
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[0].Hash()).Return(
 		peerHeaders[0], &model.BlockHeaderMeta{Height: 98}, nil,
 	)
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[1].Hash()).Return(
 		peerHeaders[1], &model.BlockHeaderMeta{Height: 99}, nil,
+	)
+	// Third header doesn't exist — this is where our chain diverges. A not-found
+	// error from GetBlockHeader signals absence and stops the search.
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[2].Hash()).Return(
+		(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+		errors.NewBlockNotFoundError("block not found"),
 	)
 
 	catchupCtx := &CatchupContext{
