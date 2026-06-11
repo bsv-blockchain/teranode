@@ -123,6 +123,10 @@ type Server struct {
 	// is used to send rejected transaction data to Kafka topics for monitoring and analysis.
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
+	// policyRejectedTxKafkaProducerClient publishes consensus-valid but policy-rejected
+	// transactions to Kafka. Subtree validation pods consume these to cache raw tx bytes.
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
 	// blockAssemblyClient connects to the block assembly service for mining integration,
 	// enabling the validator service to participate in block template generation and
 	// transaction inclusion in mining operations. This client is used to interact with
@@ -155,19 +159,21 @@ type Server struct {
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blockAssemblyClient blockassembly.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:                        logger,
-		settings:                      tSettings,
-		utxoStore:                     utxoStore,
-		stats:                         gocore.NewStat("validator"),
-		blockchainClient:              blockchainClient,
-		consumerClient:                consumerClient,
-		txMetaKafkaProducerClient:     txMetaKafkaProducerClient,
-		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
-		blockAssemblyClient:           blockAssemblyClient,
+		logger:                              logger,
+		settings:                            tSettings,
+		utxoStore:                           utxoStore,
+		stats:                               gocore.NewStat("validator"),
+		blockchainClient:                    blockchainClient,
+		consumerClient:                      consumerClient,
+		txMetaKafkaProducerClient:           txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
+		blockAssemblyClient:                 blockAssemblyClient,
 	}
 }
 
@@ -295,7 +301,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] blockassembly client is nil while enabled in the validator", nil)
 	}
 
-	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.blockAssemblyClient, v.blockchainClient)
+	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.policyRejectedTxKafkaProducerClient, v.blockAssemblyClient, v.blockchainClient)
 	if err != nil {
 		return errors.NewServiceError("[Init] could not create validator", err)
 	}
@@ -472,6 +478,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 
 	if req.SkipTxmetaPublishing != nil {
 		opts.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
+	}
+
+	if req.InBlock != nil {
+		opts.InBlock = *req.InBlock
 	}
 
 	if req.CandidateBlockTime != nil {
@@ -813,6 +823,10 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	if skipTxMetaPublishingStr := c.QueryParam("skipTxMetaPublishing"); skipTxMetaPublishingStr != "" {
 		boolVal := skipTxMetaPublishingStr == trueString || skipTxMetaPublishingStr == "1"
 		options.SkipTxMetaPublishing = boolVal
+	}
+
+	if inBlockStr := c.QueryParam("inBlock"); inBlockStr != "" {
+		options.InBlock = inBlockStr == trueString || inBlockStr == "1"
 	}
 
 	if candidateBlockTimeStr := c.QueryParam("candidateBlockTime"); candidateBlockTimeStr != "" {

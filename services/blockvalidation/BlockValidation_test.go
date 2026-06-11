@@ -88,6 +88,13 @@ func (m *SafeMockKafkaProducer) Publish(msg *kafka.Message) {
 	m.publishCalled = true
 }
 
+func (m *SafeMockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.Lock()
+	defer m.Unlock()
+	m.publishCalled = true
+	return true
+}
+
 func (m *SafeMockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	m.Lock()
 	defer m.Unlock()
@@ -292,7 +299,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}

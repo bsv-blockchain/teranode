@@ -262,6 +262,7 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		SkipPolicyChecks:          &opts.SkipPolicyChecks,
 		CreateConflicting:         &opts.CreateConflicting,
 		SkipTxmetaPublishing:      &opts.SkipTxMetaPublishing,
+		InBlock:                   &opts.InBlock,
 		CandidateBlockTime:        candidateBlockTimePtr(opts),
 		CandidateParentMedianTime: candidateParentMedianTimePtr(opts),
 		ParentMetadata:            parentMetadataToWire(opts.ParentMetadata),
@@ -322,6 +323,10 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.SkipTxMetaPublishing {
 		queryParams.Add("skipTxMetaPublishing", "true")
+	}
+
+	if opts.InBlock {
+		queryParams.Add("inBlock", "true")
 	}
 
 	if opts.CandidateBlockTime > 0 {

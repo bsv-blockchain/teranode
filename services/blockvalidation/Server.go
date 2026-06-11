@@ -268,7 +268,7 @@ func New(
 
 	// TEMP limit to 1, to prevent multiple subtrees processing at the same time
 	subtreeGroup := errgroup.Group{}
-	util.SafeSetLimit(&subtreeGroup, tSettings.BlockValidation.SubtreeGroupConcurrency)
+	util.SafeSetLimit(logger, &subtreeGroup, tSettings.BlockValidation.SubtreeGroupConcurrency)
 
 	// Initialize circuit breakers for peer management
 	cbConfig := &catchup.CircuitBreakerConfig{

@@ -172,7 +172,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					if err != nil {
 						// NewTxNotFoundError
 						if errors.Is(err, errors.ErrTxNotFound) {
-							h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
+							h.logger.Debugf("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
 						} else {
 							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
 						}

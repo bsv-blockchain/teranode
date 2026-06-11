@@ -55,7 +55,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepk
 	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()*2)
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
+	util.SafeSetLimit(u.logger, g, validateSubtreeInternalConcurrency)
 
 	var (
 		subtreeLen = subtree.Length()

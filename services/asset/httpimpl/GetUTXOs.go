@@ -94,7 +94,7 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXOs_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http:GetUTXOs] in %s for %s", mode, c.Request().RemoteAddr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http:GetUTXOs] in %s for %s", mode, c.Request().RemoteAddr),
 		)
 
 		defer deferFn()
@@ -114,7 +114,7 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 		results := make([]*utxo.SpendResponse, numRecords)
 
 		g, gCtx := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, utxosFanoutLimit)
+		util.SafeSetLimit(h.logger, g, utxosFanoutLimit)
 
 		for i := 0; i < numRecords; i++ {
 			recOffset := i * utxosRequestRecordSize
@@ -155,7 +155,7 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 
 		prometheusAssetHTTPGetUTXOs.WithLabelValues("OK", "200").Add(float64(numRecords))
 
-		h.logger.Infof("[Asset_http:GetUTXOs] served %d records in %s", numRecords, mode)
+		h.logger.Debugf("[Asset_http:GetUTXOs] served %d records in %s", numRecords, mode)
 
 		return writeUTXOsResponse(c, mode, results)
 	}

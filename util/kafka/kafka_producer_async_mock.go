@@ -46,3 +46,14 @@ func (c *KafkaAsyncProducerMock) PublishChannel() chan *Message {
 func (c *KafkaAsyncProducerMock) Publish(msg *Message) {
 	c.publishChannel <- msg
 }
+
+// TryPublish performs a non-blocking send to the mock's publish channel, returning
+// false if the buffer is full.
+func (c *KafkaAsyncProducerMock) TryPublish(msg *Message) bool {
+	select {
+	case c.publishChannel <- msg:
+		return true
+	default:
+		return false
+	}
+}

@@ -116,7 +116,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeaders_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[GetBlockHeaders_http] Get %s Block Headers in %s for %s", mode, c.RealIP(), hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[GetBlockHeaders_http] Get %s Block Headers in %s for %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()

@@ -1261,7 +1261,7 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 // not the goroutine count, since producers are mostly parked on errChan receives.
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, s.settings.UtxoStore.OutpointBatcherSize)
+	util.SafeSetLimit(s.logger, g, s.settings.UtxoStore.OutpointBatcherSize)
 
 	for _, tx := range txs {
 		tx := tx

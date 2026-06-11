@@ -111,7 +111,7 @@ func (h *HTTP) GetBlockHeadersFromCommonAncestor(mode ReadMode) func(c echo.Cont
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeadersFromCommonAncestor_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[GetBlockHeadersFromCommonAncestor_http] Get %s Block Headers in %s for %s", mode, c.RealIP(), hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[GetBlockHeadersFromCommonAncestor_http] Get %s Block Headers in %s for %s", mode, c.RealIP(), hashStr),
 		)
 		defer deferFn()
 

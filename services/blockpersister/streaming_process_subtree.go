@@ -123,7 +123,7 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 	concurrency := subtreepkg.Max(4, runtime.NumCPU()/2)
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(u.logger, g, concurrency)
 
 	subtreeLen := subtree.Length()
 
