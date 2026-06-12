@@ -289,21 +289,39 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return ctx.Err()
 
 		case <-ch:
-			if err := s.trigger(ctx, "blockchain"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "blockchain"), "blockchain")
 
 		case source := <-s.triggerCh:
-			if err := s.trigger(ctx, source); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, source), source)
 
 		case <-time.After(duration):
-			if err := s.trigger(ctx, "timer"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "timer"), "timer")
 		}
 	}
+}
+
+// handleTriggerError swallows transient errors from a trigger so the
+// long-running Start loop is not torn down by a single bad iteration.
+// Returning a non-nil error here would propagate into ServiceManager's
+// errgroup and cause it to gracefully stop every other service in the
+// process - so a transient storage error (e.g. blob-store read semaphore
+// timed out under load) would shut down the entire core sidecar daemon
+// rather than be retried on the next iteration.
+//
+// The trigger already converts the expected "no work to do" signal
+// (errors.ErrNotFound) into a nil return, so anything reaching here is
+// either ctx.Err (already handled by the main select on ctx.Done) or an
+// operational error. Both are recoverable by simply waiting for the next
+// blockchain notification, timer tick, or triggerCh push. The next
+// iteration will retry whatever failed.
+func (s *Server) handleTriggerError(ctx context.Context, err error, source string) {
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.logger.Errorf("[UTXOPersister] trigger from %s failed, will retry on next iteration: %v", source, err)
 }
 
 // Stop stops the server's processing operations.
