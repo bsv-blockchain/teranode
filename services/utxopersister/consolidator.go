@@ -212,21 +212,17 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 			return err
 		}
 
-		r, err := us.GetUTXODeletionsReader(ctx)
-		if err != nil && !errors.Is(err, errors.ErrBlobNotFound) {
+		// GetUTXO{Deletions,Additions}Reader return a semaphoreReadCloser
+		// that holds a file-store read permit until Close is called. Close
+		// each one before continuing the loop - leaking permits here would
+		// exhaust the read semaphore (default 768) within a few hundred
+		// blocks, after which acquireReadPermit times out at 25s and any
+		// subsequent Exists/GetIoReader fails with SERVICE_UNAVAILABLE.
+		if err := c.consumeDeletions(ctx, us); err != nil {
 			return err
 		}
 
-		if err := c.processDeletionsFromReader(ctx, r); err != nil {
-			return err
-		}
-
-		r, err = us.GetUTXOAdditionsReader(ctx)
-		if err != nil {
-			return err
-		}
-
-		if err := c.processAdditionsFromReader(ctx, r); err != nil {
+		if err := c.consumeAdditions(ctx, us); err != nil {
 			return err
 		}
 
@@ -238,6 +234,33 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	c.logger.Infof("Finished processing headers at height %d", c.lastBlockHeight)
 
 	return nil
+}
+
+// consumeDeletions fetches the per-block deletions reader, processes it, and
+// releases the read permit. ErrBlobNotFound is tolerated (matching the prior
+// behaviour) and means "no deletions for this block".
+func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error {
+	r, err := us.GetUTXODeletionsReader(ctx)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlobNotFound) {
+			return nil
+		}
+		return err
+	}
+	defer r.Close()
+	return c.processDeletionsFromReader(ctx, r)
+}
+
+// consumeAdditions fetches the per-block additions reader, processes it, and
+// releases the read permit. Unlike deletions, a missing additions file is a
+// real error - every block written via NewUTXOSet creates one.
+func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
+	r, err := us.GetUTXOAdditionsReader(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return c.processAdditionsFromReader(ctx, r)
 }
 
 // processDeletionsFromReader processes UTXO deletions from a reader.
