@@ -4832,6 +4832,59 @@ func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
 	}
 }
 
+// TestBlock_EmptyBlock_DiskMapDirs verifies a coinbase-only block — whose
+// TransactionCount is 0, since GetAndValidateSubtrees derives it from subtree
+// lengths and an empty block has no subtrees — passes checkDuplicateTransactions
+// and validOrderAndBlessed when block_diskMapDirs is set. The mmap-backed maps
+// reject FilterCapacity == 0, so the call sites must clamp the derived capacity
+// to a floor of 1; without the clamp every empty block fails validation on
+// nodes configured with disk-backed maps.
+func TestBlock_EmptyBlock_DiskMapDirs(t *testing.T) {
+	cases := []struct {
+		name string
+		dirs func(t *testing.T) []string
+	}{
+		{"in_memory", func(*testing.T) []string { return nil }},
+		{"single_disk", func(t *testing.T) []string { return []string{t.TempDir()} }},
+		{"multi_disk", func(t *testing.T) []string { return []string{t.TempDir(), t.TempDir()} }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+
+			blockHeaderBytes, _ := hex.DecodeString(block1Header)
+			blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+			require.NoError(t, err)
+
+			coinbase, err := bt.NewTxFromString(CoinbaseHex)
+			require.NoError(t, err)
+
+			block, err := NewBlock(blockHeader, coinbase, nil, 0, 123, 0, 0)
+			require.NoError(t, err)
+			require.Zero(t, block.TransactionCount)
+
+			ctx := context.Background()
+			logger := ulogger.TestLogger{}
+			dirs := tc.dirs(t)
+
+			err = block.checkDuplicateTransactions(ctx, logger, tSettings.Block.CheckDuplicateTransactionsConcurrency, dirs)
+			require.NoError(t, err)
+
+			deps := &validationDependencies{
+				txMetaStore:           createTestUTXOStore(t),
+				subtreeStore:          &mockSubtreeStore{shouldError: true},
+				currentChain:          []*BlockHeader{},
+				currentBlockHeaderIDs: []uint32{},
+				oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+			}
+
+			err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, dirs, tSettings.Block.ParentSpendsCapacityMultiplier)
+			require.NoError(t, err)
+		})
+	}
+}
+
 // buildBlockForValidOrderBench constructs a block with one subtree of `leaves`
 // nodes, each with `parentsPerTx` parent hashes. All parents resolve inside
 // the block (b.txMap fast-path) except for the first non-coinbase node, which

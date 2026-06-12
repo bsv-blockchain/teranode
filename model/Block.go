@@ -682,10 +682,16 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 	}
 
 	if len(diskMapDirs) > 0 {
+		// An empty (coinbase-only) block has TransactionCount == 0, but the
+		// mmap-backed table rejects a zero capacity — clamp to 1.
+		filterCapacity := b.TransactionCount
+		if filterCapacity == 0 {
+			filterCapacity = 1
+		}
 		diskMap, diskErr := NewDiskTxMapUint64(DiskTxMapUint64Options{
 			BasePaths:      diskMapDirs,
 			Prefix:         "bv-txmap",
-			FilterCapacity: uint(b.TransactionCount),
+			FilterCapacity: uint(filterCapacity),
 		})
 		if diskErr != nil {
 			return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to create disk tx map", b.String(), diskErr)
@@ -789,6 +795,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		parentSpendsCapacityMultiplier = 1
 	}
 	expectedInpoints := b.TransactionCount * parentSpendsCapacityMultiplier
+	if expectedInpoints == 0 {
+		// Empty (coinbase-only) block: TransactionCount == 0, but the
+		// mmap-backed table rejects a zero capacity — clamp to 1.
+		expectedInpoints = 1
+	}
 
 	var psMap ParentSpendsMap
 	if len(diskMapDirs) > 0 {
