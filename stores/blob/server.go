@@ -307,6 +307,12 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
+	// Close on every return path - the underlying file-store reader holds
+	// a read permit. Previously this handler leaked the permit on success
+	// AND on all four mid-function error returns (seek failure, store does
+	// not support seeking, Read failure, and the fall-through after Write).
+	// handleGet just above has the same defer rc.Close() pattern.
+	defer dataReader.Close()
 
 	// seek the reader to the start position
 	if start > 0 {
