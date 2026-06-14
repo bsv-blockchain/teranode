@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	memory_blob "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1710,6 +1711,91 @@ func TestSendChunkResult_DeliversWhenChannelHasCapacity(t *testing.T) {
 	default:
 		t.Fatal("result was not delivered to channel")
 	}
+}
+
+// readErrCloser is a test double whose Read returns a sticky error and that
+// records whether Close was called. Used to assert that consumers release
+// file-store read permits on every error path.
+type readErrCloser struct {
+	err    error
+	closed bool
+}
+
+func (r *readErrCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r *readErrCloser) Close() error             { r.closed = true; return nil }
+
+// subtreeStoreFakeReader wraps an in-memory subtree store and replaces the
+// GetIoReader return for a specific (key, fileType) pair with a caller-supplied
+// io.ReadCloser. Everything else delegates to the embedded store so the rest
+// of the repository plumbing keeps working.
+type subtreeStoreFakeReader struct {
+	*memory_blob.Memory
+	targetKey  []byte
+	targetType fileformat.FileType
+	reader     io.ReadCloser
+}
+
+func (s *subtreeStoreFakeReader) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	if fileType == s.targetType && bytes.Equal(key, s.targetKey) {
+		return s.reader, nil
+	}
+	return s.Memory.GetIoReader(ctx, key, fileType, opts...)
+}
+
+// TestGetLegacyBlockReader_ClosesSubtreeReaderOnReadError pins the close
+// contract on the legacy-block streaming path. If a subtree's data file
+// exists but reading transactions out of it fails partway through, the
+// per-iteration io.ReadCloser must be Closed (releasing the file-store
+// read permit held by the underlying semaphoreReadCloser) and the output
+// pipe must be CloseWithError'd so the consumer's Read returns instead of
+// blocking forever on bytes that will never arrive. Prior to the fix, the
+// non-EOF read-failure path at GetLegacyBlock.go returned without doing
+// either, leaking a permit per affected request and deadlocking the
+// consumer.
+func TestGetLegacyBlockReader_ClosesSubtreeReaderOnReadError(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := setup(t)
+	block, subtree := newBlock(ctx, t, params)
+
+	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+	// Pre-write a non-empty SubtreeData so Exists() returns true and the
+	// inline streaming branch is taken. The body's exact contents don't
+	// matter because the fake reader will override what GetIoReader returns.
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	for i, tx := range params.txs {
+		if i != 0 {
+			require.NoError(t, subtreeData.AddTx(tx, i))
+		}
+	}
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+	// Wrap the existing in-memory store so that GetIoReader for
+	// (subtreeRoot, SubtreeData) returns a reader that errors on the
+	// first Read with a non-EOF error - the leak-prone path.
+	fakeReader := &readErrCloser{err: io.ErrUnexpectedEOF}
+	ctx.repo.SubtreeStore = &subtreeStoreFakeReader{
+		Memory:     ctx.repo.SubtreeStore.(*memory_blob.Memory),
+		targetKey:  subtree.RootHash()[:],
+		targetType: fileformat.FileTypeSubtreeData,
+		reader:     fakeReader,
+	}
+
+	r, err := ctx.repo.GetLegacyBlockReader(t.Context(), &chainhash.Hash{})
+	require.NoError(t, err)
+
+	// Drain the pipe. The streaming goroutine will hit the read error
+	// inside the subtree loop and CloseWithError the pipe; we should
+	// receive the same error from io.ReadAll, NOT hang.
+	_, readErr := io.ReadAll(r)
+	require.Error(t, readErr, "consumer's Read must return after the streaming goroutine errors; if this hangs, the pipe was not closed on the error path")
+
+	require.True(t, fakeReader.closed,
+		"subtreeDataReader must be Closed when the streaming loop returns an error - otherwise the file-store read permit leaks for the lifetime of the process")
 }
 
 func TestSendChunkResult_ReturnsCtxErrWhenBlocked(t *testing.T) {
