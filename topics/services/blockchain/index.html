@@ -8386,7 +8386,7 @@ Explanation of the sequences:</p>
 <li><strong>GetFSMCurrentState</strong>: Retrieves the current state of the FSM.</li>
 <li><strong>WaitFSMToTransitionToGivenState</strong>: Waits for FSM to reach a specific state.</li>
 <li><strong>WaitUntilFSMTransitionFromIdleState</strong>: Waits for FSM to transition from IDLE state.</li>
-<li><strong>Run, CatchUpBlocks, LegacySync, Idle</strong>: Transitions the service to specific operational modes.</li>
+<li><strong>Run, CatchUpBlocks, Idle</strong>: Transitions the service to specific operational modes.</li>
 </ul>
 <h4 id="state-management">State Management<a class="headerlink" href="#state-management" title="Permanent link">&para;</a></h4>
 <ul>
@@ -8411,7 +8411,7 @@ Explanation of the sequences:</p>
 <p>The Blockchain Service uses a Finite State Machine (FSM) to manage its operational states. This design allows the service to maintain a clear lifecycle and respond appropriately to different events.</p>
 <p>For a comprehensive understanding of the Blockchain Service's FSM implementation, please refer to the dedicated <a href="../../architecture/stateManagement/">State Management in Teranode</a> documentation, which covers:</p>
 <ul>
-<li>FSM states (Idle, Running, CatchingBlocks, LegacySyncing)</li>
+<li>FSM states (Idle, Running, CatchingBlocks)</li>
 <li>State transitions and events</li>
 <li>Allowed operations in each state</li>
 <li>FSM initialization and access methods</li>
@@ -8422,7 +8422,7 @@ Explanation of the sequences:</p>
 <li><strong>GetFSMCurrentState</strong>: Returns the current state of the FSM</li>
 <li><strong>WaitFSMToTransitionToGivenState</strong>: Waits for the FSM to reach a specific state</li>
 <li><strong>SendFSMEvent</strong>: Sends events to trigger state transitions</li>
-<li><strong>Run, CatchUpBlocks, LegacySync, Idle</strong>: Convenience methods that delegate to SendFSMEvent</li>
+<li><strong>Run, CatchUpBlocks, Idle</strong>: Convenience methods that delegate to SendFSMEvent</li>
 </ul>
 <p>The FSM ensures that the service only performs operations appropriate for its current state, providing isolation and predictable behavior.</p>
 <h3 id="93-kafka-integration-details">9.3. Kafka Integration Details<a class="headerlink" href="#93-kafka-integration-details" title="Permanent link">&para;</a></h3>

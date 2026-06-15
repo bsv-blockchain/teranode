@@ -7675,7 +7675,7 @@
 <h4 id="fsm-finite-state-machine-management">FSM (Finite State Machine) Management<a class="headerlink" href="#fsm-finite-state-machine-management" title="Permanent link">&para;</a></h4>
 <p><strong>Current State Display:</strong></p>
 <ul>
-<li>Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, LEGACY SYNCING, DISCONNECTED</li>
+<li>Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, DISCONNECTED</li>
 </ul>
 <p><strong>State Transitions:</strong></p>
 <table>
@@ -7697,10 +7697,6 @@
 <tr>
 <td>CATCHUPBLOCKS</td>
 <td>Enter block catchup mode</td>
-</tr>
-<tr>
-<td>LEGACYSYNC</td>
-<td>Enter legacy sync mode</td>
 </tr>
 </tbody>
 </table>
@@ -7826,7 +7822,6 @@
 <li><code>POST /fsm/run</code>: Start blockchain</li>
 <li><code>POST /fsm/idle</code>: Stop blockchain</li>
 <li><code>POST /fsm/catchup</code>: Enter catchup mode</li>
-<li><code>POST /fsm/legacysync</code>: Enter legacy sync mode</li>
 </ul>
 <p><strong>Block Operations:</strong></p>
 <ul>

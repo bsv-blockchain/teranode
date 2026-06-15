@@ -7580,7 +7580,7 @@ The service also receives blocks from the Teranode network and converts them bac
 <li>
 <p><strong>Validation:</strong></p>
 <ul>
-<li>For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO <code>SetMinedMulti</code> is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (LEGACYSYNCING or CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.</li>
+<li>For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO <code>SetMinedMulti</code> is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.</li>
 <li>For blocks above the highest checkpoint, more thorough validation is performed via the Teranode validation services.</li>
 </ul>
 </li>
