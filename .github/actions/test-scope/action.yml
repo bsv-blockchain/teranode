@@ -1,0 +1,87 @@
+name: 'Compute test scope'
+description: >
+  Compute which tests a pull request needs to run, via the reverse-dependency
+  closure of its changed files (see plans/ci-test-scoping.md and
+  test/scripts/affected). Emits per-suite outputs that gate the unit, smoke,
+  chainintegrity, and sequential jobs. When force-full is 'true' (the ci-full
+  label), every suite is signalled to run.
+
+inputs:
+  go-version:
+    description: Go version for `go run`/`go list`.
+    required: true
+  force-full:
+    description: "'true' to force the full suite regardless of the diff (ci-full label)."
+    default: 'false'
+
+outputs:
+  full:
+    description: Run the complete suite; ignore the scoped lists.
+    value: ${{ steps.scope.outputs.full }}
+  any_go:
+    description: Any .go file changed → run linters.
+    value: ${{ steps.scope.outputs.any_go }}
+  run_unit:
+    description: Run scoped unit tests.
+    value: ${{ steps.scope.outputs.run_unit }}
+  unit_pkgs:
+    description: Space-separated import paths for `make test TEST_PKGS=...`.
+    value: ${{ steps.scope.outputs.unit_pkgs }}
+  run_smoke:
+    description: Closure touches test/e2e/daemon/ready (smoke/pruner/legacy).
+    value: ${{ steps.scope.outputs.run_smoke }}
+  run_chainintegrity:
+    description: Closure touches test/e2e/chainintegrity.
+    value: ${{ steps.scope.outputs.run_chainintegrity }}
+  run_seq:
+    description: Run scoped sequential tests.
+    value: ${{ steps.scope.outputs.run_seq }}
+  seq_pkgs:
+    description: Space-separated dirs for run_tests_sequentially.sh --packages.
+    value: ${{ steps.scope.outputs.seq_pkgs }}
+
+runs:
+  using: 'composite'
+  # NOTE: the calling job MUST run actions/checkout before invoking this action —
+  # GitHub resolves local `./.github/actions/...` references from the checked-out
+  # workspace, and `go run`/`go list` need the source tree present.
+  steps:
+    - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    # Module cache only — we just `go run`/`go list`, no -race build.
+    - name: Restore Go caches
+      uses: ./.github/actions/go-cache
+      with:
+        build_cache: 'false'
+
+    - name: Compute scope
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        FORCE_FULL: ${{ inputs.force-full }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        if [ "$FORCE_FULL" = "true" ]; then
+          {
+            echo "full=true"; echo "any_go=true"
+            echo "reason=ci-full label set — forcing full suite"
+            echo "run_unit=false"; echo "unit_pkgs="
+            echo "run_smoke=false"; echo "run_chainintegrity=false"
+            echo "run_seq=false"; echo "seq_pkgs="
+          } >> "$GITHUB_OUTPUT"
+          echo "ci-full label set — forcing full suite"
+          exit 0
+        fi
+
+        # Changed-file list via the API (no deep git history needed).
+        gh pr diff "$PR_NUMBER" --name-only > /tmp/changed-files.txt
+        echo "::group::Changed files"; cat /tmp/changed-files.txt; echo "::endgroup::"
+
+        # Human-readable decision in the log, machine-readable into GITHUB_OUTPUT.
+        go run ./test/scripts/affected -json < /tmp/changed-files.txt
+        go run ./test/scripts/affected < /tmp/changed-files.txt >> "$GITHUB_OUTPUT"

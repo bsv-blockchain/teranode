@@ -182,10 +182,18 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# TEST_PKGS: space-separated Go package patterns (e.g. ./services/propagation/...).
+# When set, runs only those packages without coverage instrumentation — used by CI
+# for service-scoped PRs to skip unrelated test compilation. When unset (default),
+# runs the full unit suite with coverage over all non-test packages.
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+ifdef TEST_PKGS
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m $(TEST_PKGS)
+else
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+endif
 
 # run tests in the test/longtest directory
 .PHONY: longtest
@@ -198,10 +206,13 @@ longtest:
 #   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3)
 #   TEST_RETRY_DELAY - Delay between retries in seconds (default: 2)
 # Example: make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3
+# SEQ_PKGS: space-separated sequential package dirs to restrict the run to (e.g.
+# "test/sequentialtest/double_spend"). Empty (default) runs all packages. Used by
+# CI scoping; the runner reads it from the environment.
 .PHONY: sequentialtest
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
-	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
+	SEQ_PKGS="$(SEQ_PKGS)" TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
 # run sequential tests for specific database backends
 .PHONY: sequentialtest-sqlite
@@ -222,7 +233,7 @@ sequentialtest-aerospike:
 .PHONY: sequentialtest-shard
 sequentialtest-shard:
 	@mkdir -p /tmp/teranode-test-results
-	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
+	SEQ_PKGS="$(SEQ_PKGS)" TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
 		test/scripts/run_tests_sequentially.sh --shard $(SHARD) --total $(TOTAL) 2>&1 \
 		| tee /tmp/teranode-test-results/sequentialtest-shard-$(SHARD)-results.txt
 

@@ -23,8 +23,31 @@ env:
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
+  scope:
+    name: compute test scope
+    # Needs Go to build the import graph; the small arm runner is plenty.
+    runs-on: teranode-runner-8-core-arm
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.s.outputs.full }}
+      any_go: ${{ steps.s.outputs.any_go }}
+      run_unit: ${{ steps.s.outputs.run_unit }}
+      unit_pkgs: ${{ steps.s.outputs.unit_pkgs }}
+    steps:
+      # Local action reference requires the workspace to be checked out first.
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - id: s
+        uses: ./.github/actions/test-scope
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          force-full: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+
   golangci-lint:
     name: golangci-lint
+    needs: [scope]
+    if: needs.scope.outputs.any_go == 'true'
     # arm64-safe: pure Go analysis, no containers (golangci-lint ships arm64).
     runs-on: teranode-runner-8-core-arm
     steps:
@@ -58,12 +81,16 @@ jobs:
 
   test:
     name: test
+    needs: [scope]
+    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.run_unit == 'true'
     # TEMPORARY: 32-core/128GB arm to stop intermittent OOM (exit 143). `make test`
     # runs `go test -race -coverpkg=./...` over the whole repo; a few test binaries
     # peak very high (sql ~34G, blockassembly ~31G, subtreeprocessor ~20G) and at
     # -p=16 enough overlap to exhaust a 16-core/64GB runner intermittently. Job-wide
     # peak measured ~110GB+. This is a stopgap until per-package memory is reduced —
     # tracked in #1051. Revert to teranode-runner-16-core-arm once that lands.
+    # Note: scoped runs (TEST_PKGS set) skip -coverpkg=./... so memory is lower;
+    # a smaller runner is feasible once #1051 lands and runner options are confirmed.
     runs-on: teranode-runner-32-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -127,11 +154,20 @@ jobs:
             echo "::endgroup::"
           }
           trap summary EXIT
-          make test
+          if [ "${{ needs.scope.outputs.full }}" != "true" ]; then
+            # Scoped run: only test the affected packages, no coverage instrumentation.
+            # This avoids compiling all packages under -coverpkg=./... which is the
+            # primary driver of the ~110GB peak on full runs.
+            make test TEST_PKGS="${{ needs.scope.outputs.unit_pkgs }}"
+          else
+            make test
+          fi
         continue-on-error: false
 
       - name: Upload coverage report
-        if: always()
+        # Coverage is only produced on full runs. Scoped runs skip -coverpkg=./...
+        # and produce no coverage.out.
+        if: always() && needs.scope.outputs.full == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-report
