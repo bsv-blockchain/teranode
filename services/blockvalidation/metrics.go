@@ -72,11 +72,13 @@ var (
 	blockQueueSkipCount prometheus.Histogram
 	blockQueueWaitTime  prometheus.Histogram
 
-	// setMinedChan retry tracking. Per-blockhash label deliberately accepts the
-	// cardinality cost: an alert on a single block hitting the retry ceiling is
-	// the primary signal that historical-corrupt state requires manual repair.
-	prometheusBlockValidationSetMinedRetries *prometheus.CounterVec
-	prometheusBlockValidationSetMinedDrops   *prometheus.CounterVec
+	// setMinedChan retry tracking. These are aggregate counters with no
+	// per-blockhash label: using the block hash as a label value would create
+	// unbounded Prometheus cardinality (one permanent series per distinct hash
+	// over the node's lifetime). The specific block hash is recorded in the
+	// accompanying log lines for manual repair.
+	prometheusBlockValidationSetMinedRetries prometheus.Counter
+	prometheusBlockValidationSetMinedDrops   prometheus.Counter
 )
 
 var (
@@ -216,24 +218,22 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetMinedRetries = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedRetries = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_retry_total",
-			Help:      "Number of setTxMined retries per block hash. Alert when this approaches the retry ceiling (typically 10): the block likely has historical-corrupt state and needs manual repair.",
+			Help:      "Total number of setTxMined retries across all blocks. A rising rate indicates blocks with historical-corrupt state that need manual repair; the specific block hash is recorded in the logs.",
 		},
-		[]string{"blockhash"},
 	)
 
-	prometheusBlockValidationSetMinedDrops = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedDrops = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
-			Help:      "Number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention.",
+			Help:      "Total number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention; the specific block hash is recorded in the logs.",
 		},
-		[]string{"blockhash"},
 	)
 
 	// Initialize catchup operation metrics
