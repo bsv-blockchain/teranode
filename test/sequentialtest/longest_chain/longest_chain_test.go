@@ -1,5 +1,8 @@
 package longest_chain
 
+// verify-scope: trivial marker to validate CI test scoping (run only the
+// affected sequential package). Safe to revert once the scope job is confirmed.
+
 import (
 	"testing"
 	"time"
