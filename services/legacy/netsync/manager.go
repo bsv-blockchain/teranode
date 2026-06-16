@@ -2472,6 +2472,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// add the number of orphan transactions to the prometheus metric
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
 		for {
 			select {

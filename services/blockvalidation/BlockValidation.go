@@ -531,6 +531,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 		}
 		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine (interval: %v)", interval)
 		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 
 		for {
 			select {
