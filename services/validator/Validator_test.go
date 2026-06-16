@@ -49,6 +49,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -87,7 +88,7 @@ func BenchmarkValidator(b *testing.B) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(b, err)
 
-	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -126,7 +127,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -172,7 +173,7 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 		require.NoError(t, err)
 
-		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are not getting blockIDs
@@ -368,7 +369,7 @@ func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing
 	)
 	require.NotEqual(t, txA.TxID(), txB.TxID())
 
-	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, server.Init(ctx))
 
 	createConflicting := true
@@ -545,6 +546,103 @@ func TestValidate_ConsensusRejectsUnconfirmedParent(t *testing.T) {
 	require.Nil(t, txMetaData)
 	require.Contains(t, err.Error(), "bad-txns-unconfirmed-input-in-block",
 		"consensus-mode validation must surface the BDK UnconfirmedInputInBlock rejection for unconfirmed parents")
+}
+
+// TestValidate_ConsensusAcceptsUnconfirmedParentAtCandidateHeight is the
+// accept-counterpart of TestValidate_ConsensusRejectsUnconfirmedParent and
+// the validator-level regression for the legacy-sync wedge at testnet
+// 1730003: same fixtures, same unconfirmed parent (BlockHeights empty in the
+// UTXO store), but WithUnconfirmedParentsAtCandidateHeight(true) — the option
+// the legacy CheckSubtreeFromBlock branch sets — resolves the sentinel to the
+// candidate height. Runs the real TxValidator + GoBDK end to end: proves BDK
+// accepts the child once the parent resolves at the candidate height instead
+// of translating the sentinel to MEMPOOL_HEIGHT.
+func TestValidate_ConsensusAcceptsUnconfirmedParentAtCandidateHeight(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parentTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parentTx, err := bt.NewTxFromString(parentTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_t13_consensus_accept_hinted")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix())) //nolint:gosec
+
+	// Parent created WITHOUT WithMinedBlockInfo — BlockHeights stays empty,
+	// identical to the reject test. Only the option below differs.
+	_, err = utxoStore.Create(ctx, parentTx, 257726)
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                &MockBlockAssemblyStore{},
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	// The flag is compatible with block assembly enabled (the legacy branch
+	// sets it in every FSM state, including RUNNING where assembly stays on);
+	// assembly is disabled here only because the test scenario mirrors the
+	// catch-up (CATCHINGBLOCKS) deployment state.
+	txMetaData, err := v.Validate(t.Context(), tx, 257727,
+		WithSkipPolicyChecks(true),
+		WithUnconfirmedParentsAtCandidateHeight(true),
+		WithAddTXToBlockAssembly(false),
+	)
+	require.NoError(t, err,
+		"with UnconfirmedParentsAtCandidateHeight, consensus-mode validation must accept a child of an unconfirmed same-block parent")
+	require.NotNil(t, txMetaData)
+
+	// Side-effect contract (deliberate, pinned here so it stays documented):
+	// tx-level blessing mutates the store BEFORE any block-level membership
+	// verdict. From the validator's perspective this scenario is identical to
+	// an external floater (a parent that is unconfirmed and NOT in the block)
+	// — membership is only decided later by block validation's
+	// checkParentsExistOnChain, which returns BlockIncompleteError for an
+	// unmined parent (pinned in model/Block_test.go "parent has no block ID")
+	// so the block is never accepted while the floater stays unmined. The
+	// store state left behind is exactly what a policy-mode mempool-chain
+	// admission of the same txs would produce, and is handled by the same
+	// unmined-tx cleanup machinery:
+	//   - the child's meta exists, unmined (no BlockIDs / BlockHeights yet)
+	//   - the parent's spent output records the child as its spender
+	childMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.BlockHeights)
+	require.NoError(t, err)
+	require.Empty(t, childMeta.BlockIDs, "blessed child must be unmined until block acceptance")
+	require.Empty(t, childMeta.BlockHeights, "blessed child must be unmined until block acceptance")
+
+	spentVout := tx.Inputs[0].PreviousTxOutIndex
+	parentUtxoHash, err := util.UTXOHashFromOutput(parentTx.TxIDChainHash(), parentTx.Outputs[spentVout], spentVout)
+	require.NoError(t, err)
+
+	spendStatus, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
+		TxID:     parentTx.TxIDChainHash(),
+		Vout:     spentVout,
+		UTXOHash: parentUtxoHash,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, spendStatus.SpendingData, "parent output must be marked spent by the blessed child")
+	require.Equal(t, *tx.TxIDChainHash(), *spendStatus.SpendingData.TxID)
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
@@ -1680,6 +1778,8 @@ type fakeAsyncProducer struct {
 }
 
 func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
+
+func (f *fakeAsyncProducer) TryPublish(m *kafka.Message) bool { f.publish(m); return true }
 
 func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
 	ctx := context.Background()

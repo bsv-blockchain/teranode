@@ -27,7 +27,7 @@ type State struct {
 	// sees. The integrating service calls Arm exactly once, the first time the
 	// node reaches a fully-synced state (blockchain FSM RUNNING), at which
 	// point bootstrapIntent is applied. This keeps a node pessimistic through
-	// cold-start IBD (LEGACYSYNCING / CATCHINGBLOCKS) and only lets optimism be
+	// cold-start IBD (CATCHINGBLOCKS) and only lets optimism be
 	// earned once it has been live. The latch is one-way — it never re-locks,
 	// so a later catch-up burst after RUNNING may still use optimistic mode.
 	armed bool
@@ -75,7 +75,7 @@ func New(cfg Config, serviceName string, reg prometheus.Registerer) (*State, err
 // fully-synced state (blockchain FSM RUNNING). Until Arm runs the State is
 // pinned pessimistic no matter how many observations it records, so optimistic
 // subtreeData skipping can never happen during cold-start IBD
-// (LEGACYSYNCING / CATCHINGBLOCKS).
+// (CATCHINGBLOCKS).
 //
 // Effect of Arm by configured bootstrap intent:
 //   - ModeAuto: enables automatic Pess→Opt transitions (the machine may now

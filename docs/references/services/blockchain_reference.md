@@ -542,14 +542,6 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 
 Transitions the FSM to the CATCHINGBLOCKS state.
 
-### LegacySync
-
-```go
-func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-```
-
-Transitions the FSM to the LEGACYSYNCING state.
-
 ### Idle
 
 ```go

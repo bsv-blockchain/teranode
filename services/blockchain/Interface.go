@@ -750,26 +750,6 @@ type ClientI interface {
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 
-	// OffChainBlockIDs returns the complete set of block IDs known NOT to be on the
-	// current main chain (the in-memory off-chain/forked set). It is the batch,
-	// prefetch-friendly counterpart of CheckBlockIsInCurrentChain: a caller can
-	// fetch the negative set once and then answer main-chain membership locally
-	// (a block ID is on the main chain iff id <= maxBlockID AND it is not in this
-	// set), avoiding one RPC per candidate set on big blocks.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	//
-	// Returns:
-	// - offChainBlockIDs: the off-chain block IDs (nil when none)
-	// - maxBlockID: the highest known block ID; callers must skip (treat as not
-	//   on-chain) any id > maxBlockID, mirroring CheckBlockIsInCurrentChain
-	// - rebuilding: true when the set is unavailable or stale (in-memory check
-	//   disabled, or a reorg/startup rebuild in progress); callers must fall back
-	//   to per-block CheckBlockIsInCurrentChain checks
-	// - Error if the operation fails
-	OffChainBlockIDs(ctx context.Context) (offChainBlockIDs []uint32, maxBlockID uint32, rebuilding bool, err error)
-
 	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
 	//
 	// This is used for double-spend detection on fork blocks where we need to check against
@@ -931,18 +911,6 @@ type ClientI interface {
 	// Returns:
 	// - Error if the notification fails
 	ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error
-
-	// LegacySync performs a legacy synchronization process.
-	//
-	// This method initiates a blockchain synchronization using the legacy synchronization
-	// protocol, which may be needed for compatibility with older network nodes.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	//
-	// Returns:
-	// - Error if the legacy synchronization process fails
-	LegacySync(ctx context.Context) error
 
 	// Idle transitions the blockchain service to an idle state.
 	//

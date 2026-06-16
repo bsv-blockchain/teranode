@@ -170,6 +170,20 @@ type semaphoreReadCloser struct {
 	once sync.Once
 }
 
+// Seek delegates to the wrapped reader when it implements io.Seeker. This is
+// the case for the local-store path (*os.File) which is what openFileWithFallback
+// returns from its primary success paths. Without this method the wrapper's
+// static type is io.ReadCloser - so callers like the HTTP range-request handler
+// that do dataReader.(io.Seeker) would fail the type assertion and report
+// "Store does not support seeking" even though the underlying file is Seekable.
+// Falls back to an error for non-seekable wrapped readers.
+func (r *semaphoreReadCloser) Seek(offset int64, whence int) (int64, error) {
+	if seeker, ok := r.ReadCloser.(io.Seeker); ok {
+		return seeker.Seek(offset, whence)
+	}
+	return 0, errors.NewProcessingError("[File] underlying reader does not implement io.Seeker")
+}
+
 func (r *semaphoreReadCloser) Close() error {
 	defer r.once.Do(releaseReadPermit)
 	// Always release the semaphore permit exactly once, even if close fails.

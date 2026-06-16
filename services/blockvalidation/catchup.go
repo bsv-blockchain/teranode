@@ -811,7 +811,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	var writeJobsChan chan *SubtreeWriteJob
 
 	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
-	// If the FSM rejects the transition (e.g. node is LEGACYSYNCING), the error propagates
+	// If the FSM rejects the transition, the error propagates
 	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
 	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
 		return err

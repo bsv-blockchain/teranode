@@ -2,10 +2,9 @@ package repository
 
 import (
 	"context"
-	"errors" //nolint:depguard
-	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // FindBlocksContainingSubtree finds all blocks that contain the specified subtree.
@@ -22,17 +21,17 @@ import (
 //   - error: Any error encountered during the search
 func (repo *Repository) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
 	if subtreeHash == nil {
-		return nil, nil, nil, errors.New("subtree hash cannot be nil")
+		return nil, nil, nil, errors.NewInvalidArgumentError("subtree hash cannot be nil")
 	}
 
 	// Check if subtree exists
 	exists, err := repo.GetSubtreeExists(ctx, subtreeHash)
 	if err != nil {
-		return nil, nil, nil, errors.New(fmt.Sprintf("failed to check subtree existence: %s", err.Error()))
+		return nil, nil, nil, errors.NewStorageError("failed to check subtree existence", err)
 	}
 
 	if !exists {
-		return nil, nil, nil, errors.New(fmt.Sprintf("subtree with hash %s does not exist", subtreeHash.String()))
+		return nil, nil, nil, errors.NewSubtreeNotFoundError("subtree with hash %s does not exist", subtreeHash.String())
 	}
 
 	// Use the blockchain client to find blocks containing this subtree
@@ -42,11 +41,11 @@ func (repo *Repository) FindBlocksContainingSubtree(ctx context.Context, subtree
 
 	blocks, err := repo.BlockchainClient.FindBlocksContainingSubtree(ctx, subtreeHash, maxSearchBlocks)
 	if err != nil {
-		return nil, nil, nil, errors.New(fmt.Sprintf("failed to find blocks containing subtree: %s", err.Error()))
+		return nil, nil, nil, errors.NewStorageError("failed to find blocks containing subtree", err)
 	}
 
 	if len(blocks) == 0 {
-		return nil, nil, nil, errors.New(fmt.Sprintf("subtree %s not found in any recent blocks", subtreeHash.String()))
+		return nil, nil, nil, errors.NewSubtreeNotFoundError("subtree %s not found in any recent blocks", subtreeHash.String())
 	}
 
 	// Process the blocks to extract IDs, heights, and find subtree indices

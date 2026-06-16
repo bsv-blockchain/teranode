@@ -90,7 +90,7 @@ Usage: teranode-cli <command> [options]
 | `validate-utxo-set`  | Validate UTXO set file        | `--verbose` - Enable verbose output showing individual UTXOs     |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
-|                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+|                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks |
 | `reconsiderblock`    | Reconsider an invalid block   | `<blockhash>` - Hash of the block to reconsider                 |
 | `resetblockassembly` | Reset block assembly state    | `--full-reset` - Perform full reset including clearing mempool  |
 
@@ -201,7 +201,7 @@ teranode-cli setfsmstate --fsmstate=<state>
 Options:
 
 - `--fsmstate`: Target FSM state (required)
-    - Valid values: running, idle, catchingblocks, legacysyncing
+    - Valid values: running, idle, catchingblocks
 
 ### Export Blocks
 

@@ -2162,26 +2162,30 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	//     - Fetch the 10,000 most-recent main-chain block IDs via
 	//       GetBlockHeaderIDs.
 	//     - Build a local map and check each tx's parent block IDs
-	//       against it (present ⇒ on chain).
+	//       against it. Membership in a freshly-fetched main-chain set is a
+	//       SOUND positive: a present id is on chain.
 	//     - The window is truncated, so on a miss fall back to a per-tx
 	//       CheckBlockIsInCurrentChain RPC.
 	//
-	//   OFF-CHAIN PREFETCH (checkOldBlockIDsOffChainPrefetch, gated by toggle):
-	//     - Fetch the *complete* off-chain (forked) block ID set once via
-	//       OffChainBlockIDs and check non-membership (absent ⇒ on chain).
-	//     - The set is complete, not a recent window, so one prefetch
-	//       resolves every tx locally with no "too old" miss.
+	//   IN-MEMORY CHAIN CHECK (checkOldBlockIDsInMemoryChainCheck, gated by
+	//   blockchain_use_in_memory_chain_check):
+	//     - Holds NO local set. Every distinct parent-block-ID set is resolved
+	//       by the authoritative CheckBlockIsInCurrentChain, which uses the
+	//       store's in-memory off-chain set as a fast negative filter and then
+	//       confirms survivors against on_main_chain in one self-consistent
+	//       snapshot. The off-chain (negative) set cannot prove on-chain
+	//       membership, so it must not drive a local accept (see #1055).
 	//
 	// The on-chain prefetch fetches an unbounded, ever-growing positive set
 	// and was a sensible amortisation when CheckBlockIsInCurrentChain was a
-	// recursive SQL CTE per call. When blockchain_use_in_memory_chain_check is
-	// true, the store maintains the small off-chain set in memory, so the
-	// off-chain prefetch fetches a tiny negative set and answers locally —
-	// one round-trip per block on any client topology. Live profiling on
-	// betfair-pc mainnet showed the on-chain prefetch holding ~35% of inuse
+	// recursive SQL CTE per call. With blockchain_use_in_memory_chain_check the
+	// store answers CheckBlockIsInCurrentChain from its in-memory off-chain set
+	// (no recursive CTE), so this route can defer every decision to that single
+	// authority without re-fetching anything into this service. Live profiling
+	// on betfair-pc mainnet showed the on-chain prefetch holding ~35% of inuse
 	// heap (464 MB) and ~16% of CPU on its own.
 	if u.settings != nil && u.settings.BlockChain.UseInMemoryChainCheck {
-		return u.checkOldBlockIDsOffChainPrefetch(ctx, oldBlockIDsMap, block)
+		return u.checkOldBlockIDsInMemoryChainCheck(ctx, oldBlockIDsMap, block)
 	}
 
 	lookupHash := block.Header.HashPrevBlock
@@ -2224,115 +2228,42 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	return
 }
 
-// checkOldBlockIDsOffChainPrefetch is the off-chain-prefetch variant of
-// checkOldBlockIDs (see checkOldBlockIDs for the strategy comparison).
+// checkOldBlockIDsInMemoryChainCheck is the in-memory-chain-check variant of
+// checkOldBlockIDs (gated by blockchain_use_in_memory_chain_check). It answers
+// the same per-tx question — "is at least one of this tx's parent block IDs on
+// the current main chain?" — but, unlike the default on-chain-prefetch route,
+// holds NO local set: every distinct parent-block-ID set is resolved by the
+// authoritative CheckBlockIsInCurrentChain.
 //
-// It answers the same per-tx question — "is at least one of this tx's
-// parent block IDs on the current main chain?" — but mirrors the on-chain
-// prefetch route with the set inverted:
+// #1055: the earlier version prefetched the off-chain (forked) set once via
+// OffChainBlockIDs and treated a parent absent from that set as on-chain. That
+// is UNSOUND — a non-existent (phantom / id-sequence-gap) id <= maxBlockID is
+// absent from the off-chain set yet has no on_main_chain row, so a
+// useInMemoryChainCheck=on node ACCEPTED a dangling id the authoritative store
+// route (and an off node) REJECTS: a chain-split. The off-chain (negative) set
+// can never prove on-chain membership, so it cannot drive a sound local accept.
 //
-//   - The on-chain route fetches the 10,000 most-recent *main-chain* block
-//     IDs and checks membership (parent ID present ⇒ on chain). Because that
-//     window is truncated, a miss may still be on an older part of the chain
-//     and forces a per-tx CheckBlockIsInCurrentChain RPC.
-//   - This route fetches the *complete* off-chain (forked) set once via
-//     OffChainBlockIDs and checks non-membership. The set is complete, not a
-//     recent window, so there is no "too old" miss: one prefetch resolves
-//     every tx locally.
-//
-// To stay consensus-equivalent with CheckBlockIsInCurrentChain, the local
-// check applies BOTH of the rules the authoritative path applies
-// (CheckBlockIsInCurrentChain.go): a block ID is on the main chain iff
-// (id <= maxBlockID) AND (id is not in the off-chain set). The id > maxBlockID
-// guard is essential — an ID can be allocated (GetNextBlockID) and written into
-// a tx's BlockIDs before AddBlock bumps maxBlockID, so without the guard a
-// fastPath that treated such an id as on-chain would accept a tx the
-// authoritative RPC rejects, a chain-split risk between toggled and untoggled
-// nodes. With the guard, an above-max id is skipped here and falls through to
-// the RPC, which rejects it identically.
-//
-// This costs exactly one round-trip per block regardless of client topology
-// (in-process LocalClient or gRPC), which is the whole point — calling
-// CheckBlockIsInCurrentChain per candidate set is free in-process but a
-// network round-trip per set under a gRPC client. The off-chain set is small
-// (bounded by fork activity, near-empty on a healthy chain), so the prefetch
-// payload and the local map stay tiny.
-//
-// When the store reports rebuilding (in-memory check disabled, or a
-// reorg/startup rebuild in progress) the off-chain set is stale, so we fall
-// back to the per-tx CheckBlockIsInCurrentChain path (which has its own
-// authoritative SQL fallback). CheckBlockIsInCurrentChain also remains the
-// lookup authority on a fast-path miss, so a block is only rejected after the
-// store confirms none of a tx's parents are on chain.
-//
-// The string-keyed dedupe cache from the original is kept because identical
-// blockIDs slices are common (sibling txs spending outputs from the same
-// parent block).
-func (u *BlockValidation) checkOldBlockIDsOffChainPrefetch(ctx context.Context,
+// CheckBlockIsInCurrentChain is the single authority: it applies the store's
+// in-memory off-chain set + maxBlockID as a fast negative filter AND confirms
+// survivors against the on_main_chain flag in one self-consistent snapshot
+// (stores/blockchain/sql/CheckBlockIsInCurrentChain.go), so it cannot diverge
+// from the always-SQL route. Deferring every decision to it — rather than
+// caching a prefetched set in this service and deciding locally — also avoids
+// the snapshot-skew window a local decision would carry across a concurrent
+// reorg (a stale "off-chain" classification could wrongly reject, the more
+// dangerous direction, since an invalid block is cached). The per-call dedupe
+// cache collapses identical parent-block-ID sets (sibling txs spending outputs
+// from the same parent block), so this is one authoritative lookup per DISTINCT
+// set, not per tx.
+func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context,
 	oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block,
 ) (iterationError error) {
-	offChainIDs, maxBlockID, rebuilding, err := u.blockchainClient.OffChainBlockIDs(ctx)
-	if err != nil {
-		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get off-chain block IDs", block.String(), err)
-	}
-
-	if rebuilding {
-		// Off-chain set unavailable or stale — resolve each tx with the
-		// authoritative per-tx RPC (no local prefetch map).
-		if u.logger != nil {
-			u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route (rebuilding fallback): per-tx lookup over %d old block ID entries", block.Hash().String(), oldBlockIDsMap.Length())
-		}
-
-		iterErr, _, lookupCount, cacheHitCount :=
-			u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.blockchainClient.CheckBlockIsInCurrentChain)
-
-		if u.logger != nil {
-			u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route (rebuilding fallback) done: lookup=%d, cacheHit=%d", block.Hash().String(), lookupCount, cacheHitCount)
-		}
-
-		return iterErr
-	}
-
-	offChain := make(map[uint32]struct{}, len(offChainIDs))
-	for _, id := range offChainIDs {
-		offChain[id] = struct{}{}
-	}
+	iterationError, _, lookupCount, cacheHitCount :=
+		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.blockchainClient.CheckBlockIsInCurrentChain)
 
 	if u.logger != nil {
-		u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route: prefetched %d off-chain block IDs (maxBlockID=%d), checking %d old block ID entries", block.Hash().String(), len(offChain), maxBlockID, oldBlockIDsMap.Length())
-	}
-
-	// NOTE (Option C / consensus): this local fast path treats a candidate absent
-	// from the off-chain set as on-chain. That is UNSOUND for a non-existent
-	// (phantom / id-sequence gap) id <= maxBlockID, which is absent from the
-	// off-chain set yet has no on_main_chain row — the authoritative store route
-	// (CheckBlockIsInCurrentChain, now fixed) rejects it. This toggle-on
-	// optimization therefore still carries the latent split for dangling ids.
-	// Making it sound removes the positive short-circuit (every survivor would
-	// need an authoritative confirm), which obsoletes this profiled prefetch — a
-	// perf/design call left for the team. Phantom CREATION is already prevented by
-	// the idempotent AssignBlockID fix, so this is latent, not reachable in normal
-	// operation.
-	fastPath := func(blockIDs []uint32) bool {
-		for _, blockID := range blockIDs {
-			if blockID > maxBlockID {
-				continue
-			}
-
-			if _, isOffChain := offChain[blockID]; !isOffChain {
-				return true
-			}
-		}
-
-		return false
-	}
-
-	iterationError, fastPathCount, lookupCount, cacheHitCount :=
-		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, fastPath, u.blockchainClient.CheckBlockIsInCurrentChain)
-
-	if u.logger != nil {
-		u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route done: fastPath=%d, lookup=%d, cacheHit=%d", block.Hash().String(), fastPathCount, lookupCount, cacheHitCount)
+		u.logger.Infof("[checkOldBlockIDs][%s] in-memory-chain-check route (authoritative per-set lookup): lookup=%d, cacheHit=%d", block.Hash().String(), lookupCount, cacheHitCount)
 	}
 
 	return iterationError
@@ -2340,13 +2271,14 @@ func (u *BlockValidation) checkOldBlockIDsOffChainPrefetch(ctx context.Context,
 
 // iterateOldBlockIDsWithCachedLookup is the shared per-tx iterator used by
 // both checkOldBlockIDs (on-chain prefetch route) and
-// checkOldBlockIDsOffChainPrefetch (off-chain prefetch route). For each
-// (txID, blockIDs) entry it:
+// checkOldBlockIDsInMemoryChainCheck (which passes a nil fastPath and defers
+// every set to the lookup). For each (txID, blockIDs) entry it:
 //
 //  1. Rejects an empty blockIDs slice as a processing error.
 //  2. (prefetch only) invokes fastPath(blockIDs) and short-circuits true if
-//     a parent is already known on-chain. fastPath may be nil to skip this
-//     step (the no-prefetch route passes nil).
+//     a parent is already known on-chain via a SOUND positive set. fastPath
+//     may be nil to skip this step, in which case every set is resolved by the
+//     authoritative lookup (the in-memory-chain-check route passes nil).
 //  3. Builds a sorted string key from blockIDs and consults a per-call
 //     dedupe cache. Identical blockIDs slices across sibling txs (a parent
 //     block referenced by many children) hit the cache and skip the lookup.

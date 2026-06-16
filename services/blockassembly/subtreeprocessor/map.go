@@ -3,17 +3,29 @@ package subtreeprocessor
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/dolthub/swiss"
 )
 
 type SplitSwissMap struct {
-	m           map[uint16]*swiss.Map[chainhash.Hash, struct{}]
-	mu          map[uint16]*sync.RWMutex
+	// m and mu are dense, indexed by bucket (0..nrOfBuckets-1). Slices, not
+	// map[uint16]: with hundreds of millions of operations per block, the
+	// per-op Go-map lookup (hash + probe of the bucket key) showed up at ~5%
+	// of insert CPU in profiles; a slice index is free.
+	m           []*swiss.Map[chainhash.Hash, struct{}]
+	mu          []*sync.RWMutex
 	nrOfBuckets uint16
+
+	// frozen marks the map read-only: Exists skips the per-bucket RLock and
+	// the write methods fail. The caller must join all writers before calling
+	// Freeze — that join is the happens-before edge that makes bucket contents
+	// safe for lock-free readers. Clear un-freezes for pool reuse.
+	frozen atomic.Bool
 }
 
 // swissBucketHeadroomNumerator / swissBucketHeadroomDenominator give the
@@ -46,8 +58,8 @@ const swissBucketHeadroomDenominator = 10
 // Returns:
 //   - A pointer to the newly created SplitSwissMap.
 func NewSplitSwissMap(nrOfBuckets uint16, length int) *SplitSwissMap {
-	m := make(map[uint16]*swiss.Map[chainhash.Hash, struct{}], nrOfBuckets)
-	mu := make(map[uint16]*sync.RWMutex, nrOfBuckets)
+	m := make([]*swiss.Map[chainhash.Hash, struct{}], nrOfBuckets)
+	mu := make([]*sync.RWMutex, nrOfBuckets)
 
 	perBucketSizeHint := length / int(nrOfBuckets)
 	if perBucketSizeHint > 0 {
@@ -79,10 +91,26 @@ func NewSplitSwissMap(nrOfBuckets uint16, length int) *SplitSwissMap {
 // not serialise on each other; readers and writers within one bucket do.
 func (s *SplitSwissMap) Exists(hash chainhash.Hash) bool {
 	bucket := txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)
+
+	// Frozen maps have no writers (Put/PutMultiBucket are rejected), so the
+	// RLock — whose readerCount atomics dominate profiles at ~190 concurrent
+	// readers — can be skipped entirely.
+	if s.frozen.Load() {
+		_, ok := s.m[bucket].Get(hash)
+		return ok
+	}
+
 	s.mu[bucket].RLock()
 	_, ok := s.m[bucket].Get(hash)
 	s.mu[bucket].RUnlock()
 	return ok
+}
+
+// Freeze marks the map read-only. All writers must have finished (joined)
+// before this call; afterwards Exists reads lock-free and Put/PutMultiBucket
+// return an error. Clear lifts the freeze for pooled reuse.
+func (s *SplitSwissMap) Freeze() {
+	s.frozen.Store(true)
 }
 
 func (s *SplitSwissMap) Length() int {
@@ -102,6 +130,10 @@ func (s *SplitSwissMap) Buckets() uint16 {
 }
 
 func (s *SplitSwissMap) Put(hash chainhash.Hash) error {
+	if s.frozen.Load() {
+		return errors.NewProcessingError("SplitSwissMap is frozen, Put rejected for %s", hash.String())
+	}
+
 	bucket := txmap.Bytes2Uint16Buckets(hash, s.nrOfBuckets)
 
 	s.mu[bucket].Lock()
@@ -113,6 +145,10 @@ func (s *SplitSwissMap) Put(hash chainhash.Hash) error {
 }
 
 func (s *SplitSwissMap) PutMultiBucket(bucket uint16, hashes []chainhash.Hash) error {
+	if s.frozen.Load() {
+		return errors.NewProcessingError("SplitSwissMap is frozen, PutMultiBucket rejected for bucket %d", bucket)
+	}
+
 	s.mu[bucket].Lock()
 	defer s.mu[bucket].Unlock()
 
@@ -139,7 +175,16 @@ func (s *SplitSwissMap) Iter(f func(hash chainhash.Hash, v struct{}) bool) {
 // is memory-bandwidth-bound on its key/value/ctrl arrays, and with 1024
 // buckets the work is naturally embarrassingly parallel.
 func (s *SplitSwissMap) Clear() {
-	ncpu := runtime.NumCPU()
+	// Lift any freeze before clearing: the pooled map is recycled across
+	// blocks (fill → Freeze → read → Clear → fill ...), and the next block's
+	// inserts must succeed.
+	s.frozen.Store(false)
+
+	// GOMAXPROCS(0), not NumCPU(): this parallel clear is bandwidth-bound and
+	// should track runnable parallelism, matching ParallelBulkSetIfNotExists
+	// below and the inserter sizing — under a cgroup CPU quota NumCPU() reports
+	// host cores and oversubscribes.
+	ncpu := runtime.GOMAXPROCS(0)
 	if ncpu > int(s.nrOfBuckets) {
 		ncpu = int(s.nrOfBuckets)
 	}

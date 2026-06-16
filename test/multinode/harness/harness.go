@@ -218,6 +218,52 @@ func (s *Stack) Reset(t *testing.T) {
 	// Converge on some tip, whatever it is. Caller can use this as its
 	// baseline.
 	_ = WaitForConverged(t, s.Nodes(), 60*time.Second)
+
+	// Steady-state check: hold a clean RPC + matched-tip state for a short
+	// window before handing control back to the test body. Without this
+	// Reset would pass on the very first successful poll, which leaves it
+	// vulnerable to a service that briefly answers, then crashes / drops
+	// peers a second later under accumulated state from prior scenarios.
+	// Empirically observed: after a scenario fails mid-flight without
+	// running its cleanup, the next scenario's Reset would say "all RPCs
+	// ready" then fail in the test body with a connection-refused to a
+	// node we never touched.
+	s.waitSteady(t, 5*time.Second, 500*time.Millisecond)
+}
+
+// waitSteady polls every node's RPC at interval over window and returns once
+// every poll across the whole window has succeeded back-to-back. Any failure
+// resets the window. Useful as the final step of Reset to filter out
+// "just-started, about-to-crash" services that briefly answer ready and
+// then disappear before the test body needs them.
+func (s *Stack) waitSteady(t *testing.T, window, interval time.Duration) {
+	t.Helper()
+	clients := s.Nodes()
+	deadline := time.Now().Add(window + window) // hard cap so a permanently flaky stack still surfaces a failure
+	steadyStart := time.Now()
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		allOk := true
+		for _, c := range clients {
+			if err := c.Ready(ctx); err != nil {
+				allOk = false
+				break
+			}
+		}
+		cancel()
+		if allOk {
+			if time.Since(steadyStart) >= window {
+				return
+			}
+		} else {
+			steadyStart = time.Now()
+		}
+		if time.Now().After(deadline) {
+			t.Logf("waitSteady: stack did not hold steady for %s within %s; proceeding anyway", window, window*2)
+			return
+		}
+		time.Sleep(interval)
+	}
 }
 
 // Node returns an RPC client for node n (1-indexed).

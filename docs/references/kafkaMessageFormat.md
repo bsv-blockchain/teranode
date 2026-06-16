@@ -749,7 +749,7 @@ func handleTxValidationMessage(msg *kafka.Message) error {
 
 `kafka_txmetaConfig` is the Kafka topic used for broadcasting transaction metadata for validated transactions. This topic allows the Validator to either add new transaction metadata or request deletion of previously shared metadata.
 
-Unlike the other Teranode Kafka topics, the txmeta topic does **not** use protobuf. Each Kafka record carries a custom, length-prefixed binary batch of many entries so the producer can amortise the per-record overhead at high transaction rates (the throughput target is well into the millions of transactions per second). The wire-format constants are defined once in [`stores/txmetacache/wire.go`](../../stores/txmetacache/wire.go) and imported by the producer (`services/validator`) and every consumer (`services/subtreevalidation`, `services/legacy/netsync`).
+Unlike the other Teranode Kafka topics, the txmeta topic does **not** use protobuf. Each Kafka record carries a custom, length-prefixed binary batch of many entries so the producer can amortise the per-record overhead at high transaction rates (the throughput target is well into the millions of transactions per second). The wire-format constants are defined once in `stores/txmetacache/wire.go` and imported by the producer (`services/validator`) and every consumer (`services/subtreevalidation`, `services/legacy/netsync`).
 
 ### Wire Format
 

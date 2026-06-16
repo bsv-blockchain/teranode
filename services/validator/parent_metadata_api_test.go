@@ -323,3 +323,47 @@ func TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, gotOpts.ParentMetadata)
 }
+
+// TestUnconfirmedParentsAtCandidateHeight_WireRoundTrip pins the
+// client-build → wire → server-reconstruction path for the
+// unconfirmed_parents_at_candidate_height flag set by the legacy
+// CheckSubtreeFromBlock branch. A silently-dropped flag would reintroduce the
+// bad-txns-unconfirmed-input-in-block wedge on deployments with a remote
+// validator, so the mapping on both sides is pinned here.
+func TestUnconfirmedParentsAtCandidateHeight_WireRoundTrip(t *testing.T) {
+	t.Run("set flag survives build, marshal, and reconstruction", func(t *testing.T) {
+		opts := ProcessOptions(WithUnconfirmedParentsAtCandidateHeight(true))
+
+		req := buildValidateTxRequest([]byte{1, 2, 3}, 1730003, opts)
+		require.NotNil(t, req.UnconfirmedParentsAtCandidateHeight)
+		require.True(t, *req.UnconfirmedParentsAtCandidateHeight)
+
+		bytesOut, err := proto.Marshal(req)
+		require.NoError(t, err)
+
+		got := &validator_api.ValidateTransactionRequest{}
+		require.NoError(t, proto.Unmarshal(bytesOut, got))
+
+		reconstructed, err := optionsFromValidateRequest(got)
+		require.NoError(t, err)
+		require.True(t, reconstructed.UnconfirmedParentsAtCandidateHeight)
+	})
+
+	t.Run("default stays false through the round-trip", func(t *testing.T) {
+		opts := ProcessOptions()
+
+		req := buildValidateTxRequest([]byte{1, 2, 3}, 1730003, opts)
+		require.Nil(t, req.UnconfirmedParentsAtCandidateHeight,
+			"unset flag must not be put on the wire at all")
+
+		bytesOut, err := proto.Marshal(req)
+		require.NoError(t, err)
+
+		got := &validator_api.ValidateTransactionRequest{}
+		require.NoError(t, proto.Unmarshal(bytesOut, got))
+
+		reconstructed, err := optionsFromValidateRequest(got)
+		require.NoError(t, err)
+		require.False(t, reconstructed.UnconfirmedParentsAtCandidateHeight)
+	})
+}

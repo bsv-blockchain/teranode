@@ -259,7 +259,12 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 
 	/* recommend setting max connection to low number - don't hide a problem by allowing infinite connections.
 	This is sqlite, our local db, this isn't about performance. Use a small number. See the problem. Fail fast. */
-	// db.SetMaxOpenConns(5)
+	// Bound the SQLite pool. Left unbounded, each store's connections accumulate
+	// temp/page workspace in modernc.org/memory's global arena (which never returns
+	// pages to the OS), so under CI load (-race, -p=32) the per-binary peak RSS
+	// ratcheted unpredictably — the main driver of sql.test's bimodal ~2G/~34G swing
+	// and the intermittent OOM (#1051). SQLite serialises writes anyway, so 5 is ample.
+	db.SetMaxOpenConns(5)
 	return db, nil
 }
 

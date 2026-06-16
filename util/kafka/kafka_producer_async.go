@@ -42,6 +42,12 @@ type KafkaAsyncProducerI interface {
 
 	// Publish sends a message to the producer's channel
 	Publish(msg *Message)
+
+	// TryPublish performs a non-blocking send to the producer's channel. It returns
+	// false (dropping the message) if the channel is full or the producer is shutting
+	// down. Use for best-effort topics where blocking the caller's hot path on Kafka
+	// back-pressure is worse than losing a message.
+	TryPublish(msg *Message) bool
 }
 
 // defaultOuterBatcherLinger is the default time the outer async batcher
@@ -772,6 +778,21 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	if c.publishChannel != nil {
 		util.SafeSend(c.publishChannel, msg)
 	}
+}
+
+// TryPublish performs a non-blocking send to the producer's publish channel. It returns
+// false if the producer is shutting down or the channel buffer is full, dropping the
+// message rather than blocking the caller. Best-effort callers should treat a false
+// return as "not published" and fall back accordingly.
+func (c *KafkaAsyncProducer) TryPublish(msg *Message) bool {
+	c.channelMu.RLock()
+	defer c.channelMu.RUnlock()
+
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
+		return false
+	}
+
+	return util.TrySend(c.publishChannel, msg)
 }
 
 // createTopicWithFranz creates a new Kafka topic with the specified configuration.

@@ -150,33 +150,52 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Is reports whether error codes match.
+// maxIsChainDepth bounds the chain walk in (*Error).Is as insurance against a
+// cycle that slipped past SetWrappedErr's guards. Far above any legitimate
+// chain depth.
+const maxIsChainDepth = 1 << 20
+
+// Is reports whether any error in e's wrapped chain matches target's code.
+//
+// Implemented as a flat loop. The previous implementation recursed into the
+// remaining chain at every level — and the stdlib errors.Is driver already
+// invokes this method once per unwrap level — giving O(N²) reflection-based
+// errors.As calls for an N-link chain. A mass spend failure on a
+// high-input-count tx produced chains tens of thousands of links deep,
+// turning a single errors.Is into CPU-hours (mainnet IBD stall, block 820116).
 func (e *Error) Is(target error) bool {
 	if e == nil || target == nil {
 		return false
 	}
 
-	var targetError *Error
-	ok := errors.As(target, &targetError)
-	if !ok {
-		// fmt.Println("Target is not of type *Error, checking \ne.Error()", e.Error(), "contains() target.Error():\n", target.Error())
+	// Resolve the target *Error once, not per chain link.
+	targetError, ok := target.(*Error)
+	if !ok && !errors.As(target, &targetError) {
+		// Target is not an *Error: fall back to substring matching on the
+		// rendered message. Error() truncates the chain at a fixed depth, so
+		// this stays bounded even for pathological chains.
 		return strings.Contains(e.Error(), target.Error())
 	}
 
-	if e.code == targetError.code {
-		return true
-	}
-
-	if e.wrappedErr == nil {
-		return false
-	}
-
-	// Unwrap the current error and recursively call Is on the unwrapped error
-	if unwrapped := errors.Unwrap(e); unwrapped != nil {
-		var ue *Error
-		if errors.As(unwrapped, &ue) {
-			return ue.Is(target)
+	for cur, depth := e, 0; cur != nil && depth < maxIsChainDepth; depth++ {
+		if cur.code == targetError.code {
+			return true
 		}
+
+		if cur.wrappedErr == nil {
+			return false
+		}
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			// Non-*Error link: let errors.As dig through foreign wrappers to
+			// the next *Error, mirroring the previous unwrap behaviour.
+			if !errors.As(cur.wrappedErr, &next) {
+				return false
+			}
+		}
+
+		cur = next
 	}
 
 	return false
@@ -238,6 +257,14 @@ func (e *Error) SetWrappedErr(err error) {
 	lastErr := e
 
 	for lastErr.wrappedErr != nil {
+		// Fast path: direct *Error link, no reflection. Appending to an N-link
+		// chain via errors.As cost O(N) reflection calls per append — O(N²) to
+		// build a chain through repeated appends (the errors.Join loop shape).
+		if next, ok := lastErr.wrappedErr.(*Error); ok {
+			lastErr = next
+			continue
+		}
+
 		if errors.As(lastErr.wrappedErr, &lastWrappedErr) {
 			lastErr = lastWrappedErr
 		} else {
@@ -893,12 +920,65 @@ func Join(errs ...error) error {
 	return errors.New(strings.Join(messages, ", "))
 }
 
+// JoinCapped combines errors like Join but keeps at most maxErrs wrapped
+// links; the remainder is summarized by count in a final link. Use it for
+// per-item failure aggregation (batch spends, batch record updates) where the
+// item count is unbounded: every link makes each subsequent errors.Is walk
+// longer, gRPC serialization carries the whole chain, and nobody consumes
+// more than the first few links anyway.
+func JoinCapped(maxErrs int, errs ...error) error {
+	if maxErrs <= 0 {
+		maxErrs = 1
+	}
+
+	kept := make([]error, 0, min(len(errs), maxErrs+1))
+	total := 0
+
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+
+		total++
+
+		if len(kept) < maxErrs {
+			kept = append(kept, err)
+		}
+	}
+
+	if total == 0 {
+		return nil
+	}
+
+	if total > maxErrs {
+		kept = append(kept, NewError(fmt.Sprintf("... and %d more errors", total-maxErrs)))
+	}
+
+	return Join(kept...)
+}
+
 // Is checks if the error matches the target error.
 func Is(err, target error) bool {
 	origErr := err
 
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// Fast path: both sides are *Error — one flat O(N) chain walk.
+	// Letting the stdlib errors.Is drive instead invokes (*Error).Is once per
+	// unwrap level, each walking the remaining chain: O(N²) on deep chains.
+	// (*Error).Is digs through foreign (non-*Error) links via errors.As, so
+	// the only behaviour given up is a foreign error type whose own Is method
+	// matches a teranode *Error target — a shape that does not exist here.
+	if e, ok := err.(*Error); ok {
+		if t, ok := target.(*Error); ok {
+			if e.Is(t) {
+				return true
+			}
+
+			return checkGRPCContextError(origErr, err, target)
+		}
 	}
 
 	if errors.Is(err, target) {

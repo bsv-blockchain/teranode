@@ -31,7 +31,7 @@ func TestNew_MissingKafkaConfig(t *testing.T) {
 	settings := test.CreateBaseTestSettings(t)
 	settings.Kafka.TxMetaConfig = nil // Missing Kafka config
 
-	_, err := New(ctx, logger, settings, nil, nil, nil, nil, nil)
+	_, err := New(ctx, logger, settings, nil, nil, nil, nil, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing Kafka URL for txmeta")
 }
@@ -45,7 +45,7 @@ func TestNew_BlockAssemblyDisabled(t *testing.T) {
 	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.Disabled = true // Block assembly disabled
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, validator)
 
@@ -67,7 +67,7 @@ func TestNew_BlockAssemblyEnabled(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, validator)
 
@@ -83,7 +83,7 @@ func TestValidator_Health_Liveness(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	code, message, err := validator.Health(context.Background(), true)
@@ -104,7 +104,7 @@ func TestValidator_Health_Readiness(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	code, _, _ := validator.Health(ctx, false)
@@ -126,7 +126,7 @@ func TestValidator_GetBlockHeight(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// NullStore returns 0 as default height
@@ -141,7 +141,7 @@ func TestValidator_GetMedianBlockTime(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// NullStore returns 0 as default median time
@@ -165,7 +165,7 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction using the transactions helper
@@ -194,7 +194,7 @@ func TestValidator_TriggerBatcher(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// This is a no-op function, just verify it doesn't panic
@@ -208,7 +208,7 @@ func TestValidator_ValidateInternal_CoinbaseTransaction(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create coinbase transaction
@@ -236,7 +236,7 @@ func TestValidator_ExtendTransaction_Coinbase(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create coinbase transaction
@@ -261,7 +261,7 @@ func TestValidator_ExtendTransaction_NonCoinbase(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create non-coinbase transaction
@@ -287,7 +287,7 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create non-extended transaction
@@ -304,6 +304,35 @@ func TestValidator_ValidateTransaction_NotExtended(t *testing.T) {
 	options := &Options{}
 
 	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
+	// Should error trying to extend transaction since parent doesn't exist
+	assert.Error(t, err)
+}
+
+func TestValidator_ValidateTransactionScripts_NotExtended(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	nullStore, _ := nullstore.NewNullStore()
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	// Create non-extended transaction
+	tx := bt.NewTx()
+	prevHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	input := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xfffffffe,
+	}
+	_ = input.PreviousTxIDAdd(prevHash)
+	tx.Inputs = append(tx.Inputs, input)
+
+	v := validator.(*Validator)
+	options := &Options{}
+
+	err = v.validateTransaction(ctx, tx, 100, []uint32{99}, options)
+	// Should error trying to extend transaction since parent doesn't exist
 	assert.Error(t, err)
 }
 
@@ -314,7 +343,7 @@ func TestValidator_CreateInUtxoStore(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction
@@ -337,7 +366,7 @@ func TestValidator_SendTxMetaToKafka_NilProducer(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction
@@ -366,7 +395,7 @@ func TestValidator_ReverseSpends_Success(t *testing.T) {
 	nullStore, _ := nullstore.NewNullStore()
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, nullStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -384,7 +413,7 @@ func TestValidator_ReverseSpends_WithRetries(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -415,7 +444,7 @@ func TestValidator_ReverseSpends_WithRetriesAndFailure(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -447,7 +476,7 @@ func TestValidator_ReverseSpends_AllRetriesFail(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -479,7 +508,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -533,7 +562,7 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -585,7 +614,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -630,7 +659,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound_NotInStore(t *te
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -674,7 +703,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_GeneralError(t *testing.T) 
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -716,7 +745,7 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -760,7 +789,7 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -830,7 +859,7 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 		settings := test.CreateBaseTestSettings(t)
 
-		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 		require.NoError(t, err)
 		v := validator.(*Validator)
 
@@ -927,7 +956,7 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	v := validator.(*Validator)
 
@@ -969,7 +998,7 @@ func TestValidator_Health_BlockHeight_Zero_Coverage(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
@@ -999,7 +1028,7 @@ func TestValidator_Health_BlockHeight_Valid_Default_Coverage(t *testing.T) {
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil)
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)

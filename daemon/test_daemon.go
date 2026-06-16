@@ -582,9 +582,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		case blockchain.FSMStateCATCHINGBLOCKS:
 			err = blockchainClient.CatchUpBlocks(ctx)
 			require.NoError(t, err)
-		case blockchain.FSMStateLEGACYSYNCING:
-			err = blockchainClient.LegacySync(ctx)
-			require.NoError(t, err)
 		}
 	}
 

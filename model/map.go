@@ -11,7 +11,11 @@ import (
 // ParentSpendsMap is the interface for tracking spent inpoints during block validation.
 // Both SplitSyncedParentMap (in-memory) and DiskParentSpendsMap (disk-backed) implement this.
 type ParentSpendsMap interface {
-	SetIfNotExists(inpoint subtreepkg.Inpoint) bool
+	// SetIfNotExists records the inpoint. inserted=true means newly recorded;
+	// inserted=false means it was already present (a duplicate spend). A non-nil
+	// error indicates a storage/capacity failure and MUST halt validation — the
+	// caller must not treat an error as either "new" or "duplicate".
+	SetIfNotExists(inpoint subtreepkg.Inpoint) (inserted bool, err error)
 }
 
 type swissInpointBucket struct {
@@ -41,7 +45,7 @@ func NewSplitSyncedParentMap(nrOfBuckets uint16, expectedInpoints ...uint64) *Sp
 	return s
 }
 
-func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) bool {
+func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) (bool, error) {
 	idx := txmap.Bytes2Uint16Buckets(inpoint.Hash, s.nrOfBuckets)
 	b := &s.buckets[idx]
 
@@ -49,12 +53,12 @@ func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) bool {
 	defer b.mu.Unlock()
 
 	if b.m.Has(inpoint) {
-		return false
+		return false, nil
 	}
 
 	b.m.Put(inpoint, struct{}{})
 
-	return true
+	return true, nil
 }
 
 // Clear empties every bucket without releasing the per-bucket dolthub/swiss

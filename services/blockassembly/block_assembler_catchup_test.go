@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
@@ -256,5 +257,76 @@ func TestProcessNewBlockAnnouncement_CatchupVsReorg(t *testing.T) {
 		currentHeader, currentHeight := items.blockAssembler.CurrentBlock()
 		require.Equal(t, genesis.Hash().String(), currentHeader.Hash().String(), "BA tip must stay at pre-catchup state after Reorg error")
 		require.Equal(t, uint32(0), currentHeight, "BA height must stay at pre-catchup height after Reorg error")
+	})
+}
+
+// TestBlockAssembler_Reset_FastForwardGatedOnCheckpoint verifies that the
+// SubtreeProcessor.Reset fast-forward flag (4th positional arg) is gated on the
+// highest checkpoint height: the reset target's height must be at/below the
+// highest checkpoint for the fast-forward path to be taken. The reset target
+// height is meta.Height inside BlockAssembler.reset (the blockchain store tip),
+// so each sub-case seeds the store to the desired tip height via buildChain/
+// addChain — the same fixture mechanism the catch-up/reorg tests above use —
+// and then drives the reset path directly.
+func TestBlockAssembler_Reset_FastForwardGatedOnCheckpoint(t *testing.T) {
+	initPrometheusMetrics()
+
+	cpHash := &chainhash.Hash{}
+
+	// Highest checkpoint at 100, reset target height <= 100 → fast-forward (true).
+	t.Run("at or below checkpoint -> fast-forward", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		// Checkpoint at height 100. HighestCheckpointHeight reads only .Height.
+		items.blockAssembler.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
+			{Height: 100, Hash: cpHash},
+		}
+
+		// Store tip at height 2 (<= 100): this is the reset target meta.Height.
+		chain := buildChain(genesis, 2, 11000)
+		addChain(t, items, chain)
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, true, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{})
+		// GetCurrentBlockHeader is only consulted on the Reset error path; not expected here.
+		injectMockStp(t, items, mockStp)
+
+		// BA parked at genesis so getReorgBlocks yields a pure forward set to the store tip.
+		items.blockAssembler.setBestBlockHeader(genesis, 0)
+
+		require.NoError(t, items.blockAssembler.reset(t.Context()))
+
+		// 4th arg true => useFastForwardReset (target height <= highest checkpoint).
+		mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, true, mock.Anything)
+	})
+
+	// Highest checkpoint at 100, reset target height > 100 → full reset (false).
+	t.Run("above checkpoint -> full reset", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		items.blockAssembler.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
+			{Height: 100, Hash: cpHash},
+		}
+
+		// Store tip at height 101 (> 100): reset target meta.Height exceeds the checkpoint.
+		chain := buildChain(genesis, 101, 12000)
+		addChain(t, items, chain)
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, false, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{})
+		injectMockStp(t, items, mockStp)
+
+		items.blockAssembler.setBestBlockHeader(genesis, 0)
+
+		require.NoError(t, items.blockAssembler.reset(t.Context()))
+
+		// 4th arg false => full reset (target height > highest checkpoint).
+		mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, false, mock.Anything)
 	})
 }

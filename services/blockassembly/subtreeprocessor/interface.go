@@ -134,11 +134,11 @@ type Interface interface {
 	//   - blockHeader: Target block header to reset to
 	//   - moveBackBlocks: Blocks to be removed during reset
 	//   - moveForwardBlocks: Blocks to be added during reset
-	//   - isLegacySync: Whether this is part of legacy synchronization
+	//   - useFastForwardReset: Whether to use fast-forward reset (coinbase-only UTXO processing) for checkpoint-trusted blocks
 	//
 	// Returns:
 	//   - ResetResponse: Response containing reset operation results
-	Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool, postProcess func() error) ResetResponse
+	Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse
 
 	// Remove removes a specific transaction from the processor by its hash.
 	// This is used when transactions become invalid or need to be excluded.

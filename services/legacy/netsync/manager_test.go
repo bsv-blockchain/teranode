@@ -5,12 +5,16 @@
 package netsync
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -27,6 +31,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
@@ -91,7 +97,7 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		return errors.NewServiceError("failed to create utxo store", err)
 	}
 
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create validator client", err)
 	}
@@ -1044,6 +1050,71 @@ func TestHandleCheckSyncPeer_LocalBacklog(t *testing.T) {
 	})
 }
 
+// TestProcessTXmetaBatchMessage_SkipsInBlockTx verifies the tx announce path
+// drops txmeta entries flagged InBlock. The txmeta Kafka topic carries every
+// validated transaction — including those that arrived as part of a block or
+// announced subtree (block validation, subtree validation, legacy sync, which
+// feed the subtree-validation cache) — and announcing those as fresh mempool
+// txs floods peers with getdata for transactions that are long mined and
+// often already pruned.
+func TestProcessTXmetaBatchMessage_SkipsInBlockTx(t *testing.T) {
+	inBlockHash := chainhash.Hash{0xAA}
+	mempoolHash := chainhash.Hash{0xBB}
+
+	inBlockBytes, err := (&meta.Data{Fee: 1, SizeInBytes: 100, InBlock: true}).MetaBytes()
+	require.NoError(t, err)
+
+	mempoolBytes, err := (&meta.Data{Fee: 2, SizeInBytes: 200}).MetaBytes()
+	require.NoError(t, err)
+
+	// Build a v1 wire message with both entries.
+	buf := new(bytes.Buffer)
+	require.NoError(t, binary.Write(buf, binary.LittleEndian, uint32(2)))
+
+	for _, entry := range []struct {
+		hash    chainhash.Hash
+		content []byte
+	}{
+		{inBlockHash, inBlockBytes},
+		{mempoolHash, mempoolBytes},
+	} {
+		buf.Write(entry.hash[:])
+		buf.WriteByte(txmetacache.WireActionADD)
+		require.NoError(t, binary.Write(buf, binary.LittleEndian, uint32(len(entry.content))))
+		buf.Write(entry.content)
+	}
+
+	var (
+		mu        sync.Mutex
+		announced []chainhash.Hash
+	)
+
+	sm := &SyncManager{logger: ulogger.TestLogger{}}
+	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](10, 10*time.Millisecond, func(batch []*TxHashAndFee) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, item := range batch {
+			announced = append(announced, item.TxHash)
+		}
+	}, true)
+
+	require.NoError(t, sm.processTXmetaBatchMessage(buf.Bytes()))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(announced) > 0
+	}, 2*time.Second, 10*time.Millisecond, "expected the mempool tx to be announced")
+
+	// Give the batcher one more flush window so a wrongly-announced in-block
+	// tx would have surfaced.
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []chainhash.Hash{mempoolHash}, announced, "only the mempool tx must be announced")
+}
+
 func TestHasHealthyDownloadThroughput(t *testing.T) {
 	const minSpeed = 51200 // 50 KiB/s, matches default minSyncPeerNetworkSpeed
 
@@ -1160,6 +1231,75 @@ func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
 
 	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
 	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
+}
+
+// TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks verifies that EVERY peer
+// connecting while the node is catching up is asked (via a raised feefilter) to
+// hold back transaction announcements, reducing load during sync. It asserts the
+// observable behaviour — the feefilter message is actually delivered to each
+// peer's remote end — not just the internal marker, and covers the second peer
+// (regression guard: an earlier version only raised it for the first connector).
+// The filter is restored to the policy default once the node reaches RUNNING
+// (resetFeeFilterToDefault).
+func TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return(&catchingBlocks, nil)
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// connectPeer returns a peer for handleNewPeerMsg to operate on; gotFee
+	// records the MinFee of any feefilter its remote end receives.
+	connectPeer := func(idx uint8, gotFee *atomic.Int64) *peer.Peer {
+		remoteCfg := peer.Config{
+			Listeners: peer.MessageListeners{
+				OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+					gotFee.Store(msg.MinFee)
+				},
+			},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		localCfg := peer.Config{
+			Listeners:        peer.MessageListeners{},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, idx)
+		require.NoError(t, err)
+		require.True(t, remote.Connected())
+		return smPeer
+	}
+
+	var fee1, fee2 atomic.Int64
+	p1 := connectPeer(101, &fee1)
+	p2 := connectPeer(102, &fee2)
+
+	sm.handleNewPeerMsg(p1)
+	sm.handleNewPeerMsg(p2)
+
+	want := int64(bsvutil.SatoshiPerBitcoin)
+	require.True(t, WaitUntil(func() bool { return fee1.Load() == want }, 2*time.Second),
+		"first peer must receive the raised feefilter")
+	require.True(t, WaitUntil(func() bool { return fee2.Load() == want }, 2*time.Second),
+		"second peer must also receive the raised feefilter, not just the first")
+
+	require.Equal(t, uint64(bsvutil.SatoshiPerBitcoin), sm.currentFeeFilter.Load(),
+		"fee filter marker must be set while catching up")
+	require.True(t, sm.peerStates.Exists(p1), "first peer must be registered")
+	require.True(t, sm.peerStates.Exists(p2), "second peer must be registered")
 }
 
 // TestHandleNewPeerMsg_SkipsDisconnectedPeer verifies that a peer whose socket

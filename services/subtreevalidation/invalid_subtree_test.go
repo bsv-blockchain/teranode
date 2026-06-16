@@ -57,6 +57,11 @@ func (m *mockKafkaProducer) Publish(msg *kafka.Message) {
 	m.messages = append(m.messages, msg)
 }
 
+func (m *mockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.messages = append(m.messages, msg)
+	return true
+}
+
 // TestInvalidSubtreeReporting_MalformedTransactionData tests that invalid subtree messages ARE sent
 // when malformed transaction data is received from a peer
 func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {

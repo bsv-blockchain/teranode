@@ -259,10 +259,6 @@ func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs [
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
 
-func (c *LocalClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	return c.store.OffChainBlockIDs(ctx)
-}
-
 func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	return c.store.CheckBlockIsAncestorOfBlock(ctx, blockIDs, blockHash)
 }
@@ -476,10 +472,6 @@ func (c *LocalClient) CatchUpBlocks(ctx context.Context) error {
 }
 
 func (c *LocalClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
-	return nil
-}
-
-func (c *LocalClient) LegacySync(ctx context.Context) error {
 	return nil
 }
 

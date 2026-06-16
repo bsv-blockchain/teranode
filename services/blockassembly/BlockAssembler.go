@@ -423,13 +423,26 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		return errors.NewProcessingError("[Reset] error getting reorg blocks", err)
 	}
 
-	isLegacySync, err := b.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateLEGACYSYNCING)
-	if err != nil {
-		b.logger.Errorf("[BlockAssembler][Reset] error getting FSM state: %v", err)
-
-		// if we can't get the FSM state, we assume we are not in legacy sync, which is the default, but less optimized
-		isLegacySync = false
-	}
+	// Fast-forward reset is safe when the whole forward range is at/below the
+	// highest checkpoint: these are the genuine historical blocks, whose
+	// canonicality is guaranteed by PoW plus upstream checkpoint enforcement
+	// (which keeps a non-canonical sub-checkpoint block from ever reaching
+	// reset), so the per-block conflicting-transaction processing in the
+	// SubtreeProcessor reset is unnecessary.
+	//
+	// This is the same checkpoint-trust idea blockvalidation uses for
+	// skipDifficultyCheck / quickValidate, but it goes a step further: the quick
+	// validation path still runs a pre-storage checkParentExistsOnChain
+	// double-spend check, whereas this path waives conflict handling for the
+	// forward range entirely. The safety therefore rests on these being the real
+	// historical chain (gated by the checkpoint), not on the height test alone.
+	//
+	// Testing meta.Height (the target tip) alone is sufficient: it is the max
+	// height of the forward range, so meta.Height <= checkpoint implies every
+	// forward block is <= checkpoint. A range that straddles the checkpoint has
+	// meta.Height > checkpoint and takes the full path.
+	highestCheckpoint := blockchain.HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
+	useFastForwardReset := meta.Height <= highestCheckpoint
 
 	currentHeight := meta.Height
 
@@ -594,7 +607,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		Height: currentHeight,
 	})
 
-	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, isLegacySync, postProcessFn); response.Err != nil {
+	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcessFn); response.Err != nil {
 		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
 		// something went wrong, we need to set the best block header in the block assembly to be the
 		// same as the subtree processor's best block header

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -775,6 +776,15 @@ func BenchmarkReorgMemoryProfile(b *testing.B) {
 func TestReorgBenchmarkBaseline(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping baseline benchmark in short mode")
+	}
+	// Manual perf-measurement test: prints a human-readable reorg timing table and asserts
+	// nothing beyond NoError (reorg correctness is covered by the other tests in this
+	// package). Its 50K/100K scales build ~200k txs + subtrees and were a top contributor
+	// to subtreeprocessor.test peak RSS under -race (#1051). The testing.Short() guard above
+	// never trips in CI (the Makefile passes no -short), so gate it behind an explicit env
+	// var instead; run it with RUN_REORG_BASELINE=1.
+	if os.Getenv("RUN_REORG_BASELINE") == "" {
+		t.Skip("manual reorg perf benchmark; set RUN_REORG_BASELINE=1 to run")
 	}
 
 	scales := []struct {

@@ -88,6 +88,13 @@ func (m *SafeMockKafkaProducer) Publish(msg *kafka.Message) {
 	m.publishCalled = true
 }
 
+func (m *SafeMockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.Lock()
+	defer m.Unlock()
+	m.publishCalled = true
+	return true
+}
+
 func (m *SafeMockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	m.Lock()
 	defer m.Unlock()
@@ -292,7 +299,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -2317,14 +2324,13 @@ func Test_checkOldBlockIDs(t *testing.T) {
 	})
 }
 
-// Test_checkOldBlockIDs_noPrefetchRoute exercises the off-chain-prefetch route's
-// rebuilding-fallback sub-path: when OffChainBlockIDs reports rebuilding the
-// route resolves each tx with the per-tx CheckBlockIsInCurrentChain RPC, exactly
-// as the prefetch route does on a fast-path miss. Mirrors the subtests of
-// Test_checkOldBlockIDs above so the two routes stay behaviourally equivalent
-// (same pass/fail outcomes per input). The off-chain-prefetch happy path (set
-// available, resolved locally) is covered by Test_checkOldBlockIDs_offChainPrefetch.
-func Test_checkOldBlockIDs_noPrefetchRoute(t *testing.T) {
+// Test_checkOldBlockIDs_inMemoryChainCheckRoute exercises the in-memory-chain-check
+// route (blockchain_use_in_memory_chain_check=true). Post-#1055 the route holds no
+// local set: it resolves every tx by deferring to the authoritative
+// CheckBlockIsInCurrentChain, so it never calls the on-chain-prefetch
+// GetBlockHeaderIDs RPC. Mirrors the subtests of Test_checkOldBlockIDs above so the
+// two routes stay behaviourally equivalent (same pass/fail outcomes per input).
+func Test_checkOldBlockIDs_inMemoryChainCheckRoute(t *testing.T) {
 	initPrometheusMetrics()
 
 	testBlock := func() *model.Block {
@@ -2333,13 +2339,11 @@ func Test_checkOldBlockIDs_noPrefetchRoute(t *testing.T) {
 		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
 	}
 
-	// newBlockValidation returns a BlockValidation with settings configured to
-	// dispatch to the off-chain-prefetch route, with OffChainBlockIDs reporting
-	// rebuilding so the route takes the per-tx CheckBlockIsInCurrentChain
-	// fallback. GetBlockHeaderIDs should never be called in any of these tests —
-	// if it is, that is a bug in the dispatch.
+	// newBlockValidation returns a BlockValidation configured to dispatch to the
+	// in-memory-chain-check route. That route resolves every set via
+	// CheckBlockIsInCurrentChain; the on-chain-prefetch GetBlockHeaderIDs RPC should
+	// never be called — if it is, that is a bug in the dispatch.
 	newBlockValidation := func(blockchainMock *blockchain.Mock) *BlockValidation {
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).Return([]uint32(nil), 0, true, nil)
 		s := &settings.Settings{}
 		s.BlockChain.UseInMemoryChainCheck = true
 		return &BlockValidation{
@@ -2348,7 +2352,7 @@ func Test_checkOldBlockIDs_noPrefetchRoute(t *testing.T) {
 		}
 	}
 
-	t.Run("dispatches to no-prefetch (no GetBlockHeaderIDs call)", func(t *testing.T) {
+	t.Run("dispatches to in-memory chain check (no prefetch calls)", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := newBlockValidation(blockchainMock)
 
@@ -2362,7 +2366,7 @@ func Test_checkOldBlockIDs_noPrefetchRoute(t *testing.T) {
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
 
-		// Belt-and-braces: assert GetBlockHeaderIDs was NOT called.
+		// Belt-and-braces: assert the on-chain-prefetch RPC was not called.
 		blockchainMock.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
 		blockchainMock.AssertExpectations(t)
 	})
@@ -2466,12 +2470,14 @@ func Test_checkOldBlockIDs_noPrefetchRoute(t *testing.T) {
 
 }
 
-// Test_checkOldBlockIDs_offChainPrefetch exercises the off-chain-prefetch happy
-// path: OffChainBlockIDs returns the complete forked set once and membership is
-// resolved locally (a parent is on the main chain iff it is NOT in the set), so
-// no per-tx CheckBlockIsInCurrentChain RPC is needed unless a tx's parents are
-// all off-chain.
-func Test_checkOldBlockIDs_offChainPrefetch(t *testing.T) {
+// Test_checkOldBlockIDs_inMemoryChainCheck_consensusEquivalence proves the
+// in-memory-chain-check route forwards every parent-block-ID set verbatim to the
+// authoritative CheckBlockIsInCurrentChain and mirrors its verdict — the property
+// that keeps a useInMemoryChainCheck=on node consensus-equivalent with an off
+// node. Post-#1055 the route makes no local accept/reject of its own: the cases
+// the old off-chain prefetch resolved locally (a set with one on-chain id, an
+// all-off-chain set, an above-maxBlockID id) are all decided by the store now.
+func Test_checkOldBlockIDs_inMemoryChainCheck_consensusEquivalence(t *testing.T) {
 	initPrometheusMetrics()
 
 	testBlock := func() *model.Block {
@@ -2483,59 +2489,30 @@ func Test_checkOldBlockIDs_offChainPrefetch(t *testing.T) {
 	newBlockValidation := func(blockchainMock *blockchain.Mock) *BlockValidation {
 		s := &settings.Settings{}
 		s.BlockChain.UseInMemoryChainCheck = true
-		return &BlockValidation{
-			blockchainClient: blockchainMock,
-			settings:         s,
-		}
+		return &BlockValidation{blockchainClient: blockchainMock, settings: s}
 	}
 
-	t.Run("all parents on chain resolved locally (no RPC)", func(t *testing.T) {
+	t.Run("set with one on-chain id is forwarded whole and accepted", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := newBlockValidation(blockchainMock)
 
-		// Off-chain set holds a forked ID that none of the txs (0..99) reference.
-		// maxBlockID is high so every referenced id is at or below it.
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).Return([]uint32{1000}, 1_000_000, false, nil).Once()
-
-		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-		for i := uint32(0); i < 100; i++ {
-			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
-			oldBlockIDsMap.Set(txHash, []uint32{i})
-		}
-
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
-		require.NoError(t, err)
-
-		// Everything resolved from the prefetched set — no per-tx RPC, no on-chain prefetch.
-		blockchainMock.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
-		blockchainMock.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
-		blockchainMock.AssertExpectations(t)
-	})
-
-	t.Run("mixed parent set with one on-chain ID is accepted locally", func(t *testing.T) {
-		blockchainMock := &blockchain.Mock{}
-		blockValidation := newBlockValidation(blockchainMock)
-
-		// 5 is off-chain, 7 is not — ANY-of ⇒ on chain.
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).Return([]uint32{5}, 1_000_000, false, nil).Once()
+		// The full slice {5,7} is forwarded to the authority — ANY-of semantics are
+		// the store's job; the route must not pre-filter 5 just because a local set
+		// could look off-chain. The store reports on-chain ⇒ accept.
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{5, 7}).Return(true, nil).Once()
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{5, 7})
 
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
-
-		blockchainMock.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 		blockchainMock.AssertExpectations(t)
 	})
 
-	t.Run("parents exclusively off-chain are confirmed via RPC then rejected", func(t *testing.T) {
+	t.Run("all-off-chain set is rejected by the authority", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := newBlockValidation(blockchainMock)
 
-		// The only parent (1) is in the off-chain set ⇒ fast-path miss; the
-		// lookup RPC re-confirms before the block is rejected.
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).Return([]uint32{1}, 1_000_000, false, nil).Once()
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).Return(false, nil).Once()
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2547,37 +2524,14 @@ func Test_checkOldBlockIDs_offChainPrefetch(t *testing.T) {
 		blockchainMock.AssertExpectations(t)
 	})
 
-	t.Run("OffChainBlockIDs error surfaces as ServiceError", func(t *testing.T) {
+	t.Run("above-maxBlockID id is rejected by the authority (no local short-circuit)", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := newBlockValidation(blockchainMock)
 
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).
-			Return([]uint32(nil), 0, false, errors.NewServiceError("blockchain unavailable")).Once()
-
-		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{1})
-
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to get off-chain block IDs")
-		require.NotContains(t, err.Error(), "are not from current chain")
-	})
-
-	// Guard: a parent block ID above maxBlockID must NOT be short-circuited to
-	// on-chain by the fastPath. CheckBlockIsInCurrentChain skips id > maxBlockID
-	// (treats it as not on-chain); the fastPath must do the same and fall through
-	// to the RPC, otherwise a toggled node accepts a tx an untoggled node rejects
-	// (chain-split). Off-chain set is empty here, so only the maxBlockID guard can
-	// keep this from being wrongly accepted.
-	t.Run("parent id above maxBlockID is not accepted locally (falls through to RPC, rejected)", func(t *testing.T) {
-		blockchainMock := &blockchain.Mock{}
-		blockValidation := newBlockValidation(blockchainMock)
-
-		// Empty off-chain set, maxBlockID = 5. Parent id 10 is above max.
-		blockchainMock.On("OffChainBlockIDs", mock.Anything).Return([]uint32(nil), 5, false, nil).Once()
-		// The fastPath must skip id 10 (>5) and fall through to the authoritative
-		// RPC, which also rejects it. If the guard were missing, fastPath would
-		// return true and this RPC would never be called.
+		// An id above the store's maxBlockID has no row; the store rejects it. The
+		// route must consult the store rather than accepting it locally — the
+		// chain-split the old maxBlockID guard defended against is now wholly the
+		// store's responsibility.
 		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{10}).Return(false, nil).Once()
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2586,9 +2540,65 @@ func Test_checkOldBlockIDs_offChainPrefetch(t *testing.T) {
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "are not from current chain")
-		// Proves the guard fired and the RPC was consulted (not short-circuited).
+		blockchainMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{10})
 		blockchainMock.AssertExpectations(t)
 	})
+
+	t.Run("RPC error surfaces as ProcessingError (not BlockInvalid)", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+		blockValidation := newBlockValidation(blockchainMock)
+
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{1}).
+			Return(false, errors.NewServiceError("blockchain unavailable")).Once()
+
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{1})
+
+		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to check if old blocks are part of the current chain")
+		require.NotContains(t, err.Error(), "are not from current chain")
+	})
+}
+
+// Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected is the #1055 regression.
+// The in-memory-chain-check route must not treat a parent block id as on-chain
+// merely because it is absent from the off-chain (negative) set: a phantom /
+// id-sequence-gap id (<= maxBlockID, no on_main_chain row) is exactly such an id.
+// The route must defer to the authoritative CheckBlockIsInCurrentChain, which
+// rejects it, so a useInMemoryChainCheck=on node stays consensus-equivalent with
+// an off node. Before the fix the route short-circuited the gap id to on-chain
+// locally (absent from the prefetched off-chain set ⇒ "on chain") and never
+// consulted CheckBlockIsInCurrentChain, accepting a block the store rejects.
+func Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected(t *testing.T) {
+	initPrometheusMetrics()
+
+	prevHash := chainhash.HashH([]byte("prev"))
+	merkleRoot := chainhash.HashH([]byte("merkle"))
+	testBlock := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+
+	blockchainMock := &blockchain.Mock{}
+	s := &settings.Settings{}
+	s.BlockChain.UseInMemoryChainCheck = true
+	blockValidation := &BlockValidation{blockchainClient: blockchainMock, settings: s}
+
+	// Gap id 50: well below any plausible maxBlockID and in no off-chain set, yet
+	// it has no committed on_main_chain row. The authoritative check rejects it.
+	const gapID uint32 = 50
+	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{gapID}).Return(false, nil).Once()
+
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap.Set(chainhash.HashH([]byte("tx")), []uint32{gapID})
+
+	err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "are not from current chain")
+
+	// The fix: the route consulted the authoritative check rather than accepting
+	// the gap id from its absence in a local set. (It also no longer fetches the
+	// off-chain set into this service — only CheckBlockIsInCurrentChain is called.)
+	blockchainMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{gapID})
+	blockchainMock.AssertExpectations(t)
 }
 
 // Test_checkOldBlockIDs_nilHeader guards the round-1 fix: a nil block header (or
@@ -2625,15 +2635,18 @@ func Test_checkOldBlockIDs_nilHeader(t *testing.T) {
 	})
 }
 
-// Test_checkOldBlockIDs_offChainPrefetch_realStore is the sqlitememory + LocalClient
-// regression test for the maxBlockID consensus guard, run against a REAL blockchain
-// store (per the repo testing rules — no mocking the blockchain store). It proves the
-// off-chain-prefetch route stays consensus-equivalent with CheckBlockIsInCurrentChain:
-// an id above maxBlockID is rejected by BOTH, and an on-chain id is accepted by BOTH.
-// Without the id > maxBlockID guard in the fastPath, the above-max case would be
-// ACCEPTED by checkOldBlockIDs while the authoritative RPC REJECTS it — the chain-split
-// this test exists to catch.
-func Test_checkOldBlockIDs_offChainPrefetch_realStore(t *testing.T) {
+// Test_checkOldBlockIDs_inMemoryChainCheck_realStore is the sqlitememory +
+// LocalClient end-to-end guard for the in-memory-chain-check route, run against a
+// REAL blockchain store (per the repo testing rules — no mocking the blockchain
+// store). It proves the route stays consensus-equivalent with the authoritative
+// CheckBlockIsInCurrentChain: an id above maxBlockID is rejected by BOTH, and an
+// on-chain id is accepted by BOTH. Post-#1055 the route defers every set to
+// CheckBlockIsInCurrentChain, so equivalence holds by construction; this
+// differential assertion is the regression guard that fails loudly if a future
+// change re-introduces a local accept/reject path that can diverge from the store
+// (the interior-gap divergence #1055 fixed is covered deterministically by
+// Test_checkOldBlockIDs_inMemoryChainCheck_gapIDRejected).
+func Test_checkOldBlockIDs_inMemoryChainCheck_realStore(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := context.Background()
@@ -2655,24 +2668,32 @@ func Test_checkOldBlockIDs_offChainPrefetch_realStore(t *testing.T) {
 		return &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
 	}
 
-	// The startup on_main_chain / off-chain-set rebuild runs asynchronously and holds
-	// mainChainRebuilding until done; until then OffChainBlockIDs reports rebuilding.
-	// Wait for it so we exercise the off-chain-prefetch path, not the rebuilding fallback.
-	require.Eventually(t, func() bool {
-		_, _, rebuilding, e := blockchainClient.OffChainBlockIDs(ctx)
-		return e == nil && !rebuilding
-	}, 15*time.Second, 25*time.Millisecond, "store should finish its startup rebuild")
-
-	offIDs, maxBlockID, rebuilding, err := blockchainClient.OffChainBlockIDs(ctx)
+	// Genesis is the only (hence best) block, so its id is the highest known block id.
+	_, bestMeta, err := blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
-	require.False(t, rebuilding)
-	require.Empty(t, offIDs, "fresh chain has no off-chain (forked) blocks")
+	maxBlockID := bestMeta.ID
 
-	// Differential test: for each candidate block id, the off-chain-prefetch route's
-	// accept/reject MUST match the authoritative CheckBlockIsInCurrentChain bool.
-	// The above-maxBlockID case is the one the missing guard got wrong (route would
-	// accept while the RPC rejects); the differential assertion catches any such
-	// divergence regardless of the store's exact maxBlockID.
+	// Wait until the best block reports on-chain, so the store is in a stable,
+	// queryable state before the differential checks below.
+	//
+	// Note: this does NOT prove the async startup rebuild has finished. While
+	// mainChainRebuilding > 0, CheckBlockIsInCurrentChain takes the CTE fallback
+	// (CheckBlockIsInCurrentChain.go), which already finds the best block on-chain —
+	// so this gate can pass mid-rebuild, before the in-memory off-chain set is the
+	// active path. That's fine: the differential below asserts route == store
+	// regardless of which internal path the store takes, so it holds either way. The
+	// exact "rebuild done" signal was the OffChainBlockIDs rebuilding flag, removed
+	// with that RPC in this PR.
+	require.Eventually(t, func() bool {
+		onChain, e := blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{maxBlockID})
+		return e == nil && onChain
+	}, 15*time.Second, 25*time.Millisecond, "best block should report on-chain")
+
+	// Differential test: for each candidate block id, the route's accept/reject MUST
+	// match the authoritative CheckBlockIsInCurrentChain bool. The above-maxBlockID
+	// case is the one the old local fast path got wrong (it would accept while the
+	// store rejects); the differential assertion catches any such divergence
+	// regardless of the store's exact maxBlockID.
 	candidates := []uint32{maxBlockID + 1000, maxBlockID + 1, maxBlockID}
 	for _, id := range candidates {
 		onChain, rpcErr := blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{id})
@@ -2687,48 +2708,9 @@ func Test_checkOldBlockIDs_offChainPrefetch_realStore(t *testing.T) {
 		}
 
 		require.Equal(t, onChain, accepted,
-			"consensus divergence at id %d: RPC on-chain=%v but off-chain-prefetch route accepted=%v (maxBlockID=%d)",
+			"consensus divergence at id %d: store on-chain=%v but in-memory-chain-check route accepted=%v (maxBlockID=%d)",
 			id, onChain, accepted, maxBlockID)
 	}
-}
-
-// Test_OffChainBlockIDs_StoreBranches unit-tests the store method's two branches
-// directly: rebuilding (disabled / mid-rebuild) vs the populated normal path.
-func Test_OffChainBlockIDs_StoreBranches(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-
-	t.Run("disabled toggle reports rebuilding", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings(t)
-		tSettings.BlockChain.UseInMemoryChainCheck = false
-
-		store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
-		require.NoError(t, err)
-
-		ids, maxID, rebuilding, err := store.OffChainBlockIDs(ctx)
-		require.NoError(t, err)
-		require.True(t, rebuilding, "in-memory check disabled must report rebuilding")
-		require.Empty(t, ids)
-		require.Zero(t, maxID)
-	})
-
-	t.Run("enabled, after rebuild, reports populated set", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings(t)
-		tSettings.BlockChain.UseInMemoryChainCheck = true
-
-		store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
-		require.NoError(t, err)
-
-		require.Eventually(t, func() bool {
-			_, _, rebuilding, e := store.OffChainBlockIDs(ctx)
-			return e == nil && !rebuilding
-		}, 15*time.Second, 25*time.Millisecond, "store should finish its startup rebuild")
-
-		ids, _, rebuilding, err := store.OffChainBlockIDs(ctx)
-		require.NoError(t, err)
-		require.False(t, rebuilding)
-		require.Empty(t, ids, "fresh chain has no off-chain blocks")
-	})
 }
 
 // BenchmarkCheckOldBlockIDs measures the per-block cost of both chain-membership
@@ -2784,15 +2766,17 @@ func BenchmarkCheckOldBlockIDs(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("off-chain-prefetch/%d", numTxs), func(b *testing.B) {
+		b.Run(fmt.Sprintf("in-memory-chain-check/%d", numTxs), func(b *testing.B) {
 			mockClient := &blockchain.Mock{}
-			// Empty off-chain set + high maxBlockID → every parent (1..64) is on chain
-			// and resolves via the local fastPath, no per-tx lookup.
-			mockClient.On("OffChainBlockIDs", mock.Anything).Return([]uint32(nil), 1_000_000, false, nil)
+			// Post-#1055 this route defers every distinct parent-set to the
+			// authoritative CheckBlockIsInCurrentChain. buildMap spreads the N txs
+			// across 64 distinct single-parent sets ({1}…{64}), so the dedupe cache
+			// collapses the N txs to one lookup per distinct set (64 lookups), not one;
+			// measures that delegated cost.
 			mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 
 			s := &settings.Settings{}
-			s.BlockChain.UseInMemoryChainCheck = true // off-chain prefetch route
+			s.BlockChain.UseInMemoryChainCheck = true // in-memory-chain-check route
 			bv := &BlockValidation{blockchainClient: mockClient, settings: s}
 
 			b.ReportAllocs()

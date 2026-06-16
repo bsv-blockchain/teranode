@@ -225,6 +225,19 @@ func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 // header timestamp. Returns &opts.CandidateBlockTime directly so the pointer
 // targets the caller's existing struct field (no per-request allocation),
 // matching the pattern of the other request fields built from the same opts.
+// unconfirmedParentsAtCandidateHeightPtr returns a pointer to true when the
+// option is set and nil otherwise, so the optional proto field is only put on
+// the wire for the rare legacy-sync requests that actually use it. nil and
+// explicit-false reconstruct identically server-side (optionsFromValidateRequest
+// leaves the default false).
+func unconfirmedParentsAtCandidateHeightPtr(opts *Options) *bool {
+	if !opts.UnconfirmedParentsAtCandidateHeight {
+		return nil
+	}
+
+	return &opts.UnconfirmedParentsAtCandidateHeight
+}
+
 func candidateBlockTimePtr(opts *Options) *uint32 {
 	if opts.CandidateBlockTime == 0 {
 		return nil
@@ -255,16 +268,18 @@ func candidateParentMedianTimePtr(opts *Options) *uint32 {
 // representation cannot diverge between any caller.
 func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Options) *validator_api.ValidateTransactionRequest {
 	return &validator_api.ValidateTransactionRequest{
-		TransactionData:           transactionData,
-		BlockHeight:               blockHeight,
-		SkipUtxoCreation:          &opts.SkipUtxoCreation,
-		AddTxToBlockAssembly:      &opts.AddTXToBlockAssembly,
-		SkipPolicyChecks:          &opts.SkipPolicyChecks,
-		CreateConflicting:         &opts.CreateConflicting,
-		SkipTxmetaPublishing:      &opts.SkipTxMetaPublishing,
-		CandidateBlockTime:        candidateBlockTimePtr(opts),
-		CandidateParentMedianTime: candidateParentMedianTimePtr(opts),
-		ParentMetadata:            parentMetadataToWire(opts.ParentMetadata),
+		TransactionData:                     transactionData,
+		BlockHeight:                         blockHeight,
+		SkipUtxoCreation:                    &opts.SkipUtxoCreation,
+		AddTxToBlockAssembly:                &opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:                    &opts.SkipPolicyChecks,
+		CreateConflicting:                   &opts.CreateConflicting,
+		SkipTxmetaPublishing:                &opts.SkipTxMetaPublishing,
+		InBlock:                             &opts.InBlock,
+		CandidateBlockTime:                  candidateBlockTimePtr(opts),
+		CandidateParentMedianTime:           candidateParentMedianTimePtr(opts),
+		ParentMetadata:                      parentMetadataToWire(opts.ParentMetadata),
+		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
 	}
 }
 
@@ -322,6 +337,10 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.SkipTxMetaPublishing {
 		queryParams.Add("skipTxMetaPublishing", "true")
+	}
+
+	if opts.InBlock {
+		queryParams.Add("inBlock", "true")
 	}
 
 	if opts.CandidateBlockTime > 0 {

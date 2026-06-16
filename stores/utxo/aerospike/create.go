@@ -878,6 +878,29 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights)
 	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
 		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
+	} else if !isConflicting {
+		// A transaction with no spendable outputs (e.g. one that only carries
+		// OP_RETURN / data outputs) can never be spent, so it never transitions
+		// to "all spent" via the spend path. When it is created already-mined
+		// during block validation it also bypasses setMined - the other place
+		// that assigns a deleteAtHeight. Without one, the record would never be
+		// eligible for pruning and would be retained in the UTXO store forever.
+		// Give such a mined transaction the same retention window as a
+		// fully-spent transaction so the pruner can expire it; we only want
+		// truly spendable outputs retained indefinitely. (Conflicting txs get
+		// their deleteAtHeight set separately by the caller.)
+		spendableUtxos := 0
+		for _, u := range utxos {
+			if u != nil {
+				spendableUtxos++
+			}
+		}
+
+		if spendableUtxos == 0 {
+			if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+				batches[0] = append(batches[0], aerospike.NewBin(fields.DeleteAtHeight.String(), aerospike.NewIntegerValue(int(blockHeight+retention))))
+			}
+		}
 	}
 
 	// add the created at bin in milliseconds to the first record

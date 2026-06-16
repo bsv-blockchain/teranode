@@ -51,6 +51,12 @@ const (
 	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
 	MaxSatoshis = 21_000_000_00_000_000
 
+	// maxAggregatedSpendErrs caps how many per-spend errors are wrapped into the
+	// aggregate attached to a failed-validation error. The failure count scales
+	// with the tx's input count; an uncapped chain makes error construction and
+	// every errors.Is on it quadratic. See errors.JoinCapped.
+	maxAggregatedSpendErrs = 10
+
 	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
 	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
 	// This constant is used to identify and handle coinbase transactions differently from regular transactions
@@ -149,6 +155,20 @@ type Validator struct {
 	// rejectedTxKafkaProducerClient publishes rejected transaction events
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
+	// policyRejectedTxKafkaProducerClient publishes consensus-valid transactions that were
+	// rejected by local policy (ErrTxPolicy). This is a separate topic from
+	// rejectedTxKafkaProducerClient for two reasons:
+	//   1. Different message schema: this topic carries the full raw tx bytes
+	//      (KafkaTxPolicyRejectedTopicMessage.RawTx) so that consumers can reconstruct
+	//      the transaction without an extra HTTP roundtrip. The rejected-tx topic only
+	//      carries {TxHash, Reason, PeerId} and is not suitable for raw-byte delivery.
+	//   2. Different consumers: subtree validation pods consume this topic to populate a
+	//      local cache of policy-rejected txs; the rejected-tx topic is consumed by P2P
+	//      gossip components that only need the hash and rejection reason.
+	// Merging the two topics would require either sending raw bytes for every rejection
+	// (wasted bandwidth) or adding a type tag that consumers must filter (added complexity).
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
@@ -181,6 +201,7 @@ type Validator struct {
 // Returns an error if initialization fails.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blockAssemblyClient blockassembly.ClientI, blockchainClient blockchain.ClientI) (Interface, error) {
 	initPrometheusMetrics()
 
@@ -191,15 +212,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	v := &Validator{
-		logger:                        logger,
-		settings:                      tSettings,
-		txValidator:                   NewTxValidator(logger, tSettings),
-		utxoStore:                     store,
-		blockAssembler:                ba,
-		stats:                         gocore.NewStat("validator"),
-		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
-		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
-		blockchainClient:              blockchainClient,
+		logger:                              logger,
+		settings:                            tSettings,
+		txValidator:                         NewTxValidator(logger, tSettings),
+		utxoStore:                           store,
+		blockAssembler:                      ba,
+		stats:                               gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:           txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
+		blockchainClient:                    blockchainClient,
 	}
 
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
@@ -213,6 +235,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	if v.policyRejectedTxKafkaProducerClient != nil {
+		v.policyRejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
 	// Initialize TxMeta Kafka batcher if batch size is configured
@@ -469,7 +495,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 						return
 					}
 
-					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 						// ignore notifications while syncing or catching up
 						return
 					}
@@ -485,22 +511,89 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 
-				value, err := proto.Marshal(m)
-				if err != nil {
-					return nil, err
+				value, marshalErr := proto.Marshal(m)
+				if marshalErr != nil {
+					ctxLogger.Errorf("[ValidateWithOptions] failed to marshal rejected tx message: %v", marshalErr)
+				} else {
+					v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+						Key:   []byte(txID),
+						Value: value,
+					})
 				}
-
-				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-					Key:   []byte(txID),
-					Value: value,
-				})
 
 				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 			}
 		}
+
+		// Publish consensus-valid but policy-rejected transactions so subtree validation
+		// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
+		if errors.Is(err, errors.ErrTxPolicy) {
+			v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
+		}
 	}
 
 	return txMetaData, err
+}
+
+// publishPolicyRejectedTx publishes the raw bytes of a policy-rejected transaction to
+// the KAFKA_TX_POLICY_REJECTED topic. Subtree validation pods consume from this topic
+// to populate a local cache, avoiding expensive HTTP fetches when a subtree from another
+// miner contains transactions our node rejected on policy grounds.
+func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, validationErr error) {
+	if v.policyRejectedTxKafkaProducerClient == nil {
+		return
+	}
+
+	// Stay quiet while catching up, mirroring the rejected-tx producer above.
+	// During CATCHINGBLOCKS the node replays large volumes of historical
+	// transactions; publishing a policy-rejected message for every one would flood the
+	// topic with cache entries that subtree validation does not need yet.
+	if v.blockchainClient != nil {
+		state, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			ctxLogger.Errorf("[publishPolicyRejectedTx] failed to get blockchain FSM state: %v", err)
+			return
+		}
+
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
+			return
+		}
+	}
+
+	// Skip oversized transactions before serializing (tx.Size() is computed, not
+	// allocated): the broker rejects messages over message.max.bytes, and consumers
+	// skip txs over maxCachedTxBytes anyway. Skipping is lossless — subtree validation
+	// falls back to the HTTP fetch path on a cache miss. Same pattern as propagation's
+	// large-tx HTTP fallback (see PropagationServer.ProcessTransaction).
+	if maxBytes := v.settings.Validator.KafkaMaxMessageBytes; maxBytes > 0 && tx.Size() > maxBytes {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] skipping tx %s: size %d exceeds validator_kafka_maxMessageBytes %d", tx.TxIDChainHash().String(), tx.Size(), maxBytes)
+		return
+	}
+
+	txHash := tx.TxIDChainHash()
+
+	m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{
+		TxHash: txHash.CloneBytes(),
+		RawTx:  tx.SerializeBytes(),
+		Reason: validationErr.Error(),
+	}
+
+	value, marshalErr := proto.Marshal(m)
+	if marshalErr != nil {
+		ctxLogger.Errorf("[publishPolicyRejectedTx] proto marshal error for tx %s: %v", txHash.String(), marshalErr)
+		return
+	}
+
+	// Non-blocking publish: this runs on the validation hot path, and the
+	// policy-rejected cache is strictly best-effort (a drop just falls back to the HTTP
+	// fetch path on the consumer side). Blocking here on Kafka back-pressure would stall
+	// validateTransaction, so a full producer buffer drops the message instead.
+	if !v.policyRejectedTxKafkaProducerClient.TryPublish(&kafka.Message{
+		Key:   txHash.CloneBytes(),
+		Value: value,
+	}) {
+		ctxLogger.Debugf("[publishPolicyRejectedTx] dropped tx %s: policy-rejected producer buffer full", txHash.String())
+	}
 }
 
 // validateInternal performs the core validation logic for a transaction.
@@ -656,7 +749,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
-			var spendErrs *errors.Error
+			// Collect failed spends and attach a capped aggregate to the
+			// returned error. The failure count scales with the tx's input
+			// count; an uncapped chain makes every subsequent errors.Is on it
+			// walk the full chain (mainnet IBD stall, block 820116).
+			failedSpends := make([]error, 0, 8)
 
 			for _, spend := range spentUtxos {
 				if spend.Err != nil {
@@ -664,20 +761,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						saveAsConflicting = true
 					}
 
-					var spendErr *errors.Error
-					if errors.As(spend.Err, &spendErr) {
-						if spendErrs == nil {
-							spendErrs = errors.New(spendErr.Code(), spendErr.Message(), spendErr)
-						} else {
-							spendErrs = errors.New(spendErrs.Code(), spendErrs.Message(), spendErr)
-						}
-					}
+					failedSpends = append(failedSpends, spend.Err)
 				}
 			}
 
-			if spendErrs != nil {
+			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(spendErrs)
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
 				}
 			}
 
@@ -815,6 +905,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// been validated, spent, and created in the UTXO store — returning an error would
 	// cause callers to treat an accepted tx as failed and trigger duplicate retries.
 	if v.txmetaKafkaProducerClient != nil && !validationOptions.SkipTxMetaPublishing {
+		// InBlock is set explicitly by block-context callers (block validation,
+		// subtree validation, legacy sync) whose transactions arrived as part
+		// of a block or announced subtree rather than via mempool submission.
+		// Mark the published txmeta so relay consumers (legacy netsync) don't
+		// announce it as a fresh mempool tx.
+		txMetaData.InBlock = validationOptions.InBlock
+
 		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
 			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
@@ -1562,6 +1659,30 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 
 			return err
 		}
+	}
+
+	// Legacy block-sync resolution: substitute the unconfirmedParentHeight
+	// sentinel with the candidate block height BEFORE any consumer sees it —
+	// both the BDK call in phase 1 (per-input era-flag selection, where the
+	// sentinel would otherwise translate to MEMPOOL_HEIGHT and reject with
+	// bad-txns-unconfirmed-input-in-block) and the BIP68/MTP lookups in
+	// phase 2. On the legacy path an unconfirmed parent IS a same-block
+	// parent, so the candidate height is its true height. See
+	// Options.UnconfirmedParentsAtCandidateHeight for the consensus-safety
+	// contract; the floater backstop is block validation's
+	// checkParentsExistOnChain.
+	// No AddTXToBlockAssembly guard here, deliberately (an earlier revision
+	// hard-errored on flag+assembly): the legacy branch must set this flag in
+	// EVERY FSM state — a restarted node with FSM restored to RUNNING catches
+	// up over the legacy bridge and wedges without it — while assembly stays
+	// enabled in RUNNING for reorg resilience. The combination is safe: a
+	// floater child blessed at the candidate height and added to assembly is
+	// the same tx policy-mode admission would have accepted into assembly
+	// (policy substitutes tip+1 for unconfirmed parents — equal to the
+	// candidate height at the tip; era flags cannot differ post-Genesis), and
+	// accepted-block txs are mined-removed from assembly as always.
+	if validationOptions.UnconfirmedParentsAtCandidateHeight {
+		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}
 
 	// Phase 1: run Teranode-owned checks and BDK transaction validation.

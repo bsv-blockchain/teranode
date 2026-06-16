@@ -58,12 +58,69 @@ func inpointsVouts(ti subtree.TxInpoints, i int) []uint32 {
 	return v
 }
 
+// Test_InBlockFlagRoundtrip verifies the InBlock flag survives both
+// serialization formats. InBlock marks txmeta produced while validating
+// transactions that arrived as part of a block or announced subtree (block
+// validation, subtree validation, legacy sync) so relay consumers of the
+// txmeta Kafka topic can tell them apart from fresh mempool transactions and
+// skip announcing them.
+func Test_InBlockFlagRoundtrip(t *testing.T) {
+	t.Run("MetaBytes carries InBlock", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+			InBlock:     true,
+		}
+
+		b, err := data.MetaBytes()
+		require.NoError(t, err)
+
+		var d Data
+		require.NoError(t, NewMetaDataFromBytes(b, &d))
+		assert.True(t, d.InBlock)
+		assert.False(t, d.IsCoinbase)
+	})
+
+	t.Run("MetaBytes default is not in a block", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+		}
+
+		b, err := data.MetaBytes()
+		require.NoError(t, err)
+
+		var d Data
+		require.NoError(t, NewMetaDataFromBytes(b, &d))
+		assert.False(t, d.InBlock)
+	})
+
+	t.Run("Bytes/NewDataFromBytes carries InBlock", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+			Tx:          &bt.Tx{},
+			InBlock:     true,
+		}
+
+		b, err := data.Bytes()
+		require.NoError(t, err)
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+		assert.True(t, d.InBlock)
+	})
+}
+
 func Test_NewDataFromBytes(t *testing.T) {
 	t.Run("test simple", func(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			TxInpoints: testInpointsHash3Hash4,
+			TxInpoints:  testInpointsHash3Hash4,
 			BlockIDs: []uint32{
 				123,
 				321,
@@ -99,7 +156,7 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			TxInpoints: testInpointsHash3Hash4,
+			TxInpoints:  testInpointsHash3Hash4,
 			BlockIDs: []uint32{
 				123,
 				321,
@@ -131,7 +188,7 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			TxInpoints: testInpointsHash3Hash4,
+			TxInpoints:  testInpointsHash3Hash4,
 			BlockIDs: []uint32{
 				123,
 				321,
@@ -170,7 +227,7 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		TxInpoints: testInpointsHash3Hash4,
+		TxInpoints:  testInpointsHash3Hash4,
 		BlockIDs: []uint32{
 			5,
 			6,
@@ -192,7 +249,7 @@ func Benchmark_Bytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		TxInpoints: testInpointsHash3Hash4,
+		TxInpoints:  testInpointsHash3Hash4,
 		BlockIDs: []uint32{
 			5,
 			6,
@@ -212,7 +269,7 @@ func Benchmark_MetaBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		TxInpoints: testInpointsHash3Hash4,
+		TxInpoints:  testInpointsHash3Hash4,
 	}
 
 	b.ReportAllocs()

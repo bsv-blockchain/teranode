@@ -203,3 +203,24 @@ func getKafkaInvalidSubtreeConsumerGroup(logger ulogger.Logger, settings *settin
 
 	return getKafkaConsumerGroup(logger, kafkaInvalidSubtreeConfig, consumerGroupID, true, &settings.Kafka)
 }
+
+func getKafkaTxPolicyRejectedAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	return getKafkaAsyncProducer(ctx, logger, cfg, &settings.Kafka)
+}
+
+func getKafkaTxPolicyRejectedConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
+	consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
+	cfg := settings.Kafka.TxPolicyRejectedConfig
+	if cfg == nil {
+		return nil, nil
+	}
+
+	consumerGroupID = consumerGroupID + "." + random.String(16, random.Alphanumeric)
+
+	return getKafkaConsumerGroup(logger, cfg, consumerGroupID, true, &settings.Kafka)
+}

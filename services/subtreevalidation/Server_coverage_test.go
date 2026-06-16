@@ -143,6 +143,13 @@ func (m *mockKafkaAsyncProducer) Publish(msg *kafka.Message) {
 	}
 }
 
+func (m *mockKafkaAsyncProducer) TryPublish(msg *kafka.Message) bool {
+	if m.publishFunc != nil {
+		m.publishFunc(msg)
+	}
+	return true
+}
+
 func (m *mockKafkaAsyncProducer) Start(ctx context.Context, ch chan *kafka.Message) {
 	if m.startFunc != nil {
 		m.startFunc(ctx, ch)
@@ -178,7 +185,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := &mockKafkaConsumer{}
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.Error(t, err)
 		require.Nil(t, server)
@@ -205,7 +212,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -239,7 +246,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -267,7 +274,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)

@@ -502,9 +502,8 @@ func drain(ch chan relayMsg, timeout time.Duration) []relayMsg {
 
 // TestCanRelayTx_FSMStates verifies the FSM-state gate that determines
 // whether the legacy server may emit transaction inventory. The node must
-// only relay tx when the blockchain FSM is RUNNING; LEGACYSYNCING and
-// CATCHINGBLOCKS both suppress relay. Any error reading the FSM also
-// suppresses relay (fail closed).
+// only relay tx when the blockchain FSM is RUNNING; CATCHINGBLOCKS suppresses
+// relay. Any error reading the FSM also suppresses relay (fail closed).
 func TestCanRelayTx_FSMStates(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -513,7 +512,6 @@ func TestCanRelayTx_FSMStates(t *testing.T) {
 		want     bool
 	}{
 		{name: "RUNNING permits relay", state: blockchain.FSMStateRUNNING, want: true},
-		{name: "LEGACYSYNCING suppresses relay", state: blockchain.FSMStateLEGACYSYNCING, want: false},
 		{name: "CATCHINGBLOCKS suppresses relay", state: blockchain.FSMStateCATCHINGBLOCKS, want: false},
 		{name: "IDLE suppresses relay", state: blockchain.FSMStateIDLE, want: false},
 		{name: "FSM error fails closed", state: blockchain.FSMStateRUNNING, stateErr: errors.NewError("boom"), want: false},
@@ -570,7 +568,6 @@ func TestRelayInventory_AlwaysRelaysBlockInvs(t *testing.T) {
 	for _, state := range []blockchain.FSMStateType{
 		blockchain.FSMStateRUNNING,
 		blockchain.FSMStateCATCHINGBLOCKS,
-		blockchain.FSMStateLEGACYSYNCING,
 	} {
 		t.Run(state.String(), func(t *testing.T) {
 			s, _ := newTestServerForRelay(t, state, nil)

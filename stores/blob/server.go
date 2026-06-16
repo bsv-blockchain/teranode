@@ -307,19 +307,48 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
+	// Close on every return path - the underlying file-store reader holds
+	// a read permit. Previously this handler leaked the permit on success
+	// AND on all four mid-function error returns (seek failure, store does
+	// not support seeking, Read failure, and the fall-through after Write).
+	// handleGet just above has the same defer rc.Close() pattern.
+	defer dataReader.Close()
 
-	// seek the reader to the start position
-	if start > 0 {
-		if seeker, ok := dataReader.(io.Seeker); ok {
-			_, err = seeker.Seek(int64(start), io.SeekStart)
-			if err != nil {
-				http.Error(w, "Failed to seek in blob", http.StatusInternalServerError)
-				return
-			}
-		} else {
-			http.Error(w, "Store does not support seeking", http.StatusInternalServerError)
+	// Range requests address payload bytes, not raw file bytes. The file
+	// blob store's GetIoReader has already consumed any fileformat magic
+	// header from the reader, so the current position is the start of the
+	// payload (offset 8 for header-bearing files, 0 otherwise). We anchor
+	// all subsequent Seeks against this post-header position, otherwise:
+	//   - Seek(int64(start), SeekStart) for start=2 would seek to byte 2
+	//     of the raw file, which is INSIDE the magic header, and Read
+	//     would return header bytes instead of payload.
+	//   - SeekEnd would report the raw file length (payload + header)
+	//     rather than the payload total the client cares about.
+	// The "*" total per RFC 7233 §4.2 is the documented fallback when the
+	// reader is not seekable; this also surfaces the "Store does not
+	// support seeking" error for the start>0 case that's no longer
+	// satisfiable.
+	totalStr := "*"
+	seeker, isSeeker := dataReader.(io.Seeker)
+	if isSeeker {
+		payloadStart, err := seeker.Seek(0, io.SeekCurrent)
+		if err != nil {
+			http.Error(w, "Failed to read blob position", http.StatusInternalServerError)
 			return
 		}
+		rawEnd, err := seeker.Seek(0, io.SeekEnd)
+		if err != nil {
+			http.Error(w, "Failed to determine blob size", http.StatusInternalServerError)
+			return
+		}
+		totalStr = strconv.FormatInt(rawEnd-payloadStart, 10)
+		if _, err = seeker.Seek(payloadStart+int64(start), io.SeekStart); err != nil {
+			http.Error(w, "Failed to seek in blob", http.StatusInternalServerError)
+			return
+		}
+	} else if start > 0 {
+		http.Error(w, "Store does not support seeking", http.StatusInternalServerError)
+		return
 	}
 
 	// read the requested range
@@ -333,7 +362,7 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, len(data)))
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%s", start, end-1, totalStr))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = w.Write(data)
 }

@@ -573,6 +573,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			blockIds,
 			accumulator,
 			validator.WithSkipPolicyChecks(true),
+			validator.WithInBlock(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
 			validator.WithCandidateBlockTime(candidateBlockTime),
@@ -1116,6 +1117,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	validatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
@@ -1127,8 +1129,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		return errors.NewProcessingError("[processTransactionsInLevels] Failed to get FSM current state", err)
 	}
 
-	// During legacy syncing or catching up, disable adding transactions to block assembly
-	if *currentState == blockchain.FSMStateLEGACYSYNCING || *currentState == blockchain.FSMStateCATCHINGBLOCKS {
+	// While catching up blocks, disable adding transactions to block assembly
+	if *currentState == blockchain.FSMStateCATCHINGBLOCKS {
 		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 	}
 
@@ -1202,10 +1204,16 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 				return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at level %d", level)
 			}
 
-			// Skip transactions that were already validated (found in cache or UTXO store)
+			// Skip transactions that were already validated (found in cache or UTXO store).
+			// Today both prepareTxsPerLevel variants filter out cached txs (mTx.tx == nil)
+			// before returning, so this branch is defensive and never fires under the
+			// current contract. If the filter ever passes cached entries through, this
+			// must continue to the next tx in the level rather than abort the entire
+			// level (the previous `return nil` would silently leave the rest of
+			// levelTxs un-validated and report success).
 			if txMetaSlice[mTx.idx].isSet {
 				u.logger.Debugf("[processTransactionsInLevels] Transaction %s already validated (pre-check), skipping", tx.TxIDChainHash().String())
-				return nil
+				continue
 			}
 
 			// Pre-filter the block-scoped accumulator to just this tx's input

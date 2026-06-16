@@ -771,10 +771,6 @@ func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	return true, nil
 }
 
-func (m *MockStore) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	return nil, 0, true, nil
-}
-
 func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	return false, nil
 }

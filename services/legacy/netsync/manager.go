@@ -803,17 +803,17 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
 
-	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-	if err != nil {
-		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", err)
-	}
-
-	if state != nil && *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
-		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
+	// While catching up, ask every newly-connected peer to hold back
+	// transaction announcements to reduce load during sync. The raise is queued
+	// per-peer; the global currentFeeFilter is only the marker the reset path
+	// (resetFeeFilterToDefault) checks, so it must NOT gate the per-peer queue —
+	// otherwise only the first peer to connect during catch-up would be told.
+	// The filter is restored to the policy default once we reach RUNNING.
+	if state, ferr := sm.blockchainClient.GetFSMCurrentState(sm.ctx); ferr != nil {
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", ferr)
+	} else if state != nil && *state == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
-
 		peer.QueueMessage(feeFilter, nil)
-
 		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
 	}
 
@@ -1276,7 +1276,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
-	legacySyncMode := false
 	catchingBlocks := false
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
@@ -1286,13 +1285,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
 	}
 
-	if fsmState != nil {
-		switch *fsmState {
-		case teranodeblockchain.FSMStateLEGACYSYNCING:
-			legacySyncMode = true
-		case teranodeblockchain.FSMStateCATCHINGBLOCKS:
-			catchingBlocks = true
-		}
+	if fsmState != nil && *fsmState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		catchingBlocks = true
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
@@ -1357,24 +1351,37 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
-	// if not in Legacy Sync mode, we need to potentially download the block,
-	// promote block to the block validation via kafka (p2p -> blockvalidation message),
-	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
+	// Hand sole ownership of the decoded block to HandleBlockDirect. The
+	// blockHandler goroutine keeps *bmsg alive until the reply is sent, so
+	// leaving the field set would pin the multi-GB wire block (and its decode
+	// arena) for the whole minutes-long processing of a big block. Copy the
+	// parent hash first — the missing-parent error path below needs it.
+	msgBlock := bmsg.block
+	if msgBlock == nil {
+		return errors.NewProcessingError("[handleBlockMsg][%s] block message carries no block", bmsg.blockHash)
+	}
+
+	prevBlockHash := msgBlock.Header.PrevBlock
+	bmsg.block = nil
+
+	// Process the block directly. A missing-parent error (ErrBlockNotFound)
+	// always triggers a getblocks request from our best block so block
+	// validation can proceed in order — see the orphan-continuation note below.
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, msgBlock); err != nil {
 		if errors.Is(err, errors.ErrBlockNotFound) {
-			// We don't have the parent of this block. During legacy sync /
-			// catching blocks this is typically the peer announcing its tip
-			// while we are still behind — and in the legacy sync protocol that
-			// orphan tip doubles as the batch-continuation signal: the peer
-			// pushes its tip inv after delivering a getblocks batch and waits
-			// for the next getblocks before sending more. Swallowing the
-			// orphan here stalls the sync until the stall detector rotates
-			// the peer, so always answer with a getblocks from our best
-			// block. PushGetBlocksMsg filters duplicate requests and the peer
-			// only invs blocks past the locator fork point, so a redundant
+			// We don't have the parent of this block. While catching blocks
+			// this is typically the peer announcing its tip while we are
+			// still behind — and in the legacy sync protocol that orphan tip
+			// doubles as the batch-continuation signal: the peer pushes its
+			// tip inv after delivering a getblocks batch and waits for the
+			// next getblocks before sending more. Swallowing the orphan here
+			// stalls the sync until the stall detector rotates the peer, so
+			// always answer with a getblocks from our best block.
+			// PushGetBlocksMsg filters duplicate requests and the peer only
+			// invs blocks past the locator fork point, so a redundant
 			// request costs one inv message at most.
 			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
-				bmsg.blockHash, bmsg.block.Header.PrevBlock)
+				bmsg.blockHash, prevBlockHash)
 
 			bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 			if err != nil {
@@ -1404,7 +1411,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-			if !legacySyncMode && !catchingBlocks && !serviceError {
+			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
 
@@ -2509,7 +2516,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	txControlChan := make(chan bool, 1)    // control channel for transaction-related listeners (buffered to prevent blocking)
 
 	// start a go routine to control the kafka listeners based on FSM state
-	// Block-related listeners (INV, blocks final): enabled when NOT in LEGACYSYNCING state
+	// Block-related listeners (INV, blocks final): always enabled
 	// Transaction-related listeners (txmeta): enabled only when in RUNNING state
 	go func() {
 		for {
@@ -2517,9 +2524,11 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			case <-ctx.Done():
 				return
 			case <-time.After(1 * time.Second):
-				// Block-related listeners: enable when NOT in LEGACYSYNCING
-				isLegacySyncing, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateLEGACYSYNCING)
-				blockEnabled := !isLegacySyncing
+				// Block-related listeners are always enabled. The only FSM state
+				// that previously disabled them (legacy sync mode) was removed; no
+				// automated path ever entered it — an operator could only reach it
+				// manually via the setfsmstate CLI / FSM admin endpoint.
+				blockEnabled := true
 
 				// Non-blocking send to avoid deadlock if no one is reading
 				select {
@@ -2559,7 +2568,6 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		}()
 
 		// INV listener receives inventory messages from other nodes
-		// Disabled during LEGACYSYNCING to reduce processing load during catch-up
 		controlCh := make(chan bool)
 		blockListenersCh = append(blockListenersCh, controlCh)
 
@@ -2812,6 +2820,16 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 			}
 
 			if txMeta.IsCoinbase {
+				continue
+			}
+
+			// Never announce transactions that arrived as part of a block or
+			// announced subtree. The txmeta topic also carries those (block
+			// validation, subtree validation, legacy sync pre-warm) to populate
+			// the subtree-validation cache; relaying them as fresh mempool txs
+			// floods peers with getdata for transactions that are long mined —
+			// and often already pruned.
+			if txMeta.InBlock {
 				continue
 			}
 
