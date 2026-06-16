@@ -370,13 +370,21 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
 	}
 
-	// Consume the fileformat.Header before returning the rest of the stream
+	// Consume the fileformat.Header before returning the rest of the stream.
+	// result.Body is the S3 SDK's HTTP response body and holds a network
+	// connection until Close - if header validation fails we must Close
+	// before returning, otherwise the connection is held for the lifetime of
+	// the process. Mirrors the file store's pattern at
+	// stores/blob/file/file.go:996-1002 (validateFileHeader closes the
+	// underlying *os.File on mismatch).
 	header := &fileformat.Header{}
 	if err := header.Read(result.Body); err != nil {
+		_ = result.Body.Close()
 		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header: %v", g.bucket, objectKey, err)
 	}
 	// Optionally, verify the header matches the expected fileType
 	if header.FileType() != fileType {
+		_ = result.Body.Close()
 		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch: got %s, want %s", g.bucket, objectKey, header.FileType(), fileType)
 	}
 
