@@ -629,11 +629,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				}
 			}()
 
-			var (
-				err error
-				// Phase 1: Dequeue multiple batches
-				dequeueBatches = make([]*TxBatch, 0, maxBatchesPerIteration)
-			)
+			// Phase 1: Dequeue multiple batches
+			dequeueBatches := make([]*TxBatch, 0, maxBatchesPerIteration)
 
 			for {
 				select {
@@ -833,23 +830,25 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					stp.setCurrentRunningState(StateRunning)
 
 				case resetBlocksMsg := <-stp.resetCh:
-					stp.setCurrentRunningState(StateResetBlocks)
-
-					err = stp.reset(resetBlocksMsg.blockHeader, resetBlocksMsg.moveBackBlocks, resetBlocksMsg.moveForwardBlocks,
-						resetBlocksMsg.useFastForwardReset, resetBlocksMsg.postProcess)
+					resetErr := stp.runHandlerWithRecover("reset", func() error {
+						stp.setCurrentRunningState(StateResetBlocks)
+						return stp.reset(resetBlocksMsg.blockHeader, resetBlocksMsg.moveBackBlocks, resetBlocksMsg.moveForwardBlocks,
+							resetBlocksMsg.useFastForwardReset, resetBlocksMsg.postProcess)
+					})
 
 					if resetBlocksMsg.responseCh != nil {
-						resetBlocksMsg.responseCh <- ResetResponse{Err: err}
+						resetBlocksMsg.responseCh <- ResetResponse{Err: resetErr}
 					}
 
 					stp.setCurrentRunningState(StateRunning)
 
 				case removeTxHash := <-stp.removeTxCh:
 					// remove the given transaction from the subtrees
-					stp.setCurrentRunningState(StateRemoveTx)
-
-					if err = stp.removeTxFromSubtrees(processorCtx, removeTxHash); err != nil {
-						stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", err.Error())
+					if rmErr := stp.runHandlerWithRecover("removeTxFromSubtrees", func() error {
+						stp.setCurrentRunningState(StateRemoveTx)
+						return stp.removeTxFromSubtrees(processorCtx, removeTxHash)
+					}); rmErr != nil {
+						stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", rmErr.Error())
 					}
 
 					stp.setCurrentRunningState(StateRunning)
@@ -859,9 +858,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					lengthCh <- stp.currentSubtree.Load().Length()
 
 				case errCh := <-stp.checkSubtreeProcessorCh:
-					stp.setCurrentRunningState(StateCheckSubtreeProcessor)
-
-					stp.checkSubtreeProcessor(errCh)
+					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
+						stp.setCurrentRunningState(StateCheckSubtreeProcessor)
+						return stp.checkSubtreeProcessor()
+					})
 
 					stp.setCurrentRunningState(StateRunning)
 
@@ -2805,8 +2805,13 @@ func (stp *SubtreeProcessor) CheckSubtreeProcessor() error {
 }
 
 // checkSubtreeProcessor performs a check on the subtree processor's state.
-func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
+// Returns the first inconsistency encountered, or nil if everything matches.
+// The dispatcher relays the returned value to the caller's errCh, so this
+// function must NOT touch errCh itself - returning multiple errors would
+// wedge the dispatcher on the unbuffered response channel.
+func (stp *SubtreeProcessor) checkSubtreeProcessor() error {
 	stp.logger.Infof("[SubtreeProcessor] checking subtree processor")
+	defer stp.logger.Infof("[SubtreeProcessor] check subtree processor DONE")
 
 	// check all the transactions in the currentTxMap are in the subtrees
 	for subtreeIdx, subtree := range stp.chainedSubtrees {
@@ -2814,18 +2819,14 @@ func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				// check that the coinbase placeholder is in the first subtree
 				if subtreeIdx != 0 || nodeIdx != 0 {
-					errCh <- errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first subtree %d", subtreeIdx)
-
-					break
+					return errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first subtree %d", subtreeIdx)
 				}
 
 				continue
 			}
 
 			if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
-				errCh <- errors.NewSubtreeError("[SubtreeProcessor] tx %s from subtree %d not in currentTxMap", node.Hash.String(), subtreeIdx)
-
-				break
+				return errors.NewSubtreeError("[SubtreeProcessor] tx %s from subtree %d not in currentTxMap", node.Hash.String(), subtreeIdx)
 			}
 		}
 	}
@@ -2836,17 +2837,13 @@ func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				// check that the coinbase placeholder is in the first subtree
 				if nodeIdx != 0 {
-					errCh <- errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first node of subtree %d", nodeIdx)
-
-					break
+					return errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first node of subtree %d", nodeIdx)
 				}
 
 				continue
 			}
 
-			errCh <- errors.NewSubtreeError("[SubtreeProcessor] tx %s from currentSubtree not in currentTxMap", node.Hash.String())
-
-			break
+			return errors.NewSubtreeError("[SubtreeProcessor] tx %s from currentSubtree not in currentTxMap", node.Hash.String())
 		}
 	}
 
@@ -2858,12 +2855,10 @@ func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
 	txCount := stp.TxCount()
 
 	if currentTxMapSize != int(txCount)-1 { // nolint:gosec
-		errCh <- errors.NewSubtreeError("[SubtreeProcessor] currentTxMap size %d does not match txCount %d", currentTxMapSize, txCount-1)
+		return errors.NewSubtreeError("[SubtreeProcessor] currentTxMap size %d does not match txCount %d", currentTxMapSize, txCount-1)
 	}
 
-	errCh <- nil
-
-	stp.logger.Infof("[SubtreeProcessor] check subtree processor DONE")
+	return nil
 }
 
 // GetCompletedSubtreesForMiningCandidate retrieves all completed subtrees for block mining.

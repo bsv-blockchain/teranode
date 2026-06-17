@@ -452,9 +452,7 @@ func TestReChainSubtrees(t *testing.T) {
 	assert.Equal(t, uint64(21), stp.chainedSubtrees[5].Nodes[2].Fee)
 
 	// Check state using internal method (since Start() is not running)
-	errCh := make(chan error, 1)
-	stp.checkSubtreeProcessor(errCh)
-	require.NoError(t, <-errCh)
+	require.NoError(t, stp.checkSubtreeProcessor())
 
 	node := stp.chainedSubtrees[5].Nodes[2]
 
@@ -488,9 +486,7 @@ func TestReChainSubtrees(t *testing.T) {
 	}
 
 	// Check state using internal method (since Start() is not running)
-	errCh2 := make(chan error, 1)
-	stp.checkSubtreeProcessor(errCh2)
-	require.NoError(t, <-errCh2)
+	require.NoError(t, stp.checkSubtreeProcessor())
 }
 
 func TestGetMerkleProofForCoinbase(t *testing.T) {
