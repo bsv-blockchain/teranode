@@ -1191,8 +1191,10 @@ func (stp *SubtreeProcessor) GetCurrentLength() int {
 // Returns:
 //   - ResetResponse: Response containing any errors encountered
 func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse {
-	responseCh := make(chan ResetResponse)
-	stp.resetCh <- &resetBlocks{
+	ctx := stp.processorContext()
+
+	responseCh := make(chan ResetResponse, 1)
+	req := &resetBlocks{
 		blockHeader:         blockHeader,
 		moveBackBlocks:      moveBackBlocks,
 		moveForwardBlocks:   moveForwardBlocks,
@@ -1201,7 +1203,18 @@ func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlock
 		postProcess:         postProcess,
 	}
 
-	return <-responseCh
+	select {
+	case stp.resetCh <- req:
+	case <-ctx.Done():
+		return ResetResponse{Err: errors.NewProcessingError("[SubtreeProcessor] Reset aborted: processor stopped before request delivered", ctx.Err())}
+	}
+
+	select {
+	case resp := <-responseCh:
+		return resp
+	case <-ctx.Done():
+		return ResetResponse{Err: errors.NewProcessingError("[SubtreeProcessor] Reset aborted: processor stopped while waiting for response", ctx.Err())}
+	}
 }
 
 func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block,
@@ -2789,11 +2802,22 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 // Returns:
 //   - error: Any error encountered during the check
 func (stp *SubtreeProcessor) CheckSubtreeProcessor() error {
-	errCh := make(chan error)
+	ctx := stp.processorContext()
 
-	stp.checkSubtreeProcessorCh <- errCh
+	errCh := make(chan error, 1)
 
-	return <-errCh
+	select {
+	case stp.checkSubtreeProcessorCh <- errCh:
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] CheckSubtreeProcessor aborted: processor stopped before request delivered", ctx.Err())
+	}
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] CheckSubtreeProcessor aborted: processor stopped while waiting for response", ctx.Err())
+	}
 }
 
 // checkSubtreeProcessor performs a check on the subtree processor's state.
@@ -2946,14 +2970,26 @@ func (stp *SubtreeProcessor) updatePrecomputedMiningData() {
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
-	errChan := make(chan error)
+	ctx := stp.processorContext()
 
-	stp.moveForwardBlockChan <- moveBlockRequest{
+	errChan := make(chan error, 1)
+	req := moveBlockRequest{
 		block:   block,
 		errChan: errChan,
 	}
 
-	return <-errChan
+	select {
+	case stp.moveForwardBlockChan <- req:
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] MoveForwardBlock aborted: processor stopped before request delivered", ctx.Err())
+	}
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] MoveForwardBlock aborted: processor stopped while waiting for response", ctx.Err())
+	}
 }
 
 // Reorg handles blockchain reorganization by processing moved blocks.
@@ -2965,14 +3001,27 @@ func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 // Returns:
 //   - error: Any error encountered during reorganization
 func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error {
-	errChan := make(chan error)
-	stp.reorgBlockChan <- reorgBlocksRequest{
+	ctx := stp.processorContext()
+
+	errChan := make(chan error, 1)
+	req := reorgBlocksRequest{
 		moveBackBlocks:    moveBackBlocks,
 		moveForwardBlocks: moveForwardBlocks,
 		errChan:           errChan,
 	}
 
-	return <-errChan
+	select {
+	case stp.reorgBlockChan <- req:
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] Reorg aborted: processor stopped before request delivered", ctx.Err())
+	}
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return errors.NewProcessingError("[SubtreeProcessor] Reorg aborted: processor stopped while waiting for response", ctx.Err())
+	}
 }
 
 // reorgBlocks performs an incremental blockchain reorganization by processing blocks efficiently.
