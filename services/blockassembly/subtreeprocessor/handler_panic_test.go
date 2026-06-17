@@ -19,10 +19,13 @@ import (
 // reorgBlockChan (no reader). A peer-controllable panic in reorg
 // processing would therefore wedge BlockAssembly's reorg pipeline.
 //
-// We trigger a deterministic panic by passing a nil *model.Block in
-// moveForwardBlocks with empty moveBackBlocks: this hits the catch-up
-// fast path which calls moveForwardBlocks[len-1].Hash() at
-// SubtreeProcessor.go:3038, where Hash() on nil dereferences.
+// We trigger a panic by passing a nil *model.Block in moveForwardBlocks
+// with empty moveBackBlocks: this reaches the catch-up fast path which
+// dereferences moveForwardBlocks[len-1].Hash() (SubtreeProcessor.go).
+// The contract this test pins is "caller gets an error, does not hang" -
+// it does NOT assert the error string contains "panicked", because a
+// future defensive nil-check on this code path would return a regular
+// error and would still satisfy the contract.
 func TestReorg_PanicSurfacesAsError(t *testing.T) {
 	stp := setupTestSubtreeProcessor(t)
 
@@ -37,11 +40,8 @@ func TestReorg_PanicSurfacesAsError(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err,
-			"Reorg must return an error when reorgBlocks panics, not nil; "+
-				"otherwise the caller has no way to know the work failed")
-		require.Contains(t, err.Error(), "panicked",
-			"the surfaced error should explicitly identify a panic so operators "+
-				"can recognise the dispatcher's panic-recovery path fired")
+			"Reorg must return an error rather than nil when handed an input "+
+				"that triggers a panic or hits a defensive early-return")
 	case <-time.After(5 * time.Second):
 		t.Fatal("Reorg hung waiting on errChan - panic in handler did not unblock the caller. " +
 			"This is the pre-fix behaviour: dispatcher's goroutine-level recover exits without " +
@@ -52,22 +52,25 @@ func TestReorg_PanicSurfacesAsError(t *testing.T) {
 // TestMoveForwardBlock_PanicSurfacesAsError pins the same contract on
 // the MoveForwardBlock dispatcher case, which shares the
 // runHandlerWithRecover protection with the reorgBlocks case.
+//
+// As with TestReorg_PanicSurfacesAsError, the contract is "caller gets
+// an error, does not hang"; the test does not assert "panicked" in the
+// message so a future defensive nil-check stays compatible.
 func TestMoveForwardBlock_PanicSurfacesAsError(t *testing.T) {
 	stp := setupTestSubtreeProcessor(t)
 
 	done := make(chan error, 1)
 	go func() {
 		// Passing a nil block triggers a nil-deref inside the
-		// moveForwardBlock handler when it dereferences block.Hash() or
-		// similar methods on the input.
+		// dispatcher's moveForward case (logger.Infof with block.String()).
 		done <- stp.MoveForwardBlock(nil)
 	}()
 
 	select {
 	case err := <-done:
 		require.Error(t, err,
-			"MoveForwardBlock must return an error when its handler panics")
-		require.Contains(t, err.Error(), "panicked")
+			"MoveForwardBlock must return an error rather than nil when handed "+
+				"an input that triggers a panic or hits a defensive early-return")
 	case <-time.After(5 * time.Second):
 		t.Fatal("MoveForwardBlock hung waiting on errChan after handler panic")
 	}

@@ -796,34 +796,59 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					moveForwardReq.errChan <- stp.runHandlerWithRecover("moveForwardBlock", func() error {
 						stp.setCurrentRunningState(StateMoveForwardBlock)
 
-						logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
-
-						// create empty map for processed conflicting hashes
-						processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
-
-						// store current state before attempting to move forward the block
+						// Snapshot + defer registration BEFORE any user-input deref (e.g.
+						// the block.String() in the log line below) so that a panic on
+						// nil/malformed input still unwinds via the rollback defer rather
+						// than skipping past it. Cheap pointer loads, ordering matters.
 						originalChainedSubtrees := stp.chainedSubtrees
 						originalCurrentSubtree := stp.currentSubtree.Load()
 						originalCurrentTxMap := stp.currentTxMap
 						currentBlockHeader := stp.currentBlockHeader.Load()
 
-						_, _, mfErr := stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, false, true)
-						if mfErr != nil {
-							// rollback to previous state
+						rollback := func() {
 							stp.chainedSubtrees = originalChainedSubtrees
 							stp.currentSubtree.Store(originalCurrentSubtree)
 							stp.currentTxMap = originalCurrentTxMap
 							stp.currentBlockHeader.Store(currentBlockHeader)
-
-							// recalculate tx count from subtrees
 							stp.setTxCountFromSubtrees()
-						} else {
-							// Finalize block processing
-							// this will also set the current block header
-							stp.finalizeBlockProcessing(processorCtx, moveForwardReq.block)
 						}
 
-						return mfErr
+						// Defer panic-aware rollback so a panic in moveForwardBlock unwinds
+						// the partial state too, not just an error return. Without this,
+						// runHandlerWithRecover surfaces "panicked" to the caller while the
+						// in-memory state stays half-mutated until BA's reset fallback fires.
+						// Finalize-time panics are intentionally NOT rolled back: by then the
+						// block has been applied (chainedSubtrees reflect it), and rewinding
+						// the 4 fields would put them out of sync with the SetBlockProcessedAt
+						// side effect that may have already committed.
+						committed := false
+						defer func() {
+							if r := recover(); r != nil {
+								if !committed {
+									rollback()
+								}
+								panic(r)
+							}
+						}()
+
+						logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
+
+						// create empty map for processed conflicting hashes
+						processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
+
+						_, _, mfErr := stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, false, true)
+						if mfErr != nil {
+							rollback()
+							return mfErr
+						}
+
+						// moveForwardBlock succeeded - past the point where rollback is correct.
+						committed = true
+
+						// Finalize block processing - sets current block header, fires SetBlockProcessedAt, etc.
+						stp.finalizeBlockProcessing(processorCtx, moveForwardReq.block)
+
+						return nil
 					})
 
 					logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor DONE", moveForwardReq.block.String())
@@ -843,13 +868,22 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					stp.setCurrentRunningState(StateRunning)
 
 				case removeTxHash := <-stp.removeTxCh:
-					// remove the given transaction from the subtrees
-					if rmErr := stp.runHandlerWithRecover("removeTxFromSubtrees", func() error {
+					// remove the given transaction from the subtrees.
+					// Inline panic recovery (rather than runHandlerWithRecover) because
+					// there is no errChan response - the case body logs failures itself,
+					// and using the shared helper would double-log on panic (helper logs
+					// panic + stack, case body then logs the wrapped error).
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								stp.logger.Errorf("[SubtreeProcessor][removeTxFromSubtrees] panic recovered: %v\n%s", r, debug.Stack())
+							}
+						}()
 						stp.setCurrentRunningState(StateRemoveTx)
-						return stp.removeTxFromSubtrees(processorCtx, removeTxHash)
-					}); rmErr != nil {
-						stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", rmErr.Error())
-					}
+						if err := stp.removeTxFromSubtrees(processorCtx, removeTxHash); err != nil {
+							stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", err.Error())
+						}
+					}()
 
 					stp.setCurrentRunningState(StateRunning)
 
@@ -3091,31 +3125,48 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		originalCurrentTxMap := stp.currentTxMap
 		currentBlockHeader := stp.currentBlockHeader.Load()
 
+		rollback := func() {
+			stp.chainedSubtrees = originalChainedSubtrees
+			stp.currentSubtree.Store(originalCurrentSubtree)
+			stp.currentTxMap = originalCurrentTxMap
+			stp.currentBlockHeader.Store(currentBlockHeader)
+			stp.setTxCountFromSubtrees()
+		}
+
+		// Defer panic-aware rollback so a panic mid-loop unwinds the partial
+		// state too. The inline rollback below only fires on error return;
+		// without this defer a panic would leave chainedSubtrees / currentSubtree
+		// / currentTxMap / currentBlockHeader half-mutated until BA's reset
+		// fallback fires. Re-panic so the dispatcher's runHandlerWithRecover
+		// still surfaces "panicked" to the caller.
+		catchupCommitted := false
+		defer func() {
+			if r := recover(); r != nil {
+				if !catchupCommitted {
+					rollback()
+				}
+				panic(r)
+			}
+		}()
+
 		// Just move forward the blocks and do not go into a full reorg
 		for idx, block := range moveForwardBlocks {
 			// skip dequeue if not the last block
 			skipNotificationsAndDequeue := idx != len(moveForwardBlocks)-1
 
 			if _, _, err = stp.moveForwardBlock(ctx, block, skipNotificationsAndDequeue, processedConflictingHashesMap, skipNotificationsAndDequeue, true); err != nil {
-				// rollback to previous state
-				stp.chainedSubtrees = originalChainedSubtrees
-				stp.currentSubtree.Store(originalCurrentSubtree)
-				stp.currentTxMap = originalCurrentTxMap
-				stp.currentBlockHeader.Store(currentBlockHeader)
-
-				// recalculate tx count from subtrees
-				stp.setTxCountFromSubtrees()
-
+				rollback()
 				return err
-			} else {
-				// Finalize block processing
-				// this will also set the current block header
-				stp.finalizeBlockProcessing(ctx, block)
 			}
+			// Finalize block processing - sets current block header etc. Any
+			// panic from here is past the rollback point: the block has been
+			// applied and SetBlockProcessedAt may have committed.
+			stp.finalizeBlockProcessing(ctx, block)
 
 			stp.currentBlockHeader.Store(block.Header)
 		}
 
+		catchupCommitted = true
 		return nil
 
 	} else {
