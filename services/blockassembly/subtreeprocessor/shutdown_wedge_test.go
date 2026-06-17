@@ -71,6 +71,44 @@ func TestShutdown_CheckSubtreeProcessor_DoesNotHang(t *testing.T) {
 	requireErrorBeforeTimeout(t, done, "CheckSubtreeProcessor")
 }
 
+// TestShutdown_PanicExit_DoesNotHang pins the contract for the harder
+// exit path: the dispatcher is killed by a recovered panic, NOT by
+// Stop(). Pre-fix this branch left processorContext() live (only Stop's
+// cancel() closed it), so entry-point callers selecting on
+// processorContext().Done() would still block forever on the request
+// send despite the dispatcher being dead. The Major-item fix cancels
+// the context in the dispatcher's deferred recover so any exit path -
+// clean ctx-done, fall-through, panic recovery - releases blocked
+// callers.
+//
+// The panic is induced by closing the response channel of a lengthCh
+// request before the dispatcher consumes it. The dispatcher's
+// `lengthCh <- stp.currentSubtree.Load().Length()` send on a closed
+// channel panics; the goroutine-level recover at the top of Start
+// catches it.
+func TestShutdown_PanicExit_DoesNotHang(t *testing.T) {
+	stp := setupTestSubtreeProcessor(t)
+
+	// Inject a panic into the dispatcher's lengthCh handler: close the
+	// response channel before the dispatcher writes to it. The dispatcher
+	// runs `lengthCh <- ...` which panics on send-to-closed-channel.
+	poisoned := make(chan int)
+	close(poisoned)
+	stp.lengthCh <- poisoned
+
+	// Wait for the goroutine-level recover to fire and set stopped=true.
+	// Bounded poll, not a sleep loop - tests under load may take longer
+	// than a single sleep would tolerate.
+	require.Eventually(t, stp.stopped.Load, 2*time.Second, 10*time.Millisecond,
+		"dispatcher did not exit within 2 s after the induced panic; the goroutine-level recover may not have fired")
+
+	// Confirm the entry-point caller now unblocks on processorContext().Done()
+	// even though Stop() was never called.
+	done := make(chan error, 1)
+	go func() { done <- stp.Reorg(nil, nil) }()
+	requireErrorBeforeTimeout(t, done, "Reorg-after-panic-exit")
+}
+
 // newStoppedSubtreeProcessor returns a SubtreeProcessor with its dispatcher
 // goroutine torn down. setupTestSubtreeProcessor already registers a Cleanup
 // hook that calls Stop again, which is safe via stopOnce.

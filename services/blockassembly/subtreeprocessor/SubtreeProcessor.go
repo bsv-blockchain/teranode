@@ -620,9 +620,18 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 		stp.setCurrentRunningState(StateRunning)
 
 		go func() {
-			// Recover from panics (e.g., send on closed channel during shutdown)
+			// Recover from panics (e.g., send on closed channel during shutdown).
+			// Cancel the lifecycle context on EVERY exit path - clean ctx-done,
+			// panic recovery, fall-through - so callers blocked on
+			// processorContext().Done() (the entry-point shutdown-wedge guards
+			// below) unblock fast. Without the cancel, a panicked exit left
+			// stopped=true but processorContext() still live, so subsequent
+			// Reorg/MoveForwardBlock/Reset/CheckSubtreeProcessor calls would
+			// block forever on the request send despite the dispatcher being
+			// dead. cancel() is idempotent with the one in Stop().
 			defer func() {
 				stp.stopped.Store(true) // Must be set on any exit so Stop() does not hang
+				cancel()
 				if r := recover(); r != nil {
 					logger.Warnf("[SubtreeProcessor] goroutine recovered from panic: %v", r)
 				}
@@ -2804,6 +2813,14 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 func (stp *SubtreeProcessor) CheckSubtreeProcessor() error {
 	ctx := stp.processorContext()
 
+	// NOTE: cap-1 here makes the response-receive side ctx-cancellable, but it
+	// does NOT eliminate the dispatcher-side wedge that exists pre-#1110: the
+	// dispatcher's checkSubtreeProcessor handler can send multiple values on
+	// errCh (one per detected inconsistency, plus a final nil), and only the
+	// first send completes - any second send blocks because the caller has
+	// read once and returned. PR #1110 refactors checkSubtreeProcessor to
+	// return a single error so the dispatcher relays exactly one value;
+	// once that lands, the cap-1 buffer is sufficient.
 	errCh := make(chan error, 1)
 
 	select {
