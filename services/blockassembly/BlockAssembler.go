@@ -510,6 +510,7 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 		// Even though BlockValidation handles moveForward, we need this map to avoid marking
 		// transactions that appear in BOTH moveBack and moveForward as unmined
 		moveForwardTxMap := make(map[chainhash.Hash]struct{})
+		moveForwardMapComplete := true
 		for _, blockWithMeta := range moveForwardBlocksWithMeta {
 			if blockWithMeta.meta.Invalid {
 				continue
@@ -518,6 +519,16 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			block := blockWithMeta.block
 			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
 			if err != nil {
+				// Without this block's txs in moveForwardTxMap, the moveBack filter
+				// below will treat its txs as net-unmined and write unmined_since
+				// on entries that ARE in the new main chain. BlockValidation's
+				// background job (which clears unmined_since for moveForward txs)
+				// races with that write, so the corruption can persist for a full
+				// reconcile cycle. Mark the map untrusted and skip the moveBack
+				// marker entirely - on next reconcile, GetSubtrees usually
+				// succeeds and the marker runs correctly.
+				b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveForward block %s: %v (skipping moveBack unmined_since marker for this reset cycle; next reconcile will retry)", block.Hash().String(), err)
+				moveForwardMapComplete = false
 				continue
 			}
 
@@ -530,42 +541,51 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 			}
 		}
 
-		// Now collect moveBack transactions, excluding those in moveForward
-		// Net unmined = transactions ONLY in moveBack (not also in moveForward)
-		moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
+		// Only write unmined_since markers when we trust the moveForward map.
+		// If any moveForward block's GetSubtrees failed above, moveForwardTxMap
+		// is incomplete: the moveBack filter would treat its txs as net-unmined
+		// and write unmined_since on entries that ARE in the new main chain.
+		// loadUnminedTransactions still runs after subtreeProcessor.Reset and
+		// recovers what is already flagged unmined; the next reconcile cycle
+		// retries and usually succeeds.
+		if moveForwardMapComplete {
+			// Now collect moveBack transactions, excluding those in moveForward
+			// Net unmined = transactions ONLY in moveBack (not also in moveForward)
+			moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
 
-		for _, blockWithMeta := range moveBackBlocksWithMeta {
-			if blockWithMeta.meta.Invalid {
-				// Skip invalid blocks — BlockValidation has already handled them via
-				// setTxMinedStatus(unsetMined=true) which we waited for above.
-				continue
-			}
+			for _, blockWithMeta := range moveBackBlocksWithMeta {
+				if blockWithMeta.meta.Invalid {
+					// Skip invalid blocks — BlockValidation has already handled them via
+					// setTxMinedStatus(unsetMined=true) which we waited for above.
+					continue
+				}
 
-			block := blockWithMeta.block
-			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
-			if err != nil {
-				b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveBack block %s: %v (will skip)", block.Hash().String(), err)
-				continue
-			}
+				block := blockWithMeta.block
+				blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
+				if err != nil {
+					b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveBack block %s: %v (will skip)", block.Hash().String(), err)
+					continue
+				}
 
-			for _, st := range blockSubtrees {
-				for _, node := range st.Nodes {
-					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-						// Only add if NOT in moveForward (these are net unmined)
-						if _, inForward := moveForwardTxMap[node.Hash]; !inForward {
-							moveBackTxs = append(moveBackTxs, node.Hash)
+				for _, st := range blockSubtrees {
+					for _, node := range st.Nodes {
+						if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
+							// Only add if NOT in moveForward (these are net unmined)
+							if _, inForward := moveForwardTxMap[node.Hash]; !inForward {
+								moveBackTxs = append(moveBackTxs, node.Hash)
+							}
 						}
 					}
 				}
 			}
-		}
 
-		// Mark net unmined transactions as NOT on longest chain (set unmined_since)
-		if len(moveBackTxs) > 0 {
-			if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, moveBackTxs, false); err != nil {
-				b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", err)
-			} else {
-				b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward)", len(moveBackTxs))
+			// Mark net unmined transactions as NOT on longest chain (set unmined_since)
+			if len(moveBackTxs) > 0 {
+				if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, moveBackTxs, false); err != nil {
+					b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", err)
+				} else {
+					b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward)", len(moveBackTxs))
+				}
 			}
 		}
 	}
