@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -782,44 +783,51 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					stp.setCurrentRunningState(StateRunning)
 
 				case reorgReq := <-stp.reorgBlockChan:
-					stp.setCurrentRunningState(StateReorg)
-					logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
+					reorgReq.errChan <- stp.runHandlerWithRecover("reorgBlocks", func() error {
+						stp.setCurrentRunningState(StateReorg)
+						logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 
-					reorgReq.errChan <- stp.reorgBlocks(processorCtx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
+						reorgErr := stp.reorgBlocks(processorCtx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
 
-					logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
+						logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
+						return reorgErr
+					})
+
 					stp.setCurrentRunningState(StateRunning)
 
 				case moveForwardReq := <-stp.moveForwardBlockChan:
-					stp.setCurrentRunningState(StateMoveForwardBlock)
+					moveForwardReq.errChan <- stp.runHandlerWithRecover("moveForwardBlock", func() error {
+						stp.setCurrentRunningState(StateMoveForwardBlock)
 
-					logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
+						logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
 
-					// create empty map for processed conflicting hashes
-					processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
+						// create empty map for processed conflicting hashes
+						processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 
-					// store current state before attempting to move forward the block
-					originalChainedSubtrees := stp.chainedSubtrees
-					originalCurrentSubtree := stp.currentSubtree.Load()
-					originalCurrentTxMap := stp.currentTxMap
-					currentBlockHeader := stp.currentBlockHeader.Load()
+						// store current state before attempting to move forward the block
+						originalChainedSubtrees := stp.chainedSubtrees
+						originalCurrentSubtree := stp.currentSubtree.Load()
+						originalCurrentTxMap := stp.currentTxMap
+						currentBlockHeader := stp.currentBlockHeader.Load()
 
-					if _, _, err = stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, false, true); err != nil {
-						// rollback to previous state
-						stp.chainedSubtrees = originalChainedSubtrees
-						stp.currentSubtree.Store(originalCurrentSubtree)
-						stp.currentTxMap = originalCurrentTxMap
-						stp.currentBlockHeader.Store(currentBlockHeader)
+						_, _, mfErr := stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, false, true)
+						if mfErr != nil {
+							// rollback to previous state
+							stp.chainedSubtrees = originalChainedSubtrees
+							stp.currentSubtree.Store(originalCurrentSubtree)
+							stp.currentTxMap = originalCurrentTxMap
+							stp.currentBlockHeader.Store(currentBlockHeader)
 
-						// recalculate tx count from subtrees
-						stp.setTxCountFromSubtrees()
-					} else {
-						// Finalize block processing
-						// this will also set the current block header
-						stp.finalizeBlockProcessing(processorCtx, moveForwardReq.block)
-					}
+							// recalculate tx count from subtrees
+							stp.setTxCountFromSubtrees()
+						} else {
+							// Finalize block processing
+							// this will also set the current block header
+							stp.finalizeBlockProcessing(processorCtx, moveForwardReq.block)
+						}
 
-					moveForwardReq.errChan <- err
+						return mfErr
+					})
 
 					logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor DONE", moveForwardReq.block.String())
 					stp.setCurrentRunningState(StateRunning)
@@ -2936,6 +2944,41 @@ func (stp *SubtreeProcessor) updatePrecomputedMiningData() {
 		Subtrees:       subtreesCopy,
 		UpdatedAt:      time.Now(),
 	})
+}
+
+// runHandlerWithRecover invokes the supplied handler and converts any
+// panic into an error. The dispatcher loop uses this around handlers
+// whose callers wait on a response channel - reorgBlocks and
+// moveForwardBlock are the production-critical ones - so a panic in
+// consensus-critical code surfaces to the in-flight Reorg/MoveForward
+// caller as an actionable error rather than leaving them blocked on
+// errChan forever.
+//
+// Before this helper, a panic in reorgBlocks was caught by the
+// goroutine-level recover at the dispatcher's top (which only logs and
+// exits), so:
+//
+//   - The processor goroutine died, signalling stopped=true.
+//   - The errChan send never happened, so the caller of Reorg() blocked
+//     forever on <-errChan.
+//   - The next BlockAssembler.handleReorg call would also try to send on
+//     reorgBlockChan, which now has no reader, blocking forever too.
+//
+// A peer-controllable panic during reorg processing (deep reorgs touch
+// a lot of code) would therefore wedge BlockAssembly's reorg pipeline.
+// This helper catches the panic at the handler boundary so the response
+// channel always gets a value, and the dispatcher keeps running.
+//
+// The recovered panic is logged with a stack trace; operators who see
+// repeated panics for the same input have a clear escalation signal.
+func (stp *SubtreeProcessor) runHandlerWithRecover(name string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stp.logger.Errorf("[SubtreeProcessor][%s] panic recovered: %v\n%s", name, r, debug.Stack())
+			err = errors.NewProcessingError("[SubtreeProcessor][%s] panicked: %v", name, r)
+		}
+	}()
+	return fn()
 }
 
 // MoveForwardBlock updates the subtrees when a new block is found.
