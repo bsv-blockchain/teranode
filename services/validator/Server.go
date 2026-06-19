@@ -421,13 +421,18 @@ func (v *Server) Stop(_ context.Context) error {
 		}
 	}
 
+	// DC15: drain the tx-meta batcher BEFORE stopping the txmeta producer below,
+	// so queued tx-meta is flushed INTO the producer first; then the producer
+	// flushes to Kafka. The batcher lives on the concrete *Validator (same
+	// package); type-assert so non-*Validator Interface impls (test doubles) are
+	// skipped. Bounded drain (go-batcher v2.0.4 Close blocks + is idempotent).
+	if val, ok := v.validator.(*Validator); ok && val.txmetaKafkaBatcher != nil {
+		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, val.txmetaKafkaBatcher.Close)
+	}
+
 	// DC11: synchronously stop the async producers so their final flush completes
 	// inside the bounded Stop() window instead of racing process exit. Guard each
 	// and continue past failures.
-	//
-	// Stage D will drain v.validator.txmetaKafkaBatcher HERE — before the producer
-	// Stops below — so queued tx-meta is flushed into the producer first. That
-	// drain is intentionally NOT added in this stage.
 	if v.txMetaKafkaProducerClient != nil {
 		if err := v.txMetaKafkaProducerClient.Stop(); err != nil {
 			v.logger.Errorf("[Validator] failed to stop txmeta kafka producer gracefully: %v", err)

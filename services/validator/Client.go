@@ -150,9 +150,15 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
-// Close gracefully shuts down the validator client, releasing the gRPC
-// connection it dialed in NewClient.
+// Close gracefully shuts down the validator client: it drains the request
+// batcher (flushing queued validations while the connection is still live) and
+// then releases the gRPC connection it dialed in NewClient. The bounded drain
+// runs BEFORE the conn close.
 func (c *Client) Close() error {
+	if c.batcher != nil {
+		util.DrainBatcher(c.logger, "validator_client", util.DefaultBatcherDrainTimeout, c.batcher.Close)
+	}
+
 	if c.conn != nil {
 		return c.conn.Close()
 	}

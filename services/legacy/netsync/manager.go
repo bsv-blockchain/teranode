@@ -43,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -399,6 +400,15 @@ type SyncManager struct {
 	// synchronously; without a field there is no handle to flush it on shutdown.
 	legacyKafkaInvProducer kafka.KafkaAsyncProducerI
 	txAnnounceBatcher      *batcher.BatcherWithDedup[TxHashAndFee]
+	// txAnnounceMu / txAnnounceClosed guard txAnnounceBatcher.Put against the
+	// batcher's Close in Stop(). go-batcher v2.0.4 PANICS on Put-after-Close, and
+	// the txmeta Kafka listener (which Puts into the batcher) is a fire-and-forget
+	// goroutine not joined by Stop(). The RLock/RWLock pairing guarantees no Put
+	// runs concurrently with or after the drain: Stop takes the write lock (which
+	// waits for any in-flight Put holding the read lock), sets closed, then drains;
+	// subsequent Puts see closed and become no-ops. (DC15 / review C1.)
+	txAnnounceMu     sync.RWMutex
+	txAnnounceClosed bool
 
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
@@ -2379,6 +2389,10 @@ func (sm *SyncManager) Stop() error {
 	sm.requestedTxns.Stop()
 	sm.requestedBlocks.Stop()
 
+	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
+	// tearing down transports.
+	sm.closeTxAnnounceBatcher()
+
 	// DC11: synchronously stop the legacy INV async producer so its final flush
 	// completes inside the bounded Stop() window. Safe here — handlerDone above
 	// guarantees no more sends to legacyKafkaInvCh, which producer.Stop() closes.
@@ -2389,6 +2403,38 @@ func (sm *SyncManager) Stop() error {
 	}
 
 	return nil
+}
+
+// announceTx queues a transaction for peer announcement via the tx-announce
+// batcher, unless the batcher has been closed by closeTxAnnounceBatcher during
+// shutdown. go-batcher v2.0.4 panics on Put-after-Close, and this is called from
+// the txmeta Kafka listener goroutine (not joined by Stop), so the read lock
+// pairs with the write lock in closeTxAnnounceBatcher to make a post-close Put a
+// safe no-op.
+func (sm *SyncManager) announceTx(item *TxHashAndFee) {
+	sm.txAnnounceMu.RLock()
+	defer sm.txAnnounceMu.RUnlock()
+
+	if !sm.txAnnounceClosed && sm.txAnnounceBatcher != nil {
+		sm.txAnnounceBatcher.Put(item)
+	}
+}
+
+// closeTxAnnounceBatcher marks the tx-announce batcher closed (so further
+// announceTx calls become no-ops) and then drains it under a bounded timeout.
+// Taking the write lock first waits for any in-flight announceTx (holding the
+// read lock) to finish, so no Put can race the drain. Idempotent.
+func (sm *SyncManager) closeTxAnnounceBatcher() {
+	sm.txAnnounceMu.Lock()
+	alreadyClosed := sm.txAnnounceClosed
+	sm.txAnnounceClosed = true
+	sm.txAnnounceMu.Unlock()
+
+	if alreadyClosed || sm.txAnnounceBatcher == nil {
+		return
+	}
+
+	util.DrainBatcher(sm.logger, "netsync_tx_announce", util.DefaultBatcherDrainTimeout, sm.txAnnounceBatcher.Close)
 }
 
 // SyncPeerID returns the ID of the current sync peer, or 0 if there is none.
@@ -2849,7 +2895,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				continue
 			}
 
-			sm.txAnnounceBatcher.Put(&TxHashAndFee{
+			sm.announceTx(&TxHashAndFee{
 				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,

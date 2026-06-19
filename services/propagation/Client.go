@@ -212,6 +212,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 // A new client instance should be created if needed.
 
 func (c *Client) Close() error {
+	// Drain the batcher first so queued transactions are flushed while the
+	// connection is still live. Bounded; the batcher is owned by this client
+	// regardless of who owns the conn, so drain it even for injected conns.
+	if c.batcher != nil {
+		util.DrainBatcher(c.logger, "propagation_client", util.DefaultBatcherDrainTimeout, c.batcher.Close)
+	}
+
 	if c.ownsConn && c.client != nil && c.conn != nil {
 		_ = c.conn.Close()
 	}

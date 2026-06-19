@@ -211,8 +211,16 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	return client, nil
 }
 
-// Close releases the gRPC connection owned by this client.
+// Close drains the transaction batcher (so queued submissions are flushed) and
+// then releases the gRPC connection owned by this client. The drain runs BEFORE
+// the conn close so in-flight batch sends still have a live connection; it is
+// bounded so a hung flush cannot stall shutdown (go-batcher v2.0.4 Close blocks
+// until drained and is idempotent — DC17).
 func (s *Client) Close() error {
+	if s.batcher != nil {
+		util.DrainBatcher(s.logger, "blockassembly_client", util.DefaultBatcherDrainTimeout, s.batcher.Close)
+	}
+
 	if s.conn != nil {
 		return s.conn.Close()
 	}
