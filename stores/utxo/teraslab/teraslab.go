@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-batcher"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	teraslab "github.com/icellan/teraslab/client/go"
 
 	"github.com/bsv-blockchain/teranode/settings"
