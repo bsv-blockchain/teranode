@@ -1073,9 +1073,9 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 
 **Observability.**
 
-- `teranode_blockvalidation_setmined_retry_total{blockhash}` (counter) — incremented on every retry. Alert when a single label series approaches the retry ceiling.
-- `teranode_blockvalidation_setmined_drops_total{blockhash}` (counter) — incremented when the worker drops a block after exceeding retries. Any non-zero value is page-worthy.
-- Log marker: grep `manual_intervention_required` in the blockvalidation service logs for dropped block hashes.
+- `teranode_blockvalidation_setmined_retry_total` (counter, aggregate across all blocks) — incremented on every retry. Alert on a sustained non-zero rate (e.g. `rate(...[5m]) > 0`); a rising rate indicates blocks with historical-corrupt state that need manual repair. The specific block hash is not a label — recover it from the `manual_intervention_required` log line (see below).
+- `teranode_blockvalidation_setmined_drops_total` (counter, aggregate across all blocks) — incremented when the worker drops a block after exceeding retries. Any non-zero value (or an increase over a window) is page-worthy.
+- Log marker: grep `manual_intervention_required` in the blockvalidation service logs for the dropped block hashes; this is the authoritative source for the specific block, since the metrics are no longer labeled by `blockhash`.
 
 **Operator runbook for `manual_intervention_required`.**
 
@@ -1083,9 +1083,9 @@ After **10 consecutive failures** (total worst-case budget: 111s) the worker emi
 2. Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's `blockID` in its `blockIDs` slice. Drift here is the signal.
 3. If the block is on the longest chain and has missing tags, repair via a targeted re-run of `SetMinedMulti` for the affected txs (use the maintenance CLI; do NOT bypass the coverage check).
 4. After repair, re-trigger marking by re-publishing `NotificationType_BlockSubtreesSet` for the block hash (blockchain service `SetBlockSubtreesSet`). The worker counter is already cleared from the drop, so the new attempt starts fresh.
-5. If `block_validation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
+5. If `teranode_blockvalidation_setmined_drops_total` keeps incrementing across a cluster after deploy, **stop the rollout** and audit `block_ids` data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.
 
-The label cardinality cost of `{blockhash}` is intentional: a per-block alert is the only useful operator signal for "this specific block is unrecoverable". Once repaired and the counter stops incrementing, the series naturally falls out of recent windows.
+These counters are deliberately unlabeled (no `{blockhash}`) to avoid unbounded Prometheus cardinality — a per-block label series would grow without limit and never be reclaimed. Operators alert on the aggregate rate / non-zero total instead, and resolve the specific unrecoverable block from the `manual_intervention_required` log line. Do not attempt to build a per-block alert on these metrics: there is no `blockhash` label, so such an alert would silently never fire.
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 >
