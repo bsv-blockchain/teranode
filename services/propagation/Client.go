@@ -106,7 +106,7 @@ type Client struct {
 	conn                *grpc.ClientConn
 	batchSize           int
 	batchCh             chan []*batchItem
-	batcher             batcher.Batcher[batchItem]
+	batcher             *batcher.Batcher[batchItem]
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	propagationHTTPAddr *url.URL
@@ -178,7 +178,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
-	c.batcher = *batcher.NewWithPool(batchSize, duration, sendBatch, true,
+	c.batcher = batcher.NewWithPool(batchSize, duration, sendBatch, true,
 		batcher.WithName("propagation_client"),
 		batcher.WithLogger(logger),
 		batcher.WithMetrics(batchermetrics.Provider()),
@@ -188,7 +188,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return c, nil
 }
 
-// Stop gracefully shuts down the client and closes the gRPC connection.
+// Close gracefully shuts down the client and closes the gRPC connection.
 // This method performs proper cleanup of resources used by the propagation client:
 //
 // 1. Verifies that both client and connection are initialized before attempting cleanup
@@ -199,13 +199,15 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 // resource leaks, particularly long-lived gRPC connections. It's commonly used
 // during service shutdown or when switching connection configurations.
 //
-// Important: After Stop is called, the client instance should not be reused.
+// Important: After Close is called, the client instance should not be reused.
 // A new client instance should be created if needed.
 
-func (c *Client) Stop() {
+func (c *Client) Close() error {
 	if c.client != nil && c.conn != nil {
 		_ = c.conn.Close()
 	}
+
+	return nil
 }
 
 // ProcessTransaction submits a single BSV transaction for processing.

@@ -420,6 +420,16 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
+// clientCloser is the optional close contract the daemon uses to tear down the
+// gRPC clients it constructs. Production clients gain a Close() error method
+// (Fix group A); the daemon's closeClients step (added later) type-asserts each
+// retained client to this interface and closes it, so the client interfaces
+// themselves do not need to declare Close. Mirrors the existing optional-stopper
+// pattern in services/pruner/server.go.
+type clientCloser interface {
+	Close() error
+}
+
 // closeStores safely closes the main stores used by the Daemon.
 //
 // Uses a fresh context with a 30 s deadline rather than the daemon's

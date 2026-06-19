@@ -150,9 +150,10 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
-// Stop gracefully shuts down the validator client. Currently a no-op as the
-// underlying gRPC connection lifecycle is managed externally.
-func (c *Client) Stop() {
+// Close gracefully shuts down the validator client. Currently a no-op; the real
+// connection close is wired in a later stage.
+func (c *Client) Close() error {
+	return nil
 }
 
 // Health checks the health of the remote validator service. When checkLiveness is true,
