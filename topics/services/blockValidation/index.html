@@ -9338,9 +9338,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 <p><strong>Observability.</strong></p>
 <ul>
-<li><code>teranode_blockvalidation_setmined_retry_total{blockhash}</code> (counter) — incremented on every retry. Alert when a single label series approaches the retry ceiling.</li>
-<li><code>teranode_blockvalidation_setmined_drops_total{blockhash}</code> (counter) — incremented when the worker drops a block after exceeding retries. Any non-zero value is page-worthy.</li>
-<li>Log marker: grep <code>manual_intervention_required</code> in the blockvalidation service logs for dropped block hashes.</li>
+<li><code>teranode_blockvalidation_setmined_retry_total</code> (counter, aggregate across all blocks) — incremented on every retry. Alert on a sustained non-zero rate (e.g. <code>rate(...[5m]) &gt; 0</code>); a rising rate indicates blocks with historical-corrupt state that need manual repair. The specific block hash is not a label — recover it from the <code>manual_intervention_required</code> log line (see below).</li>
+<li><code>teranode_blockvalidation_setmined_drops_total</code> (counter, aggregate across all blocks) — incremented when the worker drops a block after exceeding retries. Any non-zero value (or an increase over a window) is page-worthy.</li>
+<li>Log marker: grep <code>manual_intervention_required</code> in the blockvalidation service logs for the dropped block hashes; this is the authoritative source for the specific block, since the metrics are no longer labeled by <code>blockhash</code>.</li>
 </ul>
 <p><strong>Operator runbook for <code>manual_intervention_required</code>.</strong></p>
 <ol>
@@ -9348,9 +9348,9 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Pull the block's tx hashes via the asset service and spot-check a sample against the UTXO store: each non-coinbase tx MUST have the block's <code>blockID</code> in its <code>blockIDs</code> slice. Drift here is the signal.</li>
 <li>If the block is on the longest chain and has missing tags, repair via a targeted re-run of <code>SetMinedMulti</code> for the affected txs (use the maintenance CLI; do NOT bypass the coverage check).</li>
 <li>After repair, re-trigger marking by re-publishing <code>NotificationType_BlockSubtreesSet</code> for the block hash (blockchain service <code>SetBlockSubtreesSet</code>). The worker counter is already cleared from the drop, so the new attempt starts fresh.</li>
-<li>If <code>block_validation_setmined_drops_total</code> keeps incrementing across a cluster after deploy, <strong>stop the rollout</strong> and audit <code>block_ids</code> data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.</li>
+<li>If <code>teranode_blockvalidation_setmined_drops_total</code> keeps incrementing across a cluster after deploy, <strong>stop the rollout</strong> and audit <code>block_ids</code> data drift before continuing; the new postcondition is surfacing pre-existing corruption that needs a one-shot repair pass before the stricter check is safe to flip on.</li>
 </ol>
-<p>The label cardinality cost of <code>{blockhash}</code> is intentional: a per-block alert is the only useful operator signal for "this specific block is unrecoverable". Once repaired and the counter stops incrementing, the series naturally falls out of recent windows.</p>
+<p>These counters are deliberately unlabeled (no <code>{blockhash}</code>) to avoid unbounded Prometheus cardinality — a per-block label series would grow without limit and never be reclaimed. Operators alert on the aggregate rate / non-zero total instead, and resolve the specific unrecoverable block from the <code>manual_intervention_required</code> log line. Do not attempt to build a per-block alert on these metrics: there is no <code>blockhash</code> label, so such an alert would silently never fire.</p>
 <blockquote>
 <p><strong>For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the <a href="../../features/two_phase_commit/">Two-Phase Transaction Commit Process</a> documentation.</strong>
 </p>
