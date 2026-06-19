@@ -72,11 +72,12 @@ var (
 	blockQueueSkipCount prometheus.Histogram
 	blockQueueWaitTime  prometheus.Histogram
 
-	// setMinedChan retry tracking. Per-blockhash label deliberately accepts the
-	// cardinality cost: an alert on a single block hitting the retry ceiling is
-	// the primary signal that historical-corrupt state requires manual repair.
-	prometheusBlockValidationSetMinedRetries *prometheus.CounterVec
-	prometheusBlockValidationSetMinedDrops   *prometheus.CounterVec
+	// setMinedChan retry tracking. These stay label-free to avoid unbounded
+	// Prometheus cardinality: a per-blockhash label adds a permanent time series
+	// for every distinct block that ever retries or is dropped. The offending
+	// block hash is recorded in the logs instead.
+	prometheusBlockValidationSetMinedRetries prometheus.Counter
+	prometheusBlockValidationSetMinedDrops   prometheus.Counter
 )
 
 var (
@@ -216,24 +217,22 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetMinedRetries = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedRetries = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_retry_total",
-			Help:      "Number of setTxMined retries per block hash. Alert when this approaches the retry ceiling (typically 10): the block likely has historical-corrupt state and needs manual repair.",
+			Help:      "Total number of setTxMined retries across all blocks. The offending block hash is recorded in the logs. A sustained rise indicates blocks with historical-corrupt state that need manual repair.",
 		},
-		[]string{"blockhash"},
 	)
 
-	prometheusBlockValidationSetMinedDrops = promauto.NewCounterVec(
+	prometheusBlockValidationSetMinedDrops = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "setmined_drops_total",
 			Help:      "Number of blocks dropped from the setTxMined retry loop after exceeding the retry ceiling. Non-zero values are page-worthy and require manual intervention.",
 		},
-		[]string{"blockhash"},
 	)
 
 	// Initialize catchup operation metrics

@@ -624,11 +624,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 						attempt := prev.(uint64) + 1
 						u.setMinedRetries.Store(*blockHash, attempt)
 
-						prometheusBlockValidationSetMinedRetries.WithLabelValues(blockHash.String()).Inc()
+						prometheusBlockValidationSetMinedRetries.Inc()
 
 						if attempt >= setMinedMaxRetries {
 							u.logger.Errorf("[BlockValidation:start][%s] manual_intervention_required: setTxMined exceeded %d retries; dropping from setMinedChan. Last error: %s", blockHash.String(), setMinedMaxRetries, err)
-							prometheusBlockValidationSetMinedDrops.WithLabelValues(blockHash.String()).Inc()
+							prometheusBlockValidationSetMinedDrops.Inc()
 							u.setMinedRetries.Delete(*blockHash)
 							return
 						}
