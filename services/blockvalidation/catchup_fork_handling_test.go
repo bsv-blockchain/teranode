@@ -12,6 +12,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
@@ -383,9 +384,26 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 50, ID: 1}}, nil).Maybe()
 
-		// Mock GetBlockHeader for any header lookups during validation
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding. Our best block (height 50) is in our chain and
+		// serves as the common ancestor; the adversarial fork headers are absent, so
+		// they must surface as not-found errors to stop the search.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
+			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 50, ID: 1}, nil).Maybe()
+		for _, h := range invalidChain {
+			mockBlockchainClient.On("GetBlockHeader", mock.Anything, h.Hash()).
+				Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+					errors.NewBlockNotFoundError("block not found")).Maybe()
+		}
+		// Catch-all for any other header lookups
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
+
+		// Fork cleanup (Step 3.5) queries the headers between the common ancestor and
+		// our tip to clear their mined_set; an empty result keeps the test focused.
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
