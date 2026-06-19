@@ -149,6 +149,13 @@ type trackingBlockchainClient struct {
 	notificationCh   chan *blockchain_api.Notification
 	setMinedOnce     sync.Once
 	setMinedCalled   chan struct{}
+
+	// fsmStateOverride, when non-nil, makes GetFSMCurrentState report this state
+	// instead of delegating to the embedded client. LocalClient hardwires
+	// FSMStateRUNNING, so this is how a test drives CATCHINGBLOCKS
+	// (or an error) through BlockValidation.isCaughtUp.
+	fsmStateOverride    *blockchain.FSMStateType
+	fsmStateOverrideErr error
 }
 
 func newTrackingBlockchainClient(client blockchain.ClientI) *trackingBlockchainClient {
@@ -179,12 +186,50 @@ func (t *trackingBlockchainClient) withSetMinedTracking() *trackingBlockchainCli
 	return t
 }
 
+// withFSMState forces GetFSMCurrentState to report the given state, bypassing
+// the embedded LocalClient (which always reports RUNNING). Used to drive the
+// catchup branch of BlockValidation.isCaughtUp.
+func (t *trackingBlockchainClient) withFSMState(state blockchain.FSMStateType) *trackingBlockchainClient {
+	t.fsmStateOverride = &state
+	return t
+}
+
+// withFSMError forces GetFSMCurrentState to fail, exercising the fail-safe
+// branch of isCaughtUp (an FSM-query error must be treated as not-caught-up so
+// a transient hiccup never wrongly invalidates a #1031 catchup block).
+func (t *trackingBlockchainClient) withFSMError(err error) *trackingBlockchainClient {
+	t.fsmStateOverrideErr = err
+	return t
+}
+
+func (t *trackingBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
+	if t.fsmStateOverrideErr != nil {
+		return nil, t.fsmStateOverrideErr
+	}
+	if t.fsmStateOverride != nil {
+		return t.fsmStateOverride, nil
+	}
+	return t.ClientI.GetFSMCurrentState(ctx)
+}
+
 func (t *trackingBlockchainClient) InvalidateBlock(ctx context.Context, hash *chainhash.Hash) ([]chainhash.Hash, error) {
 	hashes, err := t.ClientI.InvalidateBlock(ctx, hash)
 	t.invalidateOnce.Do(func() {
 		close(t.invalidateCalled)
 	})
 	return hashes, err
+}
+
+// invalidateWasCalled reports whether InvalidateBlock has been observed yet
+// (non-blocking). Used by the #1031 guard test to assert a catchup floater is
+// NOT rolled back.
+func (t *trackingBlockchainClient) invalidateWasCalled() bool {
+	select {
+	case <-t.invalidateCalled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *trackingBlockchainClient) Subscribe(ctx context.Context, tag string) (chan *blockchain_api.Notification, error) {
@@ -1822,7 +1867,11 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	// genesis+1 block: ValidateBlock's difficulty gate runs GetNextWorkRequired
+	// BEFORE subtree blessing, so the header must carry the regtest-expected target
+	// (207fffff). 2000ffff would be rejected on the nBits check before reaching
+	// CheckBlockSubtrees and the subtree-error classification path under test.
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
@@ -4323,8 +4372,15 @@ func TestBlockValidation_BlockValidMissingParent_NotPersistedInvalid(t *testing.
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	localClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
+
+	// Force CATCHINGBLOCKS so isCaughtUp() is false: a not-yet-absorbed parent is a
+	// transient #1031 catchup-ordering state, NOT a floater. The block must surface
+	// BLOCK_INCOMPLETE (retry) and must NOT be persisted invalid. LocalClient hardwires
+	// FSMStateRUNNING (caught up), which would wrongly route to the floater
+	// invalidate+persist path — see TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp.
+	blockchainClient := newTrackingBlockchainClient(localClient).withFSMState(blockchain.FSMStateCATCHINGBLOCKS)
 
 	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
@@ -4425,4 +4481,108 @@ func TestCheckParentInvalid_CascadeIsIntentional(t *testing.T) {
 
 	// Unknown parent metadata is not treated as invalid.
 	require.False(t, bv.checkParentInvalid(nil))
+}
+
+func TestBlockValidation_FloaterPersistedInvalidWhenCaughtUp(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = false // force the synchronous block.Valid path
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Subtree validation succeeds — the failure must come from block.Valid's parent lookup.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase paying exactly the block subsidy so checkBlockRewardAndFees passes.
+	privateKey, _ := bec.NewPrivateKey()
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	require.NoError(t, err)
+
+	// Child tx that spends the EXTERNAL parentTx fixture. parentTx is deliberately NOT placed
+	// in the block and NOT in the utxo store, so block.Valid's parent lookup will miss it.
+	childTx := newTx(7, parentTx.TxIDChainHash())
+	_, err = utxoStore.Create(context.Background(), childTx, 0)
+	require.NoError(t, err)
+
+	// Subtree: coinbase + childTx.
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), 100, 0))
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	// Merkle root with coinbase swapped into the placeholder position.
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	// Use the regtest expected target so the ValidateBlock difficulty gate (GetNextWorkRequired
+	// at genesis+1) accepts the block and we reach block.Valid.
+	nBits, _ := model.NewNBitFromString("207fffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		uint64(coinbaseTx.Size()+childTx.Size()), //nolint:gosec
+		100, 0,
+	)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "caught-up floater must surface BLOCK_INVALID, got: %v", err)
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.True(t, exists, "caught-up floater must be persisted as invalid (storeInvalidBlock)")
 }

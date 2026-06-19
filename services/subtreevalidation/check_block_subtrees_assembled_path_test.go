@@ -24,9 +24,10 @@ import (
 
 // recordingValidatorClient wraps MockValidatorClient and captures the
 // Options passed to every Validate call. Used by the assembled-path test
-// to assert that the block-scoped accumulator correctly populates per-tx
-// ParentMetadata for skip-level grandparents and DOES NOT populate it for
-// confirmed external parents.
+// to assert that the block-validation path sets
+// UnconfirmedParentsAtCandidateHeight on every per-tx Options struct it
+// hands to the validator (both the batch-loop and the ordered-retry
+// pipelines).
 type recordingValidatorClient struct {
 	*validator.MockValidatorClient
 	mu        sync.Mutex
@@ -42,7 +43,7 @@ func newRecordingValidatorClient(inner *validator.MockValidatorClient) *recordin
 
 // ValidateWithOptions captures the resolved Options struct and returns
 // Data with TxInpoints populated from the tx so the downstream subtreeMeta
-// serialisation in validateSubtreeInternalImpl succeeds — the production
+// serialisation in ValidateSubtreeInternal succeeds — the production
 // validator does this; MockValidatorClient.ValidateWithOptions does not
 // (it just calls UtxoStore.Create which returns empty Data in tests).
 //
@@ -68,10 +69,11 @@ func (r *recordingValidatorClient) ValidateWithOptions(_ context.Context, tx *bt
 
 // recordedOptions returns the slice of options recorded for tx h (nil if
 // not called). Multiple entries are expected: the batch loop
-// processTransactionsInLevels calls once, and validateSubtreeInternalImpl's
+// processTransactionsInLevels calls once, and ValidateSubtreeInternal's
 // processMissingTransactions also calls during the ordered-retry pass.
-// Every recorded call MUST have the correct ParentMetadata — anything less
-// means one of the two pipelines re-narrowed the accumulator's scope.
+// Every recorded call MUST carry UnconfirmedParentsAtCandidateHeight —
+// anything less means one of the two pipelines dropped the option and
+// in-block parents would be rejected on that pipeline.
 func (r *recordingValidatorClient) recordedOptions(h chainhash.Hash) []*validator.Options {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -83,15 +85,13 @@ func (r *recordingValidatorClient) recordedOptions(h chainhash.Hash) []*validato
 // TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent is the
 // end-to-end regression for the consensus-split path: the assembled
 // CheckBlockSubtrees pipeline (parse → batch → level-order → per-tx
-// filter → validator) must thread the block-scoped accumulator's
-// metadata into every per-tx Options struct passed to the validator.
-// Without this, a refactor that breaks the accumulator (e.g. one that
-// re-narrows per-tx ParentMetadata to the immediately-previous level
-// only) silently re-opens the skip-level path: a skip-level grandparent
-// falls through to the UTXO-store BlockHeights path, finds it empty
-// (the parent's blocks_transactions row isn't written until the block
-// is accepted), the validator stamps unconfirmedParentHeight, and BDK
-// rejects the legitimate block with bad-txns-unconfirmed-input-in-block.
+// validation) must hand the validator per-tx Options with
+// UnconfirmedParentsAtCandidateHeight set on EVERY call, on BOTH pipelines
+// (the batch-loop processTransactionsInLevels pass and the ordered-retry
+// ValidateSubtreeInternal pass). Without it, an in-block parent — which is
+// in the UTXO store with empty BlockHeights until SetMinedMulti runs after
+// acceptance — gets stamped with the unconfirmedParentHeight sentinel and
+// BDK rejects the legitimate block with bad-txns-unconfirmed-input-in-block.
 //
 // The DAG inside the candidate block:
 //
@@ -111,40 +111,37 @@ func (r *recordingValidatorClient) recordedOptions(h chainhash.Hash) []*validato
 //	                                                   external — in UTXO
 //	                                                   store at prior
 //	                                                   height, NOT in
-//	                                                   this block; must
-//	                                                   NOT appear in
-//	                                                   C's ParentMetadata)
+//	                                                   this block)
 //
-// Why the skip-level edge requires C to ALSO spend P: the dependency-level
-// builder places C above its highest in-block parent. If C only spent G,
-// both P and C would land at level 1 (each depends only on G) — and
-// a previous-level-only buildParentMetadata for level-1 fed txsPerLevel[level-0]=[G],
-// so the bug shape would not be triggered. With C also spending P, C is
-// at level 2 and a previous-level-only buildParentMetadata for level-2 fed
-// txsPerLevel[level-1]=[P] — so G's metadata for C's skip-level input
-// would silently be dropped.
+// The skip-level edge (C also spending P) keeps the historical level
+// structure meaningful: C lands at level 2 and references the level-0
+// grandparent directly, the shape the old per-level metadata machinery
+// regressed on. Under the option mechanism the resolution is uniform —
+// the validator substitutes the sentinel with the candidate height for
+// ANY in-block parent regardless of level distance — so the per-call
+// assertion is simply that the option is set everywhere.
+//
+// Mixed-parent invariant (Gext): a confirmed external parent has recorded
+// BlockHeights (mocked at 99 here), so the validator resolves it through
+// the UTXO-store branch to its REAL height. The option provably cannot
+// touch it: substituteUnconfirmedHeights matches only the exact
+// 0xFFFFFFFF sentinel, which the recorded-heights branch never produces
+// (pinned by the validator unit tests, e.g.
+// TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentinel
+// and TestValidate_ConsensusAcceptsUnconfirmedParentAtCandidateHeight).
+// What this test pins for Gext is the setup shape: a block mixing in-block
+// and confirmed-external parents validates successfully end-to-end.
 //
 // Assertions exercised:
 //
-//   - P's Options.ParentMetadata contains G at the candidate block height
-//     (standard parent → child).
-//
-//   - C's Options.ParentMetadata contains G at the candidate block height
-//     (skip-level grandparent — a previous-level-only buildParentMetadata only fed
-//     level-1; this is the bug-shape).
-//
-//   - C's Options.ParentMetadata does NOT contain Gext (confirmed external
-//     parents stay out of the accumulator — the validator resolves them
-//     through the UTXO-store BlockHeights path with their prior-block
-//     height. If a refactor accidentally seeded all parents into the
-//     accumulator at the candidate height, Gext would be wrongly stamped
-//     at the candidate height, breaking CSV/locktime checks.).
+//   - Every recorded call for G, P and C carries
+//     UnconfirmedParentsAtCandidateHeight == true (both pipelines).
 //
 //   - The block is accepted (response.Blessed == true).
 //
 // This black-boxes everything below CheckBlockSubtrees so a future
-// refactor that re-tightens the accumulator's scope (e.g. per-level only,
-// or per-batch only) is caught here even when component tests stay green.
+// refactor that drops the option from either pipeline is caught here even
+// when component tests stay green.
 func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -163,8 +160,8 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 	// G has TWO outputs so P can spend vout 0 and C can spend vout 1 (the
 	// skip-level edge). C also spends P's vout 0 — without that edge, the
 	// level builder would put C at level 1 (same as P), and the test would
-	// not actually exercise the skip-level case that a previous-level-only
-	// buildParentMetadata implementation regressed on.
+	// not actually exercise the skip-level shape the old per-level metadata
+	// machinery regressed on.
 	txG := buildAssembledPathTx(t, []*bt.Input{
 		// G's input: synthetic "external coinbase-like" hash. Not used by
 		// anything else in this test; just gives G a parseable input.
@@ -185,28 +182,25 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 		// promotes C to level 2). Without this edge, C and P share level 1.
 		newSyntheticInput(t, pHash, 0),
 		// C input 1 → G directly. SKIP-LEVEL: C is at level 2, references
-		// the level-0 grandparent. A previous-level-only buildParentMetadata only fed
-		// txsPerLevel[level-1] (i.e. txs at C's level minus 1 = level 1 =
-		// just P) into C's ParentMetadata, so G's metadata would silently
-		// be dropped and C would fall through to the UTXO-store empty
-		// BlockHeights path → unconfirmedParentHeight → BDK rejects.
+		// the level-0 grandparent. Under the option mechanism G resolves the
+		// same as any in-block parent (sentinel → candidate height); the
+		// edge is kept so the level structure matches the historical
+		// regression shape.
 		newSyntheticInput(t, gHash, 1),
 		// C input 2 → Gext. Mixed parent: confirmed external parent
-		// alongside the in-block skip-level edge. The accumulator must
-		// NOT include Gext — the validator resolves it through the
-		// UTXO-store BlockHeights path at its actual prior-block height.
+		// alongside the in-block skip-level edge. The validator resolves it
+		// through the UTXO-store BlockHeights path at its actual prior-block
+		// height; the option never touches it (sentinel-exact-match only).
 		newSyntheticInput(t, gextHash, 0),
 	}, 1)
 	cHash := *txC.TxIDChainHash()
 
 	// PRE-FLIGHT INVARIANT: confirm the constructed DAG actually produces
-	// the level structure the test claims. If C does not land at level 2,
-	// the skip-level edge assertion below is vacuous — a previous-level-
-	// only buildParentMetadata(txsPerLevel[level-1]) implementation for
-	// level 1 would have included G's metadata for both P and C, and the
-	// test would silently pass even with the bug present. This guard
-	// catches a future refactor of the level-builder OR an accidental
-	// edit to the DAG that breaks the skip-level shape.
+	// the level structure the test claims (G at level 0, P at level 1, C at
+	// level 2 with a skip-level edge to G). This guard catches a future
+	// refactor of the level-builder OR an accidental edit to the DAG that
+	// breaks the skip-level shape, keeping the scenario representative of
+	// the historical regression.
 	maxLevel, txsPerLevel, err := server.selectPrepareTxsPerLevel(context.Background(),
 		[]missingTx{
 			{tx: txG, idx: 0},
@@ -251,7 +245,7 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 		subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes()))
 
 	// Build the candidate block. Header values are placeholder — the
-	// validator/accumulator path doesn't inspect them. BlockHeight gates
+	// validation path doesn't inspect them. BlockHeight gates
 	// the CSV branch in CheckBlockSubtrees; we keep it below CSVHeight to
 	// skip MTP fetching (pre-CSV path), which keeps the test hermetic
 	// without having to mock GetBlockHeaders.
@@ -303,9 +297,9 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 		Return(nil).Maybe()
 
 	// Recording validator client — captures the resolved Options per tx
-	// so the test can inspect ParentMetadata after CheckBlockSubtrees
-	// returns. Wraps the existing MockValidatorClient so the underlying
-	// UtxoStore.Create plumbing still works.
+	// so the test can inspect UnconfirmedParentsAtCandidateHeight after
+	// CheckBlockSubtrees returns. Wraps the existing MockValidatorClient so
+	// the underlying UtxoStore.Create plumbing still works.
 	rec := newRecordingValidatorClient(server.validatorClient.(*validator.MockValidatorClient))
 	rec.UtxoStore = server.utxoStore
 	server.validatorClient = rec
@@ -341,57 +335,25 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 	// --- ASSEMBLED-PATH ASSERTIONS ---------------------------------------
 	//
 	// Every recorded call (both the batch-loop processTransactionsInLevels
-	// pass AND the validateSubtreeInternalImpl pass via processMissingTransactions)
-	// MUST satisfy the per-tx ParentMetadata invariant. If only one pipeline
-	// populated it correctly, a refactor that breaks the other would leave
-	// the test silently passing while production rejected legitimate blocks.
-
-	// 1. G is processed at level 0 in every pass. Its ParentMetadata is
-	//    nil/empty in every call — G has no in-block parent.
-	gAll := rec.recordedOptions(gHash)
-	require.NotEmpty(t, gAll, "G must reach the validator at least once")
-	for i, opts := range gAll {
-		require.NotNil(t, opts, "G call #%d must carry resolved Options", i)
-		require.Empty(t, opts.ParentMetadata,
-			"G has no in-block parent — ParentMetadata must be absent/empty in every call (call #%d)", i)
-	}
-
-	// 2. P is processed at level 1 in every pass. Its ParentMetadata
-	//    contains G at the candidate block height in every call.
-	pAll := rec.recordedOptions(pHash)
-	require.NotEmpty(t, pAll, "P must reach the validator at least once")
-	for i, opts := range pAll {
-		require.NotNil(t, opts, "P call #%d must carry resolved Options", i)
-		require.NotNil(t, opts.ParentMetadata[gHash],
-			"P references G — every per-tx ParentMetadata must contain G (call #%d failed; the accumulator wiring on that pipeline is broken)", i)
-		require.Equal(t, candidateHeight, opts.ParentMetadata[gHash].BlockHeight,
-			"BlockHeight for an in-block parent must be the candidate block's height (call #%d)", i)
-	}
-
-	// 3. CRITICAL skip-level assertion: every recorded call for C
-	//    contains G at the candidate block height — even though G is
-	//    two levels up. A previous-level-only buildParentMetadata only fed level-1
-	//    metadata; this assertion guards against a refactor that
-	//    re-narrows the accumulator's scope on EITHER the batch-loop
-	//    OR the ordered-retry pipeline.
-	cAll := rec.recordedOptions(cHash)
-	require.NotEmpty(t, cAll, "C must reach the validator at least once")
-	for i, opts := range cAll {
-		require.NotNil(t, opts, "C call #%d must carry resolved Options", i)
-		require.NotNil(t, opts.ParentMetadata[gHash],
-			"C references G across a level skip — every per-tx ParentMetadata must contain G (call #%d failed; regression for Path 2: skip-level grandparents fell through to UTXO-store empty BlockHeights and got stamped with unconfirmedParentHeight)", i)
-		require.Equal(t, candidateHeight, opts.ParentMetadata[gHash].BlockHeight,
-			"skip-level in-block parent height must match the candidate block (call #%d)", i)
-
-		// 4. Mixed-parent assertion: C also references Gext (confirmed
-		//    external). The accumulator MUST NOT include Gext in any
-		//    call — only in-block txs feed it. The validator resolves
-		//    Gext through the UTXO-store BlockHeights path with its
-		//    prior-block height. If a refactor accidentally seeded all
-		//    parents at the candidate height, Gext would be wrongly
-		//    stamped at candidateHeight, breaking CSV/locktime checks.
-		require.Nil(t, opts.ParentMetadata[gextHash],
-			"Gext is a confirmed external parent (not in this block) — the accumulator must NOT contain it in any call (call #%d)", i)
+	// pass AND the ValidateSubtreeInternal pass via processMissingTransactions)
+	// MUST carry UnconfirmedParentsAtCandidateHeight. If only one pipeline
+	// set it, a refactor that breaks the other would leave the test silently
+	// passing while production rejected legitimate blocks.
+	for _, tc := range []struct {
+		name string
+		hash chainhash.Hash
+	}{
+		{"G (level 0, no in-block parent)", gHash},
+		{"P (level 1, in-block parent G)", pHash},
+		{"C (level 2, skip-level parent G + external parent Gext)", cHash},
+	} {
+		all := rec.recordedOptions(tc.hash)
+		require.NotEmpty(t, all, "%s must reach the validator at least once", tc.name)
+		for i, opts := range all {
+			require.NotNil(t, opts, "%s call #%d must carry resolved Options", tc.name, i)
+			require.True(t, opts.UnconfirmedParentsAtCandidateHeight,
+				"%s call #%d must carry UnconfirmedParentsAtCandidateHeight — the block-validation path relies on it to resolve in-block parents at the candidate height; a missing flag on either pipeline rejects legitimate blocks with bad-txns-unconfirmed-input-in-block", tc.name, i)
+		}
 	}
 }
 

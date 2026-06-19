@@ -166,14 +166,11 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("failed to create bt.Tx for coinbase", err)
 	}
 
-	// validate all subtrees and store all subtree data
-	// this also should spend and create all utxos
-	subtrees, blockID, err := sm.prepareSubtrees(ctx, block)
-	if err != nil {
-		return err
-	}
-
-	// create valid teranode block, with the subtree hash
+	// Pre-extract everything the post-pipeline code needs from the decoded
+	// block BEFORE prepareSubtrees. Once createTxMap (inside prepareSubtrees)
+	// has cloned the scripts out, nothing references block/msgBlock any more,
+	// so the multi-GB wire block and its decode arena can be collected while
+	// the heavy extend/subtree/utxo/validate phases are still running.
 	blockSize := block.MsgBlock().SerializeSize()
 
 	blockSizeUint64, err := safeconversion.IntToUint64(blockSize)
@@ -181,7 +178,29 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return err
 	}
 
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), blockSizeUint64, blockHeight, blockID)
+	txCount := uint64(len(block.Transactions()))
+
+	// Pre-extract the tx hashes for the orphan-processing goroutine below.
+	// Copy the hash *values* (not the *chainhash.Hash pointers returned by
+	// tx.Hash(), which alias into the bsvutil.Tx wrapper and would pin it).
+	wireTxs := block.Transactions()
+	txHashes := make([]chainhash.Hash, len(wireTxs))
+	for i, tx := range wireTxs {
+		txHashes[i] = *tx.Hash()
+	}
+	blockHashStr := block.Hash().String()
+
+	// validate all subtrees and store all subtree data
+	// this also should spend and create all utxos
+	// NOTE: last use of `block` — from here down only scalars and tx hash
+	// copies are referenced, so the decode arena is collectable as soon as
+	// createTxMap inside prepareSubtrees returns.
+	subtrees, blockID, err := sm.prepareSubtrees(ctx, block)
+	if err != nil {
+		return err
+	}
+
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, txCount, blockSizeUint64, blockHeight, blockID)
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
@@ -200,19 +219,8 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// process any orphan transactions that are now valid in background
 	// this will also remove the transactions from the orphan pool.
-	//
-	// Pre-extract the tx hashes here, before launching the goroutine, so the
-	// background work does not keep `block` (and therefore the wire.MsgBlock
-	// + its decode arena) reachable for the lifetime of orphan processing.
-	// Copy the hash *values* (not the *chainhash.Hash pointers returned by
-	// tx.Hash(), which alias into the bsvutil.Tx wrapper and would pin it).
-	wireTxs := block.Transactions()
-	txHashes := make([]chainhash.Hash, len(wireTxs))
-	for i, tx := range wireTxs {
-		txHashes[i] = *tx.Hash()
-	}
-	blockHashStr := block.Hash().String()
-
+	// txHashes was pre-extracted above (before prepareSubtrees) so this
+	// goroutine holds no reference into the decoded block.
 	go func() {
 		acceptedTxs := make([]*TxHashAndFee, 0)
 		for i := range txHashes {
@@ -292,6 +300,21 @@ type TxMapWrapper struct {
 	ChildLevelInBlock  uint32
 }
 
+// blockIdent carries the scalar identity of a block through the pipeline
+// stages below createTxMap. Passing these values (instead of *bsvutil.Block)
+// is what lets the decoded wire block — and its multi-GB go-wire decode
+// arena — be collected as soon as createTxMap has cloned the scripts out,
+// while the heavy extend/subtree/utxo/validate phases are still running.
+// This includes tracing's deferred log args, which retain whatever they are
+// given until the span closes: a *chainhash.Hash from block.Hash() would pin
+// the whole wrapper for the duration of the stage.
+type blockIdent struct {
+	hash      chainhash.Hash
+	prevBlock chainhash.Hash
+	height    uint32
+	timestamp time.Time
+}
+
 func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, blockID uint32, err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareSubtrees",
 		tracing.WithLogMessage(
@@ -360,23 +383,43 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		subtreeMetas[i] = subtreepkg.NewSubtreeMeta(st)
 	}
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](txCount)
-
-	if err = sm.createTxMap(ctx, block, txMap); err != nil {
-		return nil, 0, err
-	}
-
-	if err = sm.extendTransactions(ctx, block, txMap); err != nil {
-		return nil, 0, err
-	}
-
-	if err = sm.createSubtrees(ctx, block, txMap, subtreeSlices, subtreeDatas, subtreeMetas); err != nil {
-		return nil, 0, err
-	}
-
 	blockHeight32, convErr := safeconversion.Int32ToUint32(block.Height())
 	if convErr != nil {
 		return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to convert block height", convErr)
+	}
+
+	// Scalar identity for every stage below createTxMap — see blockIdent.
+	bi := blockIdent{
+		hash:      *block.Hash(),
+		prevBlock: block.MsgBlock().Header.PrevBlock,
+		height:    blockHeight32,
+		timestamp: block.MsgBlock().Header.Timestamp,
+	}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](txCount)
+
+	// Last use of `block`: createTxMap clones every script into txMap and
+	// returns the block-order tx hash list. From here on the decoded wire
+	// block is unreferenced and its decode arena can be GC'd.
+	txOrder, err := sm.createTxMap(ctx, block, txMap)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// createTxMap is the only writer of txMap and it runs single-threaded; every
+	// stage below only reads it (concurrently, from many goroutines in extend /
+	// createUtxos / pre-validate). Freeze it so those reads skip the RWMutex —
+	// the per-read reader-counter atomic becomes a cache-line contention point
+	// across cores on a large block. After Freeze any txMap write panics, which
+	// is the intended guard since nothing should mutate it past this point.
+	txMap.Freeze()
+
+	if err = sm.extendTransactions(ctx, bi, txOrder, txMap); err != nil {
+		return nil, 0, err
+	}
+
+	if err = sm.createSubtrees(ctx, bi, txOrder, txMap, subtreeSlices, subtreeDatas, subtreeMetas); err != nil {
+		return nil, 0, err
 	}
 
 	// Quick validation is safe whenever the block sits at/below the highest hard-coded
@@ -384,7 +427,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// plus checkpoint-anchored chain linkage make the block canonical regardless of which
 	// FSM state drove the catch-up. The checkpoint list is owned by go-chaincfg — see PR
 	// #844 for the matching FSM-RUN gate that relies on the same invariant.
-	quickValidationMode := sm.quickValidationAllowed(blockHeight32)
+	quickValidationMode := sm.quickValidationAllowed(bi.height)
 
 	if quickValidationMode {
 		// Fetch block ID upfront so UTXOs carry mined info from creation. This ID is
@@ -398,10 +441,10 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// the existing UTXO mined-info. Otherwise fall back to the idempotent per-hash
 		// AssignBlockID. Both paths converging on one id is what prevents orphaned
 		// (phantom) block ids that wedge sync in checkOldBlockIDs.
-		if reused, ok := sm.reuseBlockIDFromUTXO(ctx, block); ok {
+		if reused, ok := sm.reuseBlockIDFromUTXO(ctx, bi, txOrder); ok {
 			blockID = reused
 		} else {
-			id, idErr := sm.blockchainClient.AssignBlockID(ctx, block.Hash())
+			id, idErr := sm.blockchainClient.AssignBlockID(ctx, &bi.hash)
 			if idErr != nil {
 				return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to assign block ID", idErr)
 			}
@@ -413,13 +456,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 		// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order
 		// first we create all the utxos, then we spend them
-		if err = sm.ValidateTransactionsLegacyMode(ctx, txMap, block, blockID); err != nil {
+		if err = sm.ValidateTransactionsLegacyMode(ctx, txMap, bi, blockID); err != nil {
 			return nil, 0, err
 		}
 	}
 
 	for i := 0; i < numSubtrees; i++ {
-		if err = sm.writeSubtree(ctx, block, subtreeSlices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode); err != nil {
+		if err = sm.writeSubtree(ctx, bi, subtreeSlices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -428,7 +471,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	// produced locally, so we can skip the round-trip through subtreeValidation.
 	if !quickValidationMode {
 		for i := 0; i < numSubtrees; i++ {
-			if err = sm.checkSubtreeFromBlock(ctx, block, subtreeSlices[i]); err != nil {
+			if err = sm.checkSubtreeFromBlock(ctx, bi, subtreeSlices[i]); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -462,29 +505,24 @@ func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
 	return blockHeight <= highest
 }
 
-func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree) error {
+func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "checkSubtreeFromBlock",
-		tracing.WithLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	defer deferFn()
 
-	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-	if err != nil {
-		return err
-	}
-
-	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", blockHeightUint32, block.Hash(), &block.MsgBlock().Header.PrevBlock); err != nil {
+	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", bi.height, &bi.hash, &bi.prevBlock); err != nil {
 		return errors.NewSubtreeError("failed to check subtree", err)
 	}
 
 	return nil
 }
 
-func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree,
+func (sm *SyncManager) writeSubtree(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree,
 	subtreeData *subtreepkg.Data, subtreeMetaData *subtreepkg.Meta, quickValidationMode bool) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "writeSubtree",
-		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	subtreeFileExtension := fileformat.FileTypeSubtreeToCheck
@@ -504,7 +542,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 		}
 
-		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
+		dah := bi.height + sm.settings.GlobalBlockHeightRetention
 
 		storer, err := filestorer.NewFileStorer(
 			gCtx,
@@ -547,7 +585,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	})
 
 	g.Go(func() error {
-		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
+		dah := bi.height + sm.settings.GlobalBlockHeightRetention
 
 		storer, err := filestorer.NewFileStorer(
 			gCtx,
@@ -606,7 +644,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 		}
 
-		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
+		dah := bi.height + sm.settings.GlobalBlockHeightRetention
 
 		storer, err := filestorer.NewFileStorer(
 			gCtx,
@@ -652,34 +690,28 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 }
 
 func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
-	block *bsvutil.Block, blockID uint32) (err error) {
+	bi blockIdent, blockID uint32) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
-		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", bi.hash, bi.height),
 	)
 
 	defer func() {
 		deferFn(err)
 	}()
 
-	if err = sm.createUtxos(ctx, txMap, block, blockID); err != nil {
+	if err = sm.createUtxos(ctx, txMap, bi, blockID); err != nil {
 		return err
 	}
 
 	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", txMap.Length())
 
-	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-	if err != nil {
-		// already wrapped in a processing error
-		return err
-	}
-
-	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, block, blockHeightUint32)
+	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, bi)
 	if err != nil {
 		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to select finality time sources", err)
 	}
 
-	if err = sm.PreValidateTransactions(ctx, txMap, *block.Hash(), blockHeightUint32, candidateBlockTime, candidateParentMedianTime); err != nil {
+	if err = sm.PreValidateTransactions(ctx, txMap, bi.hash, bi.height, candidateBlockTime, candidateParentMedianTime); err != nil {
 		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to pre-validate transactions", err)
 	}
 
@@ -702,9 +734,9 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 // proto wire. Extracted as a separate method so the era-selection branch
 // can be table-tested at the package level without standing up the full
 // SyncManager pipeline.
-func (sm *SyncManager) candidateFinalityTimesForBlock(ctx context.Context, block *bsvutil.Block, blockHeight uint32) (candidateBlockTime uint32, candidateParentMedianTime uint32, err error) {
-	if blockHeight < uint32(sm.chainParams.CSVHeight) {
-		candidateBlockTime, err = safeconversion.Int64ToUint32(block.MsgBlock().Header.Timestamp.Unix())
+func (sm *SyncManager) candidateFinalityTimesForBlock(ctx context.Context, bi blockIdent) (candidateBlockTime uint32, candidateParentMedianTime uint32, err error) {
+	if bi.height < uint32(sm.chainParams.CSVHeight) {
+		candidateBlockTime, err = safeconversion.Int64ToUint32(bi.timestamp.Unix())
 		if err != nil {
 			return 0, 0, err
 		}
@@ -712,7 +744,7 @@ func (sm *SyncManager) candidateFinalityTimesForBlock(ctx context.Context, block
 		return candidateBlockTime, 0, nil
 	}
 
-	candidateParentMedianTime, err = sm.candidateParentMedianTimeForBlock(ctx, &block.MsgBlock().Header.PrevBlock)
+	candidateParentMedianTime, err = sm.candidateParentMedianTimeForBlock(ctx, &bi.prevBlock)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -896,9 +928,9 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 // createUtxos creates all the utxos for the transactions in the block in parallel
 // before any spending is done. This only occurs in legacy mode when we assume the
 // block is valid.
-func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], block *bsvutil.Block, blockID uint32) (err error) {
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], bi blockIdent, blockID uint32) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createUtxos",
-		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
 	)
 
@@ -916,10 +948,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(sm.logger, g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
-	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-	if err != nil {
-		return errors.NewProcessingError("failed to convert block height to uint32", err)
-	}
+	blockHeightUint32 := bi.height
 
 	// Track txs that already exist in the store so we can merge our blockID into their
 	// BlockIDs after the Create pass. The quickValidation fast path skips the async
@@ -1031,21 +1060,20 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 // in-memory reservation is gone) or when another ingestion path created the
 // UTXOs first, keeping the committed block id consistent with the UTXO
 // mined-info. Returns ok=false when nothing is recorded yet.
-func (sm *SyncManager) reuseBlockIDFromUTXO(ctx context.Context, block *bsvutil.Block) (uint32, bool) {
-	txs := block.Transactions()
-	if len(txs) < 2 { // index 0 is the coinbase; need a real tx
+func (sm *SyncManager) reuseBlockIDFromUTXO(ctx context.Context, bi blockIdent, txOrder []chainhash.Hash) (uint32, bool) {
+	if len(txOrder) < 2 { // index 0 is the coinbase; need a real tx
 		return 0, false
 	}
 	// Use the same tx-hash key shape the UTXO store is keyed by. createUtxos
-	// creates entries from bt.Tx via its TxIDChainHash; bsvutil.Tx.Hash() and
-	// bt.Tx.TxIDChainHash() both resolve to the same 32-byte txid, and both
-	// return *chainhash.Hash from github.com/bsv-blockchain/go-bt/v2/chainhash
+	// creates entries from bt.Tx via its TxIDChainHash; the txOrder hashes and
+	// bt.Tx.TxIDChainHash() both resolve to the same 32-byte txid as
+	// chainhash.Hash from github.com/bsv-blockchain/go-bt/v2/chainhash
 	// — the type utxoStore.Get expects.
 	// We trust BlockIDs[0] as this block's id: the first non-coinbase tx of a
 	// block is created by that block during sync, so the first recorded mined-in
 	// id is this block's. (blockvalidation's quick path keys the same recovery on
 	// its first non-coinbase tx — keep the two in sync if this assumption changes.)
-	meta, err := sm.utxoStore.Get(ctx, txs[1].Hash(), fields.BlockIDs)
+	meta, err := sm.utxoStore.Get(ctx, &txOrder[1], fields.BlockIDs)
 	if err != nil || meta == nil || len(meta.BlockIDs) == 0 {
 		return 0, false
 	}
@@ -1055,7 +1083,7 @@ func (sm *SyncManager) reuseBlockIDFromUTXO(ctx context.Context, block *bsvutil.
 		// BlockIDs[0] may not be THIS block — surface it loudly rather than risk a
 		// silent mis-assignment that could re-create the phantom-id wedge.
 		sm.logger.Warnf("[reuseBlockIDFromUTXO] tx %s has %d mined-in block ids %v; reusing [0] for block %s — verify if sync stalls",
-			txs[1].Hash().String(), len(meta.BlockIDs), meta.BlockIDs, block.Hash().String())
+			txOrder[1].String(), len(meta.BlockIDs), meta.BlockIDs, bi.hash.String())
 	}
 	return meta.BlockIDs[0], true
 }
@@ -1243,23 +1271,15 @@ func classifyAndCountPrewarmError(logger ulogger.Logger, err error) {
 // validateTransactions validates all the transactions in the block in parallel
 // per level. This is done to speed up subtree validation later on.
 // The levels indicate the number of parents in the block.
-func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, bi blockIdent) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactions",
-		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
-	// Convert block height once and propagate any failure immediately —
-	// silently dropping the candidate finality fields to zero would defeat
-	// the always-populate rule and hand the validator back to the tip-MTP
-	// race that this code is built to avoid. Mirrors the upfront conversion
-	// in ValidateTransactionsLegacyMode.
-	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-	if err != nil {
-		return err
-	}
+	blockHeightUint32 := bi.height
 
-	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, block, blockHeightUint32)
+	candidateBlockTime, candidateParentMedianTime, err := sm.candidateFinalityTimesForBlock(ctx, bi)
 	if err != nil {
 		return errors.NewProcessingError("[validateTransactions] failed to select finality time sources", err)
 	}
@@ -1289,11 +1309,6 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		if len(blockTxsPerLevel[i]) < 10 {
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
-				blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-				if err != nil {
-					return err
-				}
-
 				timeStart = time.Now()
 
 				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
@@ -1318,11 +1333,6 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 						prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 					}()
 
-					blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
-					if err != nil {
-						return err
-					}
-
 					// send to validation, but only if the parent is not in the same block
 					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
 						classifyAndCountPrewarmError(sm.logger, validateErr)
@@ -1342,9 +1352,9 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	return nil
 }
 
-func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (err error) {
+func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "extendTransactions",
-		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
 	)
 
@@ -1368,20 +1378,18 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 
 	// Blocks always include a coinbase, but guard against 0-tx edge cases
 	// (malformed/test blocks) where len-1 would produce a negative capacity.
-	txCount := len(block.Transactions())
+	txCount := len(txOrder)
 	txCapacity := 0
 	if txCount > 0 {
 		txCapacity = txCount - 1
 	}
 	txs := make([]*bt.Tx, 0, txCapacity)
 
-	for idx, wireTx := range block.Transactions() {
+	for idx, txHash := range txOrder {
 		if idx == 0 {
 			// skip the coinbase transaction, as it cannot be extended
 			continue
 		}
-
-		txHash := *wireTx.Hash()
 
 		// the coinbase transaction is not part of the txMap
 		txWrapper, found := txMap.Get(txHash)
@@ -1538,10 +1546,10 @@ func (sm *SyncManager) extendPerTxFallback(ctx context.Context, txs []*bt.Tx) er
 // by prepareSubtrees) so the per-slice fill count is subtreeSize-1 leaves for
 // subtree 0 and subtreeSize for subsequent subtrees (subject to the final
 // subtree's smaller capacity).
-func (sm *SyncManager) createSubtrees(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
+func (sm *SyncManager) createSubtrees(ctx context.Context, bi blockIdent, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
 	subtreeSlices []*subtreepkg.Subtree, subtreeDatas []*subtreepkg.Data, subtreeMetas []*subtreepkg.Meta) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createSubtrees",
-		tracing.WithLogMessage(sm.logger, "[createSubtrees] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[createSubtrees] called for block %s / height %d", bi.hash, bi.height),
 	)
 
 	defer func() {
@@ -1554,9 +1562,7 @@ func (sm *SyncManager) createSubtrees(ctx context.Context, block *bsvutil.Block,
 
 	currentSubtreeIdx := 0
 
-	for _, wireTx := range block.Transactions() {
-		txHash := *wireTx.Hash()
-
+	for _, txHash := range txOrder {
 		// the coinbase transaction is not part of the txMap
 		txWrapper, found := txMap.Get(txHash)
 		if !found {
@@ -1603,7 +1609,7 @@ func (sm *SyncManager) createSubtrees(ctx context.Context, block *bsvutil.Block,
 		}
 	}
 
-	sm.logger.Infof("[createSubtrees] created %d subtrees for block %s / height %d", len(subtreeSlices), block.Hash(), block.Height())
+	sm.logger.Infof("[createSubtrees] created %d subtrees for block %s / height %d", len(subtreeSlices), bi.hash, bi.height)
 
 	return nil
 }
@@ -1643,7 +1649,12 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 	return inputValue - outputValue, nil
 }
 
-func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) error {
+// createTxMap converts every transaction in the block to an arena-independent
+// bt.Tx in txMap (coinbase excluded) and returns the block-order tx hash list
+// (coinbase included at index 0). The returned order is what the downstream
+// stages iterate instead of block.Transactions(), so this is the last function
+// that needs the decoded wire block.
+func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) ([]chainhash.Hash, error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createTxMap",
 		tracing.WithDebugLogMessage(
 			sm.logger,
@@ -1654,39 +1665,42 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 	)
 	defer deferFn()
 
+	txOrder := make([]chainhash.Hash, 0, len(block.Transactions()))
+
 	for _, wireTx := range block.Transactions() {
+		// Copy the hash value out of the bsvutil.Tx wrapper. bt.Tx.SetTxHash
+		// stores the pointer, so passing wireTx.Hash() directly would keep
+		// the wrapping wire.MsgTx (and its decode arena) alive through this
+		// bt.Tx and the TxMapWrapper it lands in.
+		hashCopy := *wireTx.Hash()
+		txOrder = append(txOrder, hashCopy)
+
 		tx := &bt.Tx{}
 
 		if err := WireTxToGoBtTx(wireTx, tx); err != nil {
-			return errors.NewProcessingError("failed to convert wire.Tx to bt.Tx", err)
+			return nil, errors.NewProcessingError("failed to convert wire.Tx to bt.Tx", err)
 		}
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
-			// Copy the hash value out of the bsvutil.Tx wrapper. bt.Tx.SetTxHash
-			// stores the pointer, so passing wireTx.Hash() directly would keep
-			// the wrapping wire.MsgTx (and its decode arena) alive through this
-			// bt.Tx and the TxMapWrapper it lands in.
-			hashCopy := *wireTx.Hash()
 			tx.SetTxHash(&hashCopy)
 			txMap.Set(hashCopy, &TxMapWrapper{Tx: tx})
 		}
 	}
 
-	return nil
+	return txOrder, nil
 }
 
 // prepareTxsPerLevel prepares the transactions per level for processing
 // levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, [][]*bt.Tx) {
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, [][]*bt.Tx) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 
 	maxLevel := uint32(0)
 	sizePerLevel := make(map[uint32]uint64)
 
-	for _, wireTx := range block.Transactions() {
-		txHash := *wireTx.Hash()
+	for _, txHash := range txOrder {
 		if txWrapper, found := txMap.Get(txHash); found {
 			if txWrapper.SomeParentsInBlock {
 				for _, input := range txWrapper.Tx.Inputs {

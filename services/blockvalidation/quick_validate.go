@@ -238,9 +238,9 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewProcessingError("[quickValidateBlock][%s] failed to add block to blockchain", block.Hash().String(), err)
 	}
 
-	// Unlock all UTXOs - final commit point
-	if err = u.unlockSubtreeTransactions(ctx, block.SubtreeSlices); err != nil {
-		return errors.NewProcessingError("[quickValidateBlock][%s] failed to unlock UTXOs", block.Hash().String(), err)
+	// Unlock all UTXOs - final commit point (no-op when the lock was never taken; #1103).
+	if err = u.unlockSubtreeTransactionsIfNeeded(ctx, block, "quickValidateBlock"); err != nil {
+		return err
 	}
 
 	// Update subtrees DAH and send BlockSubtreesSet notification
@@ -327,9 +327,9 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to add block to blockchain", block.Hash().String(), err)
 	}
 
-	// Unlock all UTXOs - final commit point
-	if err = u.unlockSubtreeTransactions(ctx, block.SubtreeSlices); err != nil {
-		return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to unlock UTXOs", block.Hash().String(), err)
+	// Unlock all UTXOs - final commit point (no-op when the lock was never taken; #1103).
+	if err = u.unlockSubtreeTransactionsIfNeeded(ctx, block, "quickValidateBlockAsync"); err != nil {
+		return err
 	}
 
 	// Update subtrees DAH and send BlockSubtreesSet notification
@@ -461,10 +461,13 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 // Error Handling:
 // If any stage encounters an error, the errgroup context is cancelled, stopping all stages.
 // Partial UTXO state changes are safe because:
-//   - All UTXOs are created with WithLocked(true), preventing other operations from using them
-//   - If processing fails, locked UTXOs remain in the UTXO store until unlockSubtreeTransactions
-//   - Since unlockSubtreeTransactions is never called on error, partial changes are effectively rolled back
-//   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID
+//   - By default, UTXOs are created with WithLocked(true), preventing other operations from using them.
+//     If processing fails, unlockSubtreeTransactions is never called, so the locked UTXOs remain locked
+//     and the partial changes are effectively rolled back.
+//   - When QuickValidateSkipUtxoLock is enabled (blocks at or below the highest checkpoint), UTXOs are
+//     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
+//     retry convergence below.
+//   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
 func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
@@ -922,6 +925,23 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 	return nil
 }
 
+// unlockSubtreeTransactionsIfNeeded runs the post-AddBlock unlock pass that clears the
+// per-tx lock taken during quick validation — unless the QuickValidateSkipUtxoLock
+// optimization applies to this block, in which case the UTXOs were never locked at create
+// time and there is nothing to unlock. callerTag identifies the caller in error messages.
+// Shared by quickValidateBlock and quickValidateBlockAsync. See issue #1103.
+func (u *BlockValidation) unlockSubtreeTransactionsIfNeeded(ctx context.Context, block *model.Block, callerTag string) error {
+	if u.quickValidateSkipsUtxoLock(block) {
+		return nil
+	}
+
+	if err := u.unlockSubtreeTransactions(ctx, block.SubtreeSlices); err != nil {
+		return errors.NewProcessingError("[%s][%s] failed to unlock UTXOs", callerTag, block.Hash().String(), err)
+	}
+
+	return nil
+}
+
 // unlockSubtreeTransactions unlocks all transactions in the given subtrees in parallel.
 // It skips the coinbase placeholder at index 0 of the first subtree.
 func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtrees []*subtreepkg.Subtree) error {
@@ -1146,6 +1166,8 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		return nil
 	}
 
+	lockUTXOs := !u.quickValidateSkipsUtxoLock(block)
+
 	// Phase 1: Create UTXOs in parallel, collecting any that already exist
 	createG, createCtx := errgroup.WithContext(ctx)
 	// Set concurrency to 8x StoreBatcherSize to allow sufficient parallelism while the
@@ -1174,7 +1196,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 					BlockID:     block.ID,
 					BlockHeight: block.Height,
 					SubtreeIdx:  sIdx,
-				}), utxo.WithLocked(true))
+				}), utxo.WithLocked(lockUTXOs))
 				if err != nil {
 					if errors.Is(err, errors.ErrTxExists) {
 						// Transaction already exists - collect it for mined info update

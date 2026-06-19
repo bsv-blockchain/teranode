@@ -2,16 +2,67 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestCheckBlockIsInCurrentChain_TransientlyFalseFlagStillOnChain reproduces the
+// spurious-invalidation bug: on_main_chain can be transiently false on a block
+// that IS on the best chain (a slow-path StoreBlock whose reconcileOnMainChain
+// failed, or a startup rebuild that exhausted its retries). CheckBlockIsInCurrentChain
+// must not report such a block as off-chain, because checkOldBlockIDs escalates a
+// negative into a PERMANENT ValidateBlock invalidation that the self-healing flag
+// never gets to undo. Both the SQL route (flag fast-path miss → parent_id CTE
+// confirm) and the in-memory route (off-chain set is rebuilt from the same bad
+// flag, so the candidate must still be SQL-confirmed) must return true.
+func TestCheckBlockIsInCurrentChain_TransientlyFalseFlagStillOnChain(t *testing.T) {
+	for _, useInMemory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("useInMemoryChainCheck=%v", useInMemory), func(t *testing.T) {
+			s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+				st.BlockChain.UseInMemoryChainCheck = useInMemory
+			})
+			storeBlocks(t, s, block1, block2, block3)
+
+			var block2ID uint32
+			require.NoError(t, s.db.QueryRow(`SELECT id FROM blocks WHERE hash = $1`, block2.Hash()[:]).Scan(&block2ID))
+
+			// Precondition: block2 is genuinely on the main chain.
+			ok, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{block2ID})
+			require.NoError(t, err)
+			require.True(t, ok, "precondition: block2 must be on the main chain")
+
+			// Simulate the transient inconsistency: flip on_main_chain to false on a
+			// block that is still reachable from the best block via parent_id.
+			_, err = s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE id = $1`, block2ID)
+			require.NoError(t, err)
+
+			// The in-memory off-chain set is rebuilt from the on_main_chain flags, so
+			// after a bad flag the set would contain this block. Reflect that to
+			// exercise the in-memory negative path that previously rejected without
+			// confirmation.
+			if useInMemory {
+				s.offChainBlockIDsMu.Lock()
+				s.offChainBlockIDs = map[uint32]struct{}{block2ID: {}}
+				s.offChainBlockIDsMu.Unlock()
+			}
+
+			// Only the flag changed; block2 is still on the best chain. It MUST still
+			// be reported on-chain — a false here is the bug.
+			ok, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{block2ID})
+			require.NoError(t, err)
+			require.True(t, ok, "transiently-false on_main_chain must not make an on-chain block report off-chain")
+		})
+	}
+}
 
 func TestCheckBlockIsInCurrentChain_EmptyBlockIDs(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)

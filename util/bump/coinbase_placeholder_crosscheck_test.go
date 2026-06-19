@@ -36,6 +36,10 @@ func (m *mockConstructor) GetSubtree(h *chainhash.Hash) (*subtreepkg.Subtree, er
 func (m *mockConstructor) FindBlocksContainingSubtree(*chainhash.Hash) ([]uint32, []uint32, []int, error) {
 	return []uint32{1}, []uint32{100}, []int{0}, nil
 }
+func (m *mockConstructor) IsBlockOnMainChain(uint32, uint32) (bool, error) {
+	// Single in-memory block is always on the main chain for these crosschecks.
+	return true, nil
+}
 
 // canonicalRoot mirrors model.Block.CheckMerkleRoot: coinbase replacement for subtree 0 and padding
 // for an incomplete final subtree, then a top-level merkle tree over the resulting roots.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -14,7 +15,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/stores/blob/http"
+	blobhttp "github.com/bsv-blockchain/teranode/stores/blob/http"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
-	client, err := http.New(logger, clientStoreURL)
+	client, err := blobhttp.New(logger, clientStoreURL)
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {
@@ -304,4 +305,112 @@ func TestHandleRangeRequest_ClosesReaderOnAllPaths(t *testing.T) {
 
 		require.Equal(t, 1, reader.closeCount, "reader must be Closed when ReadFull fails")
 	})
+}
+
+// fileBackedFakeStore is a Store implementation backed by an *os.File so
+// GetIoReader returns the real file-store wrapper. This is the minimum
+// scaffolding needed to exercise handleRangeRequest's end-to-end flow with
+// the same reader type the file store returns in production.
+type fileBackedFakeStore struct {
+	dir string
+}
+
+func newFileBackedFakeStore(t *testing.T, payload []byte) *fileBackedFakeStore {
+	dir, err := os.MkdirTemp("", "rangereq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	storeURL, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL)
+	require.NoError(t, err)
+	_ = srv // just used for the store construction
+
+	store, err := NewStore(ulogger.New("rangereq"), storeURL)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, payload))
+
+	return &fileBackedFakeStore{dir: dir}
+}
+
+func (s *fileBackedFakeStore) underlying(t *testing.T) Store {
+	storeURL, err := url.Parse("file://" + s.dir)
+	require.NoError(t, err)
+	store, err := NewStore(ulogger.New("rangereq"), storeURL)
+	require.NoError(t, err)
+	return store
+}
+
+// TestHandleRangeRequest_FileStoreReaderIsSeekable is a guard against the
+// regression where semaphoreReadCloser embeds io.ReadCloser (no Seek method),
+// so dataReader.(io.Seeker) fails the type assertion in handleRangeRequest
+// and every range request with start>0 against the file store returns HTTP
+// 500 "Store does not support seeking" - even though the underlying *os.File
+// is Seekable. The fix adds a Seek method on semaphoreReadCloser that
+// delegates to the wrapped reader.
+func TestHandleRangeRequest_FileStoreReaderIsSeekable(t *testing.T) {
+	payload := []byte("0123456789abcdefghij") // 20 bytes
+	store := newFileBackedFakeStore(t, payload).underlying(t)
+
+	srv := &HTTPBlobServer{store: store, logger: ulogger.New("rangereq")}
+
+	req := httptest.NewRequest("GET", "/blob/", nil)
+	req.Header.Set("Range", "bytes=5-9")
+	rr := httptest.NewRecorder()
+
+	srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+	require.Equal(t, http.StatusPartialContent, rr.Code,
+		"a range request with start>0 against a file-backed store must succeed; "+
+			"non-200 status means the file-store reader's Seeker check failed (probably "+
+			"semaphoreReadCloser does not promote Seek)")
+	require.Equal(t, "56789", rr.Body.String(), "must return bytes 5..9 of the payload")
+}
+
+// TestHandleRangeRequest_ContentRangeReportsActualTotal pins the fix for the
+// Content-Range total reported in the response. Before the fix, the handler
+// emitted "bytes start-end/len(data)" where len(data) is the size of the
+// returned slice (end-start), not the total blob length. RFC 7233 §4.2
+// requires the total length of the underlying representation in the
+// "/total" position.
+func TestHandleRangeRequest_ContentRangeReportsActualTotal(t *testing.T) {
+	payload := []byte("0123456789") // 10 bytes total
+	store := newFileBackedFakeStore(t, payload).underlying(t)
+
+	srv := &HTTPBlobServer{store: store, logger: ulogger.New("rangereq")}
+
+	req := httptest.NewRequest("GET", "/blob/", nil)
+	req.Header.Set("Range", "bytes=2-4")
+	rr := httptest.NewRecorder()
+
+	srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+	require.Equal(t, http.StatusPartialContent, rr.Code)
+	gotCR := rr.Header().Get("Content-Range")
+	// Total should be 10 (full blob), not 3 (end-start = the returned slice).
+	require.Equal(t, "bytes 2-4/10", gotCR,
+		"Content-Range must report the full blob length in the /total position per RFC 7233 §4.2, not the returned-slice length")
+}
+
+// TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable pins the
+// fallback: when the underlying reader is not seekable but start==0, the
+// handler should still return the requested bytes and emit "/*" for the
+// total per RFC 7233.
+func TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable(t *testing.T) {
+	// nonSeekingCloser returns io.EOF on Read, simulating a 0-byte payload
+	// from a non-seekable source. start=0 means we should not require
+	// seeking and should fall back to "*" for the total.
+	reader := &nonSeekingCloser{}
+	srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+
+	req := httptest.NewRequest("GET", "/blob/", nil)
+	req.Header.Set("Range", "bytes=0-0")
+	rr := httptest.NewRecorder()
+
+	srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+	require.Equal(t, http.StatusPartialContent, rr.Code, "start=0 against a non-seekable reader must still succeed")
+	gotCR := rr.Header().Get("Content-Range")
+	require.Equal(t, "bytes 0-0/*", gotCR,
+		"non-seekable readers cannot report a total, so Content-Range must use the RFC 7233 \"*\" sentinel")
 }

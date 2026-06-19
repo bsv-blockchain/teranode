@@ -65,6 +65,49 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	return store, ctx
 }
 
+// TestCreateMinedUnspendableSetsDAH_Postgres is the Postgres counterpart of the
+// SQLite TestCreateMinedUnspendableSetsDAH: it exercises the real Postgres create
+// path (CTE / batcher) and asserts that a transaction created already-mined with
+// no spendable outputs (an OP_RETURN-only data carrier) is assigned a
+// delete_at_height so the pruner can expire it. Before the fix this record had no
+// delete_at_height and was retained forever.
+func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+
+	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
+
+	const minedHeight = uint32(1000)
+
+	// Build an OP_RETURN-only (zero spendable outputs) transaction.
+	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+
+	tx.Outputs = tx.Outputs[:0]
+	require.NoError(t, tx.AddOpReturnOutput([]byte("teranode op_return data carrier")))
+	defer func() { _ = store.Delete(ctx, tx.TxIDChainHash()) }()
+
+	_, err = store.Create(ctx, tx, minedHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+		BlockID: 1, BlockHeight: minedHeight, SubtreeIdx: 0, OnLongestChain: true,
+	}))
+	require.NoError(t, err)
+
+	var dah *int64
+	err = store.db.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&dah)
+	require.NoError(t, err)
+	require.NotNil(t, dah, "a mined unspendable tx must be assigned delete_at_height via the Postgres create path")
+	assert.Equal(t, int64(minedHeight)+int64(retention), *dah)
+}
+
 // TestUnlockBatcher_Postgres_SingleHash verifies that a single-hash
 // SetLocked(false) call goes through the unlock batcher on Postgres and
 // correctly clears the locked flag.

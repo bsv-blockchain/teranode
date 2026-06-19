@@ -3,7 +3,6 @@ package httpimpl
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -93,6 +92,9 @@ type LegacyMerkleProofResponse struct {
 //     Returned when the hash doesn't exist as a transaction or subtree
 //     Example: {"message": "hash not found as transaction or subtree"}
 //
+//     Returned when the hash is a known transaction but exists only in orphan blocks
+//     Example: {"message": "transaction not in main chain"}
+//
 //   - 500 Internal Server Error:
 //     Returned for various internal errors:
 //
@@ -139,7 +141,8 @@ type LegacyMerkleProofResponse struct {
 //   - Follows BRC-74 specification for BSV ecosystem compatibility
 //   - Binary format uses Bitcoin VarInt encoding for block height
 //   - Flag values: 0x00=hash data, 0x01=duplicate, 0x02=client txid
-//   - If a transaction appears in multiple blocks, the proof for the first block is returned
+//   - Only proofs anchored in the current best chain are returned. If the
+//     transaction exists only in orphan blocks, the endpoint returns 404.
 //   - Optimized for size and validation speed while maintaining SPV compatibility
 func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
@@ -164,7 +167,7 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 		}
 
 		// Create adapter to use merkleproof helper functions
-		adapter := newMerkleProofAdapter(ctx, h.repository)
+		adapter := newMerkleProofAdapter(ctx, h.repository, h.mainChainCache)
 
 		// Try to construct merkle proof - first as transaction, then as subtree
 		var proof *merkleproof.MerkleProof
@@ -172,13 +175,18 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 		// First, try as transaction hash
 		proof, err = merkleproof.ConstructMerkleProof(txHash, adapter)
 		if err != nil {
-			// If transaction not found, try as subtree hash
-			if strings.Contains(err.Error(), "not in any block") || strings.Contains(err.Error(), "not found") {
+			// Orphan-only existence is a definitive answer for a tx hash: do NOT fall
+			// back to the subtree path (the hash is known to be a tx).
+			if errors.Is(err, errors.ErrTxNotFound) {
+				prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
+				return echo.NewHTTPError(http.StatusNotFound, "transaction not in main chain")
+			}
+
+			// Tx-side not-found (no block contains this tx) — try subtree fallback.
+			if errors.Is(err, errors.ErrNotFound) {
 				proof, err = merkleproof.ConstructSubtreeMerkleProof(txHash, adapter)
 				if err != nil {
-					// Neither transaction nor subtree found
-					errStr := err.Error()
-					if strings.Contains(errStr, "not found") {
+					if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrSubtreeNotFound) {
 						prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
 						return echo.NewHTTPError(http.StatusNotFound, "hash not found as transaction or subtree")
 					}

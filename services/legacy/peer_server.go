@@ -941,12 +941,22 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	// convenience methods and things such as hash caching.
 	block := bsvutil.NewBlockFromBlockAndBytes(msg, buf)
 
+	// Cache the hash now so nothing below this point has to reference `block`
+	// after it is queued. The bsvutil.Block retains the *wire.MsgBlock (and its
+	// multi-GB go-wire decode arena) plus the raw serialized bytes; if `block`
+	// stayed live across the synchronous <-sp.blockProcessed wait below — e.g.
+	// via block.Hash() on the disconnect path — Go liveness would pin that arena
+	// for the entire (minutes-long, for a large block) processing run, defeating
+	// the in-pipeline release in the netsync handler. Hash() returns a pointer to
+	// a separately-escaped value, so holding it does not pin the wrapper.
+	blockHash := block.Hash()
+
 	// Add the block to the known inventory for the peer.
-	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
+	iv := wire.NewInvVect(wire.InvTypeBlock, blockHash)
 	sp.AddKnownInventory(iv)
 
 	// single round-trip: GetBlockHeader tells us both existence and validity
-	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, block.Hash())
+	_, meta, err := sp.server.blockchainClient.GetBlockHeader(sp.ctx, blockHash)
 	blockIsKnownValid := err == nil && !meta.Invalid
 
 	if !blockIsKnownValid {
@@ -961,6 +971,12 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// reference implementation processes blocks in the same
 		// thread and therefore blocks further messages until
 		// the bitcoin block has been fully processed.
+		//
+		// QueueBlock is the last use of `block`: the sync manager extracts the
+		// *wire.MsgBlock into its own queue message and the netsync pipeline owns
+		// it from there (releasing the arena mid-processing). Referencing only
+		// blockHash past this point lets the wrapper and the raw bytes be
+		// collected while we wait.
 		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
 		err = <-sp.blockProcessed
@@ -971,7 +987,7 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 			// infrastructure issues (database, Kafka, etc.) which would
 			// just cause unnecessary sync peer rotation.
 			if !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrStorageError) {
-				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", block.Hash()))
+				sp.DisconnectWithWarning(fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 				return
 			}
 		}

@@ -136,16 +136,15 @@ type ValidateTransactionRequest struct {
 	TransactionData []byte                 `protobuf:"bytes,1,opt,name=transaction_data,json=transactionData,proto3" json:"transaction_data,omitempty"` // Raw transaction data to validate
 	BlockHeight     uint32                 `protobuf:"varint,2,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`            // Block height for validation context
 	// validation options
-	SkipUtxoCreation                    *bool               `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                                                               // Skip UTXO creation for validation
-	AddTxToBlockAssembly                *bool               `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"`                                               // Add transaction to block assembly
-	SkipPolicyChecks                    *bool               `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                                                               // Skip policy checks
-	CreateConflicting                   *bool               `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                                                              // Create conflicting transaction
-	SkipTxmetaPublishing                *bool               `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`                                                   // Skip publishing txmeta to Kafka
-	CandidateBlockTime                  *uint32             `protobuf:"varint,8,opt,name=candidate_block_time,json=candidateBlockTime,proto3,oneof" json:"candidate_block_time,omitempty"`                                                         // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
-	CandidateParentMedianTime           *uint32             `protobuf:"varint,9,opt,name=candidate_parent_median_time,json=candidateParentMedianTime,proto3,oneof" json:"candidate_parent_median_time,omitempty"`                                  // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. REQUIRED on every post-CSV consensus request — selectFinalityComparisonTime returns a ProcessingError when this field is missing. The server provides no tip-MTP soft-fall because blockState.MedianTime is updated asynchronously from blockchain notifications and would race with tip advance / reorg during validation.
-	ParentMetadata                      []*ParentTxMetadata `protobuf:"bytes,10,rep,name=parent_metadata,json=parentMetadata,proto3" json:"parent_metadata,omitempty"`                                                                             // Per in-block parent metadata: parent tx hash + block height (the candidate block height at the time the metadata was built). Empty when not running in block-validation context. The validator consults this map BEFORE the UTXO store fallback: when a parent appears here, the height is set from this entry and the UTXO-store BlockHeights branch is bypassed — this is what prevents the unconfirmedParentHeight sentinel from clobbering a legitimate in-block parent. Senders pass only the entries the current tx's inputs reference (per-tx filtering), not the full block-scoped accumulator.
-	InBlock                             *bool               `protobuf:"varint,11,opt,name=in_block,json=inBlock,proto3,oneof" json:"in_block,omitempty"`                                                                                           // Provenance: the transaction arrived as part of a block or announced subtree (block validation, subtree validation, legacy sync) rather than via mempool submission. The validator publishes this on the txmeta topic so relay consumers never announce such transactions. Explicit by design — do NOT infer from skip_policy_checks, which external submitters may set on genuinely fresh transactions.
-	UnconfirmedParentsAtCandidateHeight *bool               `protobuf:"varint,12,opt,name=unconfirmed_parents_at_candidate_height,json=unconfirmedParentsAtCandidateHeight,proto3,oneof" json:"unconfirmed_parents_at_candidate_height,omitempty"` // Resolve unconfirmed-parent heights to the candidate block height instead of failing closed (consensus-mode sentinel → MEMPOOL_HEIGHT → bad-txns-unconfirmed-input-in-block). CONSENSUS SAFETY: fail-open — the height feeds per-input script-era flag selection in BDK, and the floater backstop is block validation's parent-membership check. Compatible with add_tx_to_block_assembly=true (a floater child blessed at the candidate height equals what policy-mode admission would put in assembly anyway). Only the legacy block-sync path (subtreevalidation checkSubtreeFromBlock, BaseUrl "legacy") may set this; MUST NOT be set on peer-facing or mempool-admission paths. DEPLOYMENT SKEW (request-only field, no data migration in any direction): new sender → old validator ignores the unknown field and keeps the old fail-closed behaviour, so legacy sync can still wedge on same-block parents until the validator is upgraded; old sender → new validator reconstructs absent as false (old behaviour); mixed validator fleets behind load balancing make identical legacy requests pass or wedge depending on which instance serves them. Upgrade subtreevalidation and validator together; downgrade reintroduces the wedge for future legacy catchup but corrupts nothing.
+	SkipUtxoCreation                    *bool   `protobuf:"varint,3,opt,name=skip_utxo_creation,json=skipUtxoCreation,proto3,oneof" json:"skip_utxo_creation,omitempty"`                                                               // Skip UTXO creation for validation
+	AddTxToBlockAssembly                *bool   `protobuf:"varint,4,opt,name=add_tx_to_block_assembly,json=addTxToBlockAssembly,proto3,oneof" json:"add_tx_to_block_assembly,omitempty"`                                               // Add transaction to block assembly
+	SkipPolicyChecks                    *bool   `protobuf:"varint,5,opt,name=skip_policy_checks,json=skipPolicyChecks,proto3,oneof" json:"skip_policy_checks,omitempty"`                                                               // Skip policy checks
+	CreateConflicting                   *bool   `protobuf:"varint,6,opt,name=create_conflicting,json=createConflicting,proto3,oneof" json:"create_conflicting,omitempty"`                                                              // Create conflicting transaction
+	SkipTxmetaPublishing                *bool   `protobuf:"varint,7,opt,name=skip_txmeta_publishing,json=skipTxmetaPublishing,proto3,oneof" json:"skip_txmeta_publishing,omitempty"`                                                   // Skip publishing txmeta to Kafka
+	CandidateBlockTime                  *uint32 `protobuf:"varint,8,opt,name=candidate_block_time,json=candidateBlockTime,proto3,oneof" json:"candidate_block_time,omitempty"`                                                         // Candidate block header timestamp; consumed by the server for pre-CSV block-validation finality. Sender omits when not running block-context validation.
+	CandidateParentMedianTime           *uint32 `protobuf:"varint,9,opt,name=candidate_parent_median_time,json=candidateParentMedianTime,proto3,oneof" json:"candidate_parent_median_time,omitempty"`                                  // Candidate-parent MTP (equivalent to bitcoin-sv's pindexPrev->GetMedianTimePast()); consumed by the server for post-CSV block-validation finality. REQUIRED on every post-CSV consensus request — selectFinalityComparisonTime returns a ProcessingError when this field is missing. The server provides no tip-MTP soft-fall because blockState.MedianTime is updated asynchronously from blockchain notifications and would race with tip advance / reorg during validation.
+	InBlock                             *bool   `protobuf:"varint,11,opt,name=in_block,json=inBlock,proto3,oneof" json:"in_block,omitempty"`                                                                                           // Provenance: the transaction arrived as part of a block or announced subtree (block validation, subtree validation, legacy sync) rather than via mempool submission. The validator publishes this on the txmeta topic so relay consumers never announce such transactions. Explicit by design — do NOT infer from skip_policy_checks, which external submitters may set on genuinely fresh transactions.
+	UnconfirmedParentsAtCandidateHeight *bool   `protobuf:"varint,12,opt,name=unconfirmed_parents_at_candidate_height,json=unconfirmedParentsAtCandidateHeight,proto3,oneof" json:"unconfirmed_parents_at_candidate_height,omitempty"` // Resolve unconfirmed-parent heights to the candidate block height instead of failing closed (consensus-mode sentinel → MEMPOOL_HEIGHT → bad-txns-unconfirmed-input-in-block). CONSENSUS SAFETY: fail-open — the height feeds per-input script-era flag selection in BDK, and the floater backstop is block validation's parent-membership check. Compatible with add_tx_to_block_assembly=true (a floater child blessed at the candidate height equals what policy-mode admission would put in assembly anyway). Set by the legacy block-sync path (subtreevalidation checkSubtreeFromBlock, BaseUrl "legacy") and by the block-validation path (CheckBlockSubtrees, which runs after ValidateBlock's PoW checks); MUST NOT be set on peer-facing or mempool-admission paths. DEPLOYMENT SKEW (request-only field, no data migration in any direction): new sender → old validator ignores the unknown field and keeps the old fail-closed behaviour, so it stamps the unconfirmedParentHeight sentinel for genuine in-block parents and BDK rejects them with bad-txns-unconfirmed-input-in-block — this now degrades ORDINARY block validation (any block with intra-block parent chains, via the CheckBlockSubtrees setter), not just legacy catchup, for the whole skew window; old sender → new validator reconstructs absent as false (old behaviour); mixed validator fleets behind load balancing make identical legacy requests pass or wedge depending on which instance serves them. Upgrade subtreevalidation and validator together; downgrade reintroduces the wedge for future legacy catchup but corrupts nothing.
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
 }
@@ -243,13 +242,6 @@ func (x *ValidateTransactionRequest) GetCandidateParentMedianTime() uint32 {
 	return 0
 }
 
-func (x *ValidateTransactionRequest) GetParentMetadata() []*ParentTxMetadata {
-	if x != nil {
-		return x.ParentMetadata
-	}
-	return nil
-}
-
 func (x *ValidateTransactionRequest) GetInBlock() bool {
 	if x != nil && x.InBlock != nil {
 		return *x.InBlock
@@ -262,63 +254,6 @@ func (x *ValidateTransactionRequest) GetUnconfirmedParentsAtCandidateHeight() bo
 		return *x.UnconfirmedParentsAtCandidateHeight
 	}
 	return false
-}
-
-// ParentTxMetadata carries the (parent hash, block height) pair used by the
-// validator's in-block-parent height-resolution path. parent_hash is the
-// chainhash.Hash internal byte order (32 bytes), passed as-is — no hex
-// encoding, no display-order conversion. Internal-order bytes round-trip
-// directly between client and server with no encoding step.
-type ParentTxMetadata struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ParentHash    []byte                 `protobuf:"bytes,1,opt,name=parent_hash,json=parentHash,proto3" json:"parent_hash,omitempty"`     // chainhash.Hash internal byte order (32 bytes).
-	BlockHeight   uint32                 `protobuf:"varint,2,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"` // Block height stamped at metadata-build time.
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ParentTxMetadata) Reset() {
-	*x = ParentTxMetadata{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ParentTxMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ParentTxMetadata) ProtoMessage() {}
-
-func (x *ParentTxMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ParentTxMetadata.ProtoReflect.Descriptor instead.
-func (*ParentTxMetadata) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *ParentTxMetadata) GetParentHash() []byte {
-	if x != nil {
-		return x.ParentHash
-	}
-	return nil
-}
-
-func (x *ParentTxMetadata) GetBlockHeight() uint32 {
-	if x != nil {
-		return x.BlockHeight
-	}
-	return 0
 }
 
 // ValidateTransactionResponse provides transaction validation results
@@ -335,7 +270,7 @@ type ValidateTransactionResponse struct {
 
 func (x *ValidateTransactionResponse) Reset() {
 	*x = ValidateTransactionResponse{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[4]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -347,7 +282,7 @@ func (x *ValidateTransactionResponse) String() string {
 func (*ValidateTransactionResponse) ProtoMessage() {}
 
 func (x *ValidateTransactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[4]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -360,7 +295,7 @@ func (x *ValidateTransactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateTransactionResponse.ProtoReflect.Descriptor instead.
 func (*ValidateTransactionResponse) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{4}
+	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ValidateTransactionResponse) GetValid() bool {
@@ -402,7 +337,7 @@ type ValidateTransactionBatchRequest struct {
 
 func (x *ValidateTransactionBatchRequest) Reset() {
 	*x = ValidateTransactionBatchRequest{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[5]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +349,7 @@ func (x *ValidateTransactionBatchRequest) String() string {
 func (*ValidateTransactionBatchRequest) ProtoMessage() {}
 
 func (x *ValidateTransactionBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[5]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +362,7 @@ func (x *ValidateTransactionBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateTransactionBatchRequest.ProtoReflect.Descriptor instead.
 func (*ValidateTransactionBatchRequest) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{5}
+	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ValidateTransactionBatchRequest) GetTransactions() []*ValidateTransactionRequest {
@@ -450,7 +385,7 @@ type ValidateTransactionBatchResponse struct {
 
 func (x *ValidateTransactionBatchResponse) Reset() {
 	*x = ValidateTransactionBatchResponse{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[6]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -462,7 +397,7 @@ func (x *ValidateTransactionBatchResponse) String() string {
 func (*ValidateTransactionBatchResponse) ProtoMessage() {}
 
 func (x *ValidateTransactionBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[6]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -475,7 +410,7 @@ func (x *ValidateTransactionBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateTransactionBatchResponse.ProtoReflect.Descriptor instead.
 func (*ValidateTransactionBatchResponse) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{6}
+	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ValidateTransactionBatchResponse) GetValid() bool {
@@ -510,7 +445,7 @@ type GetBlockHeightResponse struct {
 
 func (x *GetBlockHeightResponse) Reset() {
 	*x = GetBlockHeightResponse{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[7]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -522,7 +457,7 @@ func (x *GetBlockHeightResponse) String() string {
 func (*GetBlockHeightResponse) ProtoMessage() {}
 
 func (x *GetBlockHeightResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[7]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -535,7 +470,7 @@ func (x *GetBlockHeightResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockHeightResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockHeightResponse) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{7}
+	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetBlockHeightResponse) GetHeight() uint32 {
@@ -556,7 +491,7 @@ type GetMedianBlockTimeResponse struct {
 
 func (x *GetMedianBlockTimeResponse) Reset() {
 	*x = GetMedianBlockTimeResponse{}
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[8]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -568,7 +503,7 @@ func (x *GetMedianBlockTimeResponse) String() string {
 func (*GetMedianBlockTimeResponse) ProtoMessage() {}
 
 func (x *GetMedianBlockTimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[8]
+	mi := &file_services_validator_validator_api_validator_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -581,7 +516,7 @@ func (x *GetMedianBlockTimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMedianBlockTimeResponse.ProtoReflect.Descriptor instead.
 func (*GetMedianBlockTimeResponse) Descriptor() ([]byte, []int) {
-	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{8}
+	return file_services_validator_validator_api_validator_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetMedianBlockTimeResponse) GetMedianTime() uint32 {
@@ -600,7 +535,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xae\a\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xfb\x06\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -610,9 +545,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x12create_conflicting\x18\x06 \x01(\bH\x03R\x11createConflicting\x88\x01\x01\x129\n" +
 	"\x16skip_txmeta_publishing\x18\a \x01(\bH\x04R\x14skipTxmetaPublishing\x88\x01\x01\x125\n" +
 	"\x14candidate_block_time\x18\b \x01(\rH\x05R\x12candidateBlockTime\x88\x01\x01\x12D\n" +
-	"\x1ccandidate_parent_median_time\x18\t \x01(\rH\x06R\x19candidateParentMedianTime\x88\x01\x01\x12H\n" +
-	"\x0fparent_metadata\x18\n" +
-	" \x03(\v2\x1f.validator_api.ParentTxMetadataR\x0eparentMetadata\x12\x1e\n" +
+	"\x1ccandidate_parent_median_time\x18\t \x01(\rH\x06R\x19candidateParentMedianTime\x88\x01\x01\x12\x1e\n" +
 	"\bin_block\x18\v \x01(\bH\aR\ainBlock\x88\x01\x01\x12Y\n" +
 	"'unconfirmed_parents_at_candidate_height\x18\f \x01(\bH\bR#unconfirmedParentsAtCandidateHeight\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
@@ -623,11 +556,8 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x15_candidate_block_timeB\x1f\n" +
 	"\x1d_candidate_parent_median_timeB\v\n" +
 	"\t_in_blockB*\n" +
-	"(_unconfirmed_parents_at_candidate_height\"V\n" +
-	"\x10ParentTxMetadata\x12\x1f\n" +
-	"\vparent_hash\x18\x01 \x01(\fR\n" +
-	"parentHash\x12!\n" +
-	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\"{\n" +
+	"(_unconfirmed_parents_at_candidate_heightJ\x04\b\n" +
+	"\x10\vR\x0fparent_metadata\"{\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +
 	"\x04txid\x18\x02 \x01(\fR\x04txid\x12\x16\n" +
@@ -664,40 +594,38 @@ func file_services_validator_validator_api_validator_api_proto_rawDescGZIP() []b
 	return file_services_validator_validator_api_validator_api_proto_rawDescData
 }
 
-var file_services_validator_validator_api_validator_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_services_validator_validator_api_validator_api_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_services_validator_validator_api_validator_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),                     // 0: validator_api.EmptyMessage
 	(*HealthResponse)(nil),                   // 1: validator_api.HealthResponse
 	(*ValidateTransactionRequest)(nil),       // 2: validator_api.ValidateTransactionRequest
-	(*ParentTxMetadata)(nil),                 // 3: validator_api.ParentTxMetadata
-	(*ValidateTransactionResponse)(nil),      // 4: validator_api.ValidateTransactionResponse
-	(*ValidateTransactionBatchRequest)(nil),  // 5: validator_api.ValidateTransactionBatchRequest
-	(*ValidateTransactionBatchResponse)(nil), // 6: validator_api.ValidateTransactionBatchResponse
-	(*GetBlockHeightResponse)(nil),           // 7: validator_api.GetBlockHeightResponse
-	(*GetMedianBlockTimeResponse)(nil),       // 8: validator_api.GetMedianBlockTimeResponse
-	(*timestamppb.Timestamp)(nil),            // 9: google.protobuf.Timestamp
-	(*errors.TError)(nil),                    // 10: errors.TError
+	(*ValidateTransactionResponse)(nil),      // 3: validator_api.ValidateTransactionResponse
+	(*ValidateTransactionBatchRequest)(nil),  // 4: validator_api.ValidateTransactionBatchRequest
+	(*ValidateTransactionBatchResponse)(nil), // 5: validator_api.ValidateTransactionBatchResponse
+	(*GetBlockHeightResponse)(nil),           // 6: validator_api.GetBlockHeightResponse
+	(*GetMedianBlockTimeResponse)(nil),       // 7: validator_api.GetMedianBlockTimeResponse
+	(*timestamppb.Timestamp)(nil),            // 8: google.protobuf.Timestamp
+	(*errors.TError)(nil),                    // 9: errors.TError
 }
 var file_services_validator_validator_api_validator_api_proto_depIdxs = []int32{
-	9,  // 0: validator_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 1: validator_api.ValidateTransactionRequest.parent_metadata:type_name -> validator_api.ParentTxMetadata
-	2,  // 2: validator_api.ValidateTransactionBatchRequest.transactions:type_name -> validator_api.ValidateTransactionRequest
-	10, // 3: validator_api.ValidateTransactionBatchResponse.errors:type_name -> errors.TError
-	0,  // 4: validator_api.ValidatorAPI.HealthGRPC:input_type -> validator_api.EmptyMessage
-	2,  // 5: validator_api.ValidatorAPI.ValidateTransaction:input_type -> validator_api.ValidateTransactionRequest
-	5,  // 6: validator_api.ValidatorAPI.ValidateTransactionBatch:input_type -> validator_api.ValidateTransactionBatchRequest
-	0,  // 7: validator_api.ValidatorAPI.GetBlockHeight:input_type -> validator_api.EmptyMessage
-	0,  // 8: validator_api.ValidatorAPI.GetMedianBlockTime:input_type -> validator_api.EmptyMessage
-	1,  // 9: validator_api.ValidatorAPI.HealthGRPC:output_type -> validator_api.HealthResponse
-	4,  // 10: validator_api.ValidatorAPI.ValidateTransaction:output_type -> validator_api.ValidateTransactionResponse
-	6,  // 11: validator_api.ValidatorAPI.ValidateTransactionBatch:output_type -> validator_api.ValidateTransactionBatchResponse
-	7,  // 12: validator_api.ValidatorAPI.GetBlockHeight:output_type -> validator_api.GetBlockHeightResponse
-	8,  // 13: validator_api.ValidatorAPI.GetMedianBlockTime:output_type -> validator_api.GetMedianBlockTimeResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	8, // 0: validator_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	2, // 1: validator_api.ValidateTransactionBatchRequest.transactions:type_name -> validator_api.ValidateTransactionRequest
+	9, // 2: validator_api.ValidateTransactionBatchResponse.errors:type_name -> errors.TError
+	0, // 3: validator_api.ValidatorAPI.HealthGRPC:input_type -> validator_api.EmptyMessage
+	2, // 4: validator_api.ValidatorAPI.ValidateTransaction:input_type -> validator_api.ValidateTransactionRequest
+	4, // 5: validator_api.ValidatorAPI.ValidateTransactionBatch:input_type -> validator_api.ValidateTransactionBatchRequest
+	0, // 6: validator_api.ValidatorAPI.GetBlockHeight:input_type -> validator_api.EmptyMessage
+	0, // 7: validator_api.ValidatorAPI.GetMedianBlockTime:input_type -> validator_api.EmptyMessage
+	1, // 8: validator_api.ValidatorAPI.HealthGRPC:output_type -> validator_api.HealthResponse
+	3, // 9: validator_api.ValidatorAPI.ValidateTransaction:output_type -> validator_api.ValidateTransactionResponse
+	5, // 10: validator_api.ValidatorAPI.ValidateTransactionBatch:output_type -> validator_api.ValidateTransactionBatchResponse
+	6, // 11: validator_api.ValidatorAPI.GetBlockHeight:output_type -> validator_api.GetBlockHeightResponse
+	7, // 12: validator_api.ValidatorAPI.GetMedianBlockTime:output_type -> validator_api.GetMedianBlockTimeResponse
+	8, // [8:13] is the sub-list for method output_type
+	3, // [3:8] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_services_validator_validator_api_validator_api_proto_init() }
@@ -712,7 +640,7 @@ func file_services_validator_validator_api_validator_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_validator_validator_api_validator_api_proto_rawDesc), len(file_services_validator_validator_api_validator_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

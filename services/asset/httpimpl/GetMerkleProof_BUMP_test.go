@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -94,10 +95,13 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 
 	t.Run("JSON BUMP format", func(t *testing.T) {
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Setup mock expectations
@@ -105,6 +109,7 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Create request
 		e := echo.New()
@@ -137,10 +142,13 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 
 	t.Run("HEX BUMP format", func(t *testing.T) {
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Setup mock expectations
@@ -148,6 +156,7 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Create request
 		e := echo.New()
@@ -183,10 +192,13 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 
 	t.Run("Binary BUMP format", func(t *testing.T) {
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Setup mock expectations
@@ -194,6 +206,7 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Create request
 		e := echo.New()
@@ -228,10 +241,13 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 	t.Run("Format consistency", func(t *testing.T) {
 		// Test that all three formats represent the same data
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Setup mock expectations (called multiple times)
@@ -239,6 +255,7 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Get JSON format
 		e := echo.New()

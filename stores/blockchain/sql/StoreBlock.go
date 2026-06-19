@@ -173,6 +173,15 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// blocks table.
 	s.blockIDReservations.Delete(*block.Hash())
 
+	// Drop the durable reservation too (best-effort): the committed blocks row is
+	// now authoritative, so AssignBlockID's committed-check (blockIDByHash) takes
+	// priority over the reservations table regardless. A failure here is harmless —
+	// the row is redundant and the age-based sweep will reclaim it — so log and do
+	// not fail the (already-committed) StoreBlock.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM block_id_reservations WHERE hash = $1`, block.Hash()[:]); err != nil {
+		s.logger.Warnf("[StoreBlock][%s] failed to delete durable block-id reservation (harmless, sweep will reclaim): %v", block.Hash().String(), err)
+	}
+
 	// Fast path: the block was inserted with onMainChain=true (its parent is the
 	// pre-insert best block) AND we won the race for the highest ID. In this
 	// case we can skip the post-insert getBestBlockID query entirely — the new

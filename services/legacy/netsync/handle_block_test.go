@@ -107,6 +107,17 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// testBlockIdent builds the scalar blockIdent for a test block, mirroring
+// what prepareSubtrees derives before dropping the decoded block.
+func testBlockIdent(block *bsvutil.Block) blockIdent {
+	return blockIdent{
+		hash:      *block.Hash(),
+		prevBlock: block.MsgBlock().Header.PrevBlock,
+		height:    uint32(block.Height()), //nolint:gosec // test helper, heights are small
+		timestamp: block.MsgBlock().Header.Timestamp,
+	}
+}
+
 func TestSyncManager_createTxMap(t *testing.T) {
 	// Define test cases with block file paths and expected lengths of the txMap
 	testCases := []struct {
@@ -145,9 +156,11 @@ func TestSyncManager_createTxMap(t *testing.T) {
 
 			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
-			err = sm.createTxMap(context.Background(), block, txMap)
+			txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
 			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
+			require.Len(t, txOrder, len(block.Transactions()), "txOrder should include every tx (coinbase included)")
+			require.Equal(t, *block.Transactions()[0].Hash(), txOrder[0], "txOrder[0] should be the coinbase")
 		})
 	}
 }
@@ -190,12 +203,11 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			sm := &SyncManager{}
 			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
-			err = sm.createTxMap(context.Background(), block, txMap)
+			txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
 			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
 
-			for _, wireTx := range block.Transactions() {
-				txHash := *wireTx.Hash()
+			for _, txHash := range txOrder {
 				// extend transaction
 				if txWrapper, found := txMap.Get(txHash); found {
 					tx := txWrapper.Tx
@@ -209,7 +221,7 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 				}
 			}
 
-			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
+			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), txOrder, txMap)
 			assert.Equal(t, tc.expectedLevels, maxLevel)
 
 			allParents := 0
@@ -255,7 +267,7 @@ func BenchmarkCreateTxMap(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		err = sm.createTxMap(context.Background(), block, txMap)
+		_, err = sm.createTxMap(context.Background(), block, txMap)
 		require.NoError(b, err)
 	}
 }
@@ -345,8 +357,10 @@ func TestSyncManager_createSubtrees_MultiSubtreeDistribution(t *testing.T) {
 	sm := &SyncManager{logger: ulogger.TestLogger{}}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
-	require.NoError(t, sm.createTxMap(context.Background(), block, txMap))
+	txOrder, err := sm.createTxMap(context.Background(), block, txMap)
+	require.NoError(t, err)
 	require.Equal(t, 5, txMap.Length(), "createTxMap should skip the coinbase")
+	require.Len(t, txOrder, 6, "txOrder should include the coinbase")
 
 	for _, wrapper := range txMap.Range() {
 		for _, in := range wrapper.Tx.Inputs {
@@ -383,7 +397,7 @@ func TestSyncManager_createSubtrees_MultiSubtreeDistribution(t *testing.T) {
 		subtreeMetas[i] = subtreepkg.NewSubtreeMeta(st)
 	}
 
-	require.NoError(t, sm.createSubtrees(context.Background(), block, txMap, subtreeSlices, subtreeDatas, subtreeMetas))
+	require.NoError(t, sm.createSubtrees(context.Background(), testBlockIdent(block), txOrder, txMap, subtreeSlices, subtreeDatas, subtreeMetas))
 
 	require.Equal(t, 4, subtreeSlices[0].Length(), "subtree 0 should hold coinbase + 3 regular txs")
 	require.True(t, subtreeSlices[0].IsComplete())
@@ -399,7 +413,7 @@ func Benchmark_createSubtrees(b *testing.B) {
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
-	err = sm.createTxMap(b.Context(), block, txMap)
+	txOrder, err := sm.createTxMap(b.Context(), block, txMap)
 	require.NoError(b, err)
 
 	b.ResetTimer()
@@ -411,7 +425,7 @@ func Benchmark_createSubtrees(b *testing.B) {
 		subtreeData := subtreepkg.NewSubtreeData(subtree)
 		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
-		_ = sm.createSubtrees(b.Context(), block, txMap,
+		_ = sm.createSubtrees(b.Context(), testBlockIdent(block), txOrder, txMap,
 			[]*subtreepkg.Subtree{subtree},
 			[]*subtreepkg.Data{subtreeData},
 			[]*subtreepkg.Meta{subtreeMeta},
@@ -431,11 +445,11 @@ func TestSyncManager_extendTransactions(t *testing.T) {
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
-	err = sm.createTxMap(context.Background(), block, txMap)
+	txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 	require.NoError(t, err)
 
 	// Test extending transactions
-	err = sm.extendTransactions(context.Background(), block, txMap)
+	err = sm.extendTransactions(context.Background(), testBlockIdent(block), txOrder, txMap)
 	assert.NoError(t, err)
 }
 
@@ -481,7 +495,7 @@ func TestSyncManager_createUtxos(t *testing.T) {
 	block.SetHeight(100)
 
 	// Test createUtxos
-	utxos := sm.createUtxos(context.Background(), txMap, block, 0)
+	utxos := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0)
 	assert.NotNil(t, utxos)
 }
 
@@ -518,7 +532,7 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 	block := bsvutil.NewBlock(msgBlock)
 
 	// Test validateTransactions - it should handle validation gracefully even without mocks
-	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, block)
+	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, testBlockIdent(block))
 	// We expect this to succeed since MockValidatorClient has default behavior
 	assert.NoError(t, err)
 }
@@ -1146,7 +1160,7 @@ func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
 	block.SetHeight(100)
 
 	const expectedBlockID uint32 = 42
-	require.NoError(t, sm.createUtxos(ctx, txMap, block, expectedBlockID))
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), expectedBlockID))
 
 	post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs)
 	require.NoError(t, err)
@@ -1259,7 +1273,7 @@ func TestSyncManager_createUtxos_ChunksExistingTxs(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, block, 42))
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42))
 
 	// Assert 1: at least 2 calls (proves chunking happens).
 	require.GreaterOrEqual(t, len(callChunks), 2,
@@ -1296,7 +1310,7 @@ func TestSyncManager_createUtxos_ChunkErrorReturnsWrappedProcessingError(t *test
 		errors.NewStorageError("synthetic chunk failure"),
 	)
 
-	err := sm.createUtxos(ctx, txMap, block, 42)
+	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to merge blockID into 20 pre-existing txs",
 		"expected wrapped ProcessingError, got: %v", err)
@@ -1365,7 +1379,7 @@ func TestSyncManager_createUtxos_ChunkFailureCancelsSiblings(t *testing.T) {
 		postTriggerMu.Unlock()
 	}).Return(map[chainhash.Hash][]uint32{}, errors.NewStorageError("SetMinedMulti must not be called after mergeCtx cancellation")).Maybe()
 
-	err := sm.createUtxos(ctx, txMap, block, 42)
+	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42)
 	require.Error(t, err, "cancelled mergeCtx should propagate an error out of createUtxos")
 
 	postTriggerMu.Lock()
@@ -1394,7 +1408,7 @@ func TestSyncManager_createUtxos_ExactBatchSize(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, block, 42))
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42))
 
 	require.Len(t, callChunks, 1, "expected exactly 1 chunk for n == batchSize")
 	require.Len(t, callChunks[0], totalTxs, "single chunk must cover all txs")
@@ -1419,7 +1433,7 @@ func TestSyncManager_createUtxos_OneOverBatchSize(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, block, 42))
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42))
 
 	require.Len(t, callChunks, 2, "expected 2 chunks for n == batchSize+1 with 2 workers")
 	for i, chunk := range callChunks {
@@ -1448,7 +1462,7 @@ func TestSyncManager_createUtxos_BatchSizeZeroClamped(t *testing.T) {
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
 	require.NotPanics(t, func() {
-		require.NoError(t, sm.createUtxos(ctx, txMap, block, 42))
+		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42))
 	}, "batchSize=0 must be clamped to avoid divide-by-zero")
 
 	require.Len(t, callChunks, totalTxs, "with batchSize clamped to 1, expected one chunk per tx")
@@ -1477,7 +1491,7 @@ func TestSyncManager_createUtxos_RoutinesZeroClamped(t *testing.T) {
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
 	require.NotPanics(t, func() {
-		require.NoError(t, sm.createUtxos(ctx, txMap, block, 42))
+		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42))
 	}, "numRoutines=0 must be clamped so the merge actually runs")
 
 	require.Len(t, callChunks, 3, "with routines clamped to 1, expected 3 chunks (ceil(10/4))")

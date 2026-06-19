@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -408,6 +409,14 @@ func TestQuickValidateBlock_IncompleteBlockNilCoinbase(t *testing.T) {
 	})
 }
 
+func TestQuickValidateSkipUtxoLockSetting_DefaultsOff(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	require.False(t, suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock,
+		"QuickValidateSkipUtxoLock must default to false")
+}
+
 // filterCalls removes mock expectations for a specific method
 func filterCalls(calls []*mock.Call, methodToRemove string) []*mock.Call {
 	filtered := make([]*mock.Call, 0)
@@ -417,4 +426,239 @@ func filterCalls(calls []*mock.Call, methodToRemove string) []*mock.Call {
 		}
 	}
 	return filtered
+}
+
+// setCheckpointSlice replaces the checkpoint set on the suite's settings with the given
+// slice. It copies ChainCfgParams first so it never mutates the shared (global) chaincfg.Params.
+func setCheckpointSlice(t *testing.T, s *CatchupTestSuite, cps []chaincfg.Checkpoint) {
+	t.Helper()
+	require.NotNil(t, s.Server.blockValidation.settings.ChainCfgParams)
+	params := *s.Server.blockValidation.settings.ChainCfgParams
+	params.Checkpoints = cps
+	s.Server.blockValidation.settings.ChainCfgParams = &params
+}
+
+// setCheckpoints replaces the checkpoint set on the suite's settings with a single
+// checkpoint at the given height.
+func setCheckpoints(t *testing.T, s *CatchupTestSuite, height uint32) {
+	t.Helper()
+	setCheckpointSlice(t, s, []chaincfg.Checkpoint{{Height: int32(height)}})
+}
+
+func TestQuickValidateSkipsUtxoLock(t *testing.T) {
+	tests := []struct {
+		name             string
+		settingOn        bool
+		emptyCheckpoints bool
+		checkpointAt     uint32
+		blockHeight      uint32
+		want             bool
+	}{
+		{name: "setting off", settingOn: false, checkpointAt: 1000, blockHeight: 100, want: false},
+		{name: "on, height below checkpoint", settingOn: true, checkpointAt: 1000, blockHeight: 100, want: true},
+		{name: "on, height equal to checkpoint", settingOn: true, checkpointAt: 1000, blockHeight: 1000, want: true},
+		{name: "on, height above checkpoint", settingOn: true, checkpointAt: 50, blockHeight: 100, want: false},
+		{name: "on, checkpoint at height 0", settingOn: true, checkpointAt: 0, blockHeight: 100, want: false},
+		{name: "on, empty checkpoint list", settingOn: true, emptyCheckpoints: true, blockHeight: 100, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = tt.settingOn
+			if tt.emptyCheckpoints {
+				setCheckpointSlice(t, suite, []chaincfg.Checkpoint{})
+			} else {
+				setCheckpoints(t, suite, tt.checkpointAt)
+			}
+
+			block := &model.Block{Height: tt.blockHeight}
+			got := suite.Server.blockValidation.quickValidateSkipsUtxoLock(block)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// assertCreatedLocked asserts every recorded Create call used the expected WithLocked flag.
+func assertCreatedLocked(t *testing.T, m *utxo.MockUtxostore, wantLocked bool) {
+	t.Helper()
+	found := false
+	for _, c := range m.Calls {
+		if c.Method != "Create" {
+			continue
+		}
+		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
+		require.True(t, ok, "Create 4th arg should be []utxo.CreateOption")
+		o := &utxo.CreateOptions{}
+		for _, opt := range opts {
+			opt(o)
+		}
+		require.Equal(t, wantLocked, o.Locked, "Create WithLocked flag mismatch")
+		found = true
+	}
+	require.True(t, found, "expected at least one Create call")
+}
+
+// buildOneSubtreeBlock builds a block with one subtree (coinbase + 2 txs) and stores its
+// subtree + subtree-data files in the suite's subtree store. Mirrors the existing
+// "block with 1 subtree and 2 txs" setup in TestQuickValidateBlock.
+func buildOneSubtreeBlock(t *testing.T, s *CatchupTestSuite, height uint32) *model.Block {
+	t.Helper()
+	txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+	coinbaseTx := txs[0]
+	regularTxs := txs[1:]
+
+	block := testhelpers.CreateTestBlocks(t, 1)[0]
+	block.Height = height
+	block.CoinbaseTx = coinbaseTx
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*regularTxs[0].TxIDChainHash(), 1, 1))
+	require.NoError(t, subtree.AddNode(*regularTxs[1].TxIDChainHash(), 2, 2))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.Server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes))
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
+	require.NoError(t, subtreeData.AddTx(regularTxs[0], 1))
+	require.NoError(t, subtreeData.AddTx(regularTxs[1], 2))
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, s.Server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+	block.Subtrees = []*chainhash.Hash{subtree.RootHash()}
+	block.TransactionCount = 3
+	block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
+	require.NoError(t, err)
+	return block
+}
+
+// setupQuickValidateMocks registers the common UTXO/blockchain/validator mock
+// expectations needed to run quickValidateBlock for a one-subtree block.
+func setupQuickValidateMocks(s *CatchupTestSuite) {
+	s.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
+	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
+	s.MockUTXOStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+	s.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
+	s.MockValidator.Errors = []error{nil, nil, nil}
+}
+
+func TestQuickValidateBlock_UtxoLockGating(t *testing.T) {
+	t.Run("setting off: UTXOs locked then unlocked", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, true)
+		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+
+	t.Run("setting on, height <= checkpoint: unlocked, no unlock pass", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		setCheckpoints(t, suite, 1000)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, false)
+		suite.MockUTXOStore.AssertNotCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+
+	t.Run("setting on, height > checkpoint: lock still applied", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		setCheckpoints(t, suite, 50)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, true)
+		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+}
+
+func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
+	t.Run("setting off: UTXOs locked then unlocked", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
+		// jobs (one job per subtree; the test block has a single subtree), so no consumer
+		// goroutine is needed.
+		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, true)
+		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+
+	t.Run("setting on, height <= checkpoint: unlocked, no unlock pass", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		setCheckpoints(t, suite, 1000)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
+		// jobs (one job per subtree; the test block has a single subtree), so no consumer
+		// goroutine is needed.
+		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, false)
+		suite.MockUTXOStore.AssertNotCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
+
+	t.Run("setting on, height > checkpoint: lock still applied", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		setupQuickValidateMocks(suite)
+		suite.Server.blockValidation.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		setCheckpoints(t, suite, 50)
+
+		block := buildOneSubtreeBlock(t, suite, 100)
+
+		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
+		// jobs (one job per subtree; the test block has a single subtree), so no consumer
+		// goroutine is needed.
+		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		require.NoError(t, err)
+
+		assertCreatedLocked(t, suite.MockUTXOStore, true)
+		suite.MockUTXOStore.AssertCalled(t, "SetLocked", mock.Anything, mock.Anything, false)
+	})
 }

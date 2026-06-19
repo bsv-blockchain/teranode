@@ -53,9 +53,19 @@ import (
 const chainWalkCacheTTL = 10 * time.Minute
 
 // blockIDReservationTTL bounds how long a block-id reservation (AssignBlockID)
-// survives without a commit. Reservations are normally cleared on commit; the
-// TTL only reclaims entries for blocks that are fetched but never committed.
+// survives in the in-memory L1 cache without a commit. Reservations are normally
+// cleared on commit; the TTL only reclaims L1 entries for blocks that are fetched
+// but never committed. The durable L2 table (block_id_reservations) outlives this
+// TTL and is reclaimed by the age-based sweep below.
 const blockIDReservationTTL = 10 * time.Minute
+
+// staleReservationSweepAge bounds how long a durable block-id reservation
+// (block_id_reservations) survives without a commit before reservationSweepLoop
+// sweeps it. Set well above any plausible single-block processing time (and above
+// blockIDReservationTTL) so an in-flight block is never swept mid-processing; only
+// genuinely abandoned reservations (fetched but never committed — e.g. a block
+// that failed validation) are reclaimed, bounding table growth.
+const staleReservationSweepAge = 1 * time.Hour
 
 // rebuildOffChainSetTimeout bounds the duration of rebuildOffChainSet calls made with
 // context.Background() (in InvalidateBlock, RevalidateBlock). This prevents the rebuild
@@ -352,6 +362,10 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		go s.backgroundRefreshLoop()
 	}
 
+	// Always reclaim abandoned durable block-id reservations: the table is written
+	// regardless of useInMemoryChainCheck, so its sweep must run regardless too.
+	go s.reservationSweepLoop()
+
 	return s, nil
 }
 
@@ -462,6 +476,7 @@ var (
 		"idx_inserted_at",
 		"idx_invalid_height",
 		"idx_on_main_chain_height",
+		"idx_off_main_chain",
 	}
 )
 
@@ -481,6 +496,19 @@ func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
 		return false, err
 	}
 	if !hasBlocks {
+		return false, nil
+	}
+
+	// block_id_reservations table present? Added after blocks; an existing
+	// deployment that predates it must re-run the DDL (CREATE TABLE IF NOT EXISTS)
+	// to gain it, so treat its absence as "not current".
+	var hasReservations bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'block_id_reservations')`,
+	).Scan(&hasReservations); err != nil {
+		return false, err
+	}
+	if !hasReservations {
 		return false, nil
 	}
 
@@ -580,6 +608,21 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
+	}
+
+	// block_id_reservations durably backs the in-memory AssignBlockID cache so a
+	// reservation survives the cache TTL, a restart, and a second instance. No FK
+	// to blocks: a reservation exists BEFORE the block row does. Cleared on commit
+	// (StoreBlock) and swept by age (reservationSweepLoop).
+	if _, err := db.Exec(`
+      CREATE TABLE IF NOT EXISTS block_id_reservations (
+        hash         BYTEA   NOT NULL PRIMARY KEY
+        ,block_id    BIGINT  NOT NULL
+        ,reserved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create block_id_reservations table", err)
 	}
 
 	// change the blocks table peer_id column to TEXT, if it is not already
@@ -764,6 +807,21 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
 		}
+
+		// === OFF-CHAIN INDEX ===
+		// Partial index for the off-chain (fork/orphan) block lookup that rebuildOffChainSet's
+		// fast path runs: "SELECT id FROM blocks WHERE on_main_chain = false". Without an index
+		// for the false case (the existing idx_on_main_chain_height only covers true), that query
+		// is a full sequential scan of the entire blocks table. On a large, disk-bound node this
+		// is expensive and recurs on every fork/invalidation plus the periodic refresh — observed
+		// on testnet at ~627k blocks as a 634 MB seq scan that returns 0 rows and competes with
+		// block-validation reads. Scoping the index to on_main_chain = false keeps it tiny: it
+		// holds only the off-chain blocks (typically a few hundred across all of mainnet history,
+		// often zero), never the ~99% of rows that are on the main chain.
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_off_main_chain ON blocks (id) WHERE on_main_chain = false;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_off_main_chain index", err)
+		}
 	}
 
 	if _, err := db.Exec(`
@@ -867,6 +925,19 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
+	}
+
+	// block_id_reservations: see the Postgres schema for rationale. Durably backs
+	// the in-memory AssignBlockID reservation cache.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS block_id_reservations (
+		 hash         BLOB    NOT NULL PRIMARY KEY
+		,block_id     INTEGER NOT NULL
+		,reserved_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create block_id_reservations table", err)
 	}
 
 	// add the processed_at column to the blocks table if it does not exist
@@ -1046,6 +1117,21 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_on_main_chain_height ON blocks (height ASC) WHERE on_main_chain = true;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_on_main_chain_height index", err)
+	}
+
+	// === OFF-CHAIN INDEX ===
+	// Partial index for the off-chain (fork/orphan) block lookup that rebuildOffChainSet's
+	// fast path runs: "SELECT id FROM blocks WHERE on_main_chain = false". Without an index
+	// for the false case (the existing idx_on_main_chain_height only covers true), that query
+	// is a full sequential scan of the entire blocks table. On a large, disk-bound node this
+	// is expensive and recurs on every fork/invalidation plus the periodic refresh — observed
+	// on testnet at ~627k blocks as a 634 MB seq scan that returns 0 rows and competes with
+	// block-validation reads. Scoping the index to on_main_chain = false keeps it tiny: it
+	// holds only the off-chain blocks (typically a few hundred across all of mainnet history,
+	// often zero), never the ~99% of rows that are on the main chain.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_off_main_chain ON blocks (id) WHERE on_main_chain = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_off_main_chain index", err)
 	}
 
 	if _, err := db.Exec(`
@@ -1667,6 +1753,64 @@ func (s *SQL) backgroundRefreshLoop() {
 			}
 			cancel()
 		}
+	}
+}
+
+// reservationSweepInterval is how often reservationSweepLoop reclaims abandoned
+// durable block-id reservations. Frequent relative to staleReservationSweepAge
+// (1h) is fine — the table is tiny and each sweep is a single indexed DELETE. A
+// var (not const) only so tests can shorten it; production never reassigns it.
+var reservationSweepInterval = 10 * time.Minute
+
+// reservationSweepLoop periodically reclaims abandoned durable block-id
+// reservations. It runs INDEPENDENTLY of blockchain_use_in_memory_chain_check:
+// block_id_reservations is written by AssignBlockID on every ingestion path
+// regardless of that toggle, so its sweep must run regardless too. (The
+// off-chain-set backgroundRefreshLoop is toggle-gated because the off-chain set
+// only matters when the toggle is on; that gating must not also disable this
+// sweep, or a toggle-off node would never reclaim reservations for blocks that get
+// an id but never commit — failed validation, crash-before-commit, abandoned
+// forks — letting the table grow unbounded.)
+func (s *SQL) reservationSweepLoop() {
+	ticker := time.NewTicker(reservationSweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.backgroundDone:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			s.sweepStaleReservations(ctx)
+			cancel()
+		}
+	}
+}
+
+// sweepStaleReservations deletes durable block-id reservations older than
+// staleReservationSweepAge. Reservations for committed blocks are already removed
+// by StoreBlock; this reclaims rows for blocks that were fetched but never
+// committed (e.g. failed validation, crash before commit), bounding table growth.
+// Best-effort: a failure is logged and retried on the next tick. Uses each
+// engine's own clock and native timestamp format to avoid Go/DB time-format skew.
+func (s *SQL) sweepStaleReservations(ctx context.Context) {
+	mins := int(staleReservationSweepAge / time.Minute)
+
+	var (
+		q   string
+		arg interface{}
+	)
+
+	if s.engine == util.Postgres {
+		q = `DELETE FROM block_id_reservations WHERE reserved_at < NOW() - make_interval(mins => $1)`
+		arg = mins
+	} else {
+		q = `DELETE FROM block_id_reservations WHERE reserved_at < datetime('now', $1)`
+		arg = fmt.Sprintf("-%d minutes", mins)
+	}
+
+	if _, err := s.db.ExecContext(ctx, q, arg); err != nil {
+		s.logger.Warnf("sweep stale block-id reservations: %v", err)
 	}
 }
 

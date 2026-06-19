@@ -531,6 +531,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 		}
 		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine (interval: %v)", interval)
 		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -1399,46 +1400,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
-		// validate all the subtrees in the block
-		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
-
-		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
-			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
-			if errors.Is(err, errors.ErrTxInvalid) {
-				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
-				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
-			}
-
-			// Catchup-state errors: a parent transaction is not yet in our store because we
-			// have not yet absorbed the block that contains it. This is a transient ordering
-			// problem, NOT a consensus violation. Do NOT persist the block as invalid (that
-			// poisons the DB permanently and stalls sync); signal incomplete so catchup
-			// retries another peer. See issue #1031.
-			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
-				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
-				return errors.NewBlockIncompleteError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
-			}
-
-			return err
-		}
-
-		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
-
-		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
-		if opts.DisableOptimisticMining {
-			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
-			useOptimisticMining = false
-			if !opts.IsCatchupMode {
-				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
-			}
-		}
-
-		// Skip difficulty validation for blocks at or below the highest checkpoint
-		// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+		// Verify the header's proof-of-work BEFORE the (expensive) subtree validation
+		// below. The subtree-validation path sets the fail-open
+		// WithUnconfirmedParentsAtCandidateHeight validator option, whose contract
+		// requires the tx to come from a locally-held, PoW-checked block — so the
+		// difficulty checks must run first. It also means a peer cannot make us do
+		// full tx validation for a garbage header at zero cost.
+		//
+		// Skip difficulty validation for blocks at or below the highest checkpoint:
+		// these blocks are already verified by checkpoints. NOTE: on this direct
+		// (non-catchup) path the checkpoint linkage itself is not verified here, so
+		// for heights at or below the checkpoint the zero-cost claim above does not
+		// hold — a fabricated low-height header reaches subtree validation without
+		// paying PoW. block.Valid still rejects such a block unconditionally
+		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance;
+		// the exposure is transient blessing only, same as the pre-option design.
 		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
@@ -1475,6 +1451,44 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+			}
+		}
+
+		// validate all the subtrees in the block
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
+
+		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
+			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
+			if errors.Is(err, errors.ErrTxInvalid) {
+				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
+				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
+				if !opts.IsRevalidation {
+					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+				}
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+			}
+
+			// Catchup-state errors: a parent transaction is not yet in our store because we
+			// have not yet absorbed the block that contains it. This is a transient ordering
+			// problem, NOT a consensus violation. Do NOT persist the block as invalid (that
+			// poisons the DB permanently and stalls sync); signal incomplete so catchup
+			// retries another peer. See issue #1031.
+			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
+				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
+				return errors.NewBlockIncompleteError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
+			}
+
+			return err
+		}
+
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
+
+		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
+		if opts.DisableOptimisticMining {
+			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
+			useOptimisticMining = false
+			if !opts.IsCatchupMode {
+				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
 		}
 
@@ -1541,8 +1555,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 							// we should try again to re-validate the block, as we failed to mark it as invalid
 							u.ReValidateBlock(block, baseURL)
 						}
+					} else if errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(decoupledCtx) {
+						// RUNNING: a not-in-block parent with empty/absent BlockIDs is a floater that
+						// will never confirm (SetMinedMulti->MinedSet invariant: all accepted-ancestor
+						// txs are durably stamped before waitForPreviousBlocksToBeProcessed returns).
+						// Consensus-invalid -> roll back the optimistically-added block. In sync states
+						// isCaughtUp is false, so this stays the #1031 retry path below.
+						reason := p2pconstants.ReasonInvalidBlock.String()
+						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason); mErr != nil {
+							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate floater block: %v", block.String(), mErr)
+							u.ReValidateBlock(block, baseURL)
+						}
 					} else {
-						// storage or processing error, block is not really invalid, but we need to re-validate
+						// storage or processing error, or transient incomplete state during catchup;
+						// block is not really invalid, but we need to re-validate
 						u.ReValidateBlock(block, baseURL)
 					}
 
@@ -1631,10 +1657,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return err
 				}
 
-				// Transient catchup-state surfaced from block.Valid (e.g. a parent transaction
-				// not yet in our store). Don't poison the DB; signal incomplete so catchup
-				// retries another peer. See issue #1031.
+				// ErrBlockIncomplete from block.Valid means a not-in-block parent had
+				// empty/absent BlockIDs (model.getParentTxMetaBlockIDs). The meaning
+				// depends on FSM state:
+				//   - caught up (RUNNING): a floater that will never confirm
+				//     (SetMinedMulti->MinedSet invariant) — consensus-invalid, persist
+				//     invalid so we never retry it.
+				//   - sync (CATCHINGBLOCKS): a #1031 catchup-ordering
+				//     parent we have not absorbed yet — stay incomplete so catchup
+				//     retries another peer; never poison the DB.
 				if errors.Is(err, errors.ErrBlockIncomplete) {
+					if u.isCaughtUp(ctx) {
+						if !opts.IsRevalidation {
+							u.storeInvalidBlock(ctx, block, opts.PeerID, "floater: parent not in block and not on chain: "+err.Error())
+						}
+
+						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
+					}
+
 					return errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
 				}
 
@@ -1746,6 +1786,28 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		return nil
 	})
+}
+
+// isCaughtUp reports whether the node is provably in the steady RUNNING state.
+//
+// It returns true ONLY for FSMStateRUNNING. This is the distinguishing signal
+// between a genuine floater (a not-in-block parent with empty/absent BlockIDs
+// that surfaces as ErrBlockIncomplete in RUNNING — provably permanent via the
+// SetMinedMulti->MinedSet invariant) and a legitimate #1031 catchup-ordering
+// parent (transient during sync, must be retried, never persisted invalid).
+//
+// Matching only RUNNING (rather than "!= CATCHINGBLOCKS") keeps every other
+// state on the fail-safe side: IDLE, a GetFSMCurrentState error or nil state, and
+// any future FSM enum addition all return false (treat as not-caught-up => retry,
+// never wrongly invalidate). Only the one state we can prove is caught up
+// authorizes invalidating a floater.
+func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {
+	st, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil || st == nil {
+		return false
+	}
+
+	return *st == blockchain.FSMStateRUNNING
 }
 
 func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string) error {
@@ -1966,7 +2028,12 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
-		if errors.Is(err, errors.ErrBlockInvalid) {
+		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
+		// the ValidateBlock handlers): invalidate so the revalidate worker
+		// converges to rollback in RUNNING instead of silently exhausting its
+		// bounded retries with the block left optimistically accepted. In sync
+		// states isCaughtUp is false, so it stays the #1031 retry/exhaust path.
+		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) {
 			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}
@@ -1976,6 +2043,19 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
+}
+
+// quickValidateSkipsUtxoLock reports whether quick validation should create UTXOs
+// unlocked and skip the post-AddBlock unlock pass for this block. Gated by the
+// BlockValidation.QuickValidateSkipUtxoLock setting (default off) AND restricted to
+// blocks at or below the highest checkpoint. Uses the standard chain-config checkpoints
+// (not the catchup override) so it fails safe — keeping the lock for any block above the
+// real checkpoint. See issue #1103.
+func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
+	if !u.settings.BlockValidation.QuickValidateSkipUtxoLock {
+		return false
+	}
+	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 }
 
 // updateSubtreesDAH marks block subtrees as properly set in the blockchain.

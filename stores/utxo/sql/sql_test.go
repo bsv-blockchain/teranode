@@ -115,6 +115,73 @@ func TestCreate(t *testing.T) {
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
 }
 
+// TestCreateMinedUnspendableSetsDAH verifies that a transaction created
+// already-mined with no spendable outputs (e.g. an OP_RETURN-only data-carrier
+// transaction) is assigned a delete_at_height at creation time so the pruner can
+// expire it after the retention window. Such transactions never transition to
+// "all spent" via the spend path and bypass setMined, so without this they were
+// retained in the store forever. We only want truly spendable outputs retained.
+func TestCreateMinedUnspendableSetsDAH(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const minedHeight = uint32(1000)
+
+	makeOpReturnOnly := func(base *bt.Tx) *bt.Tx {
+		base.Outputs = base.Outputs[:0]
+		require.NoError(t, base.AddOpReturnOutput([]byte("teranode op_return data carrier")))
+		return base
+	}
+
+	readDAH := func(t *testing.T, store *Store, h *chainhash.Hash) *int64 {
+		t.Helper()
+		var dah *int64
+		err := store.db.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", h[:]).Scan(&dah)
+		require.NoError(t, err)
+		return dah
+	}
+
+	t.Run("mined unspendable tx is given a delete_at_height", func(t *testing.T) {
+		store, tx := setup(ctx, t)
+		retention := store.settings.GetUtxoStoreBlockHeightRetention()
+		require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
+
+		tx = makeOpReturnOnly(tx)
+
+		_, err := store.Create(ctx, tx, minedHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+			BlockID: 1, BlockHeight: minedHeight, SubtreeIdx: 0, OnLongestChain: true,
+		}))
+		require.NoError(t, err)
+
+		dah := readDAH(t, store, tx.TxIDChainHash())
+		require.NotNil(t, dah, "a mined tx with no spendable outputs must have a delete_at_height so the pruner can expire it")
+		assert.Equal(t, int64(minedHeight)+int64(retention), *dah)
+	})
+
+	t.Run("unmined unspendable tx is not expired", func(t *testing.T) {
+		store, tx := setup(ctx, t)
+		tx = makeOpReturnOnly(tx)
+
+		_, err := store.Create(ctx, tx, minedHeight)
+		require.NoError(t, err)
+
+		dah := readDAH(t, store, tx.TxIDChainHash())
+		assert.Nil(t, dah, "an unmined tx must not be given a delete_at_height - it is not in a block yet")
+	})
+
+	t.Run("mined spendable tx is not expired at creation", func(t *testing.T) {
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, minedHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+			BlockID: 1, BlockHeight: minedHeight, SubtreeIdx: 0, OnLongestChain: true,
+		}))
+		require.NoError(t, err)
+
+		dah := readDAH(t, store, tx.TxIDChainHash())
+		assert.Nil(t, dah, "a tx with spendable outputs must only get a delete_at_height once those outputs are spent")
+	})
+}
+
 func TestCreateDuplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

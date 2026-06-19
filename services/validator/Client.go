@@ -31,7 +31,6 @@ import (
 
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -278,37 +277,8 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		InBlock:                             &opts.InBlock,
 		CandidateBlockTime:                  candidateBlockTimePtr(opts),
 		CandidateParentMedianTime:           candidateParentMedianTimePtr(opts),
-		ParentMetadata:                      parentMetadataToWire(opts.ParentMetadata),
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
 	}
-}
-
-// parentMetadataToWire serialises the in-memory ParentMetadata map into the
-// repeated proto form. Each entry's parent hash is copied defensively so the
-// wire representation does not alias the source map's hash bytes; the cost is
-// one 32-byte copy per entry and it removes any slice-aliasing surprise if the
-// source map outlives the marshalled message.
-//
-// Returns nil for a nil source map and nil for an empty source map — both
-// proto3 round-trip identically to a missing field on the wire, and the
-// server-side reconstruction normalises both back to a nil Options.ParentMetadata.
-func parentMetadataToWire(src map[chainhash.Hash]*ParentTxMetadata) []*validator_api.ParentTxMetadata {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make([]*validator_api.ParentTxMetadata, 0, len(src))
-	for hash, meta := range src {
-		if meta == nil {
-			continue
-		}
-		parentHash := make([]byte, chainhash.HashSize)
-		copy(parentHash, hash[:])
-		out = append(out, &validator_api.ParentTxMetadata{
-			ParentHash:  parentHash,
-			BlockHeight: meta.BlockHeight,
-		})
-	}
-	return out
 }
 
 // buildValidateTxHTTPQuery constructs the query string for the HTTP fallback
@@ -349,6 +319,10 @@ func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
 
 	if opts.CandidateParentMedianTime > 0 {
 		queryParams.Add("candidateParentMedianTime", fmt.Sprintf("%d", opts.CandidateParentMedianTime))
+	}
+
+	if opts.UnconfirmedParentsAtCandidateHeight {
+		queryParams.Add("unconfirmedParentsAtCandidateHeight", "true")
 	}
 
 	if blockHeight > 0 {
@@ -513,9 +487,8 @@ func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem
 		// validation needs).
 		//
 		// The request was just built by this client via buildValidateTxRequest,
-		// so optionsFromValidateRequest cannot fail here in practice (the
-		// ParentMetadata wire form is built by parentMetadataToWire and is
-		// well-formed by construction). The error is still propagated to surface
+		// so optionsFromValidateRequest cannot fail here in practice (every field
+		// is well-formed by construction). The error is still propagated to surface
 		// any future bug in the client-side builder.
 		options, err := optionsFromValidateRequest(txReq)
 		if err != nil {
@@ -561,9 +534,9 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 // The request body is a serialised ValidateTransactionRequest with
 // Content-Type: application/x-protobuf — the same proto definition as gRPC.
 // Using the proto-body shape avoids URL/query-string length limits in proxies
-// and load balancers (relevant when ParentMetadata can carry many entries) and
-// guarantees field parity with gRPC by construction: anything we add to the
-// proto reaches the server here too, with no scalar-query-string drift.
+// and load balancers and guarantees field parity with gRPC by construction:
+// anything we add to the proto reaches the server here too, with no
+// scalar-query-string drift.
 //
 // The legacy application/octet-stream path remains supported by the server's
 // /tx handler for backward compatibility with non-protobuf callers; this
@@ -587,7 +560,7 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
 
 	// Marshal the full request via the shared builder — same proto, same field
-	// projection as gRPC, including ParentMetadata.
+	// projection as gRPC.
 	body, err := proto.Marshal(buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions))
 	if err != nil {
 		return errors.NewServiceError("[ValidateWithOptions][%s] error marshalling protobuf body for /tx endpoint: %v", tx.TxID(), err)

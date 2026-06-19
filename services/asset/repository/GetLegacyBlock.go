@@ -302,19 +302,31 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 	defer cancel()
 
 	resultsChan := make(chan chunkResult, concurrency)
+
+	// Window semaphore: bounds how far the chunk scheduler may run ahead of the chunk
+	// currently being written. A token is acquired before a chunk fetch is scheduled and
+	// released only once that chunk has been written to the output, in order. This couples
+	// fetch-ahead to write progress, so a slow in-order chunk applies backpressure to the
+	// scheduler rather than letting later out-of-order chunks pile up unbounded in `pending`
+	// (which previously overflowed the cap and truncated the response mid-stream). Sized at
+	// 2*concurrency: up to `concurrency` fetches in flight plus `concurrency` completed
+	// chunks buffered ahead of the writer, keeping fetchers busy while bounding peak memory.
+	window := 2 * concurrency
+	writeWindow := make(chan struct{}, window)
+
 	g, gCtx := errgroup.WithContext(streamCtx)
 	g.Go(func() error {
 		defer close(resultsChan)
-		return repo.scheduleSubtreeChunkFetches(gCtx, bufferedReader, subtreeHash, totalTxs, chunkSize, concurrency, resultsChan)
+		return repo.scheduleSubtreeChunkFetches(gCtx, bufferedReader, subtreeHash, totalTxs, chunkSize, concurrency, writeWindow, resultsChan)
 	})
 
 	pending := make(map[int]chunkResult)
 	nextChunk := 0
 
-	// Defensive cap on out-of-order chunks held in memory. With the current scheduler
-	// this should never exceed `concurrency`, but a future change to the scheduler could
-	// silently grow it. Aborting beats OOM. 2x leaves headroom for transient races.
-	pendingCap := 2 * concurrency
+	// Invariant guard: with the write-window semaphore the scheduler can never run more
+	// than `window` chunks ahead of the writer, so `pending` cannot exceed it. This only
+	// fires if that invariant is broken by a future change; aborting beats OOM.
+	pendingCap := window
 
 	for result := range resultsChan {
 		if result.err != nil {
@@ -329,7 +341,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 			cancel()
 			drainChunkResults(resultsChan)
 			_ = g.Wait()
-			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (likely scheduler regression)",
+			return errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] pending chunk buffer exceeded cap %d (write-window invariant violated)",
 				subtreeHash.String(), pendingCap)
 		}
 
@@ -348,6 +360,11 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 
 			delete(pending, nextChunk)
 			nextChunk++
+
+			// Release the write-window slot this chunk occupied, letting the scheduler
+			// fetch one more chunk ahead. There is always at least this chunk's own token
+			// buffered, so the receive never blocks.
+			<-writeWindow
 		}
 	}
 
@@ -359,7 +376,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 }
 
 func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtreeReader *bufio.Reader, subtreeHash *chainhash.Hash,
-	totalTxs, chunkSize, concurrency int, resultsChan chan<- chunkResult) error {
+	totalTxs, chunkSize, concurrency int, writeWindow chan struct{}, resultsChan chan<- chunkResult) error {
 	fetchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -370,6 +387,22 @@ func (repo *Repository) scheduleSubtreeChunkFetches(ctx context.Context, subtree
 	for chunkIdx, offset := 0, 0; offset < totalTxs; chunkIdx, offset = chunkIdx+1, offset+chunkSize {
 		if readErr = gCtx.Err(); readErr != nil {
 			cancel()
+			break
+		}
+
+		// Acquire a write-window slot before scheduling this chunk; the consumer releases
+		// it once the chunk has been written in order. This blocks (applying backpressure)
+		// when the writer has fallen `window` chunks behind, bounding `pending`. Honour
+		// cancellation so teardown after a worker error can't deadlock here.
+		acquired := false
+		select {
+		case writeWindow <- struct{}{}:
+			acquired = true
+		case <-gCtx.Done():
+			readErr = gCtx.Err()
+			cancel()
+		}
+		if !acquired {
 			break
 		}
 
