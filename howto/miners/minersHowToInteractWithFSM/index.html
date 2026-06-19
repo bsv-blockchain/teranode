@@ -7319,8 +7319,12 @@
 </span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Idle
 </span></code></pre></div>
 <h3 id="wait-for-state-change">Wait for State Change<a class="headerlink" href="#wait-for-state-change" title="Permanent link">&para;</a></h3>
-<p>You can wait for a specific state transition to complete:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;state&quot;:&quot;Running&quot;}&#39;</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState
+<p>There is no blocking "wait" endpoint. To wait for a specific state, poll the current state until it matches:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Poll until the FSM reaches RUNNING</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">until</span><span class="w"> </span>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-q<span class="w"> </span><span class="s1">&#39;&quot;state&quot;: &quot;RUNNING&quot;&#39;</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>sleep<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">done</span>
 </span></code></pre></div>
 <h2 id="further-reading">Further Reading<a class="headerlink" href="#further-reading" title="Permanent link">&para;</a></h2>
 <ul>

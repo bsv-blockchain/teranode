@@ -5219,17 +5219,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#waitfsmtotransitionrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        WaitFSMToTransitionRequest
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#getblockheadersfromcommonancestorrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8063,17 +8052,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#waitfsmtotransitionrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        WaitFSMToTransitionRequest
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#getblockheadersfromcommonancestorrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8392,9 +8370,8 @@
 <li><a href="#SetBlockSubtreesSetRequest">SetBlockSubtreesSetRequest</a></li>
 <li><a href="#SetStateRequest">SetStateRequest</a></li>
 <li><a href="#StateResponse">StateResponse</a></li>
-<li><a href="#SubscribeRequest">SubscribeRequest</a></li>
 <li>
-<p><a href="#WaitFSMToTransitionRequest">WaitFSMToTransitionRequest</a></p>
+<p><a href="#SubscribeRequest">SubscribeRequest</a></p>
 </li>
 <li>
 <p><a href="#FSMEventType">FSMEventType</a></p>
@@ -9911,27 +9888,6 @@
 </tr>
 </tbody>
 </table>
-<p><a name="WaitFSMToTransitionRequest"></a></p>
-<h3 id="waitfsmtotransitionrequest">WaitFSMToTransitionRequest<a class="headerlink" href="#waitfsmtotransitionrequest" title="Permanent link">&para;</a></h3>
-<p>swagger:model WaitFSMToTransitionRequest</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Label</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>state</td>
-<td><a href="#blockchain_api-FSMStateType">FSMStateType</a></td>
-<td></td>
-<td></td>
-</tr>
-</tbody>
-</table>
 <p><a name="GetBlockHeadersFromCommonAncestorRequest"></a></p>
 <h3 id="getblockheadersfromcommonancestorrequest">GetBlockHeadersFromCommonAncestorRequest<a class="headerlink" href="#getblockheadersfromcommonancestorrequest" title="Permanent link">&para;</a></h3>
 <p>GetBlockHeadersFromCommonAncestorRequest retrieves headers from a common ancestor to a target block.</p>
@@ -10488,12 +10444,6 @@
 <td><a href="#google-protobuf-Empty">.google.protobuf.Empty</a></td>
 <td><a href="#blockchain_api-GetFSMStateResponse">GetFSMStateResponse</a></td>
 <td>Retrieves the current state of the FSM.</td>
-</tr>
-<tr>
-<td>WaitFSMToTransitionToGivenState</td>
-<td><a href="#blockchain_api-WaitFSMToTransitionRequest">WaitFSMToTransitionRequest</a></td>
-<td><a href="#google-protobuf-Empty">.google.protobuf.Empty</a></td>
-<td>Waits for FSM to reach a specific state.</td>
 </tr>
 <tr>
 <td>WaitUntilFSMTransitionFromIdleState</td>

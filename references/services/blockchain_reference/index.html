@@ -5762,10 +5762,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#waitforfsmtotransitiontogivenstate-internal-helper" class="md-nav__link">
+  <a href="#waitforfsmtotransitiontogivenstate-client-helper" class="md-nav__link">
     <span class="md-ellipsis">
       
-        WaitForFSMtoTransitionToGivenState (Internal Helper)
+        WaitForFSMtoTransitionToGivenState (Client Helper)
       
     </span>
   </a>
@@ -8496,10 +8496,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#waitforfsmtotransitiontogivenstate-internal-helper" class="md-nav__link">
+  <a href="#waitforfsmtotransitiontogivenstate-client-helper" class="md-nav__link">
     <span class="md-ellipsis">
       
-        WaitForFSMtoTransitionToGivenState (Internal Helper)
+        WaitForFSMtoTransitionToGivenState (Client Helper)
       
     </span>
   </a>
@@ -9198,10 +9198,10 @@
 <div class="language-go highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">GetFSMCurrentState</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">GetFSMStateResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Retrieves the current state of the finite state machine.</p>
-<h3 id="waitforfsmtotransitiontogivenstate-internal-helper">WaitForFSMtoTransitionToGivenState (Internal Helper)<a class="headerlink" href="#waitforfsmtotransitiontogivenstate-internal-helper" title="Permanent link">&para;</a></h3>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">WaitForFSMtoTransitionToGivenState</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">targetState</span><span class="w"> </span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">FSMStateType</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<h3 id="waitforfsmtotransitiontogivenstate-client-helper">WaitForFSMtoTransitionToGivenState (Client Helper)<a class="headerlink" href="#waitforfsmtotransitiontogivenstate-client-helper" title="Permanent link">&para;</a></h3>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Client</span><span class="p">)</span><span class="w"> </span><span class="nx">WaitForFSMtoTransitionToGivenState</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">targetState</span><span class="w"> </span><span class="nx">FSMStateType</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
-<p>Internal helper that polls until the FSM reaches the target state. The corresponding gRPC endpoint is <code>WaitFSMToTransitionToGivenState</code>, which wraps this method and accepts a <code>WaitFSMToTransitionRequest</code>.</p>
+<p>Client-side helper that blocks until the FSM reaches the target state by polling <code>GetFSMCurrentState</code> until it matches or the context is cancelled. There is no dedicated gRPC endpoint for this wait; callers poll the current state themselves.</p>
 <h3 id="waituntilfsmtransitionfromidlestate">WaitUntilFSMTransitionFromIdleState<a class="headerlink" href="#waituntilfsmtransitionfromidlestate" title="Permanent link">&para;</a></h3>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">WaitUntilFSMTransitionFromIdleState</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </span></code></pre></div>
