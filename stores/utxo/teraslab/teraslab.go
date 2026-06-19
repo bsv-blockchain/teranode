@@ -27,6 +27,10 @@ type batcherIfc[T any] interface {
 	Put(item *T, payloadSize ...int)
 	Trigger()
 	SetDrainMode(enabled bool)
+	// Close drains all queued items through the flush fn and blocks until the
+	// worker goroutine has fully unwound. Idempotent. Satisfied by
+	// *batcher.Batcher[T] (go-batcher v2.0.4).
+	Close()
 }
 
 // Store implements the UTXO store interface using TeraSlab.
