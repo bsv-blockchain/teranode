@@ -290,6 +290,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	sm := d.ServiceManager
 
+	// Configure the per-service graceful Stop() timeout from settings so Kafka
+	// flushes and batcher drains are not cut off at the old 5s. Falls back to
+	// servicemanager.DefaultStopTimeout when unset.
+	if appSettings.ServiceManagerStopTimeout > 0 {
+		sm.StopTimeout = appSettings.ServiceManagerStopTimeout
+	}
+
 	var readyChInternal chan struct{}
 	if len(readyChannel) > 0 {
 		readyChInternal = readyChannel[0]
