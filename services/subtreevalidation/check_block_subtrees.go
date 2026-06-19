@@ -62,6 +62,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
 	}
 
+	if request.BaseUrl != "" {
+		if err := util.ValidateURL(request.BaseUrl); err != nil {
+			return nil, errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl: %v", err)
+		}
+	}
+
 	// Pre-CSV candidate block timestamp can be picked up cheaply from the block
 	// header up front; the post-CSV candidate-parent MTP requires a blockchain
 	// round-trip and is set up lower down, after the "all subtrees already

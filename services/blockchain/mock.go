@@ -936,6 +936,7 @@ type mockBlockClient struct {
 	lastSetBlockSubtreesSetReq                   *blockchain_api.SetBlockSubtreesSetRequest
 	responseGetBlocksSubtreesNotSet              *blockchain_api.GetBlocksSubtreesNotSetResponse
 	responseGetFSMCurrentState                   *blockchain_api.GetFSMStateResponse
+	fnGetFSMCurrentState                         func() (*blockchain_api.GetFSMStateResponse, error)
 	responseSendFSMEvent                         *blockchain_api.GetFSMStateResponse
 	lastSendFSMEventReq                          *blockchain_api.SendFSMEventRequest
 	responseGetBlockLocator                      *blockchain_api.GetBlockLocatorResponse
@@ -1285,6 +1286,10 @@ func (m *mockBlockClient) GetFSMCurrentState(
 	in *emptypb.Empty,
 	opts ...grpc.CallOption,
 ) (*blockchain_api.GetFSMStateResponse, error) {
+	if m.fnGetFSMCurrentState != nil {
+		return m.fnGetFSMCurrentState()
+	}
+
 	return m.responseGetFSMCurrentState, m.err
 }
 

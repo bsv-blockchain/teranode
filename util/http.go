@@ -9,11 +9,111 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/ordishs/gocore"
 )
+
+// ssrfSafeDialer wraps the default dialer and rejects connections to link-local/loopback
+// IPs after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal
+// check in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
+// hostname resolves to 169.254.169.254 (the cloud metadata endpoint) only at dial time.
+//
+// Only link-local and loopback are blocked — see isBlockedDialIP for the rationale. RFC1918
+// ranges are deliberately allowed because teranode peers, k8s pods, and private miner
+// interconnects all communicate over private networks in real deployments; this matches the
+// static ValidateURL/isBlockedIP policy.
+var ssrfSafeDialer = &net.Dialer{
+	Timeout:   30 * time.Second,
+	KeepAlive: 30 * time.Second,
+}
+
+// ssrfLookupHost resolves a hostname to its IP addresses. It is a package var so tests can
+// substitute a resolver that reproduces DNS-rebinding behaviour (e.g. returning a private
+// address for a name that "looks" public).
+var ssrfLookupHost = net.DefaultResolver.LookupHost
+
+// ssrfDialContext wraps ssrfSafeDialer.DialContext and rejects resolved addresses that
+// fall into link-local or loopback ranges (see isBlockedDialIP). It is installed as the
+// Transport.DialContext for httpClient so that every outgoing connection is checked,
+// including those that follow HTTP redirects.
+//
+// Critically, after validating the resolved addresses we dial those exact IPs rather than
+// the hostname. Dialing by hostname would let net.Dialer perform a SECOND, independent DNS
+// resolution at connect time — the classic DNS-rebinding TOCTOU bypass: a peer-controlled
+// authoritative server with TTL=0 can return a public IP for our validation lookup and
+// 169.254.169.254 / 127.0.0.1 for the dialer's lookup. Connecting to the already-validated
+// IP closes that window. (The Transport still derives the TLS ServerName and Host header
+// from the original URL, so dialing by IP does not break virtual hosting or HTTPS.)
+func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if !ssrfProtectionEnabled.Load() {
+		return ssrfSafeDialer.DialContext(ctx, network, addr)
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
+	}
+
+	ips, err := ssrfLookupHost(ctx, host)
+	if err != nil {
+		return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
+	}
+
+	// Validate every resolved address first; reject outright if any is blocked so a
+	// mixed public/private answer cannot smuggle an internal target through failover.
+	validated := make([]net.IP, 0, len(ips))
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isBlockedDialIP(ip) {
+			return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a blocked IP", ipStr, host)
+		}
+		validated = append(validated, ip)
+	}
+
+	if len(validated) == 0 {
+		return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
+	}
+
+	// Dial the validated IPs directly (no re-resolution), trying each to preserve
+	// multi-A-record failover.
+	var lastErr error
+	for _, ip := range validated {
+		conn, dialErr := ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr != nil {
+			lastErr = dialErr
+			continue
+		}
+		return conn, nil
+	}
+
+	return nil, lastErr
+}
+
+// isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
+// came from a peer-controlled URL, evaluated after DNS resolution to close the
+// DNS-rebinding gap that the static ValidateURL pre-check cannot cover.
+//
+// It blocks only:
+//   - link-local (169.254.0.0/16, fe80::/10) — the real SSRF target, since the cloud
+//     metadata endpoint 169.254.169.254 lives here;
+//   - loopback (127.0.0.0/8, ::1) — a peer should never make us dial our own localhost
+//     admin/RPC services, and no legitimate peer advertises a loopback fetch source;
+//   - unspecified (0.0.0.0, ::).
+//
+// RFC1918 ranges (10/8, 172.16/12, 192.168/16) and IPv6 ULA (fc00::/7) are intentionally
+// NOT blocked: teranode peers, k8s pods, and privately-routed miner interconnects all
+// communicate over private networks in real deployments. Blocking them here would reject
+// legitimate peer traffic and contradicts isBlockedIP, which allows the same ranges for
+// the static ValidateURL check.
+func isBlockedDialIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
 
 var (
 	// httpRequestTimeout defines the default HTTP request timeout in milliseconds
@@ -28,14 +128,29 @@ var (
 	// httpClient is configured with connection pooling optimized for high-concurrency
 	// operations like P2P catchup. Default MaxIdleConnsPerHost=2 is far too low for catchup
 	// operations that can have 128+ concurrent requests per peer (16 workers * 8 subtree fetchers).
+	//
+	// The transport uses ssrfDialContext so that DNS-resolved private/loopback IPs are
+	// rejected at dial time, closing the SSRF-via-hostname gap. CheckRedirect applies the
+	// same validation to redirect targets so a peer-controlled server cannot bounce us to
+	// an internal address.
 	httpClient = &http.Client{
 		Transport: func() *http.Transport {
 			t := http.DefaultTransport.(*http.Transport).Clone()
 			t.MaxIdleConns = 1000       // Total idle connections across all hosts (default: 100)
 			t.MaxIdleConnsPerHost = 100 // Per-host idle connections (default: 2)
 			t.MaxConnsPerHost = 200     // Per-host total connections (default: 0/unlimited)
+			t.DialContext = ssrfDialContext
 			return t
 		}(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.NewInvalidArgumentError("stopped after 10 redirects")
+			}
+			if err := ValidateURL(req.URL.String()); err != nil {
+				return errors.NewInvalidArgumentError("SSRF redirect check: %v", err)
+			}
+			return nil
+		},
 	}
 )
 
@@ -191,12 +306,18 @@ func doHTTPRequestForStreaming(ctx context.Context, url string, requestBody ...[
 
 // ssrfProtectionEnabled controls whether SSRF validation is active.
 // Tests may call SetSSRFProtection(false) to allow requests to localhost test servers.
-var ssrfProtectionEnabled = true
+// It is an atomic.Bool because SetSSRFProtection can be toggled while requests are in
+// flight (notably under `go test -race`), and the dial/validate paths read it concurrently.
+var ssrfProtectionEnabled = func() *atomic.Bool {
+	b := &atomic.Bool{}
+	b.Store(true)
+	return b
+}()
 
 // SetSSRFProtection enables or disables SSRF URL validation.
 // This is intended for use in tests that make HTTP requests to localhost test servers.
 func SetSSRFProtection(enabled bool) {
-	ssrfProtectionEnabled = enabled
+	ssrfProtectionEnabled.Store(enabled)
 }
 
 // ValidateURL checks that the given URL is safe to request, rejecting non-HTTP schemes
@@ -206,7 +327,7 @@ func SetSSRFProtection(enabled bool) {
 // allowed because teranode peers legitimately communicate over private networks.
 // DNS resolution is not performed - only IP literals in the hostname are checked.
 func ValidateURL(rawURL string) error {
-	if !ssrfProtectionEnabled {
+	if !ssrfProtectionEnabled.Load() {
 		return nil
 	}
 
@@ -224,13 +345,19 @@ func ValidateURL(rawURL string) error {
 		return nil
 	}
 
+	// Reject credentials embedded in the URL (e.g. http://user:pass@host/). Userinfo
+	// has no legitimate use here and can be used to bypass auth or confuse logging.
+	if parsed.User != nil {
+		return errors.NewInvalidArgumentError("URL must not contain userinfo (credentials)")
+	}
+
 	hostname := parsed.Hostname()
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("URL has no hostname")
 	}
 
-	// Check IP literals directly (no DNS resolution to avoid test/latency issues).
-	// Hostnames that resolve to link-local at runtime will be caught by the OS/network layer.
+	// Check IP literals directly. DNS-resolved addresses are validated later by
+	// ssrfDialContext at connection time.
 	if ip := net.ParseIP(hostname); ip != nil {
 		if isBlockedIP(ip) {
 			return errors.NewInvalidArgumentError("URL contains blocked IP address %s", ip.String())

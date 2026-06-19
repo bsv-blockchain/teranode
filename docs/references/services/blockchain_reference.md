@@ -502,13 +502,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 
 Retrieves the current state of the finite state machine.
 
-### WaitForFSMtoTransitionToGivenState (Internal Helper)
+### WaitForFSMtoTransitionToGivenState (Client Helper)
 
 ```go
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error
+func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error
 ```
 
-Internal helper that polls until the FSM reaches the target state. The corresponding gRPC endpoint is `WaitFSMToTransitionToGivenState`, which wraps this method and accepts a `WaitFSMToTransitionRequest`.
+Client-side helper that blocks until the FSM reaches the target state by polling `GetFSMCurrentState` until it matches or the context is cancelled. There is no dedicated gRPC endpoint for this wait; callers poll the current state themselves.
 
 ### WaitUntilFSMTransitionFromIdleState
 

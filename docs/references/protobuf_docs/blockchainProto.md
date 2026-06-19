@@ -76,7 +76,6 @@
     - [SetStateRequest](#SetStateRequest)
     - [StateResponse](#StateResponse)
     - [SubscribeRequest](#SubscribeRequest)
-    - [WaitFSMToTransitionRequest](#WaitFSMToTransitionRequest)
 
     - [FSMEventType](#FSMEventType)
     - [FSMStateType](#FSMStateType)
@@ -979,17 +978,6 @@ swagger:model SubscribeRequest
 
 
 
-<a name="WaitFSMToTransitionRequest"></a>
-
-### WaitFSMToTransitionRequest
-swagger:model WaitFSMToTransitionRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| state | [FSMStateType](#blockchain_api-FSMStateType) |  |  |
-
-
 
 
 
@@ -1188,7 +1176,6 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlocksSubtreesNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksSubtreesNotSetResponse](#blockchain_api-GetBlocksSubtreesNotSetResponse) | Retrieves blocks with unset subtrees. |
 | SendFSMEvent | [SendFSMEventRequest](#blockchain_api-SendFSMEventRequest) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) | Sends an event to the blockchain FSM. |
 | GetFSMCurrentState | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) | Retrieves the current state of the FSM. |
-| WaitFSMToTransitionToGivenState | [WaitFSMToTransitionRequest](#blockchain_api-WaitFSMToTransitionRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Waits for FSM to reach a specific state. |
 | WaitUntilFSMTransitionFromIdleState | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Waits for FSM to transition from IDLE state. |
 | Run | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Transitions the blockchain service to running state. |
 | CatchUpBlocks | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates block catch-up process. |

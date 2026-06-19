@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +18,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain disables SSRF protection for the entire package during tests because
+// httptest.NewServer binds to 127.0.0.1, which the dial-level guard would otherwise
+// block. Tests that specifically exercise SSRF protection re-enable it locally.
+func TestMain(m *testing.M) {
+	SetSSRFProtection(false)
+	os.Exit(m.Run())
+}
 
 func TestDoHTTPRequestGET(t *testing.T) {
 	// Create a test server that returns JSON
@@ -775,6 +786,8 @@ func TestDoHTTPRequest_ErrorResponseNilBody(t *testing.T) {
 }
 
 func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
 	// Test with malformed URL that will fail validation/request creation
 	ctx := context.Background()
 	_, err := DoHTTPRequest(ctx, "ht\ttp://invalid-url-with-control-char")
@@ -784,6 +797,8 @@ func TestDoHTTPRequest_CreateRequestError(t *testing.T) {
 }
 
 func TestValidateURL(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
 
 	tests := []struct {
 		name    string
@@ -870,11 +885,173 @@ func TestValidateURL(t *testing.T) {
 
 func TestValidateURL_Disabled(t *testing.T) {
 	// Verify that disabling SSRF protection allows all URLs
-	ssrfProtectionEnabled = false
-	defer func() { ssrfProtectionEnabled = true }()
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
 
 	err := ValidateURL("http://127.0.0.1:8080/path")
 	require.NoError(t, err)
+}
+
+// TestValidateURL_NonHTTPSentinelsPassThrough guards the "legacy" baseURL default (and the
+// empty string) used by block/subtree validation: they have no http/https scheme, so
+// ValidateURL must return nil and never reject them. Regression test for the early
+// ValidateURL guards added to the peer-supplied baseURL entry points.
+func TestValidateURL_NonHTTPSentinelsPassThrough(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	for _, s := range []string{"legacy", ""} {
+		require.NoError(t, ValidateURL(s), "ValidateURL(%q) must pass through", s)
+	}
+}
+
+func TestValidateURL_RejectsUserinfo(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"username only", "http://user@example.com/path"},
+		{"username and password", "http://user:pass@example.com/path"},
+		{"empty username with colon", "http://:secret@example.com/path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateURL(tt.url)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "userinfo")
+		})
+	}
+}
+
+func TestIsBlockedDialIP(t *testing.T) {
+	// isBlockedDialIP is a pure function; no SSRF toggle needed.
+	// Only link-local (incl. the metadata endpoint), loopback and unspecified are blocked.
+	blocked := []string{
+		"127.0.0.1",
+		"::1",
+		"169.254.1.1",
+		"169.254.169.254", // cloud metadata endpoint
+		"fe80::1",
+		"0.0.0.0",
+		"::",
+	}
+	for _, ipStr := range blocked {
+		t.Run("blocked_"+ipStr, func(t *testing.T) {
+			ip := net.ParseIP(ipStr)
+			require.NotNil(t, ip)
+			assert.True(t, isBlockedDialIP(ip), "expected %s to be blocked", ipStr)
+		})
+	}
+
+	// RFC1918 / ULA ranges are intentionally allowed: teranode peers, k8s pods and
+	// private miner interconnects all live on private networks.
+	allowed := []string{
+		"8.8.8.8",
+		"1.1.1.1",
+		"203.0.113.1",
+		"2001:db8::1",
+		"10.0.0.1",
+		"10.255.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"fc00::1",
+	}
+	for _, ipStr := range allowed {
+		t.Run("allowed_"+ipStr, func(t *testing.T) {
+			ip := net.ParseIP(ipStr)
+			require.NotNil(t, ip)
+			assert.False(t, isBlockedDialIP(ip), "expected %s to be allowed", ipStr)
+		})
+	}
+}
+
+func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	// ssrfDialContext resolves hostnames; loopback should be blocked.
+	// We use "localhost" which always resolves to 127.0.0.1 / ::1.
+	ctx := context.Background()
+	_, err := ssrfDialContext(ctx, "tcp", "localhost:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
+	SetSSRFProtection(false)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
+
+	// With protection disabled the dialer should attempt the connection normally.
+	// Use a closed port so we get a connection-refused rather than hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := ssrfDialContext(ctx, "tcp", "127.0.0.1:1")
+	// Any error here is a real network error (connection refused), NOT our SSRF guard.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "blocked IP")
+	}
+}
+
+// TestSSRFDialContext_RejectsDNSRebinding reproduces the DNS-rebinding TOCTOU attack and
+// proves the dial guard blocks it. A peer-controlled name "looks" public but resolves to a
+// private/loopback address; the guard must reject the dial rather than connect to the
+// internal target. We inject the resolver because the real attack relies on a hostile
+// authoritative server we cannot stand up in a unit test.
+func TestSSRFDialContext_RejectsDNSRebinding(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	// Resolver returns a loopback address for a "public-looking" hostname.
+	ssrfLookupHost = func(_ context.Context, host string) ([]string, error) {
+		require.Equal(t, "evil.example.com", host)
+		return []string{"127.0.0.1"}, nil
+	}
+
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+// TestSSRFDialContext_RejectsMixedPublicBlocked ensures a resolver answer mixing a public
+// and a blocked (link-local metadata) address is rejected outright, so failover cannot
+// smuggle in the internal IP.
+func TestSSRFDialContext_RejectsMixedPublicBlocked(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	orig := ssrfLookupHost
+	defer func() { ssrfLookupHost = orig }()
+	ssrfLookupHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"8.8.8.8", "169.254.169.254"}, nil
+	}
+
+	_, err := ssrfDialContext(context.Background(), "tcp", "evil.example.com:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked IP")
+}
+
+func TestHTTPClient_RejectsRedirectToLinkLocal(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+	linkLocalURL := "http://169.254.169.254/latest/meta-data/"
+	req := &http.Request{URL: func() *url.URL { u, _ := url.Parse(linkLocalURL); return u }()}
+	err := httpClient.CheckRedirect(req, []*http.Request{{}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SSRF redirect check")
+}
+
+func TestHTTPClient_RedirectLimitEnforced(t *testing.T) {
+	// Verify that CheckRedirect rejects chains longer than 10 hops.
+	req := &http.Request{URL: func() *url.URL { u, _ := url.Parse("http://example.com/"); return u }()}
+	via := make([]*http.Request, 10)
+	err := httpClient.CheckRedirect(req, via)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "10 redirects")
 }
 
 // testRetryConfig is a fast retry config for tests: short delays, low attempt count.

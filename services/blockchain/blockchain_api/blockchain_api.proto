@@ -171,9 +171,6 @@ service BlockchainAPI {
   // GetFSMCurrentState retrieves the current state of the FSM.
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
-  // WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
-  rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
-
   // WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
   rpc WaitUntilFSMTransitionFromIdleState(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
@@ -648,11 +645,6 @@ message SetBlockProcessedAtRequest {
 // GetFSMStateResponse contains current FSM state.
 message GetFSMStateResponse {
   FSMStateType state = 1;  // Current FSM state
-}
-
-// WaitFSMToTransitionRequest specifies target FSM state.
-message WaitFSMToTransitionRequest {
-  FSMStateType state = 1;  // Target FSM state
 }
 
 // SendFSMEventRequest triggers an FSM event.

@@ -130,6 +130,10 @@ type TestOptions struct {
 	// Log format: [TestName:serviceName] LEVEL: message
 	// This provides consistent formatting and ensures all logs are captured by go test.
 	UseUnifiedLogger bool
+	// WaitForHealthReadiness waits for the readiness endpoint after daemon startup.
+	// By default tests only wait for liveness because some narrow daemon configurations
+	// intentionally start without every readiness dependency.
+	WaitForHealthReadiness bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -148,6 +152,13 @@ var testDaemonCounter uint64
 
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
+	// Test daemons run multiple nodes in-process on the same host, so peers advertise
+	// and fetch from each other over localhost (e.g. http://localhost:<assetPort>). The
+	// production SSRF dial guard blocks loopback, which would make catchup block/subtree
+	// fetches fail. These nodes are trusted, so disable SSRF protection for the test
+	// process. Production (cmd/teranode) never calls this and keeps protection enabled.
+	util.SetSSRFProtection(false)
+
 	ctx, cancel := context.WithCancel(t.Context())
 
 	var (
@@ -516,7 +527,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
-	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	if opts.WaitForHealthReadiness {
+		require.NoError(t, WaitForHealthReadiness(ports, 10*time.Second))
+	} else {
+		require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	}
 
 	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
 	// Aerospike may accept connections but still reject operations immediately after multiple
@@ -1784,14 +1799,24 @@ func (td *TestDaemon) GetTxStore() (blob.Store, error) {
 	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
 }
 
-// WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+// WaitForHealthLiveness waits for the health liveness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/liveness")
+}
+
+// WaitForHealthReadiness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+func WaitForHealthReadiness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/readiness")
+}
+
+func waitForHealthEndpoint(ports []int, timeout time.Duration, path string) error {
 	timeoutElapsed := time.After(timeout)
+	localHealthClient := &http.Client{Timeout: time.Second}
 
 	var err error
 
 	for _, port := range ports {
-		healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+		healthEndpoint := fmt.Sprintf("http://localhost:%d%s", port, path)
 
 	out:
 		for {
@@ -1799,8 +1824,18 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 			case <-timeoutElapsed:
 				return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 			default:
-				_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
-				if err != nil {
+				resp, requestErr := localHealthClient.Get(healthEndpoint)
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				if requestErr != nil {
+					err = requestErr
+					time.Sleep(100 * time.Millisecond)
+
+					continue
+				}
+				if resp.StatusCode != http.StatusOK {
+					err = errors.NewError("health check returned status code %d", resp.StatusCode)
 					time.Sleep(100 * time.Millisecond)
 
 					continue

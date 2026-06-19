@@ -48,6 +48,7 @@ The `teranode-cli` is recommended for scripting and automation. It provides a co
 ### Docker Compose Environment
 
 #### 1. Check Current State
+
 ```bash
 docker exec -it blockchain teranode-cli getfsmstate
 ```
@@ -165,10 +166,14 @@ grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Idle
 
 ### Wait for State Change
 
-You can wait for a specific state transition to complete:
+There is no blocking "wait" endpoint. To wait for a specific state, poll the current state until it matches:
 
 ```bash
-grpcurl -plaintext -d '{"state":"Running"}' localhost:18087 blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState
+# Poll until the FSM reaches RUNNING
+until grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState \
+  | grep -q '"state": "RUNNING"'; do
+  sleep 1
+done
 ```
 
 ## Further Reading

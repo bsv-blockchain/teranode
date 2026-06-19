@@ -1794,15 +1794,35 @@ func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (boo
 	return *currentState == state, nil
 }
 
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
+// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state by
+// polling the current state until it matches the target or the context is cancelled.
 func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
-	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
-		State: targetState,
-	}); err != nil {
-		return errors.UnwrapGRPC(err)
-	}
+	ticker := time.NewTicker(1 * time.Second) // Re-check the state on each tick.
+	defer ticker.Stop()
 
-	return nil
+	for {
+		currentState, err := c.GetFSMCurrentState(ctx)
+		if err == nil && *currentState == targetState {
+			return nil
+		}
+
+		if err != nil {
+			// Keep polling through transient errors rather than aborting the wait. A
+			// state read can fail during the pre-warm window (e.g. a gRPC blip before
+			// the FSMState subscription has populated the cache), which on a fresh node
+			// spans the whole initial block download. Callers treat a returned error as
+			// "stay pessimistic" with no retry, so bailing on a one-off blip would
+			// disable the optimization for the process lifetime. Only ctx cancellation
+			// below ends the wait.
+			c.logger.Debugf("[WaitForFSMtoTransitionToGivenState] state read failed, retrying: %v", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.

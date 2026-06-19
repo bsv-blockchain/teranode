@@ -74,7 +74,6 @@ const (
 	BlockchainAPI_GetBlocksNotPersisted_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksNotPersisted"
 	BlockchainAPI_SendFSMEvent_FullMethodName                         = "/blockchain_api.BlockchainAPI/SendFSMEvent"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
-	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName      = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
 	BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName  = "/blockchain_api.BlockchainAPI/WaitUntilFSMTransitionFromIdleState"
 	BlockchainAPI_Run_FullMethodName                                  = "/blockchain_api.BlockchainAPI/Run"
 	BlockchainAPI_CatchUpBlocks_FullMethodName                        = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
@@ -207,8 +206,6 @@ type BlockchainAPIClient interface {
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
-	// WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
-	WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
 	WaitUntilFSMTransitionFromIdleState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Run transitions the blockchain service to running state.
@@ -775,16 +772,6 @@ func (c *blockchainAPIClient) GetFSMCurrentState(ctx context.Context, in *emptyp
 	return out, nil
 }
 
-func (c *blockchainAPIClient) WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockchainAPIClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -1068,8 +1055,6 @@ type BlockchainAPIServer interface {
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
-	// WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
-	WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error)
 	// WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
 	WaitUntilFSMTransitionFromIdleState(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	// Run transitions the blockchain service to running state.
@@ -1269,9 +1254,6 @@ func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEv
 }
 func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetFSMCurrentState not implemented")
-}
-func (UnimplementedBlockchainAPIServer) WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method WaitFSMToTransitionToGivenState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) WaitUntilFSMTransitionFromIdleState(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method WaitUntilFSMTransitionFromIdleState not implemented")
@@ -2256,24 +2238,6 @@ func _BlockchainAPI_GetFSMCurrentState_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WaitFSMToTransitionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).WaitFSMToTransitionToGivenState(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).WaitFSMToTransitionToGivenState(ctx, req.(*WaitFSMToTransitionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockchainAPI_WaitUntilFSMTransitionFromIdleState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -2786,10 +2750,6 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFSMCurrentState",
 			Handler:    _BlockchainAPI_GetFSMCurrentState_Handler,
-		},
-		{
-			MethodName: "WaitFSMToTransitionToGivenState",
-			Handler:    _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler,
 		},
 		{
 			MethodName: "WaitUntilFSMTransitionFromIdleState",
