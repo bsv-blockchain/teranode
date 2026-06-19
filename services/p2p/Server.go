@@ -1657,6 +1657,30 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// DC12: close the invalid-subtree consumer too, matching its two siblings above.
+	if s.invalidSubtreeKafkaConsumerClient != nil {
+		if err := s.invalidSubtreeKafkaConsumerClient.Close(); err != nil {
+			s.logger.Errorf("[Stop] failed to close invalid subtree kafka consumer gracefully: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
+	// DC11: synchronously stop the async producers so their final flush completes
+	// inside the bounded Stop() window instead of racing process exit.
+	if s.subtreeKafkaProducerClient != nil {
+		if err := s.subtreeKafkaProducerClient.Stop(); err != nil {
+			s.logger.Errorf("[Stop] failed to stop subtree kafka producer gracefully: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
+	if s.blocksKafkaProducerClient != nil {
+		if err := s.blocksKafkaProducerClient.Stop(); err != nil {
+			s.logger.Errorf("[Stop] failed to stop blocks kafka producer gracefully: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
 	if s.e != nil {
 		if err := s.e.Shutdown(ctx); err != nil {
 			s.logger.Errorf("[Stop] failed to shutdown Echo server: %v", err)

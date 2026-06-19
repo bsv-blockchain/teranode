@@ -395,7 +395,10 @@ type SyncManager struct {
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
-	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
+	// legacyKafkaInvProducer is retained (DC11) so SyncManager.Stop() can stop it
+	// synchronously; without a field there is no handle to flush it on shutdown.
+	legacyKafkaInvProducer kafka.KafkaAsyncProducerI
+	txAnnounceBatcher      *batcher.BatcherWithDedup[TxHashAndFee]
 
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
@@ -2376,6 +2379,15 @@ func (sm *SyncManager) Stop() error {
 	sm.requestedTxns.Stop()
 	sm.requestedBlocks.Stop()
 
+	// DC11: synchronously stop the legacy INV async producer so its final flush
+	// completes inside the bounded Stop() window. Safe here — handlerDone above
+	// guarantees no more sends to legacyKafkaInvCh, which producer.Stop() closes.
+	if sm.legacyKafkaInvProducer != nil {
+		if err := sm.legacyKafkaInvProducer.Stop(); err != nil {
+			sm.logger.Errorf("[Legacy Manager] failed to stop legacy INV kafka producer gracefully: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -2562,6 +2574,9 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
 			return
 		}
+
+		// Retain the producer (DC11) so SyncManager.Stop() can flush it synchronously.
+		sm.legacyKafkaInvProducer = producer
 
 		// start a go routine to start the kafka producer
 		go func() {

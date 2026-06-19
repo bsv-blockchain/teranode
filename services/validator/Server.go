@@ -421,6 +421,31 @@ func (v *Server) Stop(_ context.Context) error {
 		}
 	}
 
+	// DC11: synchronously stop the async producers so their final flush completes
+	// inside the bounded Stop() window instead of racing process exit. Guard each
+	// and continue past failures.
+	//
+	// Stage D will drain v.validator.txmetaKafkaBatcher HERE — before the producer
+	// Stops below — so queued tx-meta is flushed into the producer first. That
+	// drain is intentionally NOT added in this stage.
+	if v.txMetaKafkaProducerClient != nil {
+		if err := v.txMetaKafkaProducerClient.Stop(); err != nil {
+			v.logger.Errorf("[Validator] failed to stop txmeta kafka producer gracefully: %v", err)
+		}
+	}
+
+	if v.rejectedTxKafkaProducerClient != nil {
+		if err := v.rejectedTxKafkaProducerClient.Stop(); err != nil {
+			v.logger.Errorf("[Validator] failed to stop rejectedTx kafka producer gracefully: %v", err)
+		}
+	}
+
+	if v.policyRejectedTxKafkaProducerClient != nil {
+		if err := v.policyRejectedTxKafkaProducerClient.Stop(); err != nil {
+			v.logger.Errorf("[Validator] failed to stop policy-rejected tx kafka producer gracefully: %v", err)
+		}
+	}
+
 	return nil
 }
 

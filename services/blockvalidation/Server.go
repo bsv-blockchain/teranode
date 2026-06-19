@@ -1102,6 +1102,12 @@ func (u *Server) Stop(_ context.Context) error {
 	if u.blockValidation != nil {
 		u.blockValidation.Wait()
 		u.blockValidation.StopCaches()
+
+		// DC11: drain the BlockValidation-owned invalid-block kafka producer
+		// synchronously within this bounded Stop() window.
+		if err := u.blockValidation.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close block validation cleanly: %v", err)
+		}
 	}
 
 	// close the kafka consumer gracefully

@@ -963,6 +963,15 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
 func (b *Blockchain) Stop(ctx context.Context) error {
+	// DC11: synchronously stop the async final-blocks producer first so its flush
+	// completes inside the bounded Stop() window — and before the peer-registry
+	// save below, which can early-return on failure. Guarded and non-fatal.
+	if b.blocksFinalKafkaAsyncProducer != nil {
+		if err := b.blocksFinalKafkaAsyncProducer.Stop(); err != nil {
+			b.logger.Errorf("[Blockchain] failed to stop final-blocks kafka producer gracefully: %v", err)
+		}
+	}
+
 	// Drain background goroutines (ban decay loop, cleanup loop) before saving
 	// so we can't race a write against the final Save snapshot. Close is
 	// idempotent and safe to call even if StartBanDecay never ran.
