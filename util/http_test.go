@@ -886,7 +886,7 @@ func TestValidateURL(t *testing.T) {
 func TestValidateURL_Disabled(t *testing.T) {
 	// Verify that disabling SSRF protection allows all URLs
 	SetSSRFProtection(false)
-	defer SetSSRFProtection(true)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
 
 	err := ValidateURL("http://127.0.0.1:8080/path")
 	require.NoError(t, err)
@@ -982,7 +982,7 @@ func TestSSRFDialContext_RejectsPrivateHostname(t *testing.T) {
 
 func TestSSRFDialContext_DisabledAllowsPrivate(t *testing.T) {
 	SetSSRFProtection(false)
-	defer SetSSRFProtection(true)
+	defer SetSSRFProtection(false) // restore the package default set by TestMain
 
 	// With protection disabled the dialer should attempt the connection normally.
 	// Use a closed port so we get a connection-refused rather than hanging.
