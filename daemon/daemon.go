@@ -474,7 +474,22 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 	subtreeStoreToClose := d.daemonStores.mainSubtreeStore
 	tempStoreToClose := d.daemonStores.mainTempStore
 	utxoStoreToClose := d.daemonStores.mainUtxoStore
+	blockStoreToClose := d.daemonStores.mainBlockStore
+	blockPersisterStoreToClose := d.daemonStores.mainBlockPersisterStore
+	blockchainStoreToClose := d.daemonStores.mainBlockchainStore
+	peerRegistryClientToClose := d.daemonStores.mainPeerRegistryClient
 	globalStoreMutex.RUnlock()
+
+	// Close the daemon-owned peer-registry client first (DC16). It is a gRPC
+	// client to the blockchain service, not a store, and owns its conn
+	// (ownsConn=true); Close() is a no-op for non-owned conns.
+	if peerRegistryClientToClose != nil {
+		logger.Debugf("closing peer registry client")
+
+		if err := peerRegistryClientToClose.Close(); err != nil {
+			logger.Errorf("error closing peer registry client: %v", err)
+		}
+	}
 
 	// Drain the UTXO store first so any background-batched writes commit
 	// before we tear down adjacent blob stores. UTXO writes can reference
@@ -505,6 +520,31 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 		logger.Debugf("closing temp store")
 
 		_ = tempStoreToClose.Close(ctx)
+	}
+
+	// Block and block-persister blob stores (DC10) — alongside the other blob
+	// stores; both have valid Close methods.
+	if blockStoreToClose != nil {
+		logger.Debugf("closing block store")
+
+		_ = blockStoreToClose.Close(ctx)
+	}
+
+	if blockPersisterStoreToClose != nil {
+		logger.Debugf("closing block persister store")
+
+		_ = blockPersisterStoreToClose.Close(ctx)
+	}
+
+	// Close the blockchain state store last (DC9): it is the core chain-state
+	// DB and its Close stops background goroutines and closes the DB handle
+	// (orderly WAL checkpoint / connection drain on SQL/SQLite backends).
+	if blockchainStoreToClose != nil {
+		logger.Debugf("closing blockchain store")
+
+		if err := blockchainStoreToClose.Close(ctx); err != nil {
+			logger.Errorf("error closing blockchain store: %v", err)
+		}
 	}
 }
 

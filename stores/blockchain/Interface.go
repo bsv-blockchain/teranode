@@ -50,6 +50,15 @@ type Store interface {
 	// Returns: status code, status message, and any error encountered
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
+	// Close releases the resources held by the store (background goroutines,
+	// caches, and the underlying DB handle). Implementations that hold no
+	// closable resource may be a no-op. It is called once during daemon
+	// shutdown by daemon.closeStores.
+	// Parameters:
+	//   - ctx: Context for the operation
+	// Returns: Any error encountered while closing
+	Close(ctx context.Context) error
+
 	// GetDB returns the underlying SQL database instance.
 	GetDB() *usql.DB
 

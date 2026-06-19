@@ -604,6 +604,11 @@ func (d *Stores) Cleanup() {
 	globalStoreMutex.Lock()
 	d.mainBlockPersisterStore = nil
 	d.mainBlockStore = nil
+	// closeStores now closes mainBlockchainStore (DC9); nil it here too so
+	// GetBlockchainStore constructs a fresh store on reuse instead of handing
+	// back a closed cached handle. The other closed singletons (block /
+	// block-persister stores, peer-registry client) are already nil'd below.
+	d.mainBlockchainStore = nil
 	d.mainBlockValidationClient = nil
 	d.mainSubtreeStore = nil
 	d.mainSubtreeValidationClient = nil

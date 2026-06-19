@@ -47,7 +47,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		customID := uint64(42)
 
@@ -92,7 +92,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store first block with custom ID 100
 		customID1 := uint64(100)
@@ -154,7 +154,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Since the genesis block is automatically inserted when the table is created,
 		// we need to retrieve it from the database to get the exact same block
