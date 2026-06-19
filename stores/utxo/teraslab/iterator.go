@@ -64,6 +64,29 @@ func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.Unm
 	}, nil
 }
 
+// GetConflictingTxIterator returns an iterator over all transactions currently
+// flagged CONFLICTING. Like GetUnminedTxIterator, TeraSlab has no streaming
+// iteration, so the conflicting txids are queried upfront (OP_QUERY_CONFLICTING)
+// and metadata is fetched in batches by Next. Reuses the unminedTxIterator type.
+func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	ctx := context.Background()
+
+	txids, err := s.client.QueryConflicting(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := make([]chainhash.Hash, len(txids))
+	for i, txid := range txids {
+		hashes[i] = chainhash.Hash(txid)
+	}
+
+	return &unminedTxIterator{
+		store: s,
+		txids: hashes,
+	}, nil
+}
+
 // Next advances the iterator and returns a batch of unmined transactions.
 func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
 	if it.closed || it.pos >= len(it.txids) {
