@@ -30,11 +30,23 @@ func TestGetTxMap_ReusesPooledInstance(t *testing.T) {
 }
 
 func TestGetTxMap_OversizedAllocatesFresh(t *testing.T) {
-	// n above the maximum size class returns a fresh map, sized to n,
-	// and PutTxMap drops it (does not panic).
-	m := GetTxMap(2 << 30) // 2B — above the 1B max class
+	// An n above the largest size class is not pooled: GetTxMap allocates fresh
+	// and PutTxMap drops it rather than retaining a giant map. Verify that
+	// contract through the classification and the Put-drop path.
+	//
+	// This previously did `m := GetTxMap(2<<30)` — actually allocating a real
+	// ~2-billion-entry swiss map. Its constructor writes one control byte per
+	// group across 8192 sub-maps (~3 GiB of dirtied pages), which ballooned to
+	// ~10 GiB RSS under -race and made model.test the dominant memory user in CI
+	// (#1051) — all to exercise a branch that guards blocks larger than any that
+	// can exist. (The unbounded fresh allocation for adversarial n is a separate
+	// production-hardening concern, not addressed here.)
+	require.Equal(t, -1, txMapClassIdxFor(2<<30), "n above the max size class must not map to a pool")
+
+	// PutTxMap with an oversized n must drop the map (idx -1) without panicking.
+	m := GetTxMap(1 << 12)
 	require.NotNil(t, m)
-	PutTxMap(m, 2<<30)
+	require.NotPanics(t, func() { PutTxMap(m, 2<<30) })
 }
 
 func TestGetTxMap_DifferentSizeClassesAreSeparate(t *testing.T) {
@@ -63,7 +75,9 @@ func TestGetParentSpendsMap_RoundTrip(t *testing.T) {
 		var inp subtreepkg.Inpoint
 		inp.Hash[0] = byte(i)
 		inp.Index = uint32(i)
-		require.True(t, m1.SetIfNotExists(inp))
+		ok, err := m1.SetIfNotExists(inp)
+		require.NoError(t, err)
+		require.True(t, ok)
 	}
 	PutParentSpendsMap(m1, 1_000_000)
 
@@ -75,7 +89,9 @@ func TestGetParentSpendsMap_RoundTrip(t *testing.T) {
 		var inp subtreepkg.Inpoint
 		inp.Hash[0] = byte(i)
 		inp.Index = uint32(i)
-		require.True(t, m2.SetIfNotExists(inp), "cleared map should accept inpoint")
+		ok, err := m2.SetIfNotExists(inp)
+		require.NoError(t, err)
+		require.True(t, ok, "cleared map should accept inpoint")
 	}
 	PutParentSpendsMap(m2, 1_000_000)
 }

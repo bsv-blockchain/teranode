@@ -365,9 +365,6 @@ export function getFSMEvents(): Promise<ApiResponse<FSMEvent[]>> {
             case 'CATCHUPBLOCKS':
               value = 3
               break
-            case 'LEGACYSYNC':
-              value = 4
-              break
             default:
               // Try to extract a numeric ID from the event name if it exists
               const match = eventName.match(/[_-]?(\d+)$/)
@@ -563,21 +560,6 @@ export function catchupFSM(): Promise<ApiResponse<FSMState>> {
       return handleApiError<FSMState>(response.error, '/fsm/catchup')
     })
     .catch((error) => handleApiError<FSMState>(error, '/fsm/catchup'))
-}
-
-// Convenience function to start legacy sync mode
-export function legacySyncFSM(): Promise<ApiResponse<FSMState>> {
-  return callApi<FSMState>(`${baseUrl}/fsm/legacysync`, {
-    method: 'POST',
-    credentials: 'include',
-  })
-    .then((response) => {
-      if (response.ok) {
-        return { ok: true, data: response.data } as ApiResponse<FSMState>
-      }
-      return handleApiError<FSMState>(response.error, '/fsm/legacysync')
-    })
-    .catch((error) => handleApiError<FSMState>(error, '/fsm/legacysync'))
 }
 
 // BUMP (BSV Unified Merkle Path) format interfaces

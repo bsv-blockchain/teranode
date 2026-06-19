@@ -81,6 +81,17 @@ func substituteUnconfirmedHeights(utxoHeights []uint32, blockHeight uint32, cons
 	return out
 }
 
+// resolveUnconfirmedParentsAtCandidateHeight rewrites every
+// unconfirmedParentHeight sentinel in utxoHeights to the candidate block
+// height. Purpose-named wrapper for the Options.UnconfirmedParentsAtCandidateHeight
+// path so the consensus-context call site does not read as a policy-mode
+// translation: it reuses substituteUnconfirmedHeights with consensus=false
+// because that branch performs exactly the blockHeight substitution wanted
+// here — NOT because the caller is in policy mode.
+func resolveUnconfirmedParentsAtCandidateHeight(utxoHeights []uint32, blockHeight uint32) []uint32 {
+	return substituteUnconfirmedHeights(utxoHeights, blockHeight, false)
+}
+
 // uint2int safely converts uint32 slice to int32 slice, checking for overflow.
 func uint2int(arr []uint32) ([]int32, error) {
 	ret := make([]int32, len(arr))

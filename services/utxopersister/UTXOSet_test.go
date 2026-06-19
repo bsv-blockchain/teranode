@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -343,4 +344,101 @@ func checkDeletions(t *testing.T, ud *UTXOSet) {
 		// nolint:gosec
 		assert.Equal(t, uint32(i), utxoDeletion.Index)
 	}
+}
+
+// readErrCloser is a test double that errors a configurable number of bytes
+// into the Read, then surfaces a sticky error on subsequent Reads. It records
+// whether Close was called so a test can assert the contract that consumers
+// release the file-store read permit on every error path.
+type readErrCloser struct {
+	allowedBytes int
+	readBytes    int
+	err          error
+	closed       bool
+}
+
+func (r *readErrCloser) Read(p []byte) (int, error) {
+	if r.readBytes >= r.allowedBytes {
+		return 0, r.err
+	}
+	remaining := r.allowedBytes - r.readBytes
+	n := len(p)
+	if n > remaining {
+		n = remaining
+	}
+	r.readBytes += n
+	return n, nil
+}
+
+func (r *readErrCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
+// fakeStoreReturningErrCloser is a blob.Store implementation that returns a
+// caller-supplied io.ReadCloser from GetIoReader for one fileType (used for
+// the test's specific failing read), and delegates everything else to an
+// embedded memory store. Embedding memory.Memory means we only have to
+// implement what we need to control - the rest is the in-memory default.
+type fakeStoreReturningErrCloser struct {
+	*memory.Memory
+	targetType fileformat.FileType
+	reader     *readErrCloser
+}
+
+func (s *fakeStoreReturningErrCloser) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	if fileType == s.targetType {
+		return s.reader, nil
+	}
+	return s.Memory.GetIoReader(ctx, key, fileType, opts...)
+}
+
+// TestGetUTXOAdditionsReader_ClosesOnReadError pins that GetUTXOAdditionsReader
+// Closes the underlying reader when one of its two seek-past-header Reads
+// fails. Without Close, the file-store's per-reader semaphore permit is held
+// for the lifetime of the process; under sustained load this exhausts the
+// pool (default 768) and acquireReadPermit times out at 25s, after which
+// every Exists/GetIoReader returns SERVICE_UNAVAILABLE.
+func TestGetUTXOAdditionsReader_ClosesOnReadError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	someHash := chainhash.HashH([]byte("test-additions-reader-close"))
+	errReader := &readErrCloser{allowedBytes: 0, err: io.ErrUnexpectedEOF}
+	store := &fakeStoreReturningErrCloser{
+		Memory:     memory.New(),
+		targetType: fileformat.FileTypeUtxoAdditions,
+		reader:     errReader,
+	}
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash)
+	require.NoError(t, err)
+
+	_, err = us.GetUTXOAdditionsReader(ctx)
+	require.Error(t, err, "GetUTXOAdditionsReader must surface the read error")
+	require.True(t, errReader.closed, "reader must be Closed when GetUTXOAdditionsReader returns an error - otherwise the file-store read permit leaks")
+}
+
+// TestGetUTXODeletionsReader_ClosesOnReadError mirrors the above for the
+// deletions reader.
+func TestGetUTXODeletionsReader_ClosesOnReadError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	someHash := chainhash.HashH([]byte("test-deletions-reader-close"))
+	errReader := &readErrCloser{allowedBytes: 0, err: io.ErrUnexpectedEOF}
+	store := &fakeStoreReturningErrCloser{
+		Memory:     memory.New(),
+		targetType: fileformat.FileTypeUtxoDeletions,
+		reader:     errReader,
+	}
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash)
+	require.NoError(t, err)
+
+	_, err = us.GetUTXODeletionsReader(ctx)
+	require.Error(t, err, "GetUTXODeletionsReader must surface the read error")
+	require.True(t, errReader.closed, "reader must be Closed when GetUTXODeletionsReader returns an error - otherwise the file-store read permit leaks")
 }

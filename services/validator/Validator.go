@@ -51,6 +51,12 @@ const (
 	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
 	MaxSatoshis = 21_000_000_00_000_000
 
+	// maxAggregatedSpendErrs caps how many per-spend errors are wrapped into the
+	// aggregate attached to a failed-validation error. The failure count scales
+	// with the tx's input count; an uncapped chain makes error construction and
+	// every errors.Is on it quadratic. See errors.JoinCapped.
+	maxAggregatedSpendErrs = 10
+
 	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
 	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
 	// This constant is used to identify and handle coinbase transactions differently from regular transactions
@@ -69,9 +75,8 @@ const (
 	//
 	// Chosen as 0xFFFFFFFF — an impossible block height (no real chain reaches
 	// 4.29 billion blocks) — so it cannot collide with any value produced by
-	// the other two height-population branches (in-block ParentMetadata, which
-	// stamps the candidate height; UTXO-store hit, which uses the real
-	// stored height). The collision matters because in mainline block
+	// the only other height-population branch (a UTXO-store hit, which uses the
+	// real stored height). The collision matters because in mainline block
 	// validation `blockState.Height + 1` equals the candidate height, making
 	// height-based identification of unconfirmed slots ambiguous.
 	//
@@ -489,7 +494,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 						return
 					}
 
-					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 						// ignore notifications while syncing or catching up
 						return
 					}
@@ -538,8 +543,8 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 		return
 	}
 
-	// Stay quiet while syncing or catching up, mirroring the rejected-tx producer above.
-	// During CATCHINGBLOCKS/LEGACYSYNCING the node replays large volumes of historical
+	// Stay quiet while catching up, mirroring the rejected-tx producer above.
+	// During CATCHINGBLOCKS the node replays large volumes of historical
 	// transactions; publishing a policy-rejected message for every one would flood the
 	// topic with cache entries that subtree validation does not need yet.
 	if v.blockchainClient != nil {
@@ -549,7 +554,7 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 			return
 		}
 
-		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 			return
 		}
 	}
@@ -743,7 +748,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
-			var spendErrs *errors.Error
+			// Collect failed spends and attach a capped aggregate to the
+			// returned error. The failure count scales with the tx's input
+			// count; an uncapped chain makes every subsequent errors.Is on it
+			// walk the full chain (mainnet IBD stall, block 820116).
+			failedSpends := make([]error, 0, 8)
 
 			for _, spend := range spentUtxos {
 				if spend.Err != nil {
@@ -751,20 +760,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						saveAsConflicting = true
 					}
 
-					var spendErr *errors.Error
-					if errors.As(spend.Err, &spendErr) {
-						if spendErrs == nil {
-							spendErrs = errors.New(spendErr.Code(), spendErr.Message(), spendErr)
-						} else {
-							spendErrs = errors.New(spendErrs.Code(), spendErrs.Message(), spendErr)
-						}
-					}
+					failedSpends = append(failedSpends, spend.Err)
 				}
 			}
 
-			if spendErrs != nil {
+			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(spendErrs)
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
 				}
 			}
 
@@ -935,7 +937,7 @@ func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Conte
 	defer endSpan()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions.PrefetchedParents)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -964,8 +966,10 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	return nil
 }
 
-// getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
+// getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction.
+// prefetched, when non-nil, supplies parent metadata already read in bulk so per-parent
+// store Gets can be skipped (see Options.PrefetchedParents).
+func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(v.logger, g, v.settings.UtxoStore.GetBatcherSize)
@@ -990,7 +994,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, validationOptions); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, prefetched); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -1012,67 +1016,21 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 // getUtxoBlockHeightAndExtendForParentTx retrieves the block height for a parent transaction
 // and extends the inputs of the transaction if it is not already extended.
 //
-// Three height-population branches exist; only one writes utxoHeights[idx]
+// Two height-population branches exist; exactly one writes utxoHeights[idx]
 // for any given parent:
 //
-//  1. ParentMetadata-supplied (in-block parent, set by the subtreevalidation
-//     accumulator) — writes the candidate block height and is the authoritative
-//     value for this parent. cameFromParentMetadata=true records this so the
-//     post-Get block below does NOT overwrite it.
-//  2. UTXO-store hit with non-empty BlockHeights (confirmed prior-block parent)
+//  1. UTXO-store hit with non-empty BlockHeights (confirmed prior-block parent)
 //     — writes the real stored block height.
-//  3. UTXO-store fallback with empty BlockHeights (parent in the store but not
-//     yet mined into a block) — writes the unconfirmedParentHeight sentinel
-//     so the BDK adapter can translate it at the boundary: MEMPOOL_HEIGHT in
-//     consensus (BDK rejects with bad-txns-unconfirmed-input-in-block) or the
-//     candidate height in policy mode.
-//
-// CRITICAL — provenance tracking: when extend==true AND the parent appears in
-// ParentMetadata, we must still consult the UTXO store to fetch the parent
-// tx body for input-extension, but we must NOT let the post-Get height-
-// stamping block touch utxoHeights[idx]. Without cameFromParentMetadata, the
-// "len(BlockHeights)==0" branch fires (in-block parents have empty
-// BlockHeights — Create writes the tx row but the blocks_transactions join
-// row is only added by SetMinedMulti, so an in-block parent looks
-// unconfirmed to Get) and clobbers the correct candidate height with the
-// sentinel — surfacing bad-txns-unconfirmed-input-in-block on a legitimate
-// block.
+//  2. UTXO-store fallback with empty BlockHeights (parent in the store but not
+//     yet mined into a block, e.g. an in-block parent of the candidate block)
+//     — writes the unconfirmedParentHeight sentinel. The sentinel is later
+//     resolved by Options.UnconfirmedParentsAtCandidateHeight (block-validation
+//     paths substitute the candidate height before BDK/BIP68 consume the
+//     heights) or translated at the BDK boundary: MEMPOOL_HEIGHT in consensus
+//     (BDK rejects with bad-txns-unconfirmed-input-in-block) or the candidate
+//     height in policy mode.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
-	utxoHeights []uint32, tx *bt.Tx, extend bool, validationOptions *Options) error {
-
-	// OPTIMIZATION: Check if parent metadata is provided in options (for in-block parents)
-	// This allows validation without UTXO store lookups for in-block parent transactions.
-	// SAFETY: Block-validation callers populate ParentMetadata from a block-scoped
-	// accumulator that only contains txs which successfully validated earlier in the
-	// same block (per-level post-g.Wait() merges in processTransactionsInLevels /
-	// processMissingTransactions, and the post-Phase-2 in-block-order merge in
-	// validateMissingSubtreesWithOrderedRetryAccumulated — failed-Phase-2 subtree
-	// deltas are dropped). Already-known parents are seeded at the candidate block's
-	// height so children resolve through this map instead of the UTXO-store
-	// BlockHeights fallback (which is empty for unmined in-block parents).
-	cameFromParentMetadata := false
-	if validationOptions != nil && validationOptions.ParentMetadata != nil {
-		if parentMeta, found := validationOptions.ParentMetadata[parentTxHash]; found {
-			// Use pre-fetched metadata instead of UTXO store lookup
-			// Safe because metadata only includes transactions that completed full validation+storage
-			for _, idx := range idxs {
-				utxoHeights[idx] = parentMeta.BlockHeight
-			}
-
-			cameFromParentMetadata = true
-
-			// If transaction is already extended, we have all the data we need
-			// The parent metadata optimization works best with pre-extended transactions
-			if !extend {
-				return nil
-			}
-			// Otherwise fall through to UTXO store to fetch the parent tx body
-			// for input-extension only. The post-Get height-stamping block
-			// below is gated on !cameFromParentMetadata so the candidate
-			// height set above is preserved.
-		}
-	}
-
+	utxoHeights []uint32, tx *bt.Tx, extend bool, prefetched map[chainhash.Hash]*meta.Data) error {
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {
@@ -1080,27 +1038,35 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		f = append(f, fields.Tx)
 	}
 
-	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, f...)
-	if err != nil {
-		return err
+	// Use a bulk-prefetched parent if the caller supplied one that carries
+	// everything we need (the parent tx outputs too, when extending). This is a
+	// read-source swap only: the height/sentinel logic below is unchanged, and
+	// any parent not prefetched — or prefetched without the Tx needed for
+	// extension — falls back to a store Get, so correctness is never reduced.
+	var txMeta *meta.Data
+	if pf, ok := prefetched[parentTxHash]; ok && pf != nil && (!extend || pf.Tx != nil) {
+		txMeta = pf
+	} else {
+		var err error
+		if txMeta, err = v.utxoStore.Get(gCtx, &parentTxHash, f...); err != nil {
+			return err
+		}
 	}
 
-	if !cameFromParentMetadata {
-		if len(txMeta.BlockHeights) == 0 {
-			// Parent is in the UTXO store but has no block heights recorded — i.e.
-			// the parent UTXO is not yet confirmed. Mark each slot with the
-			// teranode-internal sentinel so the BDK adapter can translate it at
-			// the boundary: MEMPOOL_HEIGHT in consensus (BDK rejects with
-			// bad-txns-unconfirmed-input-in-block) or the candidate height in
-			// policy mode (matching svnode's GetInputScriptBlockHeight). See
-			// ScriptVerifierGoBDK.ValidateTransaction for the translation.
-			for _, idx := range idxs {
-				utxoHeights[idx] = unconfirmedParentHeight
-			}
-		} else {
-			for _, idx := range idxs {
-				utxoHeights[idx] = txMeta.BlockHeights[0]
-			}
+	if len(txMeta.BlockHeights) == 0 {
+		// Parent is in the UTXO store but has no block heights recorded — i.e.
+		// the parent UTXO is not yet confirmed. Mark each slot with the
+		// teranode-internal sentinel so the BDK adapter can translate it at
+		// the boundary: MEMPOOL_HEIGHT in consensus (BDK rejects with
+		// bad-txns-unconfirmed-input-in-block) or the candidate height in
+		// policy mode (matching svnode's GetInputScriptBlockHeight). See
+		// ScriptVerifierGoBDK.ValidateTransaction for the translation.
+		for _, idx := range idxs {
+			utxoHeights[idx] = unconfirmedParentHeight
+		}
+	} else {
+		for _, idx := range idxs {
+			utxoHeights[idx] = txMeta.BlockHeights[0]
 		}
 	}
 
@@ -1656,6 +1622,30 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 
 			return err
 		}
+	}
+
+	// Legacy block-sync resolution: substitute the unconfirmedParentHeight
+	// sentinel with the candidate block height BEFORE any consumer sees it —
+	// both the BDK call in phase 1 (per-input era-flag selection, where the
+	// sentinel would otherwise translate to MEMPOOL_HEIGHT and reject with
+	// bad-txns-unconfirmed-input-in-block) and the BIP68/MTP lookups in
+	// phase 2. On the legacy path an unconfirmed parent IS a same-block
+	// parent, so the candidate height is its true height. See
+	// Options.UnconfirmedParentsAtCandidateHeight for the consensus-safety
+	// contract; the floater backstop is block validation's
+	// checkParentsExistOnChain.
+	// No AddTXToBlockAssembly guard here, deliberately (an earlier revision
+	// hard-errored on flag+assembly): the legacy branch must set this flag in
+	// EVERY FSM state — a restarted node with FSM restored to RUNNING catches
+	// up over the legacy bridge and wedges without it — while assembly stays
+	// enabled in RUNNING for reorg resilience. The combination is safe: a
+	// floater child blessed at the candidate height and added to assembly is
+	// the same tx policy-mode admission would have accepted into assembly
+	// (policy substitutes tip+1 for unconfirmed parents — equal to the
+	// candidate height at the tip; era flags cannot differ post-Genesis), and
+	// accepted-block txs are mined-removed from assembly as always.
+	if validationOptions.UnconfirmedParentsAtCandidateHeight {
+		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}
 
 	// Phase 1: run Teranode-owned checks and BDK transaction validation.

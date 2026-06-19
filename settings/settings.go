@@ -246,6 +246,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
 			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
 			DiskMapDirs:                           getMultiString("block_diskMapDirs", "|", []string{}, alternativeContext...),
+			ParentSpendsCapacityMultiplier:        getUint64("block_parentSpendsCapacityMultiplier", 2, alternativeContext...),
 		},
 		BlockPersister: BlockPersisterSettings{
 			Store:                    getURL("blockpersister_store", "file://./data/blockstore", alternativeContext...),
@@ -357,11 +358,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseCatchupWhenBehind:         getBool("blockvalidation_useCatchupWhenBehind", false, alternativeContext...),
 			CatchupConcurrency:           getInt("blockvalidation_catchupConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			CatchupMaxRetries:            getInt("blockvalidation_catchup_max_retries", 3, alternativeContext...),
+			CatchupMaxAttemptsPerBlock:   getInt("blockvalidation_catchup_max_attempts_per_block", 5, alternativeContext...),
 			CatchupIterationTimeout:      getInt("blockvalidation_catchup_iteration_timeout", 30, alternativeContext...),
 			CatchupOperationTimeout:      getInt("blockvalidation_catchup_operation_timeout", 300, alternativeContext...),
 			CatchupMaxAccumulatedHeaders: getInt("blockvalidation_max_accumulated_headers", 100000, alternativeContext...),
 			CatchupCheckpointHash:        getString("blockvalidation_catchup_checkpoint_hash", "", alternativeContext...),
 			CatchupCheckpointHeight:      getInt32("blockvalidation_catchup_checkpoint_height", 0, alternativeContext...),
+			QuickValidateSkipUtxoLock:    getBool("blockvalidation_quick_validate_skip_utxo_lock", false, alternativeContext...),
 			CatchupAllowQuickValidation:  getBool("blockvalidation_catchup_allow_quick_validation", true, alternativeContext...),
 			// Catchup circuit breaker configuration
 			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
@@ -484,7 +487,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPListenAddress:  getString("p2p_httpListenAddress", "", alternativeContext...),
 			ListenAddresses:    getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
 			AdvertiseAddresses: getMultiString("p2p_advertise_addresses", "|", []string{}, alternativeContext...), // This is used to announce the node to the network on a different address than the listen address
-			Port:               getInt("p2p_port", 9906, alternativeContext...),                                   // This is the port that go-p2p-message-bus will listen on but only used when the AdvertiseAddresses are specified
+			Port:               getInt("p2p_port", 9905, alternativeContext...),                                   // This is the port that go-p2p-message-bus will listen on but only used when the AdvertiseAddresses are specified
 			ListenMode:         getString("listen_mode", ListenModeFull, alternativeContext...),
 			PeerID:             getString("p2p_peer_id", "", alternativeContext...),
 			PrivateKey:         getString("p2p_private_key", "", alternativeContext...),

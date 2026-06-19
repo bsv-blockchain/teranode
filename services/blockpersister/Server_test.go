@@ -785,10 +785,6 @@ func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, b
 	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
 	return true, nil
 }
-func (m *MockBlockchainClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	// Report rebuilding so callers fall back to per-block CheckBlockIsInCurrentChain.
-	return nil, 0, true, nil
-}
 func (m *MockBlockchainClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	// Default to false - blocks are not ancestors unless specifically testing reorg scenarios
 	return false, nil
@@ -817,7 +813,6 @@ func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSM
 func (m *MockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return true, nil }
 func (m *MockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
 func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }
-func (m *MockBlockchainClient) LegacySync(ctx context.Context) error           { return nil }
 func (m *MockBlockchainClient) Idle(ctx context.Context) error                 { return nil }
 func (m *MockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
 	return nil

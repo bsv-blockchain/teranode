@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -51,6 +52,11 @@ func createTestUTXOStore(t *testing.T) utxo.Store {
 
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
+
+	// Close the store when the test ends. Without this the sqlitememory store's
+	// spendBatcher worker goroutine + connection pool leak for the whole binary
+	// lifetime; tests calling this helper many times accumulate them (#1051).
+	t.Cleanup(func() { _ = utxoStore.Close(ctx) })
 
 	return utxoStore
 }
@@ -1970,7 +1976,7 @@ func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil, 2)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "txMap is nil")
 	})
@@ -2004,7 +2010,7 @@ func TestBlock_ValidOrderAndBlessed_WithSubtrees(t *testing.T) {
 			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil, 2)
 		require.NoError(t, err) // Should succeed with empty subtrees
 	})
 }
@@ -2708,7 +2714,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should now trigger validateSubtree function
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil, 2)
 		// Will likely error due to missing metadata but exercises the validateSubtree path
 		_ = err
 	})
@@ -2769,7 +2775,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This exercises more complex validation paths
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil, 2)
 		// Will error but exercises multiple validation functions
 		_ = err
 	})
@@ -2901,7 +2907,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		// This should exercise deep validation paths including:
 		// - validateSubtree with multiple nodes
 		// - validateTransaction for each transaction
-		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, nil, 2)
 		_ = err // Will error but exercises many code paths
 	})
 
@@ -3076,7 +3082,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 			Hash:  testHash,
 			Index: 0,
 		}
-		validationCtx.parentSpendsMap.SetIfNotExists(testInpoint)
+		_, _ = validationCtx.parentSpendsMap.SetIfNotExists(testInpoint)
 
 		// Create a mock subtree meta slice that would return the same inpoint
 		// This simulates the duplicate input scenario
@@ -4042,7 +4048,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 
 		// Add a duplicate input to trigger validation
 		inpoint := subtreepkg.Inpoint{Hash: *parentHash, Index: 0}
-		validationCtx.parentSpendsMap.SetIfNotExists(inpoint)
+		_, _ = validationCtx.parentSpendsMap.SetIfNotExists(inpoint)
 
 		// Create subtree and subtree meta
 		subtree := &subtreepkg.Subtree{}
@@ -4322,7 +4328,7 @@ func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
 		}
 
 		// This should pass validation - coinbase placeholder is in correct position
-		err = block.validOrderAndBlessed(ctx, logger, deps, 1, nil)
+		err = block.validOrderAndBlessed(ctx, logger, deps, 1, nil, 2)
 		// Note: this will likely fail on other validation checks, but it should pass the coinbase placeholder check
 		_ = err
 	})
@@ -4722,6 +4728,313 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 
 	if benchErr != nil {
 		fmt.Printf("\nNote: validateSubtree returned error (may be expected): %v\n", benchErr)
+	}
+}
+
+// TestBlock_Valid_DupTxDetected_DiskMapDirs runs the CVE-2012-2459 duplicate-tx
+// detection through the disk-backed txMap path (block_diskMapDirs set) in
+// addition to the in-memory default. The disk branch in
+// checkDuplicateTransactions (Block.go:630) and validOrderAndBlessed
+// (Block.go:728) is otherwise only exercised by direct unit tests of
+// DiskTxMapUint64 / DiskParentSpendsMap — not through Block.Valid(). This test
+// asserts behavioural equivalence: a block with a duplicate tx must be
+// rejected with ErrBlockInvalid regardless of which map implementation is in
+// use, and single-disk vs multi-disk fan-out must both behave the same.
+func TestBlock_Valid_DupTxDetected_DiskMapDirs(t *testing.T) {
+	cases := []struct {
+		name string
+		dirs func(t *testing.T) []string
+	}{
+		{"in_memory", func(*testing.T) []string { return nil }},
+		{"single_disk", func(t *testing.T) []string { return []string{t.TempDir()} }},
+		{"multi_disk", func(t *testing.T) []string { return []string{t.TempDir(), t.TempDir()} }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Block.DiskMapDirs = tc.dirs(t)
+
+			blockHeaderBytes, _ := hex.DecodeString(block1Header)
+			blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+			require.NoError(t, err)
+
+			coinbase, err := bt.NewTxFromString(CoinbaseHex)
+			require.NoError(t, err)
+
+			leafCount := 4
+			subtree, err := subtreepkg.NewTreeByLeafCount(leafCount)
+			require.NoError(t, err)
+			require.NoError(t, subtree.AddCoinbaseNode())
+
+			dupBytes := make([]byte, 32)
+			_, _ = rand.Read(dupBytes)
+			dupHash, err := chainhash.NewHash(dupBytes)
+			require.NoError(t, err)
+
+			otherBytes := make([]byte, 32)
+			_, _ = rand.Read(otherBytes)
+			otherHash, err := chainhash.NewHash(otherBytes)
+			require.NoError(t, err)
+
+			require.NoError(t, subtree.AddNode(*dupHash, 1, 0))
+			require.NoError(t, subtree.AddNode(*otherHash, 1, 0))
+			require.NoError(t, subtree.AddNode(*dupHash, 1, 0)) // duplicate
+
+			b, err := NewBlock(
+				blockHeader,
+				coinbase,
+				[]*chainhash.Hash{subtree.RootHash()},
+				uint64(leafCount),
+				123, 0, 0)
+			require.NoError(t, err)
+
+			// Pre-populate SubtreeSlices so Valid reaches checkDuplicateTransactions
+			// without needing a subtree store (matches the nil-subtree-store
+			// CVE-2012-2459 test pattern above).
+			b.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+			currentChain := make([]*BlockHeader, 11)
+			currentChainIDs := make([]uint32, 11)
+			for i := 0; i < 11; i++ {
+				currentChain[i] = &BlockHeader{
+					HashPrevBlock:  &chainhash.Hash{},
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      1231469665 - uint32(i), // nolint:gosec
+				}
+				currentChainIDs[i] = uint32(i) // nolint:gosec
+			}
+			currentChain[0].HashPrevBlock = &chainhash.Hash{}
+
+			oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+
+			valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
+			require.False(t, valid)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+			require.Contains(t, err.Error(), "duplicate transaction")
+		})
+	}
+}
+
+// buildBlockForValidOrderBench constructs a block with one subtree of `leaves`
+// nodes, each with `parentsPerTx` parent hashes. All parents resolve inside
+// the block (b.txMap fast-path) except for the first non-coinbase node, which
+// references an anchor parent that lives in deps.txMetaStore. This keeps
+// the per-block external-store cost to a constant (one anchor lookup), so the
+// benchmark variance reflects the parentSpendsMap implementation, not the
+// store.
+//
+// Returns the block (with b.txMap pre-populated and SubtreeSlices set), the
+// validationDependencies wired to a mock subtreeStore that returns the
+// pre-built meta plus a real sqlitememory utxo.Store with the anchor mined,
+// and the concurrency setting to pass to validOrderAndBlessed.
+func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Block, *validationDependencies, int) {
+	tb.Helper()
+
+	tSettings := test.CreateBaseTestSettings(tb)
+
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(tb, err)
+
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(tb, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(leaves)
+	require.NoError(tb, err)
+	require.NoError(tb, subtree.AddCoinbaseNode())
+
+	// Uniformly-distributed node hashes derived via SHA-256 — mirrors real
+	// production tx hashes so the mmap hash table's segment/bucket selection
+	// spreads keys across the table. Synthetic sequential keys (only bytes
+	// [0:8] set, rest zero) would cluster every key into one segment, forcing
+	// pathological linear-probe chains that don't occur with real tx hashes.
+	hashes := make([]chainhash.Hash, leaves)
+	for i := 0; i < leaves-1; i++ { // -1: coinbase placeholder occupies index 0
+		var seedBuf [8]byte
+		binary.LittleEndian.PutUint64(seedBuf[:], uint64(i+1))
+		hashes[i] = chainhash.Hash(sha256.Sum256(seedBuf[:]))
+		require.NoError(tb, subtree.AddNode(hashes[i], 1, 0))
+	}
+
+	// Anchor parent transaction for the first non-coinbase tx (sIdx=1): must
+	// resolve outside the block via deps.txMetaStore. validateTransaction
+	// rejects any non-coinbase tx whose ParentTxHashes is nil after
+	// deserialize, so every non-coinbase node needs at least one parent.
+	// The anchor is stored as mined in BlockID=1 which we put on the chain
+	// via deps.currentBlockHeaderIDs.
+	const anchorBlockID uint32 = 1
+	anchorTx := newTx(99) // unique LockTime → unique hash, not colliding with hashes[]
+	anchorHash := *anchorTx.TxIDChainHash()
+
+	// Build subtree meta where each non-coinbase node references earlier
+	// nodes in the same subtree (b.txMap fast-path). Bitcoin requires parents
+	// to appear before children, so parent subtree indices must be strictly
+	// less than the child's. sIdx==1 has no earlier non-coinbase ancestor and
+	// uses the external anchor.
+	meta := subtreepkg.NewSubtreeMeta(subtree)
+	for sIdx := 0; sIdx < subtree.Length(); sIdx++ {
+		// Build the (parents, packed-vout) pair for this node. voutIdxs uses the
+		// go-subtree count-prefixed layout: for each parent, one count word
+		// (=1 here, one vout per parent) followed by that many vout values.
+		var (
+			parents  []chainhash.Hash
+			voutIdxs []uint32
+		)
+
+		switch {
+		case sIdx == 0:
+			// coinbase placeholder — no parents
+		case sIdx == 1:
+			// reference the external anchor (one store lookup per block)
+			parents = append(parents, anchorHash)
+			voutIdxs = append(voutIdxs, 1, 0) // count=1, vout=0
+		default:
+			available := sIdx - 1 // usable earlier non-coinbase hashes
+			pick := parentsPerTx
+			if pick > available {
+				pick = available
+			}
+			for p := 0; p < pick; p++ {
+				parentHashIdx := sIdx - 2 - p // most-recent earlier hash first
+				parents = append(parents, hashes[parentHashIdx])
+				voutIdxs = append(voutIdxs, 1, uint32(p)) //nolint:gosec // count=1, vout=p
+			}
+		}
+
+		require.NoError(tb, meta.SetTxInpoints(sIdx, subtreepkg.NewTxInpointsFromPacked(parents, voutIdxs)))
+	}
+	metaBytes, err := meta.Serialize()
+	require.NoError(tb, err)
+
+	subtreeStore := &mockSubtreeStore{
+		data: map[string][]byte{string(subtree.RootHash()[:]): metaBytes},
+	}
+
+	block, err := NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{subtree.RootHash()},
+		uint64(leaves), //nolint:gosec
+		123, 0, 0)
+	require.NoError(tb, err)
+	block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+	// Pre-populate b.txMap so validateTransaction.b.txMap.Get(node.Hash) hits.
+	// Production sets this in checkDuplicateTransactions; we want the bench to
+	// isolate the parentSpendsMap cost.
+	block.txMap = txmap.NewSplitSwissMapUint64(uint32(leaves)) //nolint:gosec
+	for i := 0; i < leaves-1; i++ {
+		require.NoError(tb, block.txMap.Put(hashes[i], uint64(i+1)))
+	}
+
+	// sqlitememory-backed txMetaStore holding only the anchor parent mined
+	// in anchorBlockID. Every other parent lookup hits b.txMap fast-path, so
+	// the per-block external-store cost is one lookup — constant across all
+	// benchmark sizes.
+	utxoStoreURL, err := url.Parse("sqlitememory:///bench")
+	require.NoError(tb, err)
+	utxoStore, err := sql.New(context.Background(), ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+	require.NoError(tb, err)
+	_, err = utxoStore.Create(context.Background(), anchorTx, anchorBlockID,
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: anchorBlockID, BlockHeight: 1}))
+	require.NoError(tb, err)
+
+	deps := &validationDependencies{
+		txMetaStore:           utxoStore,
+		subtreeStore:          subtreeStore,
+		currentChain:          []*BlockHeader{},
+		currentBlockHeaderIDs: []uint32{anchorBlockID},
+		oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+	}
+
+	return block, deps, tSettings.Block.ValidOrderAndBlessedConcurrency
+}
+
+// BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory compares the per-block cost
+// of validOrderAndBlessed between the in-memory SplitSyncedParentMap and the
+// disk-backed DiskParentSpendsMap (single-disk and multi-disk). The disk
+// variants include the full mmap-backed map (mmaphash) open + writer-loop
+// spin-up + close cost per block, which is the realistic per-block-validation
+// overhead.
+//
+// Run with:
+//
+//	go test -tags testtxmetacache -run='^$' -bench=BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory -benchmem ./model/
+func BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory(b *testing.B) {
+	sizes := []int{1024, 16384}
+	impls := []struct {
+		name string
+		dirs func(b *testing.B) []string
+	}{
+		{"memory", func(*testing.B) []string { return nil }},
+		{"disk_1", func(b *testing.B) []string { return []string{b.TempDir()} }},
+		{"disk_2", func(b *testing.B) []string { return []string{b.TempDir(), b.TempDir()} }},
+	}
+
+	for _, size := range sizes {
+		for _, impl := range impls {
+			b.Run(fmt.Sprintf("leaves=%d/%s", size, impl.name), func(b *testing.B) {
+				block, deps, concurrency := buildBlockForValidOrderBench(b, size, 3)
+				ctx := context.Background()
+				logger := ulogger.TestLogger{}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := block.validOrderAndBlessed(ctx, logger, deps, concurrency, impl.dirs(b), 2); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestBlock_ValidOrderAndBlessed_DiskMapDirs covers the disk-backed
+// parentSpendsMap construction and teardown in validOrderAndBlessed
+// (Block.go:728). It uses empty SubtreeSlices so the disk map is created,
+// no subtrees iterate, and the deferred Close+stats path runs cleanly.
+// This guards against regressions in the DiskParentSpendsMap open/close
+// lifecycle when wired through block validation.
+func TestBlock_ValidOrderAndBlessed_DiskMapDirs(t *testing.T) {
+	cases := []struct {
+		name string
+		dirs func(t *testing.T) []string
+	}{
+		{"single_disk", func(t *testing.T) []string { return []string{t.TempDir()} }},
+		{"multi_disk", func(t *testing.T) []string { return []string{t.TempDir(), t.TempDir()} }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+
+			blockHeaderBytes, _ := hex.DecodeString(block1Header)
+			blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+			require.NoError(t, err)
+
+			coinbase, err := bt.NewTxFromString(CoinbaseHex)
+			require.NoError(t, err)
+
+			block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+			require.NoError(t, err)
+
+			block.txMap = txmap.NewSplitSwissMapUint64(10)
+			block.SubtreeSlices = []*subtreepkg.Subtree{}
+
+			deps := &validationDependencies{
+				txMetaStore:           createTestUTXOStore(t),
+				subtreeStore:          &mockSubtreeStore{shouldError: true},
+				currentChain:          []*BlockHeader{},
+				currentBlockHeaderIDs: []uint32{},
+				oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+			}
+
+			err = block.validOrderAndBlessed(context.Background(), ulogger.TestLogger{}, deps, tSettings.Block.ValidOrderAndBlessedConcurrency, tc.dirs(t), 2)
+			require.NoError(t, err)
+		})
 	}
 }
 

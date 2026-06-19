@@ -160,7 +160,7 @@ Teranode starts in IDLE state. You need to transition to the appropriate state:
 
 ```bash
 # Via teranode-cli
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate RUNNING
 ```
 
 ### Monitor Synchronization

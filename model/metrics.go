@@ -99,7 +99,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "block",
 			Name:      "txmap_filter_ram_bytes",
-			Help:      "Cuckoo filter memory in bytes for disk-backed txMap during block validation",
+			Help:      "In-RAM filter bytes for the disk-backed txMap during block validation (0 with the mmap backend, which holds no in-RAM filter)",
 		},
 	)
 
@@ -108,7 +108,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "block",
 			Name:      "txmap_disk_written_bytes",
-			Help:      "Data bytes written to disk for disk-backed txMap during block validation",
+			Help:      "Logical bytes populated (entries x slot size) in the mmap-backed txMap during block validation",
 		},
 	)
 
@@ -126,7 +126,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "block",
 			Name:      "parentspends_filter_ram_bytes",
-			Help:      "Cuckoo filter memory in bytes for disk-backed parentSpendsMap during block validation",
+			Help:      "In-RAM filter bytes for the disk-backed parentSpendsMap during block validation (0 with the mmap backend, which holds no in-RAM filter)",
 		},
 	)
 
@@ -135,7 +135,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "block",
 			Name:      "parentspends_disk_written_bytes",
-			Help:      "Data bytes written to disk for disk-backed parentSpendsMap during block validation",
+			Help:      "Logical bytes populated (entries x slot size) in the mmap-backed parentSpendsMap during block validation",
 		},
 	)
 }

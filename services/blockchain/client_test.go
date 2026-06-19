@@ -4743,24 +4743,6 @@ func TestClient_SendFSMEvent(t *testing.T) {
 		assert.Equal(t, blockchain_api.FSMEventType_STOP, mockClient.lastSendFSMEventReq.Event)
 	})
 
-	t.Run("success with LEGACYSYNC event", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseSendFSMEvent: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_LEGACYSYNCING,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC)
-		require.NoError(t, err)
-		assert.Equal(t, blockchain_api.FSMEventType_LEGACYSYNC, mockClient.lastSendFSMEventReq.Event)
-	})
-
 	t.Run("success with CATCHUPBLOCKS event", func(t *testing.T) {
 		ctx := context.Background()
 		mockClient := &mockBlockClient{
@@ -4905,62 +4887,6 @@ func TestClient_CatchUpBlocks(t *testing.T) {
 		err := client.CatchUpBlocks(ctx)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "CatchUpBlocks failed")
-	})
-}
-
-// Test LegacySync function
-func TestClient_LegacySync(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	t.Run("success when already in LEGACYSYNCING state", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_LEGACYSYNCING,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		require.NoError(t, err)
-	})
-
-	t.Run("success when transitioning from IDLE state", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			responseGetFSMCurrentState: &blockchain_api.GetFSMStateResponse{
-				State: blockchain_api.FSMStateType_IDLE,
-			},
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		require.NoError(t, err)
-	})
-
-	t.Run("gRPC error on LegacySync call", func(t *testing.T) {
-		ctx := context.Background()
-		mockClient := &mockBlockClient{
-			err: errors.NewProcessingError("LegacySync failed"),
-		}
-		client := &Client{
-			client:   mockClient,
-			logger:   logger,
-			settings: tSettings,
-		}
-
-		err := client.LegacySync(ctx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "LegacySync failed")
 	})
 }
 

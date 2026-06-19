@@ -531,6 +531,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 		}
 		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine (interval: %v)", interval)
 		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -1399,46 +1400,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
-		// validate all the subtrees in the block
-		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
-
-		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
-			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
-			if errors.Is(err, errors.ErrTxInvalid) {
-				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
-				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
-			}
-
-			// Catchup-state errors: a parent transaction is not yet in our store because we
-			// have not yet absorbed the block that contains it. This is a transient ordering
-			// problem, NOT a consensus violation. Do NOT persist the block as invalid (that
-			// poisons the DB permanently and stalls sync); signal incomplete so catchup
-			// retries another peer. See issue #1031.
-			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
-				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
-				return errors.NewBlockIncompleteError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
-			}
-
-			return err
-		}
-
-		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
-
-		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
-		if opts.DisableOptimisticMining {
-			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
-			useOptimisticMining = false
-			if !opts.IsCatchupMode {
-				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
-			}
-		}
-
-		// Skip difficulty validation for blocks at or below the highest checkpoint
-		// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+		// Verify the header's proof-of-work BEFORE the (expensive) subtree validation
+		// below. The subtree-validation path sets the fail-open
+		// WithUnconfirmedParentsAtCandidateHeight validator option, whose contract
+		// requires the tx to come from a locally-held, PoW-checked block — so the
+		// difficulty checks must run first. It also means a peer cannot make us do
+		// full tx validation for a garbage header at zero cost.
+		//
+		// Skip difficulty validation for blocks at or below the highest checkpoint:
+		// these blocks are already verified by checkpoints. NOTE: on this direct
+		// (non-catchup) path the checkpoint linkage itself is not verified here, so
+		// for heights at or below the checkpoint the zero-cost claim above does not
+		// hold — a fabricated low-height header reaches subtree validation without
+		// paying PoW. block.Valid still rejects such a block unconditionally
+		// (HasMetTargetDifficulty + checkParentsExistOnChain) before acceptance;
+		// the exposure is transient blessing only, same as the pre-option design.
 		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
@@ -1475,6 +1451,44 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+			}
+		}
+
+		// validate all the subtrees in the block
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
+
+		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
+			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
+			if errors.Is(err, errors.ErrTxInvalid) {
+				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
+				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
+				if !opts.IsRevalidation {
+					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+				}
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+			}
+
+			// Catchup-state errors: a parent transaction is not yet in our store because we
+			// have not yet absorbed the block that contains it. This is a transient ordering
+			// problem, NOT a consensus violation. Do NOT persist the block as invalid (that
+			// poisons the DB permanently and stalls sync); signal incomplete so catchup
+			// retries another peer. See issue #1031.
+			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
+				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
+				return errors.NewBlockIncompleteError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
+			}
+
+			return err
+		}
+
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
+
+		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
+		if opts.DisableOptimisticMining {
+			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
+			useOptimisticMining = false
+			if !opts.IsCatchupMode {
+				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
 		}
 
@@ -1541,8 +1555,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 							// we should try again to re-validate the block, as we failed to mark it as invalid
 							u.ReValidateBlock(block, baseURL)
 						}
+					} else if errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(decoupledCtx) {
+						// RUNNING: a not-in-block parent with empty/absent BlockIDs is a floater that
+						// will never confirm (SetMinedMulti->MinedSet invariant: all accepted-ancestor
+						// txs are durably stamped before waitForPreviousBlocksToBeProcessed returns).
+						// Consensus-invalid -> roll back the optimistically-added block. In sync states
+						// isCaughtUp is false, so this stays the #1031 retry path below.
+						reason := p2pconstants.ReasonInvalidBlock.String()
+						if mErr := u.markBlockAsInvalid(decoupledCtx, block, reason); mErr != nil {
+							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate floater block: %v", block.String(), mErr)
+							u.ReValidateBlock(block, baseURL)
+						}
 					} else {
-						// storage or processing error, block is not really invalid, but we need to re-validate
+						// storage or processing error, or transient incomplete state during catchup;
+						// block is not really invalid, but we need to re-validate
 						u.ReValidateBlock(block, baseURL)
 					}
 
@@ -1631,10 +1657,24 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return err
 				}
 
-				// Transient catchup-state surfaced from block.Valid (e.g. a parent transaction
-				// not yet in our store). Don't poison the DB; signal incomplete so catchup
-				// retries another peer. See issue #1031.
+				// ErrBlockIncomplete from block.Valid means a not-in-block parent had
+				// empty/absent BlockIDs (model.getParentTxMetaBlockIDs). The meaning
+				// depends on FSM state:
+				//   - caught up (RUNNING): a floater that will never confirm
+				//     (SetMinedMulti->MinedSet invariant) — consensus-invalid, persist
+				//     invalid so we never retry it.
+				//   - sync (CATCHINGBLOCKS): a #1031 catchup-ordering
+				//     parent we have not absorbed yet — stay incomplete so catchup
+				//     retries another peer; never poison the DB.
 				if errors.Is(err, errors.ErrBlockIncomplete) {
+					if u.isCaughtUp(ctx) {
+						if !opts.IsRevalidation {
+							u.storeInvalidBlock(ctx, block, opts.PeerID, "floater: parent not in block and not on chain: "+err.Error())
+						}
+
+						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
+					}
+
 					return errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
 				}
 
@@ -1746,6 +1786,28 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		return nil
 	})
+}
+
+// isCaughtUp reports whether the node is provably in the steady RUNNING state.
+//
+// It returns true ONLY for FSMStateRUNNING. This is the distinguishing signal
+// between a genuine floater (a not-in-block parent with empty/absent BlockIDs
+// that surfaces as ErrBlockIncomplete in RUNNING — provably permanent via the
+// SetMinedMulti->MinedSet invariant) and a legitimate #1031 catchup-ordering
+// parent (transient during sync, must be retried, never persisted invalid).
+//
+// Matching only RUNNING (rather than "!= CATCHINGBLOCKS") keeps every other
+// state on the fail-safe side: IDLE, a GetFSMCurrentState error or nil state, and
+// any future FSM enum addition all return false (treat as not-caught-up => retry,
+// never wrongly invalidate). Only the one state we can prove is caught up
+// authorizes invalidating a floater.
+func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {
+	st, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil || st == nil {
+		return false
+	}
+
+	return *st == blockchain.FSMStateRUNNING
 }
 
 func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string) error {
@@ -1966,7 +2028,12 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
-		if errors.Is(err, errors.ErrBlockInvalid) {
+		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
+		// the ValidateBlock handlers): invalidate so the revalidate worker
+		// converges to rollback in RUNNING instead of silently exhausting its
+		// bounded retries with the block left optimistically accepted. In sync
+		// states isCaughtUp is false, so it stays the #1031 retry/exhaust path.
+		if errors.Is(err, errors.ErrBlockInvalid) || (errors.Is(err, errors.ErrBlockIncomplete) && u.isCaughtUp(ctx)) {
 			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}
@@ -1976,6 +2043,19 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
+}
+
+// quickValidateSkipsUtxoLock reports whether quick validation should create UTXOs
+// unlocked and skip the post-AddBlock unlock pass for this block. Gated by the
+// BlockValidation.QuickValidateSkipUtxoLock setting (default off) AND restricted to
+// blocks at or below the highest checkpoint. Uses the standard chain-config checkpoints
+// (not the catchup override) so it fails safe — keeping the lock for any block above the
+// real checkpoint. See issue #1103.
+func (u *BlockValidation) quickValidateSkipsUtxoLock(block *model.Block) bool {
+	if !u.settings.BlockValidation.QuickValidateSkipUtxoLock {
+		return false
+	}
+	return block.Height <= blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
 }
 
 // updateSubtreesDAH marks block subtrees as properly set in the blockchain.
@@ -2162,26 +2242,30 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	//     - Fetch the 10,000 most-recent main-chain block IDs via
 	//       GetBlockHeaderIDs.
 	//     - Build a local map and check each tx's parent block IDs
-	//       against it (present ⇒ on chain).
+	//       against it. Membership in a freshly-fetched main-chain set is a
+	//       SOUND positive: a present id is on chain.
 	//     - The window is truncated, so on a miss fall back to a per-tx
 	//       CheckBlockIsInCurrentChain RPC.
 	//
-	//   OFF-CHAIN PREFETCH (checkOldBlockIDsOffChainPrefetch, gated by toggle):
-	//     - Fetch the *complete* off-chain (forked) block ID set once via
-	//       OffChainBlockIDs and check non-membership (absent ⇒ on chain).
-	//     - The set is complete, not a recent window, so one prefetch
-	//       resolves every tx locally with no "too old" miss.
+	//   IN-MEMORY CHAIN CHECK (checkOldBlockIDsInMemoryChainCheck, gated by
+	//   blockchain_use_in_memory_chain_check):
+	//     - Holds NO local set. Every distinct parent-block-ID set is resolved
+	//       by the authoritative CheckBlockIsInCurrentChain, which uses the
+	//       store's in-memory off-chain set as a fast negative filter and then
+	//       confirms survivors against on_main_chain in one self-consistent
+	//       snapshot. The off-chain (negative) set cannot prove on-chain
+	//       membership, so it must not drive a local accept (see #1055).
 	//
 	// The on-chain prefetch fetches an unbounded, ever-growing positive set
 	// and was a sensible amortisation when CheckBlockIsInCurrentChain was a
-	// recursive SQL CTE per call. When blockchain_use_in_memory_chain_check is
-	// true, the store maintains the small off-chain set in memory, so the
-	// off-chain prefetch fetches a tiny negative set and answers locally —
-	// one round-trip per block on any client topology. Live profiling on
-	// betfair-pc mainnet showed the on-chain prefetch holding ~35% of inuse
+	// recursive SQL CTE per call. With blockchain_use_in_memory_chain_check the
+	// store answers CheckBlockIsInCurrentChain from its in-memory off-chain set
+	// (no recursive CTE), so this route can defer every decision to that single
+	// authority without re-fetching anything into this service. Live profiling
+	// on betfair-pc mainnet showed the on-chain prefetch holding ~35% of inuse
 	// heap (464 MB) and ~16% of CPU on its own.
 	if u.settings != nil && u.settings.BlockChain.UseInMemoryChainCheck {
-		return u.checkOldBlockIDsOffChainPrefetch(ctx, oldBlockIDsMap, block)
+		return u.checkOldBlockIDsInMemoryChainCheck(ctx, oldBlockIDsMap, block)
 	}
 
 	lookupHash := block.Header.HashPrevBlock
@@ -2224,115 +2308,42 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	return
 }
 
-// checkOldBlockIDsOffChainPrefetch is the off-chain-prefetch variant of
-// checkOldBlockIDs (see checkOldBlockIDs for the strategy comparison).
+// checkOldBlockIDsInMemoryChainCheck is the in-memory-chain-check variant of
+// checkOldBlockIDs (gated by blockchain_use_in_memory_chain_check). It answers
+// the same per-tx question — "is at least one of this tx's parent block IDs on
+// the current main chain?" — but, unlike the default on-chain-prefetch route,
+// holds NO local set: every distinct parent-block-ID set is resolved by the
+// authoritative CheckBlockIsInCurrentChain.
 //
-// It answers the same per-tx question — "is at least one of this tx's
-// parent block IDs on the current main chain?" — but mirrors the on-chain
-// prefetch route with the set inverted:
+// #1055: the earlier version prefetched the off-chain (forked) set once via
+// OffChainBlockIDs and treated a parent absent from that set as on-chain. That
+// is UNSOUND — a non-existent (phantom / id-sequence-gap) id <= maxBlockID is
+// absent from the off-chain set yet has no on_main_chain row, so a
+// useInMemoryChainCheck=on node ACCEPTED a dangling id the authoritative store
+// route (and an off node) REJECTS: a chain-split. The off-chain (negative) set
+// can never prove on-chain membership, so it cannot drive a sound local accept.
 //
-//   - The on-chain route fetches the 10,000 most-recent *main-chain* block
-//     IDs and checks membership (parent ID present ⇒ on chain). Because that
-//     window is truncated, a miss may still be on an older part of the chain
-//     and forces a per-tx CheckBlockIsInCurrentChain RPC.
-//   - This route fetches the *complete* off-chain (forked) set once via
-//     OffChainBlockIDs and checks non-membership. The set is complete, not a
-//     recent window, so there is no "too old" miss: one prefetch resolves
-//     every tx locally.
-//
-// To stay consensus-equivalent with CheckBlockIsInCurrentChain, the local
-// check applies BOTH of the rules the authoritative path applies
-// (CheckBlockIsInCurrentChain.go): a block ID is on the main chain iff
-// (id <= maxBlockID) AND (id is not in the off-chain set). The id > maxBlockID
-// guard is essential — an ID can be allocated (GetNextBlockID) and written into
-// a tx's BlockIDs before AddBlock bumps maxBlockID, so without the guard a
-// fastPath that treated such an id as on-chain would accept a tx the
-// authoritative RPC rejects, a chain-split risk between toggled and untoggled
-// nodes. With the guard, an above-max id is skipped here and falls through to
-// the RPC, which rejects it identically.
-//
-// This costs exactly one round-trip per block regardless of client topology
-// (in-process LocalClient or gRPC), which is the whole point — calling
-// CheckBlockIsInCurrentChain per candidate set is free in-process but a
-// network round-trip per set under a gRPC client. The off-chain set is small
-// (bounded by fork activity, near-empty on a healthy chain), so the prefetch
-// payload and the local map stay tiny.
-//
-// When the store reports rebuilding (in-memory check disabled, or a
-// reorg/startup rebuild in progress) the off-chain set is stale, so we fall
-// back to the per-tx CheckBlockIsInCurrentChain path (which has its own
-// authoritative SQL fallback). CheckBlockIsInCurrentChain also remains the
-// lookup authority on a fast-path miss, so a block is only rejected after the
-// store confirms none of a tx's parents are on chain.
-//
-// The string-keyed dedupe cache from the original is kept because identical
-// blockIDs slices are common (sibling txs spending outputs from the same
-// parent block).
-func (u *BlockValidation) checkOldBlockIDsOffChainPrefetch(ctx context.Context,
+// CheckBlockIsInCurrentChain is the single authority: it applies the store's
+// in-memory off-chain set + maxBlockID as a fast negative filter AND confirms
+// survivors against the on_main_chain flag in one self-consistent snapshot
+// (stores/blockchain/sql/CheckBlockIsInCurrentChain.go), so it cannot diverge
+// from the always-SQL route. Deferring every decision to it — rather than
+// caching a prefetched set in this service and deciding locally — also avoids
+// the snapshot-skew window a local decision would carry across a concurrent
+// reorg (a stale "off-chain" classification could wrongly reject, the more
+// dangerous direction, since an invalid block is cached). The per-call dedupe
+// cache collapses identical parent-block-ID sets (sibling txs spending outputs
+// from the same parent block), so this is one authoritative lookup per DISTINCT
+// set, not per tx.
+func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context,
 	oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block,
 ) (iterationError error) {
-	offChainIDs, maxBlockID, rebuilding, err := u.blockchainClient.OffChainBlockIDs(ctx)
-	if err != nil {
-		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get off-chain block IDs", block.String(), err)
-	}
-
-	if rebuilding {
-		// Off-chain set unavailable or stale — resolve each tx with the
-		// authoritative per-tx RPC (no local prefetch map).
-		if u.logger != nil {
-			u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route (rebuilding fallback): per-tx lookup over %d old block ID entries", block.Hash().String(), oldBlockIDsMap.Length())
-		}
-
-		iterErr, _, lookupCount, cacheHitCount :=
-			u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.blockchainClient.CheckBlockIsInCurrentChain)
-
-		if u.logger != nil {
-			u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route (rebuilding fallback) done: lookup=%d, cacheHit=%d", block.Hash().String(), lookupCount, cacheHitCount)
-		}
-
-		return iterErr
-	}
-
-	offChain := make(map[uint32]struct{}, len(offChainIDs))
-	for _, id := range offChainIDs {
-		offChain[id] = struct{}{}
-	}
+	iterationError, _, lookupCount, cacheHitCount :=
+		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, nil, u.blockchainClient.CheckBlockIsInCurrentChain)
 
 	if u.logger != nil {
-		u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route: prefetched %d off-chain block IDs (maxBlockID=%d), checking %d old block ID entries", block.Hash().String(), len(offChain), maxBlockID, oldBlockIDsMap.Length())
-	}
-
-	// NOTE (Option C / consensus): this local fast path treats a candidate absent
-	// from the off-chain set as on-chain. That is UNSOUND for a non-existent
-	// (phantom / id-sequence gap) id <= maxBlockID, which is absent from the
-	// off-chain set yet has no on_main_chain row — the authoritative store route
-	// (CheckBlockIsInCurrentChain, now fixed) rejects it. This toggle-on
-	// optimization therefore still carries the latent split for dangling ids.
-	// Making it sound removes the positive short-circuit (every survivor would
-	// need an authoritative confirm), which obsoletes this profiled prefetch — a
-	// perf/design call left for the team. Phantom CREATION is already prevented by
-	// the idempotent AssignBlockID fix, so this is latent, not reachable in normal
-	// operation.
-	fastPath := func(blockIDs []uint32) bool {
-		for _, blockID := range blockIDs {
-			if blockID > maxBlockID {
-				continue
-			}
-
-			if _, isOffChain := offChain[blockID]; !isOffChain {
-				return true
-			}
-		}
-
-		return false
-	}
-
-	iterationError, fastPathCount, lookupCount, cacheHitCount :=
-		u.iterateOldBlockIDsWithCachedLookup(ctx, oldBlockIDsMap, block, fastPath, u.blockchainClient.CheckBlockIsInCurrentChain)
-
-	if u.logger != nil {
-		u.logger.Infof("[checkOldBlockIDs][%s] off-chain-prefetch route done: fastPath=%d, lookup=%d, cacheHit=%d", block.Hash().String(), fastPathCount, lookupCount, cacheHitCount)
+		u.logger.Infof("[checkOldBlockIDs][%s] in-memory-chain-check route (authoritative per-set lookup): lookup=%d, cacheHit=%d", block.Hash().String(), lookupCount, cacheHitCount)
 	}
 
 	return iterationError
@@ -2340,13 +2351,14 @@ func (u *BlockValidation) checkOldBlockIDsOffChainPrefetch(ctx context.Context,
 
 // iterateOldBlockIDsWithCachedLookup is the shared per-tx iterator used by
 // both checkOldBlockIDs (on-chain prefetch route) and
-// checkOldBlockIDsOffChainPrefetch (off-chain prefetch route). For each
-// (txID, blockIDs) entry it:
+// checkOldBlockIDsInMemoryChainCheck (which passes a nil fastPath and defers
+// every set to the lookup). For each (txID, blockIDs) entry it:
 //
 //  1. Rejects an empty blockIDs slice as a processing error.
 //  2. (prefetch only) invokes fastPath(blockIDs) and short-circuits true if
-//     a parent is already known on-chain. fastPath may be nil to skip this
-//     step (the no-prefetch route passes nil).
+//     a parent is already known on-chain via a SOUND positive set. fastPath
+//     may be nil to skip this step, in which case every set is resolved by the
+//     authoritative lookup (the in-memory-chain-check route passes nil).
 //  3. Builds a sorted string key from blockIDs and consults a per-call
 //     dedupe cache. Identical blockIDs slices across sibling txs (a parent
 //     block referenced by many children) hit the cache and skip the lookup.

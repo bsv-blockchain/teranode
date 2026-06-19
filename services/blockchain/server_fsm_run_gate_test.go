@@ -199,13 +199,35 @@ func TestGuardRunBelowHighestCheckpoint_NilSettings(t *testing.T) {
 	})
 }
 
+// TestInit_MigratesPersistedLegacySyncingToCatchingBlocks verifies that Init
+// maps a persisted "LEGACYSYNCING" state to CATCHINGBLOCKS and re-persists it,
+// so a node that crashed mid-legacy-sync is not bricked on restart.
+func TestInit_MigratesPersistedLegacySyncingToCatchingBlocks(t *testing.T) {
+	ctx := context.Background()
+
+	store := &fsmGateStore{}
+	// Seed the persisted FSM state to the orphan value.
+	require.NoError(t, store.SetFSMState(ctx, "LEGACYSYNCING"))
+
+	b := newTestBlockchainForGate(t, &chaincfg.RegressionNetParams, store)
+
+	require.NoError(t, b.Init(ctx))
+
+	// The in-memory FSM must have been set to CATCHINGBLOCKS.
+	require.Equal(t, blockchain_api.FSMStateType_CATCHINGBLOCKS.String(), b.finiteStateMachine.Current())
+
+	// The store must have been re-written with the migrated state.
+	persisted, err := store.GetFSMState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, blockchain_api.FSMStateType_CATCHINGBLOCKS.String(), persisted)
+}
+
 // TestSendFSMEvent_RunGate_SourceState pins the source-state semantics of
 // the RUN gate added in PR #844 and fixed here: IDLE → RUNNING is the boot
 // path and must succeed even when the local tip sits below the highest
 // checkpoint (a fresh node has tip 0 and nothing else can move the FSM
-// forward), while LEGACYSYNCING → RUNNING and CATCHINGBLOCKS → RUNNING
-// claim "I'm caught up" and must still be rejected when the tip is below
-// the checkpoint.
+// forward), while CATCHINGBLOCKS → RUNNING claims "I'm caught up" and must
+// still be rejected when the tip is below the checkpoint.
 func TestSendFSMEvent_RunGate_SourceState(t *testing.T) {
 	ctx := context.Background()
 	highest := HighestCheckpointHeight(chaincfg.MainNetParams.Checkpoints)
@@ -230,21 +252,6 @@ func TestSendFSMEvent_RunGate_SourceState(t *testing.T) {
 			name:       "IDLE with tip 100 still below checkpoint succeeds",
 			startState: blockchain_api.FSMStateType_IDLE,
 			tipHeight:  100,
-			wantErr:    false,
-			wantState:  blockchain_api.FSMStateType_RUNNING,
-		},
-		{
-			name:       "LEGACYSYNCING below checkpoint rejects",
-			startState: blockchain_api.FSMStateType_LEGACYSYNCING,
-			tipHeight:  highest - 1,
-			wantErr:    true,
-			wantState:  blockchain_api.FSMStateType_LEGACYSYNCING,
-			wantSubstr: "refusing RUN",
-		},
-		{
-			name:       "LEGACYSYNCING at checkpoint succeeds",
-			startState: blockchain_api.FSMStateType_LEGACYSYNCING,
-			tipHeight:  highest,
 			wantErr:    false,
 			wantState:  blockchain_api.FSMStateType_RUNNING,
 		},

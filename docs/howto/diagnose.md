@@ -104,7 +104,7 @@ These checks provide deeper insight into the node's operational health:
 
 | Check | Description |
 |-------|-------------|
-| **FSM State** | Current state machine state (IDLE, RUNNING, CATCHINGBLOCKS, LEGACYSYNCING) |
+| **FSM State** | Current state machine state (IDLE, RUNNING, CATCHINGBLOCKS) |
 | **Chain Tip** | Block height, count, and tip freshness. Only flags as stale (FAIL) when FSM is RUNNING and tip is older than 30 minutes. During catchup or on regtest with old timestamps, an old tip is expected and reported as OK. |
 | **Catchup** | Shows sync progress if catching up (peer, blocks validated, percentage) |
 | **Block Assembly State** | FSM state, transaction count, queue depth, subtree count, height |

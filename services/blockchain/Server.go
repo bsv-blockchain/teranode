@@ -419,6 +419,19 @@ func (b *Blockchain) Init(ctx context.Context) error {
 			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
+		// Migration: the LEGACYSYNCING state was removed. A node persisted in it
+		// would otherwise restore into an orphan state with no outgoing transitions
+		// and be unable to RUN. Map it to CATCHINGBLOCKS (same RUN->RUNNING exit) and
+		// re-persist so the migration is durable.
+		if stateStr == "LEGACYSYNCING" {
+			b.logger.Infof("[Blockchain][Init] migrating persisted FSM state LEGACYSYNCING -> CATCHINGBLOCKS")
+			stateStr = blockchain_api.FSMStateType_CATCHINGBLOCKS.String()
+
+			if setErr := b.store.SetFSMState(ctx, stateStr); setErr != nil {
+				b.logger.Errorf("[Blockchain][Init] error persisting migrated FSM state: %v", setErr)
+			}
+		}
+
 		b.logger.Infof("[Blockchain][Init] Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
 		b.finiteStateMachine.SetState(stateStr)
 	}
@@ -1610,26 +1623,6 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 	}, nil
 }
 
-// GetOffChainBlockIDs returns the in-memory off-chain (forked) block ID set so callers
-// can prefetch the negative set once and resolve main-chain membership locally.
-func (b *Blockchain) GetOffChainBlockIDs(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetOffChainBlockIDsResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetOffChainBlockIDs",
-		tracing.WithParentStat(b.stats),
-	)
-	defer deferFn()
-
-	ids, maxBlockID, rebuilding, err := b.store.OffChainBlockIDs(ctx)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetOffChainBlockIDsResponse{
-		OffChainBlockIds: ids,
-		Rebuilding:       rebuilding,
-		MaxBlockId:       maxBlockID,
-	}, nil
-}
-
 // CheckBlockIsAncestorOfBlock verifies if any of the given block IDs are ancestors of a specific block.
 // This is used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
 func (b *Blockchain) CheckBlockIsAncestorOfBlock(ctx context.Context, req *blockchain_api.CheckBlockIsAncestorOfBlockRequest) (*blockchain_api.CheckBlockIsAncestorOfBlockResponse, error) {
@@ -2688,7 +2681,6 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 // - RUNNING: Service is actively processing blocks and transactions
 // - SYNCING: Service is synchronizing with the network
 // - CATCHING_BLOCKS: Service is catching up on missing blocks
-// - LEGACY_SYNCING: Service is using legacy synchronization protocols
 // - STOPPING: Service is gracefully shutting down
 // - ERROR: Service has encountered an error condition
 //
@@ -2843,7 +2835,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
 	//
 	// The gate only applies when the prior state already implies a "caught
-	// up" claim (LEGACYSYNCING or CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
+	// up" claim (CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
 	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
 	// downstream services (legacy, p2p) to start syncing, and tx relay is
 	// suppressed while FSM != RUNNING so allowing the transition is safe.
@@ -3007,26 +2999,6 @@ func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.
 
 	if _, err := b.SendNotification(ctx, notification); err != nil {
 		b.logger.Errorf("[ReportPeerFailure] Failed to send notification: %v", err)
-		return nil, err
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
-// LegacySync transitions the service to legacy sync mode.
-func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the LEGACYSYNC state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_LEGACYSYNCING.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_LEGACYSYNC,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
 		return nil, err
 	}
 

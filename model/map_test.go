@@ -59,7 +59,8 @@ func TestSplitSyncedParentMap_SetIfNotExists(t *testing.T) {
 			Index: 0,
 		}
 
-		result := m.SetIfNotExists(inpoint)
+		result, err := m.SetIfNotExists(inpoint)
+		require.NoError(t, err)
 		require.True(t, result, "SetIfNotExists should return true for new inpoint")
 	})
 
@@ -73,11 +74,13 @@ func TestSplitSyncedParentMap_SetIfNotExists(t *testing.T) {
 		}
 
 		// First insertion should succeed
-		result1 := m.SetIfNotExists(inpoint)
+		result1, err := m.SetIfNotExists(inpoint)
+		require.NoError(t, err)
 		require.True(t, result1, "First SetIfNotExists should return true")
 
 		// Second insertion of same inpoint should fail
-		result2 := m.SetIfNotExists(inpoint)
+		result2, err := m.SetIfNotExists(inpoint)
+		require.NoError(t, err)
 		require.False(t, result2, "Second SetIfNotExists should return false for duplicate")
 	})
 
@@ -94,10 +97,12 @@ func TestSplitSyncedParentMap_SetIfNotExists(t *testing.T) {
 			Index: 1,
 		}
 
-		result1 := m.SetIfNotExists(inpoint1)
+		result1, err := m.SetIfNotExists(inpoint1)
+		require.NoError(t, err)
 		require.True(t, result1, "SetIfNotExists should return true for index 0")
 
-		result2 := m.SetIfNotExists(inpoint2)
+		result2, err := m.SetIfNotExists(inpoint2)
+		require.NoError(t, err)
 		require.True(t, result2, "SetIfNotExists should return true for index 1 (different inpoint)")
 	})
 
@@ -115,10 +120,12 @@ func TestSplitSyncedParentMap_SetIfNotExists(t *testing.T) {
 			Index: 0,
 		}
 
-		result1 := m.SetIfNotExists(inpoint1)
+		result1, err := m.SetIfNotExists(inpoint1)
+		require.NoError(t, err)
 		require.True(t, result1, "SetIfNotExists should return true for hash1")
 
-		result2 := m.SetIfNotExists(inpoint2)
+		result2, err := m.SetIfNotExists(inpoint2)
+		require.NoError(t, err)
 		require.True(t, result2, "SetIfNotExists should return true for hash2 (different inpoint)")
 	})
 
@@ -133,7 +140,8 @@ func TestSplitSyncedParentMap_SetIfNotExists(t *testing.T) {
 				Index: uint32(i),
 			}
 
-			result := m.SetIfNotExists(inpoint)
+			result, err := m.SetIfNotExists(inpoint)
+			require.NoError(t, err)
 			require.True(t, result, "SetIfNotExists should return true for inpoint %d", i)
 		}
 	})
@@ -159,7 +167,8 @@ func TestSplitSyncedParentMap_Concurrent(t *testing.T) {
 						Index: uint32(i),
 					}
 
-					result := m.SetIfNotExists(inpoint)
+					result, err := m.SetIfNotExists(inpoint)
+					require.NoError(t, err)
 					require.True(t, result, "SetIfNotExists should return true for unique inpoint")
 				}
 			}(g)
@@ -188,7 +197,8 @@ func TestSplitSyncedParentMap_Concurrent(t *testing.T) {
 		for g := 0; g < numGoroutines; g++ {
 			go func() {
 				defer wg.Done()
-				result := m.SetIfNotExists(sharedInpoint)
+				result, err := m.SetIfNotExists(sharedInpoint)
+				require.NoError(t, err)
 				successCount <- result
 			}()
 		}
@@ -243,7 +253,7 @@ func TestSplitSyncedParentMap_Concurrent(t *testing.T) {
 					}
 
 					// Just call - don't check result for shared hashes as it's race-dependent
-					m.SetIfNotExists(inpoint)
+					_, _ = m.SetIfNotExists(inpoint)
 				}
 			}(g)
 		}
@@ -264,7 +274,7 @@ func TestSplitSyncedParentMap_BucketDistribution(t *testing.T) {
 				Hash:  hash,
 				Index: uint32(i),
 			}
-			m.SetIfNotExists(inpoint)
+			_, _ = m.SetIfNotExists(inpoint)
 		}
 
 		// Check that multiple buckets have entries (not all in one bucket)
@@ -296,7 +306,7 @@ func BenchmarkSplitSyncedParentMap_SetIfNotExists(b *testing.B) {
 		m := NewSplitSyncedParentMap(256)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			m.SetIfNotExists(inpoints[i%len(inpoints)])
+			_, _ = m.SetIfNotExists(inpoints[i%len(inpoints)])
 		}
 	})
 
@@ -304,7 +314,7 @@ func BenchmarkSplitSyncedParentMap_SetIfNotExists(b *testing.B) {
 		m := NewSplitSyncedParentMap(16)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			m.SetIfNotExists(inpoints[i%len(inpoints)])
+			_, _ = m.SetIfNotExists(inpoints[i%len(inpoints)])
 		}
 	})
 
@@ -312,7 +322,7 @@ func BenchmarkSplitSyncedParentMap_SetIfNotExists(b *testing.B) {
 		m := NewSplitSyncedParentMap(1)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			m.SetIfNotExists(inpoints[i%len(inpoints)])
+			_, _ = m.SetIfNotExists(inpoints[i%len(inpoints)])
 		}
 	})
 }
@@ -335,7 +345,7 @@ func BenchmarkSplitSyncedParentMap_ConcurrentSetIfNotExists(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
 			for pb.Next() {
-				m.SetIfNotExists(inpoints[i%numInpoints])
+				_, _ = m.SetIfNotExists(inpoints[i%numInpoints])
 				i++
 			}
 		})
@@ -347,7 +357,7 @@ func BenchmarkSplitSyncedParentMap_ConcurrentSetIfNotExists(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
 			for pb.Next() {
-				m.SetIfNotExists(inpoints[i%numInpoints])
+				_, _ = m.SetIfNotExists(inpoints[i%numInpoints])
 				i++
 			}
 		})
@@ -359,7 +369,7 @@ func BenchmarkSplitSyncedParentMap_ConcurrentSetIfNotExists(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
 			for pb.Next() {
-				m.SetIfNotExists(inpoints[i%numInpoints])
+				_, _ = m.SetIfNotExists(inpoints[i%numInpoints])
 				i++
 			}
 		})

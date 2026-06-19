@@ -67,12 +67,6 @@ func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, b
 	return args.Bool(0), args.Error(1)
 }
 
-// OffChainBlockIDs implements the blockchain.ClientI interface. It reports
-// rebuilding so callers fall back to per-block CheckBlockIsInCurrentChain.
-func (m *MockBlockchainClient) OffChainBlockIDs(ctx context.Context) ([]uint32, uint32, bool, error) {
-	return nil, 0, true, nil
-}
-
 // GetBestBlockHeader implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	args := m.Called(ctx)
@@ -369,12 +363,6 @@ func (m *MockBlockchainClient) Idle(ctx context.Context) error {
 func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
 	args := m.Called(ctx, state)
 	return args.Bool(0), args.Error(1)
-}
-
-// LegacySync implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) LegacySync(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
 }
 
 // LocateBlockHeaders implements the blockchain.ClientI interface

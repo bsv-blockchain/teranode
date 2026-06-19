@@ -71,7 +71,6 @@ Valid states you can issue are:
 - `running` - Normal operation mode (processes transactions and creates blocks)
 - `idle` - Idle mode (default startup state)
 - `catchingblocks` - Catching up on blocks from the network
-- `legacysyncing` - Syncing via legacy peer connections
 
 Example to switch to RUNNING state:
 

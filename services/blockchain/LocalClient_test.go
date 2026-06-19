@@ -182,11 +182,6 @@ func TestLocalClient_LifecycleMethods(t *testing.T) {
 		err := client.CatchUpBlocks(ctx)
 		require.NoError(t, err)
 	})
-
-	t.Run("LegacySync", func(t *testing.T) {
-		err := client.LegacySync(ctx)
-		require.NoError(t, err)
-	})
 }
 
 // Test LocateBlockHeaders

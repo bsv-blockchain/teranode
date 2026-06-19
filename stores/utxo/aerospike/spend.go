@@ -76,6 +76,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// maxAggregatedSpendErrs caps how many per-spend errors are wrapped into the
+// aggregate error returned by Spend. The failure count scales with the tx's
+// input count, and an uncapped chain makes error construction and every
+// errors.Is on it quadratic. See errors.JoinCapped.
+const maxAggregatedSpendErrs = 10
+
 // Spend operations in the Aerospike UTXO store handle spending UTXOs through
 // batched Lua operations with automatic DAH management and error handling.
 //
@@ -430,20 +436,21 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 		}
 
-		var spendErrors error
+		// Aggregate with a hard cap. The failure count scales with the tx's
+		// input count (a mass DEVICE_OVERLOAD on a 50k-input consolidation tx
+		// fails every spend); an uncapped chain is O(N²) to build via pairwise
+		// Join and makes every subsequent errors.Is on it walk the full chain.
+		// The per-spend errors stay available to the caller via spends[i].Err.
+		failedSpends := make([]error, 0, len(spends))
 
 		for _, spend := range spends {
 			if spend.Err != nil {
-				if spendErrors != nil {
-					spendErrors = errors.Join(spendErrors, spend.Err)
-				} else {
-					spendErrors = spend.Err
-				}
+				failedSpends = append(failedSpends, spend.Err)
 			}
 		}
 
 		// return the errors found
-		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", spendErrors)
+		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))

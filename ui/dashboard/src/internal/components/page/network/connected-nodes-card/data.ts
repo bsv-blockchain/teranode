@@ -236,9 +236,6 @@ export const renderCells = {
     } else if (state === 'CATCHINGBLOCKS') {
       emoji = '🟠'
       tooltip = 'CATCHINGBLOCKS'
-    } else if (state === 'LEGACYSYNCING') {
-      emoji = '🟡'
-      tooltip = 'LEGACYSYNCING'
     } else if (state === 'IDLE') {
       emoji = '⏸️'
       tooltip = 'IDLE'

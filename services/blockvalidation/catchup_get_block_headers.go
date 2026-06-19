@@ -33,6 +33,7 @@ import (
 func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string) (*catchup.Result, *model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "catchupGetBlockHeaders",
 		tracing.WithParentStat(u.stats),
+		tracing.WithStartTime(), // startTime is read back from ctx below
 		tracing.WithLogMessage(u.logger, "[catchup][%s] fetching headers up to %s from peer %s", blockUpTo.Hash().String(), baseURL, peerID),
 		tracing.WithContextTimeout(time.Duration(u.settings.BlockValidation.CatchupOperationTimeout)*time.Second),
 	)

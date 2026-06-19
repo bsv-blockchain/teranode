@@ -209,7 +209,6 @@ func TestFSMEventType_Values(t *testing.T) {
 	assert.Equal(t, int32(0), int32(FSMEventType_STOP))
 	assert.Equal(t, int32(1), int32(FSMEventType_RUN))
 	assert.Equal(t, int32(2), int32(FSMEventType_CATCHUPBLOCKS))
-	assert.Equal(t, int32(3), int32(FSMEventType_LEGACYSYNC))
 }
 
 func TestFSMStateType_Values(t *testing.T) {
@@ -217,7 +216,6 @@ func TestFSMStateType_Values(t *testing.T) {
 	assert.Equal(t, int32(0), int32(FSMStateType_IDLE))
 	assert.Equal(t, int32(1), int32(FSMStateType_RUNNING))
 	assert.Equal(t, int32(2), int32(FSMStateType_CATCHINGBLOCKS))
-	assert.Equal(t, int32(3), int32(FSMStateType_LEGACYSYNCING))
 }
 
 func TestGetLastNBlocksRequest_Fields(t *testing.T) {

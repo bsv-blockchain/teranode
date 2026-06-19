@@ -106,6 +106,29 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	assert.False(t, current, "schema should not be current after column drop")
 }
 
+func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Drop block_id_reservations to simulate a deployment that predates the
+	// durable-reservation table. The probe must report not-current so the DDL
+	// fast-path is skipped and createPostgresSchemaUnlocked re-creates it.
+	_, err = db.Exec(`DROP TABLE block_id_reservations`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err, "missing table must not be reported as a transport error")
+	assert.False(t, current, "schema must not be current when block_id_reservations is missing")
+}
+
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")

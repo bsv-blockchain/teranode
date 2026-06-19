@@ -41,42 +41,38 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 
 	maxID := uint32(s.maxBlockID.Load())
 
-	s.offChainBlockIDsMu.RLock()
-	offChain := s.offChainBlockIDs
-	s.offChainBlockIDsMu.RUnlock()
-
-	// ANY-of semantics: return true if at least one block is on the main chain.
-	//
-	// The off-chain set + maxID give a fast NEGATIVE only: an id above the highest
-	// known id, or one in the off-chain set, definitely is NOT on the main chain.
-	// A surviving candidate is NOT positively on-chain, though — the off-chain set
-	// tracks only blocks that EXIST off-chain, so a *non-existent* (phantom /
-	// id-sequence gap) id <= maxID survives this filter despite having no row.
-	// Treating a survivor as on-chain (the previous behaviour) disagreed with the
-	// authoritative SQL route (checkBlockIsInCurrentChainSQL requires a real
-	// on_main_chain=true row) and could split a useInMemoryChainCheck=on node from
-	// an off node on a dangling id. So confirm survivors against the authoritative
-	// on_main_chain flag instead of assuming membership.
-	survivors := make([]uint32, 0, len(blockIDs))
+	// Drop ids above the highest committed id. These are allocated-but-uncommitted
+	// (GetNextBlockID writes a tx's BlockIDs before AddBlock bumps maxBlockID), so
+	// they have no committed row and are definitively not on the main chain. This
+	// is a pure in-memory reject with no DB round-trip and is consensus-critical:
+	// it keeps useInMemoryChainCheck on/off nodes agreeing on dangling ids.
+	candidates := make([]uint32, 0, len(blockIDs))
 	for _, id := range blockIDs {
-		if id > maxID {
-			continue
+		if id <= maxID {
+			candidates = append(candidates, id)
 		}
-		if _, isOffChain := offChain[id]; isOffChain {
-			continue
-		}
-		survivors = append(survivors, id)
 	}
 
-	if len(survivors) == 0 {
+	if len(candidates) == 0 {
 		return false, nil
 	}
 
-	// We reach here only when mainChainRebuilding == 0, so checkBlockIsInCurrentChainSQL
-	// takes its indexed fast path (SELECT 1 ... WHERE id IN (...) AND on_main_chain=true),
-	// never the recursive CTE. A non-existent id matches no row and is rejected,
-	// identically to the always-SQL route — closing the toggled/untoggled split.
-	return s.checkBlockIsInCurrentChainSQL(ctx, survivors)
+	// Confirm the committed candidates against the authoritative SQL route.
+	//
+	// We deliberately do NOT use the in-memory off-chain set as a negative
+	// short-circuit. That set is rebuilt FROM the on_main_chain flags
+	// (rebuildOffChainSet), so a transiently-false flag on a block that IS on the
+	// best chain — a raced slow-path StoreBlock whose reconcileOnMainChain failed,
+	// or an exhausted startup rebuild — lands the block in the off-chain set and
+	// would make this a FALSE NEGATIVE. Because checkOldBlockIDs escalates a
+	// negative into a PERMANENT ValidateBlock invalidation, a transient flag must
+	// never be allowed to reject here. checkBlockIsInCurrentChainSQL confirms
+	// positives via the indexed on_main_chain flag and confirms negatives via the
+	// flag-free parent_id CTE, so it stays correct even while flags are mid-flux.
+	// This path is only reached when every parent block id of a tx is off-chain or
+	// uncommitted per the in-memory prefetch, which is rare, so the round-trip is
+	// not on the hot path.
+	return s.checkBlockIsInCurrentChainSQL(ctx, candidates)
 }
 
 // checkBlockIsInCurrentChainSQL is the SQL fallback implementation used when
@@ -119,10 +115,57 @@ func (s *SQL) checkBlockIsInCurrentChainSQL(ctx context.Context, blockIDs []uint
 			}
 			return true, nil // ANY-of short-circuit
 		}
+		// No on_main_chain=true row matched in any batch. Do NOT return false here:
+		// on_main_chain can be transiently false on a block that IS on the best
+		// chain — a slow-path StoreBlock whose reconcileOnMainChain failed
+		// (log-and-continue), or a startup rebuildOnMainChainFlag that exhausted
+		// its retries/timed out. A false negative is not cosmetic here: the caller
+		// (checkOldBlockIDs) escalates it into a PERMANENT ValidateBlock
+		// invalidation, which the transient flag never gets a chance to undo. Fall
+		// through to the authoritative, flag-free parent_id CTE walk below to
+		// confirm the block really is off the chain before rejecting. Positives
+		// already short-circuited above, so the CTE only runs on the rare
+		// about-to-reject path.
+	}
+
+	// Authoritative, flag-free confirmation via the parent_id CTE walk. Reached
+	// both when a rebuild is in progress (on_main_chain unreliable) and when the
+	// flag fast-path above found no match (the flag may be transiently false on an
+	// on-chain block). Batched so the block_ids UNION ALL never exceeds sqlite's
+	// compound-SELECT limit; ANY-of short-circuits on the first on-chain hit.
+	for start := 0; start < len(blockIDs); start += cteBlockIDBatch {
+		end := start + cteBlockIDBatch
+		if end > len(blockIDs) {
+			end = len(blockIDs)
+		}
+		onChain, err := s.checkBlockIsInCurrentChainCTE(ctx, blockIDs[start:end])
+		if err != nil {
+			return false, err
+		}
+		if onChain {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// cteBlockIDBatch caps how many ids go into one block_ids CTE. The CTE materialises
+// the ids as a UNION ALL of single-row SELECTs, and sqlite limits a compound SELECT
+// to 500 terms (SQLITE_MAX_COMPOUND_SELECT), so stay safely under it. Postgres has
+// no comparable limit. In practice CheckBlockIsInCurrentChain is called with one
+// tx's handful of parent block ids, so batching almost never splits.
+const cteBlockIDBatch = 400
+
+// checkBlockIsInCurrentChainCTE answers ANY-of "is one of blockIDs on the main
+// chain?" by walking parent_id backward from the chain_work-best block. It does
+// NOT read on_main_chain, so it stays correct even while those flags are being
+// rebuilt or are transiently wrong. Callers must keep len(blockIDs) within
+// cteBlockIDBatch (the sqlite compound-SELECT cap).
+func (s *SQL) checkBlockIsInCurrentChainCTE(ctx context.Context, blockIDs []uint32) (bool, error) {
+	if len(blockIDs) == 0 {
 		return false, nil
 	}
 
-	// CTE fallback when on_main_chain is being rebuilt.
 	_, bestBlockMeta, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return false, errors.NewStorageError("failed to get best block header", err)

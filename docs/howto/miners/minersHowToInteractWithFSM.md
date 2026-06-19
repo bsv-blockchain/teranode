@@ -88,7 +88,6 @@ The following states are valid for all environments:
 
 - IDLE
 - RUNNING
-- LEGACYSYNCING
 - CATCHINGBLOCKS
 
 ## Validation
@@ -120,9 +119,6 @@ grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.GetFSMCurrentSt
 ```bash
 # Transition to RUNNING state
 grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.Run
-
-# Transition to LEGACYSYNCING state
-grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.LegacySync
 
 # Transition to CATCHINGBLOCKS state
 grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.CatchUpBlocks
@@ -159,9 +155,6 @@ Expected output:
 ```bash
 # Transition to RUNNING state
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
-
-# Transition to LEGACYSYNCING state
-grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.LegacySync
 
 # Transition to CATCHINGBLOCKS state
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.CatchUpBlocks

@@ -21,9 +21,13 @@
 //   - Batch processing for high-volume transaction scenarios
 //
 // Integration:
-// This package integrates with other Teranode services including the mempool, validator,
-// and P2P services to ensure transactions are properly validated and distributed across
-// the network according to Bitcoin protocol specifications.
+// This package integrates with other Teranode services including the validator
+// (which validates transactions and forwards them to block assembly for inclusion
+// in subtrees) and the P2P service, ensuring transactions are properly validated and
+// distributed across the network according to Bitcoin protocol specifications.
+// Teranode has no separate mempool service: validated-but-unmined transactions are
+// assembled into subtrees by the block assembly service, with their unmined state
+// tracked in the UTXO store.
 package propagation
 
 import (

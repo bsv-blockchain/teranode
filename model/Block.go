@@ -565,6 +565,19 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		ReportTxMapStats(diskMap.Stats())
 	}
 
+	// The duplicate-check write phase (checkDuplicateTransactions) is complete and
+	// flushed; validOrderAndBlessed below only reads b.txMap — one Get per tx plus
+	// one per parent, fanned out across every core. Freeze it so those reads skip
+	// the per-bucket RWMutex.RLock, whose reader-counter atomic otherwise
+	// cache-line ping-pongs across cores and dominates the read phase on many-core
+	// validation nodes. checkDuplicateTransactions' internal errgroup.Wait is the
+	// happens-before edge that guarantees all writes precede this Freeze.
+	// releaseTxMap resets the freeze on its way back to the pool (in-memory Clear)
+	// or discards the map (disk Close).
+	if b.txMap != nil {
+		b.txMap.Freeze()
+	}
+
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
@@ -576,7 +589,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			oldBlockIDsMap:        oldBlockIDsMap,
 			metaRegenerator:       metaRegenerator,
 		}
-		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs)
+		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs, settings.Block.ParentSpendsCapacityMultiplier)
 		if err != nil {
 			return false, err
 		}
@@ -770,7 +783,7 @@ type validationDependencies struct {
 	metaRegenerator       SubtreeMetaRegeneratorI // optional: nil means no regeneration
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int, diskMapDirs []string) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int, diskMapDirs []string, parentSpendsCapacityMultiplier uint64) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed",
 		tracing.WithLogMessage(logger, "[validOrderAndBlessed][%s] called", b.String()),
 	)
@@ -780,12 +793,22 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
+	// Size the parent-spends map at TransactionCount * multiplier (assumed
+	// average inputs/tx). For the disk-backed map this is a hard cap, so the
+	// multiplier is configurable (block_parentSpendsCapacityMultiplier); a
+	// consolidation-heavy block exceeding it overflows a segment and halts
+	// (fail-safe). 0 is treated as 1.
+	if parentSpendsCapacityMultiplier == 0 {
+		parentSpendsCapacityMultiplier = 1
+	}
+	expectedInpoints := b.TransactionCount * parentSpendsCapacityMultiplier
+
 	var psMap ParentSpendsMap
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
 			Prefix:         "bv-parentspends",
-			FilterCapacity: uint(b.TransactionCount * 3),
+			FilterCapacity: uint(expectedInpoints),
 		})
 		if diskErr != nil {
 			return errors.NewProcessingError("[validOrderAndBlessed][%s] failed to create disk parent spends map", b.String(), diskErr)
@@ -799,7 +822,6 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	} else {
 		// Draw the parent-spends map from a size-class pool. Released via
 		// defer below, keyed by the same expectedInpoints value.
-		expectedInpoints := b.TransactionCount * 3
 		pooled := GetParentSpendsMap(expectedInpoints)
 		psMap = pooled
 		defer PutParentSpendsMap(pooled, expectedInpoints)
@@ -1072,7 +1094,12 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 	}
 
 	for _, txInpoint := range txInpoints {
-		if valueSet := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint); !valueSet {
+		valueSet, err := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint)
+		if err != nil {
+			return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d]:%d parent-spends map error",
+				b.String(), subtreeHash.String(), sIdx, snIdx, err)
+		}
+		if !valueSet {
 			return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs",
 				b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 		}

@@ -779,7 +779,7 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 		}
 	}
 
-	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 		// ignore notifications while syncing or catching up
 		return true, nil
 	}

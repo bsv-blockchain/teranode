@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1230,6 +1231,75 @@ func TestHandleNewPeerMsg_NilFSMState(t *testing.T) {
 
 	require.True(t, sm.peerStates.Exists(smPeer), "peer must be registered even when FSM state is unavailable")
 	require.Equal(t, uint64(0), sm.currentFeeFilter.Load(), "fee filter must not be set when FSM state is unavailable")
+}
+
+// TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks verifies that EVERY peer
+// connecting while the node is catching up is asked (via a raised feefilter) to
+// hold back transaction announcements, reducing load during sync. It asserts the
+// observable behaviour — the feefilter message is actually delivered to each
+// peer's remote end — not just the internal marker, and covers the second peer
+// (regression guard: an earlier version only raised it for the first connector).
+// The filter is restored to the policy default once the node reaches RUNNING
+// (resetFeeFilterToDefault).
+func TestHandleNewPeerMsg_SetsFeeFilterWhenCatchingBlocks(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain2.Mock{}
+	blockchainClient.Mock.On("GetFSMCurrentState", mock.Anything).
+		Return(&catchingBlocks, nil)
+
+	sm := &SyncManager{
+		ctx:              context.Background(),
+		settings:         test.CreateBaseTestSettings(t),
+		logger:           ulogger.TestLogger{},
+		chainParams:      chainParams,
+		blockchainClient: blockchainClient,
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+
+	// connectPeer returns a peer for handleNewPeerMsg to operate on; gotFee
+	// records the MinFee of any feefilter its remote end receives.
+	connectPeer := func(idx uint8, gotFee *atomic.Int64) *peer.Peer {
+		remoteCfg := peer.Config{
+			Listeners: peer.MessageListeners{
+				OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+					gotFee.Store(msg.MinFee)
+				},
+			},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		localCfg := peer.Config{
+			Listeners:        peer.MessageListeners{},
+			UserAgentName:    "btcdtest",
+			UserAgentVersion: "1.0",
+			ChainParams:      chainParams,
+		}
+		remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, idx)
+		require.NoError(t, err)
+		require.True(t, remote.Connected())
+		return smPeer
+	}
+
+	var fee1, fee2 atomic.Int64
+	p1 := connectPeer(101, &fee1)
+	p2 := connectPeer(102, &fee2)
+
+	sm.handleNewPeerMsg(p1)
+	sm.handleNewPeerMsg(p2)
+
+	want := int64(bsvutil.SatoshiPerBitcoin)
+	require.True(t, WaitUntil(func() bool { return fee1.Load() == want }, 2*time.Second),
+		"first peer must receive the raised feefilter")
+	require.True(t, WaitUntil(func() bool { return fee2.Load() == want }, 2*time.Second),
+		"second peer must also receive the raised feefilter, not just the first")
+
+	require.Equal(t, uint64(bsvutil.SatoshiPerBitcoin), sm.currentFeeFilter.Load(),
+		"fee filter marker must be set while catching up")
+	require.True(t, sm.peerStates.Exists(p1), "first peer must be registered")
+	require.True(t, sm.peerStates.Exists(p2), "second peer must be registered")
 }
 
 // TestHandleNewPeerMsg_SkipsDisconnectedPeer verifies that a peer whose socket

@@ -78,6 +78,7 @@ nav:
           - Configuration:
               - Docker: howto/miners/docker/minersHowToConfigureTheNode.md
               - Kubernetes: howto/miners/kubernetes/minersHowToConfigureTheNode.md
+              - P2P Public Exposure (Kubernetes): howto/miners/kubernetes/minersHowToExposeP2P.md
               - Aerospike Tuning: howto/miners/minersHowToAerospikeTuning.md
               - Asset Server Interaction: howto/miners/minersHowToInteractWithAssetServer.md
               - FSM Interaction: howto/miners/minersHowToInteractWithFSM.md

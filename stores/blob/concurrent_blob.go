@@ -132,13 +132,23 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, fileType fileformat.
 		return nil, err
 	}
 
+	// Always close the source reader on the way out. The Store.SetFromReader
+	// contract on whether the input reader is closed is inconsistent across
+	// implementations - memory does (defer at the top of its SetFromReader)
+	// but file does not - so the caller cannot rely on either. Closing here
+	// covers both. Close is idempotent for the readers used in practice
+	// (semaphoreReadCloser via sync.Once, http.Response.Body per net/http
+	// docs), so a redundant close from a store that does close internally
+	// is benign.
+	defer func() {
+		_ = resultReader.Close()
+	}()
+
 	// Cache the result
 	err = c.blobStore.SetFromReader(ctx, key[:], fileType, resultReader, c.options...)
 	if err != nil {
 		return nil, err
 	}
-
-	_ = resultReader.Close()
 
 	// Return a reader to the cached blob
 	return c.blobStore.GetIoReader(ctx, key[:], fileType, c.options...)

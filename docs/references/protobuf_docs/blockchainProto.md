@@ -1117,7 +1117,6 @@ swagger:enum FSMEventType
 | STOP | 0 | Stop the blockchain service |
 | RUN | 1 | Run the blockchain service |
 | CATCHUPBLOCKS | 2 | Start catching up blocks |
-| LEGACYSYNC | 3 | Start legacy synchronization |
 
 
 
@@ -1131,7 +1130,6 @@ FSMStateType defines possible states of the blockchain FSM.
 | IDLE | 0 | Service is idle |
 | RUNNING | 1 | Service is running normally |
 | CATCHINGBLOCKS | 2 | Service is catching up blocks |
-| LEGACYSYNCING | 3 | Service is in legacy sync mode |
 
 
  <!-- end enums -->
@@ -1194,7 +1192,6 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | WaitUntilFSMTransitionFromIdleState | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Waits for FSM to transition from IDLE state. |
 | Run | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Transitions the blockchain service to running state. |
 | CatchUpBlocks | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates block catch-up process. |
-| LegacySync | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates legacy synchronization process. |
 | Idle | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks the service as idle. |
 | ReportPeerFailure | [ReportPeerFailureRequest](#blockchain_api-ReportPeerFailureRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Notifies about peer download failures (catchup, subtree, block, etc). |
 | GetBlockLocator | [GetBlockLocatorRequest](#blockchain_api-GetBlockLocatorRequest) | [GetBlockLocatorResponse](#blockchain_api-GetBlockLocatorResponse) | Retrieves a block locator for chain synchronization. |

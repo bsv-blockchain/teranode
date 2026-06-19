@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobMemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -593,6 +596,17 @@ func TestServerStart_FSMContextCancellation(t *testing.T) {
 
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
+	// http.Start() starts the main-chain cache, which subscribes to blockchain
+	// notifications; without this expectation the mock panics (and races).
+	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).
+		Return(make(chan *blockchain_api.Notification), nil).Maybe()
+	// The cache's async initial window populate may fire before shutdown; give
+	// the mock harmless answers so it doesn't panic. Empty headers leave the
+	// window unhealthy, which is fine for this test.
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
+		Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}, &model.BlockHeaderMeta{}, nil).Maybe()
+	mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
 	server := NewServer(logger, tSettings, utxoStore, blobMemory.New(), blobMemory.New(), blobMemory.New(), mockBlockchainClient, nil, nil, nil)
 	require.NoError(t, server.Init(ctx))

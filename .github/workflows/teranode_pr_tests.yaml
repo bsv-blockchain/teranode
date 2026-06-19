@@ -58,13 +58,7 @@ jobs:
 
   test:
     name: test
-    # TEMPORARY: 32-core/128GB arm to stop intermittent OOM (exit 143). `make test`
-    # runs `go test -race -coverpkg=./...` over the whole repo; a few test binaries
-    # peak very high (sql ~34G, blockassembly ~31G, subtreeprocessor ~20G) and at
-    # -p=16 enough overlap to exhaust a 16-core/64GB runner intermittently. Job-wide
-    # peak measured ~110GB+. This is a stopgap until per-package memory is reduced —
-    # tracked in #1051. Revert to teranode-runner-16-core-arm once that lands.
-    runs-on: teranode-runner-32-core-arm
+    runs-on: teranode-runner-16-core-arm
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -88,11 +82,11 @@ jobs:
       - name: Run Go tests
         # Tracks each test binary's peak RSS (VmHWM — the kernel's monotonic
         # high-water mark) silently in the background, then prints a top-10
-        # peak-memory table plus the job-wide peak at the END of the run. Lets us
-        # watch unit-test memory come down as #1051 is worked, and justifies the
-        # temporary 32-core runner above. No deps; survives a SIGTERM (the summary
-        # also runs from the EXIT trap). Sampler runs under `set +e` so a
-        # SIGPIPE/no-match can't trip the step's `set -e`; `make test` keeps it.
+        # peak-memory table at the END of the run, so per-binary unit-test memory
+        # stays visible and regressions are caught early. No deps; survives a
+        # SIGTERM (the summary also runs from the EXIT trap). Sampler runs under
+        # `set +e` so a SIGPIPE/no-match can't trip the step's `set -e`; `make test`
+        # keeps it.
         run: |
           TRACK="$(mktemp)"
           track() {

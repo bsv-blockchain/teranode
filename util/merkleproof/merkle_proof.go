@@ -84,6 +84,11 @@ type MerkleProofConstructor interface {
 	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree
 	// Returns arrays of block IDs, block heights and corresponding subtree indices
 	FindBlocksContainingSubtree(subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error)
+
+	// IsBlockOnMainChain reports whether the given internal block ID at the given
+	// height is part of the current best chain. The height lets implementations
+	// route the lookup through height-windowed caches.
+	IsBlockOnMainChain(blockID, blockHeight uint32) (bool, error)
 }
 
 // ConstructMerkleProof constructs a complete merkle proof for a given transaction.
@@ -96,6 +101,9 @@ type MerkleProofConstructor interface {
 // Returns:
 //   - *MerkleProof: Complete merkle proof structure
 //   - error: Any error encountered during proof construction
+//
+// Only main-chain entries are considered; transactions found exclusively in orphan
+// blocks return a TxNotFoundError so clients don't receive unverifiable proofs.
 func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*MerkleProof, error) {
 	if txID == nil {
 		return nil, terr.NewInvalidArgumentError("transaction ID cannot be nil")
@@ -104,18 +112,51 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 	// Get transaction metadata
 	txMeta, err := repo.GetTxMeta(txID)
 	if err != nil {
+		// Unknown hash: real stores signal a missing key with ErrTxNotFound.
+		// Deliberately return a plain NotFoundError WITHOUT wrapping the cause —
+		// teranode's errors.Is matches codes through the wrapped chain, so
+		// carrying ERR_TX_NOT_FOUND here would collide with the orphan-only
+		// sentinel below and kill the HTTP layer's subtree fallback.
+		if terr.Is(err, terr.ErrTxNotFound) || terr.Is(err, terr.ErrNotFound) {
+			return nil, terr.NewNotFoundError("transaction %s not found", txID.String())
+		}
 		return nil, terr.NewProcessingError("failed to get transaction metadata", err)
 	}
 
 	// Check if transaction is in any block
 	if len(txMeta.BlockIDs) == 0 || len(txMeta.BlockHeights) == 0 || len(txMeta.SubtreeIdxs) == 0 {
-		return nil, terr.NewProcessingError("transaction not in any block")
+		return nil, terr.NewNotFoundError("transaction not in any block")
 	}
 
-	// Use the first block containing the transaction
-	blockID := txMeta.BlockIDs[0]
-	blockHeight := txMeta.BlockHeights[0]
-	subtreeIdx := txMeta.SubtreeIdxs[0]
+	// Guard against malformed parallel arrays before iteration.
+	if len(txMeta.BlockHeights) != len(txMeta.BlockIDs) || len(txMeta.SubtreeIdxs) != len(txMeta.BlockIDs) {
+		return nil, terr.NewProcessingError("malformed tx meta: parallel arrays length mismatch")
+	}
+
+	// Find the entry that is on the current main chain. If a tx appears in a fork
+	// plus the main chain, the main-chain entry is the only one a client can verify
+	// against a header it knows about.
+	// Best-effort: a reorg between this main-chain check and the GetBlockByID
+	// call below could return a proof against a re-orphaned block. SPV clients
+	// should re-fetch on header divergence.
+	mainChainIdx := -1
+	for i, id := range txMeta.BlockIDs {
+		onChain, err := repo.IsBlockOnMainChain(id, txMeta.BlockHeights[i])
+		if err != nil {
+			return nil, terr.NewProcessingError("failed to check main chain", err)
+		}
+		if onChain {
+			mainChainIdx = i
+			break
+		}
+	}
+	if mainChainIdx == -1 {
+		return nil, terr.NewTxNotFoundError("transaction not in main chain")
+	}
+
+	blockID := txMeta.BlockIDs[mainChainIdx]
+	blockHeight := txMeta.BlockHeights[mainChainIdx]
+	subtreeIdx := txMeta.SubtreeIdxs[mainChainIdx]
 
 	// Get block data using block ID instead of height for better performance
 	block, err := repo.GetBlockByID(uint64(blockID))
@@ -352,7 +393,15 @@ func ConstructSubtreeMerkleProof(subtreeHash *chainhash.Hash, repo MerkleProofCo
 		return nil, terr.NewInvalidArgumentError("subtree hash cannot be nil")
 	}
 
-	// Find blocks containing this subtree
+	// Find blocks containing this subtree.
+	//
+	// CONTRACT: FindBlocksContainingSubtree MUST return only blocks on the current
+	// best chain. The SQL implementation at
+	// stores/blockchain/sql/FindBlocksContainingSubtree.go filters with
+	// "WHERE b.on_main_chain = true"; if that gate is ever removed, orphan-anchored
+	// subtree proofs leak silently. The merkleproof-layer regression test
+	// TestConstructSubtreeMerkleProof_OrphanOnlySubtree_NotFound pins the
+	// empty-result → not-found behaviour, but cannot validate the SQL gate itself.
 	blockIDs, blockHeights, subtreeIndices, err := repo.FindBlocksContainingSubtree(subtreeHash)
 	if err != nil {
 		return nil, terr.NewProcessingError("failed to find blocks containing subtree", err)
@@ -360,7 +409,7 @@ func ConstructSubtreeMerkleProof(subtreeHash *chainhash.Hash, repo MerkleProofCo
 
 	// Check if subtree is in any block
 	if len(blockIDs) == 0 || len(blockHeights) == 0 || len(subtreeIndices) == 0 {
-		return nil, terr.NewProcessingError("subtree not found in any block")
+		return nil, terr.NewNotFoundError("subtree not found in any block")
 	}
 
 	// Use the first block containing the subtree

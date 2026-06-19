@@ -400,14 +400,18 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
-	// Consume the block hash and block height
-	_, err = r.Read(make([]byte, 32))
-	if err != nil {
+	// Close on the Read failure paths so the underlying file-store read
+	// permit (held by semaphoreReadCloser) is released. Use io.ReadFull
+	// rather than r.Read because the longterm-client fallback in
+	// openFileWithFallback returns a reader that can short-read without
+	// error, which would silently misalign every subsequent record.
+	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+		_ = r.Close()
 		return nil, errors.NewStorageError("error reading block hash", err)
 	}
 
-	_, err = r.Read(make([]byte, 4))
-	if err != nil {
+	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
+		_ = r.Close()
 		return nil, errors.NewStorageError("error reading block height", err)
 	}
 
@@ -440,14 +444,14 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
 
-	// Consume the block hash and block height
-	_, err = r.Read(make([]byte, 32))
-	if err != nil {
+	// See GetUTXOAdditionsReader for the rationale on Close + io.ReadFull.
+	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+		_ = r.Close()
 		return nil, errors.NewStorageError("error reading block hash", err)
 	}
 
-	_, err = r.Read(make([]byte, 4))
-	if err != nil {
+	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
+		_ = r.Close()
 		return nil, errors.NewStorageError("error reading block height", err)
 	}
 

@@ -474,6 +474,13 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		return s.createCTE(ctx, tx, blockHeight, options, txHash, txMeta, isCoinbase, unminedSince)
 	}
 
+	// A transaction created already-mined with no spendable outputs (e.g. an
+	// OP_RETURN-only data carrier) can never be spent and never passes through
+	// setMined, so it would otherwise never be assigned a delete_at_height and
+	// would be retained forever. Expire it after the retention window. NULL for
+	// any other transaction.
+	deleteAtHeight := s.unspendableMinedTxDAH(tx, blockHeight, options, isCoinbase)
+
 	// Insert the transaction row...
 	q := `
 		INSERT INTO transactions (
@@ -487,6 +494,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		,conflicting
 		,locked
 		,unmined_since
+		,delete_at_height
 	  ) VALUES (
 		 $1
 		,$2
@@ -498,6 +506,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		,$8
 		,$9
 		,$10
+		,$11
 		)
 		RETURNING id
 	`
@@ -527,6 +536,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		options.Conflicting,
 		options.Locked,
 		unminedSince,
+		deleteAtHeight,
 	).Scan(&transactionID)
 	if err != nil {
 		if pgErr := asPgUniqueViolation(err); pgErr != nil {
@@ -576,6 +586,38 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	return txMeta, nil
+}
+
+// unspendableMinedTxDAH returns the delete_at_height to assign at creation time
+// for a transaction that is created already-mined and has no spendable outputs
+// (e.g. an OP_RETURN-only data-carrier transaction), or nil otherwise.
+//
+// Such a transaction can never be spent, so it never transitions to "all spent"
+// via the spend path, and because it is created already-mined (the block
+// validation / catchup path) it also bypasses setMined - the other place that
+// assigns a delete_at_height. Without this it would never be eligible for
+// pruning and would be retained forever; we only want truly spendable outputs
+// retained indefinitely. Returns nil (SQL NULL) for transactions that must not
+// be expired at creation: unmined, conflicting (handled separately), retention
+// disabled, or having at least one spendable output (those are expired via the
+// spend path once their spendable outputs are gone).
+func (s *Store) unspendableMinedTxDAH(tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions, isCoinbase bool) interface{} {
+	if options.Conflicting || len(options.MinedBlockInfos) == 0 {
+		return nil
+	}
+
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return nil
+	}
+
+	for _, output := range tx.Outputs {
+		if output != nil && utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
+			return nil
+		}
+	}
+
+	return int64(blockHeight) + int64(retention)
 }
 
 // createInputsBatched inserts all transaction inputs in chunked multi-value INSERTs.
@@ -714,8 +756,8 @@ func (s *Store) createBlockIDsBatched(ctx context.Context, txn *sql.Tx, transact
 // Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays, $23-$25 = block_id arrays.
 const createCTESQL = `
 WITH new_tx AS (
-	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since)
-	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since,delete_at_height)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$26)
 	ON CONFLICT (hash) DO NOTHING
 	RETURNING id
 ), ins_inputs AS (
@@ -772,6 +814,8 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			outArrs.coinbaseSpendingHeight, outArrs.utxoHash,
 			// $23-$25: block_id arrays
 			blkArrs.blockID, blkArrs.blockHeight, blkArrs.subtreeIdx,
+			// $26: delete_at_height for a mined tx with no spendable outputs
+			s.unspendableMinedTxDAH(btTx, blockHeight, options, isCoinbase),
 		)
 		if execErr != nil {
 			return execErr
@@ -1072,6 +1116,8 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				// $23-$25: block_id arrays
 				p.blkArrs.blockID, p.blkArrs.blockHeight,
 				p.blkArrs.subtreeIdx,
+				// $26: delete_at_height for a mined tx with no spendable outputs
+				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options, p.isCoinbase),
 			)
 		}
 
