@@ -129,6 +129,11 @@ type Server struct {
 	// for checking if coinbase transactions have been processed
 	blockAssemblyClient blockassembly.ClientI
 
+	// subtreeValidationClient is the subtree validation client this server
+	// constructs in Init (service-owned, not borrowed from the daemon). It is
+	// closed exactly once in Stop().
+	subtreeValidationClient subtreevalidation.Interface
+
 	// blockFoundCh receives notifications of newly discovered blocks
 	// that need validation. This channel buffers requests when high load occurs.
 	blockFoundCh chan processBlockFound
@@ -602,6 +607,19 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
 	}
 
+	// Service-owned: retain it so Stop() closes it. If Init fails before
+	// completing, close it here and clear the field so Stop() doesn't double
+	// close (closeSubtreeValidationClient is nil-safe and idempotent).
+	u.subtreeValidationClient = subtreeValidationClient
+
+	initOK := false
+
+	defer func() {
+		if !initOK {
+			u.closeSubtreeValidationClient()
+		}
+	}()
+
 	storeURL := u.settings.UtxoStore.UtxoStore
 	if storeURL == nil {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
@@ -682,7 +700,28 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
+	initOK = true
+
 	return nil
+}
+
+// closeSubtreeValidationClient closes the service-owned subtree validation
+// client exactly once. Nil-safe (for Server-literal test fixtures that never
+// ran Init) and idempotent (clears the field after closing). The client is held
+// by the Interface type, which does not declare Close, so it is closed via the
+// optional Close() error the concrete client gained in Fix group A.
+func (u *Server) closeSubtreeValidationClient() {
+	if u.subtreeValidationClient == nil {
+		return
+	}
+
+	if c, ok := u.subtreeValidationClient.(interface{ Close() error }); ok {
+		if err := c.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close subtree validation client: %v", err)
+		}
+	}
+
+	u.subtreeValidationClient = nil
 }
 
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
@@ -1069,6 +1108,9 @@ func (u *Server) Stop(_ context.Context) error {
 	if err := u.kafkaConsumerClient.Close(); err != nil {
 		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 	}
+
+	// close the service-owned subtree validation client (constructed in Init)
+	u.closeSubtreeValidationClient()
 
 	return nil
 }

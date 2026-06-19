@@ -104,6 +104,7 @@ type batchItem struct {
 type Client struct {
 	client              propagation_api.PropagationAPIClient
 	conn                *grpc.ClientConn
+	ownsConn            bool
 	batchSize           int
 	batchCh             chan []*batchItem
 	batcher             *batcher.Batcher[batchItem]
@@ -128,6 +129,12 @@ type Client struct {
 //   - error: Error if client creation fails
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, conn ...*grpc.ClientConn) (*Client, error) {
 	var useConn *grpc.ClientConn
+
+	// ownsConn is true only when this client dialed the connection itself; when
+	// a conn is injected by the caller the caller retains ownership and Close()
+	// must not close it.
+	var ownsConn bool
+
 	if len(conn) > 0 {
 		useConn = conn[0]
 	} else {
@@ -137,6 +144,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		}
 
 		useConn = localConn
+		ownsConn = true
 	}
 
 	client := propagation_api.NewPropagationAPIClient(useConn)
@@ -166,6 +174,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	c := &Client{
 		client:              client,
 		conn:                useConn,
+		ownsConn:            ownsConn,
 		batchSize:           batchSize,
 		batchCh:             make(chan []*batchItem),
 		logger:              logger,
@@ -203,7 +212,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 // A new client instance should be created if needed.
 
 func (c *Client) Close() error {
-	if c.client != nil && c.conn != nil {
+	if c.ownsConn && c.client != nil && c.conn != nil {
 		_ = c.conn.Close()
 	}
 

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -15,6 +16,7 @@ import (
 // legacy service over gRPC.
 type Client struct {
 	client peer_api.PeerServiceClient
+	conn   *grpc.ClientConn // gRPC connection owned by this client; closed by Close()
 	logger ulogger.Logger
 }
 
@@ -52,10 +54,20 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 	c := &Client{
 		client: peer_api.NewPeerServiceClient(baConn),
+		conn:   baConn,
 		logger: logger,
 	}
 
 	return c, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
 }
 
 // GetPeers retrieves information about all currently connected legacy peers.

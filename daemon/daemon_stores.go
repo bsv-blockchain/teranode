@@ -45,6 +45,29 @@ type Stores struct {
 	// them is out of scope for this PR.
 	peerRegistryClientOnce sync.Once
 	peerRegistryClientErr  error
+
+	// constructedClients retains every gRPC client the daemon constructs
+	// (both daemonStores singletons and the fresh-per-construction clients
+	// otherwise discarded into locals) so daemon.closeClients can close each
+	// exactly once on shutdown. The daemon is the sole owner; receiving
+	// services borrow these clients and must not close them.
+	constructedClients   []clientCloser
+	constructedClientsMu sync.Mutex
+}
+
+// retainClient records a daemon-constructed client for shutdown close. It
+// type-asserts to clientCloser, so callers can pass any client interface value;
+// clients without a Close() error method (e.g. in-process locals) are ignored.
+// Each constructed instance must be retained exactly once.
+func (d *Stores) retainClient(client any) {
+	cc, ok := client.(clientCloser)
+	if !ok {
+		return
+	}
+
+	d.constructedClientsMu.Lock()
+	d.constructedClients = append(d.constructedClients, cc)
+	d.constructedClientsMu.Unlock()
 }
 
 // GetUtxoStore returns the main UTXO store instance. If the store hasn't been initialized yet,
@@ -78,6 +101,9 @@ func (d *Stores) GetSubtreeValidationClient(ctx context.Context, logger ulogger.
 	var err error
 
 	d.mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, appSettings, "main_stores")
+	if err == nil {
+		d.retainClient(d.mainSubtreeValidationClient)
+	}
 
 	return d.mainSubtreeValidationClient, err
 }
@@ -94,6 +120,9 @@ func (d *Stores) GetBlockValidationClient(ctx context.Context, logger ulogger.Lo
 	var err error
 
 	d.mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "main_stores")
+	if err == nil {
+		d.retainClient(d.mainBlockValidationClient)
+	}
 
 	return d.mainBlockValidationClient, err
 }
@@ -121,6 +150,7 @@ func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSet
 	}
 
 	d.mainP2PClient = p2pClient
+	d.retainClient(p2pClient)
 
 	return p2pClient, nil
 }
@@ -131,7 +161,16 @@ func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSet
 func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	source string) (blockchain.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
-	return blockchain.NewClient(ctx, logger, appSettings, source)
+	client, err := blockchain.NewClient(ctx, logger, appSettings, source)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fresh instance per call (not a singleton); retain each so closeClients
+	// closes every constructed blockchain client exactly once.
+	d.retainClient(client)
+
+	return client, nil
 }
 
 // GetPeerRegistryClient returns a singleton client to the centralized peer
@@ -176,6 +215,7 @@ func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logg
 	}
 
 	d.mainBlockAssemblyClient = client
+	d.retainClient(client)
 
 	return client, nil
 }
@@ -260,6 +300,8 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 		if err != nil {
 			return nil, errors.NewServiceError("could not create validator client", err)
 		}
+
+		d.retainClient(d.mainValidatorClient)
 	}
 
 	return d.mainValidatorClient, nil

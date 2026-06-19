@@ -150,9 +150,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
-// Close gracefully shuts down the validator client. Currently a no-op; the real
-// connection close is wired in a later stage.
+// Close gracefully shuts down the validator client, releasing the gRPC
+// connection it dialed in NewClient.
 func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
 	return nil
 }
 

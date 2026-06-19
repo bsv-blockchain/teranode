@@ -174,6 +174,13 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 	// Create P2P client
 	p2pClient, err := p2p.NewClient(ctx, logger, s)
 	if err != nil {
+		// Close the already-created blockchain client: NewModel returns before
+		// Run can install the deferred m.close() cleanup. ClientI does not
+		// declare Close; the concrete client gained it in DC7.
+		if c, ok := blockchainClient.(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
+
 		return nil, errors.NewProcessingError("failed to create p2p client", err)
 	}
 
@@ -1598,11 +1605,32 @@ func (m Model) formatAeroStringValue(key, val string) string {
 }
 
 // Run starts the TUI monitor
+// close releases the gRPC connections owned by the monitor's clients. The
+// fields are interface types that do not declare Close, so each is closed via
+// the optional Close() error gained by the concrete clients in Fix group A.
+func (m *Model) close() {
+	for _, client := range []any{
+		m.blockchainClient,
+		m.p2pClient,
+		m.validatorClient,
+		m.blockValClient,
+		m.blockAsmClient,
+		m.subtreeClient,
+	} {
+		if cc, ok := client.(interface{ Close() error }); ok {
+			_ = cc.Close()
+		}
+	}
+}
+
 func Run(logger ulogger.Logger, s *settings.Settings) error {
 	m, err := NewModel(logger, s)
 	if err != nil {
 		return err
 	}
+
+	// Close the clients once the TUI exits (Run blocks until quit).
+	defer m.close()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()

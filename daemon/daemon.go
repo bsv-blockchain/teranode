@@ -392,6 +392,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// missing-parent errors.
 	defer d.closeStores(logger)
 
+	// closeClients must run AFTER all services have stopped (so borrowed
+	// clients are no longer in use) and BEFORE closeStores (clients sit in
+	// front of the stores in the dependency graph). Deferred AFTER the
+	// closeStores defer above so LIFO ordering runs clients first, then stores.
+	defer d.closeClients(logger)
+
 	// Wait for either services to complete or doneCh to be closed
 	select {
 	case err = <-waitErr:
@@ -428,6 +434,27 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 // pattern in services/pruner/server.go.
 type clientCloser interface {
 	Close() error
+}
+
+// closeClients closes every gRPC client the daemon constructed, exactly once.
+//
+// The daemon is the sole owner of the clients it builds (both the daemonStores
+// singletons and the fresh-per-construction clients retained via retainClient);
+// receiving services borrow them and must not close them. This runs after
+// ServiceManager.Wait() — so all service Stop()s have completed — and before
+// closeStores, because clients sit in front of the stores in the dependency
+// graph. Each client is closed via the Stage-E clientCloser contract.
+func (d *Daemon) closeClients(logger ulogger.Logger) {
+	d.daemonStores.constructedClientsMu.Lock()
+	clients := d.daemonStores.constructedClients
+	d.daemonStores.constructedClients = nil
+	d.daemonStores.constructedClientsMu.Unlock()
+
+	for _, client := range clients {
+		if err := client.Close(); err != nil {
+			logger.Errorf("error closing client: %v", err)
+		}
+	}
 }
 
 // closeStores safely closes the main stores used by the Daemon.
