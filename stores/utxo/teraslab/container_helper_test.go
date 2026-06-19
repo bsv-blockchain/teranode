@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
@@ -27,16 +28,48 @@ func initTeraSlab(t *testing.T, tSettings *settings.Settings, logger ulogger.Log
 	ctx := context.Background()
 
 	image := teraslabDefaultImage
+	// Force a registry pull for the default :latest tag so CI always tests the
+	// published image. When an explicit TERASLAB_IMAGE is provided (e.g. a
+	// locally-built dev image not in any registry), do NOT force a pull —
+	// otherwise testcontainers errors trying to fetch a tag that only exists
+	// in the local Docker daemon.
+	alwaysPull := true
 	if envImage := os.Getenv("TERASLAB_IMAGE"); envImage != "" {
 		image = envImage
+		alwaysPull = false
 	}
+
+	// Single-node config so the server binds 0.0.0.0 (reachable from the test
+	// host via the mapped port) instead of the loopback default. ServerConfig
+	// is #[serde(default)], so a partial TOML suffices; node_id 0 keeps it in
+	// single-node mode (no cluster_secret required) and enable_remote_bind
+	// permits the non-loopback bind. The image's default CMD is
+	// `--config /etc/teraslab/node.toml`, so we mount the config there and do
+	// NOT override the entrypoint (the previous bare-entrypoint override used
+	// the loopback defaults, which testcontainers could never reach → all
+	// integration tests skipped).
+	cfg := `node_id = 0
+listen_addr = "0.0.0.0:3300"
+http_listen_addr = "0.0.0.0:9100"
+enable_remote_bind = true
+device_paths = ["/data/teraslab.dat"]
+device_size = 1073741824
+`
+	cfgPath := filepath.Join(t.TempDir(), "node.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfg), 0o644))
 
 	req := testcontainers.ContainerRequest{
 		Image:           image,
-		AlwaysPullImage: true,
+		AlwaysPullImage: alwaysPull,
 		ExposedPorts:    []string{teraslabWirePort, teraslabHTTPPort},
-		Entrypoint:      []string{"teraslab-server"}, // override to avoid default --config CMD
-		WaitingFor:      wait.ForHTTP("/health/live").WithPort(teraslabHTTPPort),
+		Files: []testcontainers.ContainerFile{
+			{
+				HostFilePath:      cfgPath,
+				ContainerFilePath: "/etc/teraslab/node.toml",
+				FileMode:          0o644,
+			},
+		},
+		WaitingFor: wait.ForHTTP("/health/live").WithPort(teraslabHTTPPort),
 	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
