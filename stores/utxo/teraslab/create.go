@@ -100,24 +100,66 @@ func hasSpentUTXOs(ctx context.Context, s *Store, txHash *chainhash.Hash) bool {
 }
 
 // Delete removes a UTXO and its associated metadata from the store.
+//
+// Delete is idempotent: deleting a transaction that does not exist is a
+// successful no-op. The server does not always report a clean TX_NOT_FOUND for
+// a missing record (it attempts parent-prune before confirming existence and
+// can surface a storage error instead), so any delete error is reconciled
+// against a positive existence check: the error is suppressed only when the
+// record is confirmed absent — a real error on an existing record still
+// propagates.
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	txid := hashToTxID(hash)
+
 	_, err := s.client.DeleteBatch(ctx, []teraslab.TxID{txid})
-	if err != nil {
-		// Treat not-found as success (idempotent delete)
-		if _, ok := err.(*teraslab.NotFoundError); ok {
-			return nil
-		}
-		if pe, ok := err.(*teraslab.PartialError); ok {
-			for _, e := range pe.Errors {
-				if e.Code == teraslab.ErrCodeTxNotFound {
-					continue
-				}
-				return mapErrorCode(e.Code)
-			}
-			return nil
-		}
-		return err
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	// Clean not-found responses are idempotent successes.
+	if _, ok := err.(*teraslab.NotFoundError); ok {
+		return nil
+	}
+
+	if pe, ok := err.(*teraslab.PartialError); ok {
+		mapped := error(nil)
+		for _, e := range pe.Errors {
+			if e.Code == teraslab.ErrCodeTxNotFound {
+				continue
+			}
+			mapped = mapErrorCode(e.Code)
+			break
+		}
+		if mapped == nil {
+			return nil // only not-found items
+		}
+		// Idempotency guard: suppress the error only if the record is
+		// confirmed absent; otherwise surface it.
+		if found, checkErr := s.recordExists(ctx, txid); checkErr == nil && !found {
+			return nil
+		}
+		return mapped
+	}
+
+	// Non-partial transport/other error: same idempotency guard.
+	if found, checkErr := s.recordExists(ctx, txid); checkErr == nil && !found {
+		return nil
+	}
+	return err
+}
+
+// recordExists reports whether a record for txid is present. The bool is only
+// meaningful when the returned error is nil.
+func (s *Store) recordExists(ctx context.Context, txid teraslab.TxID) (bool, error) {
+	records, err := s.client.GetRecordBatch(ctx, teraslab.FieldUtxoCount, []teraslab.TxID{txid})
+	if err != nil {
+		if _, ok := err.(*teraslab.NotFoundError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(records) == 0 {
+		return false, nil
+	}
+	return records[0].Found, nil
 }

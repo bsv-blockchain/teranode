@@ -165,10 +165,30 @@ func TestGetConflictingChildren(t *testing.T) {
 		assert.Equal(t, *childTx.TxIDChainHash(), children[0])
 	})
 
-	t.Run("GetCounterConflicting on parent", func(t *testing.T) {
-		children, err := store.GetCounterConflicting(ctx, *childTx.Inputs[0].PreviousTxIDChainHash())
+	t.Run("GetCounterConflicting returns spenders of a shared parent UTXO", func(t *testing.T) {
+		// Counter-conflicting txs are those spending the SAME parent UTXOs as
+		// the queried tx (double-spend siblings) — NOT the queried tx's own
+		// conflicting children. Build a tx that spends parentTx output 0, store
+		// and spend it, then query its counter-conflicting set: it must include
+		// the spender itself (the recorded spender of parentTx[0]).
+		//
+		// (The prior assertion queried the parent and expected its children,
+		// which conflated counter-conflicting with conflicting-children — an
+		// artifact of the old hand-rolled implementation.)
+		spenderTx := bt.NewTx()
+		require.NoError(t, spenderTx.From(
+			parentTx.TxIDChainHash().String(), 0,
+			parentTx.Outputs[0].LockingScript.String(), parentTx.Outputs[0].Satoshis))
+		require.NoError(t, spenderTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+		_, err := store.Create(ctx, spenderTx, 1001)
 		require.NoError(t, err)
-		require.Len(t, children, 1)
+		_, err = store.Spend(ctx, spenderTx, store.GetBlockHeight()+1)
+		require.NoError(t, err)
+
+		counter, err := store.GetCounterConflicting(ctx, *spenderTx.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Contains(t, counter, *spenderTx.TxIDChainHash())
 	})
 
 	t.Run("GetConflictingChildren on non-parent returns empty", func(t *testing.T) {

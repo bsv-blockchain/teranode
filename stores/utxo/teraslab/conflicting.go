@@ -9,6 +9,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
@@ -28,15 +30,15 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 	}
 
-	_, err := s.client.SetConflictingBatch(ctx, params, txids)
-	if err != nil {
+	if _, err := s.client.SetConflictingBatch(ctx, params, txids); err != nil {
 		if pe, ok := err.(*teraslab.PartialError); ok {
 			// Build spend results for failed items
 			var spendErrors []*utxo.Spend
 			for _, itemErr := range pe.Errors {
 				if int(itemErr.ItemIndex) < len(txHashes) {
+					h := txHashes[itemErr.ItemIndex]
 					spendErrors = append(spendErrors, &utxo.Spend{
-						TxID: func() *chainhash.Hash { h := txHashes[itemErr.ItemIndex]; return &h }(),
+						TxID: &h,
 						Err:  mapErrorCode(itemErr.Code),
 					})
 				}
@@ -48,10 +50,66 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 		return nil, nil, err
 	}
 
-	// Parent conflicting-children updates are handled server-side by TeraSlab
-	// during both Create (via parent_txids) and SetConflicting (via cold data parsing).
+	// Reconstruct the return contract that callers in the conflict-resolution
+	// flow consume (process_conflicting.go uses both): the affected parent
+	// spends (this tx's inputs) and the hashes of txs spending this tx's
+	// outputs. Mirrors the Aerospike backend. The parent conflicting-children
+	// linkage itself is applied server-side during SetConflictingBatch above.
+	affectedParentSpends := make([]*utxo.Spend, 0)
+	spendingTxHashes := make([]chainhash.Hash, 0)
 
-	return nil, nil, nil
+	for i := range txHashes {
+		txHash := txHashes[i]
+
+		data, err := s.Get(ctx, &txHash, fields.Tx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if data == nil || data.Tx == nil {
+			continue
+		}
+		tx := data.Tx
+
+		// This tx's inputs are the parent UTXOs affected by the conflict.
+		for vin, input := range tx.Inputs {
+			utxoHash, err := util.UTXOHashFromInput(input)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			affectedParentSpends = append(affectedParentSpends, &utxo.Spend{
+				TxID:         input.PreviousTxIDChainHash(),
+				Vout:         input.PreviousTxOutIndex,
+				UTXOHash:     utxoHash,
+				SpendingData: spend.NewSpendingData(tx.TxIDChainHash(), vin),
+			})
+		}
+
+		// Any tx spending this tx's outputs is a counter/spending child.
+		for vout, output := range tx.Outputs {
+			vout32 := uint32(vout) //nolint:gosec // output count is bounded well below u32
+
+			utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, vout32)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			resp, err := s.GetSpend(ctx, &utxo.Spend{
+				TxID:     tx.TxIDChainHash(),
+				Vout:     vout32,
+				UTXOHash: utxoHash,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if resp != nil && resp.SpendingData != nil && resp.SpendingData.TxID != nil {
+				spendingTxHashes = append(spendingTxHashes, *resp.SpendingData.TxID)
+			}
+		}
+	}
+
+	return affectedParentSpends, spendingTxHashes, nil
 }
 
 // RemoveFromConflictingChildren removes each (parent, child) pair from the
@@ -96,30 +154,20 @@ func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []ut
 	return nil
 }
 
-// GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
+// GetCounterConflicting returns the counter-conflicting transactions for a given
+// transaction hash — the sibling txs spending the same parent UTXOs as `txHash`.
+// Delegates to the shared store-agnostic helper, exactly as the Aerospike
+// backend does. (The previous hand-rolled version returned this record's own
+// conflicting-children — the wrong category of hashes.)
 func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	data, err := s.Get(ctx, &txHash, fields.ConflictingChildren)
-	if err != nil {
-		return nil, err
-	}
-
-	if data == nil {
-		return nil, nil
-	}
-
-	return data.ConflictingChildren, nil
+	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash)
 }
 
-// GetConflictingChildren returns the children of the given conflicting transaction.
+// GetConflictingChildren returns the full set of conflicting descendant txs of
+// `txHash` (recursive over conflicting-children + spending data, root excluded).
+// Delegates to the shared store-agnostic helper, exactly as the Aerospike
+// backend does. (The previous hand-rolled version returned only the direct
+// children of a single record.)
 func (s *Store) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	data, err := s.Get(ctx, &txHash, fields.ConflictingChildren)
-	if err != nil {
-		return nil, err
-	}
-
-	if data == nil {
-		return nil, nil
-	}
-
-	return data.ConflictingChildren, nil
+	return utxo.GetConflictingChildren(ctx, s, txHash)
 }

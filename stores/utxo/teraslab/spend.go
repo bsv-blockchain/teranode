@@ -32,10 +32,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			continue
 		}
 
-		utxoHash, err := util.UTXOHashFromOutput(prevTxID, &bt.Output{
-			Satoshis:      input.PreviousTxSatoshis,
-			LockingScript: input.PreviousTxScript,
-		}, input.PreviousTxOutIndex)
+		// Derive the UTXO hash from the (decorated) input. UTXOHashFromInput
+		// returns a clear error when PreviousTxScript is nil, so an
+		// undecorated input fails loudly here instead of silently hashing
+		// over a zero satoshi / nil script and producing the wrong UTXO hash.
+		utxoHash, err := util.UTXOHashFromInput(input)
 		if err != nil {
 			return nil, err
 		}
@@ -137,6 +138,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			TxID:     hashToTxID(sp.TxID),
 			Vout:     sp.Vout,
 			UtxoHash: hashToUtxoHash(sp.UTXOHash),
+			// The server's unspend is ownership-checked: it only clears the
+			// slot when the supplied spending data matches what is stored
+			// (otherwise it is a no-op, per the Lua reference contract).
+			// Omitting it made every unspend a silent no-op.
+			SpendingData: spendingDataToWire(sp.SpendingData),
 		})
 	}
 

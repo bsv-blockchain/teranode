@@ -114,6 +114,21 @@ func wireToSpendingData(wire teraslab.SpendingData) *spend.SpendingData {
 	return spend.NewSpendingData(txID, int(vin))
 }
 
+// spendingDataToWire converts Teranode SpendingData to the wire format
+// [txid:32][vin:4 LE] expected by the server. A nil/empty SpendingData maps to
+// the zero value (which the server treats as "no expected spending data").
+func spendingDataToWire(sd *spend.SpendingData) teraslab.SpendingData {
+	var wire teraslab.SpendingData
+	if sd == nil || sd.TxID == nil {
+		return wire
+	}
+
+	copy(wire[:32], sd.TxID[:])
+	binary.LittleEndian.PutUint32(wire[32:36], uint32(sd.Vin)) //nolint:gosec // input index fits u32
+
+	return wire
+}
+
 // ---------------------------------------------------------------------------
 // Serialize: bt.Tx → TxData for storage
 // ---------------------------------------------------------------------------

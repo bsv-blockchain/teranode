@@ -735,7 +735,10 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		spentTx := bt.NewTx()
 		require.NoError(t, spentTx.From(stx.TxIDChainHash().String(), 0, stx.Outputs[0].LockingScript.String(), stx.Outputs[0].Satoshis))
 		require.NoError(t, spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i))
-		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{}))
+		// bt.NewFeeQuote() registers the default (standard/data) fee types; an
+		// empty &bt.FeeQuote{} has none, so ChangeToAddress fails with
+		// "feetype not found". (teraslab is the only caller of Sanity.)
+		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", bt.NewFeeQuote()))
 
 		_, err = db.Spend(ctx, spentTx, db.GetBlockHeight()+1)
 		require.NoError(t, err)

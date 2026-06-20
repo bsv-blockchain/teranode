@@ -20,9 +20,8 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value 
 
 	_, err := s.client.SetLockedBatch(ctx, value, txids)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
-			s.logger.Warnf("[TeraSlab] partial error during SetLocked: %v", err)
-			return nil
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			return partialErrorToError("SetLocked", pe)
 		}
 		return err
 	}

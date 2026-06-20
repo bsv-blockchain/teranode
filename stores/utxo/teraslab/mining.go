@@ -42,9 +42,9 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 					}
 				}
 			}
-			// Log but don't fail on partial errors
-			s.logger.Warnf("[TeraSlab] partial error during SetMinedMulti: %d errors", len(pe.Errors))
-			return result, nil
+			// Return the successfully-mined block IDs AND surface the per-item
+			// failures — they must not be silently dropped on the mined path.
+			return result, partialErrorToError("SetMinedMulti", pe)
 		}
 		return nil, err
 	}
@@ -94,9 +94,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 	_, err := s.client.MarkLongestChainBatch(ctx, params, txids)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
-			s.logger.Warnf("[TeraSlab] partial error during MarkTransactionsOnLongestChain: %v", err)
-			return nil
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			// Reorg path: a per-item failure here means a tx the chain expects
+			// could not be (un)marked — surface it rather than swallow it.
+			return partialErrorToError("MarkTransactionsOnLongestChain", pe)
 		}
 		return err
 	}

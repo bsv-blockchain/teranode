@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	teraslab "github.com/icellan/teraslab/client/go"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
@@ -54,28 +55,93 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 	return nil
 }
 
-// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
+// PreviousOutputsDecorate populates each input's PreviousTxSatoshis and
+// PreviousTxScript from the referenced parent transaction's stored outputs.
+//
+// Inputs that are already decorated (PreviousTxScript != nil) are skipped (per
+// the interface contract). The distinct parent txids are fetched in one
+// GetRecordBatch with cold data (which carries the parents' outputs), then each
+// input is filled from parent.Outputs[vout] — mirroring the Aerospike backend.
+//
+// (The previous implementation called GetSpendBatch and discarded the response;
+// it never decorated anything, and GetSpendBatch returns spend status, not the
+// output script/satoshis, so it could not have.)
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	if tx == nil || len(tx.Inputs) == 0 {
 		return nil
 	}
 
-	items := make([]teraslab.GetSpendItem, 0, len(tx.Inputs))
+	// Distinct parent txids for inputs that still need decoration.
+	seen := make(map[teraslab.TxID]bool, len(tx.Inputs))
+	txids := make([]teraslab.TxID, 0, len(tx.Inputs))
+
 	for _, input := range tx.Inputs {
+		if input.PreviousTxScript != nil {
+			continue // already decorated
+		}
+
 		prevTxID := input.PreviousTxIDChainHash()
 		if prevTxID == nil {
 			continue
 		}
-		items = append(items, teraslab.GetSpendItem{
-			TxID: hashToTxID(prevTxID),
-			Vout: input.PreviousTxOutIndex,
-		})
+
+		tid := hashToTxID(prevTxID)
+		if !seen[tid] {
+			seen[tid] = true
+			txids = append(txids, tid)
+		}
 	}
 
-	if len(items) == 0 {
+	if len(txids) == 0 {
 		return nil
 	}
 
-	_, err := s.client.GetSpendBatch(ctx, items)
-	return err
+	// Cold data carries the parents' outputs; version/locktime round out the tx.
+	mask := teraslab.FieldColdData | teraslab.FieldTxVersion | teraslab.FieldLocktime
+	records, err := s.client.GetRecordBatch(ctx, mask, txids)
+	if err != nil {
+		return err
+	}
+
+	prevTxs := make(map[teraslab.TxID]*bt.Tx, len(txids))
+	for i, tid := range txids {
+		if i >= len(records) || !records[i].Found {
+			continue
+		}
+
+		data, err := recordToMetaData(records[i])
+		if err != nil {
+			return err
+		}
+
+		if data != nil && data.Tx != nil {
+			prevTxs[tid] = data.Tx
+		}
+	}
+
+	for _, input := range tx.Inputs {
+		if input.PreviousTxScript != nil {
+			continue
+		}
+
+		prevTxID := input.PreviousTxIDChainHash()
+		if prevTxID == nil {
+			continue
+		}
+
+		prevTx, ok := prevTxs[hashToTxID(prevTxID)]
+		if !ok {
+			return errors.NewTxNotFoundError("previous tx not found: %s", prevTxID.String())
+		}
+
+		vout := input.PreviousTxOutIndex
+		if int(vout) >= len(prevTx.Outputs) || prevTx.Outputs[vout] == nil {
+			return errors.NewTxInvalidError("previous tx %s has no output at index %d", prevTxID.String(), vout)
+		}
+
+		input.PreviousTxSatoshis = prevTx.Outputs[vout].Satoshis
+		input.PreviousTxScript = prevTx.Outputs[vout].LockingScript
+	}
+
+	return nil
 }

@@ -26,9 +26,8 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings
 
 	_, err := s.client.FreezeBatch(ctx, items)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
-			s.logger.Warnf("[TeraSlab] partial error during FreezeUTXOs: %v", err)
-			return nil
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			return partialErrorToError("FreezeUTXOs", pe)
 		}
 		return err
 	}
@@ -53,9 +52,8 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettin
 
 	_, err := s.client.UnfreezeBatch(ctx, items)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
-			s.logger.Warnf("[TeraSlab] partial error during UnFreezeUTXOs: %v", err)
-			return nil
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			return partialErrorToError("UnFreezeUTXOs", pe)
 		}
 		return err
 	}

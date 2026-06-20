@@ -6,6 +6,26 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
+// partialErrorToError converts a TeraSlab PartialError into a single joined
+// Teranode error — one mapped error per failed item, tagged with the operation
+// name and item index. Returns nil only if there are no item errors.
+//
+// Used by the batch mutation paths so per-item failures propagate to the caller
+// instead of being silently swallowed (a money-path correctness requirement;
+// the Aerospike backend likewise aggregates and returns per-item errors).
+func partialErrorToError(op string, pe *teraslab.PartialError) error {
+	if pe == nil || len(pe.Errors) == 0 {
+		return nil
+	}
+
+	errs := make([]error, 0, len(pe.Errors))
+	for _, ie := range pe.Errors {
+		errs = append(errs, errors.NewProcessingError("%s item %d failed", op, ie.ItemIndex, mapErrorCode(ie.Code)))
+	}
+
+	return errors.Join(errs...)
+}
+
 // mapErrorCode converts a TeraSlab error code to a Teranode error.
 func mapErrorCode(code uint16) error {
 	switch code {
