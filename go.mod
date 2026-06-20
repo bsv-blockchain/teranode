@@ -461,11 +461,9 @@ require (
 )
 
 require (
-	github.com/icellan/teraslab/client/go v0.0.0-00010101000000-000000000000
+	github.com/icellan/teraslab/client/go v0.1.0
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/labstack/gommon v0.4.2
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
 )
-
-replace github.com/icellan/teraslab/client/go => /Users/siggioskarsson/gitcheckout/teraslab/client/go
