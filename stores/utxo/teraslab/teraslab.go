@@ -43,10 +43,8 @@ type Store struct {
 	settings        *settings.Settings
 	utxoBatchSize   int
 
-	storeBatcher  batcherIfc[batchStoreItem]
-	getBatcher    batcherIfc[batchGetItem]
-	spendBatcher  batcherIfc[batchSpendItem]
-	lockedBatcher batcherIfc[batchLockedItem]
+	storeBatcher batcherIfc[batchStoreItem]
+	getBatcher   batcherIfc[batchGetItem]
 }
 
 // New creates a new TeraSlab-based UTXO store.
@@ -101,18 +99,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchDuration := time.Duration(tSettings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond
 	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, !tSettings.BatcherDrainMode)
 
-	spendBatchSize := tSettings.UtxoStore.SpendBatcherSize
-	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
-	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, !tSettings.BatcherDrainMode)
-
-	lockedBatcherSize := tSettings.UtxoStore.LockedBatcherSize
-	lockedBatchDuration := time.Duration(tSettings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond
-	s.lockedBatcher = batcher.New(lockedBatcherSize, lockedBatchDuration, s.sendLockedBatch, !tSettings.BatcherDrainMode)
-
 	if tSettings.BatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
-		s.spendBatcher.SetDrainMode(true)
-		s.lockedBatcher.SetDrainMode(true)
 		s.storeBatcher.SetDrainMode(true)
 	}
 

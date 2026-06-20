@@ -37,24 +37,6 @@ type batchGetResult struct {
 	err  error
 }
 
-// batchSpendItem is a single item in the spend batcher.
-type batchSpendItem struct {
-	ctx               context.Context
-	item              teraslab.SpendItem
-	blockHeight       uint32
-	ignoreConflicting bool
-	ignoreLocked      bool
-	done              chan error
-}
-
-// batchLockedItem is a single item in the locked batcher.
-type batchLockedItem struct {
-	ctx    context.Context
-	txHash chainhash.Hash
-	value  bool
-	done   chan error
-}
-
 // mergeBatchContexts returns a context that is canceled only when *every* input
 // context has been canceled (i.e. when no caller is still waiting for a result).
 // This lets the batch RPC proceed for as long as at least one caller cares about
@@ -119,22 +101,6 @@ func storeItemContexts(batch []*batchStoreItem) []context.Context {
 }
 
 func getItemContexts(batch []*batchGetItem) []context.Context {
-	out := make([]context.Context, len(batch))
-	for i, b := range batch {
-		out[i] = b.ctx
-	}
-	return out
-}
-
-func spendItemContexts(batch []*batchSpendItem) []context.Context {
-	out := make([]context.Context, len(batch))
-	for i, b := range batch {
-		out[i] = b.ctx
-	}
-	return out
-}
-
-func lockedItemContexts(batch []*batchLockedItem) []context.Context {
 	out := make([]context.Context, len(batch))
 	for i, b := range batch {
 		out[i] = b.ctx
@@ -228,138 +194,5 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 		}
 
 		b.done <- batchGetResult{data: data}
-	}
-}
-
-// sendSpendBatch flushes a batch of spend items to the TeraSlab server.
-//
-// Uses the merged context of all in-flight items (see sendStoreBatch).
-func (s *Store) sendSpendBatch(batch []*batchSpendItem) {
-	if len(batch) == 0 {
-		return
-	}
-
-	ctx, cancel := mergeBatchContexts(spendItemContexts(batch))
-	defer cancel()
-
-	// Use the flags from the first item (they should all be the same within a batch)
-	params := teraslab.SpendBatchParams{
-		IgnoreConflicting:    batch[0].ignoreConflicting,
-		IgnoreLocked:         batch[0].ignoreLocked,
-		CurrentBlockHeight:   s.blockHeight.Load(),
-		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
-	}
-
-	items := make([]teraslab.SpendItem, len(batch))
-	for i, b := range batch {
-		items[i] = b.item
-	}
-
-	_, err := s.client.SpendBatch(ctx, params, items)
-	if err != nil {
-		if pe, ok := err.(*teraslab.PartialError); ok {
-			errMap := make(map[uint32]*teraslab.BatchItemError)
-			for i := range pe.Errors {
-				errMap[pe.Errors[i].ItemIndex] = &pe.Errors[i]
-			}
-			for i, b := range batch {
-				if itemErr, exists := errMap[uint32(i)]; exists { //nolint:gosec
-					b.done <- mapErrorCode(itemErr.Code)
-				} else {
-					b.done <- nil
-				}
-			}
-			return
-		}
-
-		for _, b := range batch {
-			b.done <- err
-		}
-		return
-	}
-
-	for _, b := range batch {
-		b.done <- nil
-	}
-}
-
-// sendLockedBatch flushes a batch of locked items to the TeraSlab server.
-//
-// Uses the merged context of all in-flight items (see sendStoreBatch).
-func (s *Store) sendLockedBatch(batch []*batchLockedItem) {
-	ctx, cancel := mergeBatchContexts(lockedItemContexts(batch))
-	defer cancel()
-
-	// Group by value (true/false) since SetLockedBatch requires a single value
-	trueItems := make([]teraslab.TxID, 0)
-	falseItems := make([]teraslab.TxID, 0)
-	trueIndices := make([]int, 0)
-	falseIndices := make([]int, 0)
-
-	for i, b := range batch {
-		txid := hashToTxID(&b.txHash)
-		if b.value {
-			trueItems = append(trueItems, txid)
-			trueIndices = append(trueIndices, i)
-		} else {
-			falseItems = append(falseItems, txid)
-			falseIndices = append(falseIndices, i)
-		}
-	}
-
-	// Process true items
-	if len(trueItems) > 0 {
-		_, err := s.client.SetLockedBatch(ctx, true, trueItems)
-		if err != nil {
-			if pe, ok := err.(*teraslab.PartialError); ok {
-				errMap := make(map[uint32]*teraslab.BatchItemError)
-				for i := range pe.Errors {
-					errMap[pe.Errors[i].ItemIndex] = &pe.Errors[i]
-				}
-				for subIdx, batchIdx := range trueIndices {
-					if itemErr, exists := errMap[uint32(subIdx)]; exists { //nolint:gosec
-						batch[batchIdx].done <- mapErrorCode(itemErr.Code)
-					} else {
-						batch[batchIdx].done <- nil
-					}
-				}
-			} else {
-				for _, idx := range trueIndices {
-					batch[idx].done <- err
-				}
-			}
-		} else {
-			for _, idx := range trueIndices {
-				batch[idx].done <- nil
-			}
-		}
-	}
-
-	// Process false items
-	if len(falseItems) > 0 {
-		_, err := s.client.SetLockedBatch(ctx, false, falseItems)
-		if err != nil {
-			if pe, ok := err.(*teraslab.PartialError); ok {
-				errMap := make(map[uint32]*teraslab.BatchItemError)
-				for i := range pe.Errors {
-					errMap[pe.Errors[i].ItemIndex] = &pe.Errors[i]
-				}
-				for subIdx, batchIdx := range falseIndices {
-					if itemErr, exists := errMap[uint32(subIdx)]; exists { //nolint:gosec
-						batch[batchIdx].done <- mapErrorCode(itemErr.Code)
-					} else {
-						batch[batchIdx].done <- nil
-					}
-				}
-			} else {
-				for _, idx := range falseIndices {
-					batch[idx].done <- err
-				}
-			}
-		} else {
-			for _, idx := range falseIndices {
-				batch[idx].done <- nil
-			}
-		}
 	}
 }
