@@ -87,6 +87,15 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 
 		// Any tx spending this tx's outputs is a counter/spending child.
 		for vout, output := range tx.Outputs {
+			// Data outputs (OP_RETURN) are stored with a zero UTXO hash and are
+			// never spendable, so they have no spending child. Skip them, mirroring
+			// Create (txToCreateItem). Recomputing a hash here would mismatch the
+			// stored zero hash and make GetSpend return ErrTxNotFound, aborting
+			// SetConflicting for any tx with a data output.
+			if output.LockingScript.IsData() {
+				continue
+			}
+
 			vout32 := uint32(vout) //nolint:gosec // output count is bounded well below u32
 
 			utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, vout32)

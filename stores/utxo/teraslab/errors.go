@@ -59,6 +59,10 @@ func mapErrorCode(code uint16) error {
 		return errors.ErrFrozen
 	case teraslab.ErrCodeInternal:
 		return errors.NewStorageError("teraslab internal error", nil)
+	case teraslab.ErrCodeRedirect:
+		// Redirects are resolved client-side; surfacing one here means the
+		// client failed to follow it, which is an internal/storage-class fault.
+		return errors.NewStorageError("teraslab unexpected redirect", nil)
 	default:
 		return errors.NewStorageError("teraslab unknown error code", nil)
 	}

@@ -53,6 +53,7 @@ func TestMapErrorCode(t *testing.T) {
 		{"UtxoHashMismatch", teraslab.ErrCodeUtxoHashMismatch},
 		{"InvalidSpend", teraslab.ErrCodeInvalidSpend},
 		{"Internal", teraslab.ErrCodeInternal},
+		{"Redirect", teraslab.ErrCodeRedirect},
 		{"unknown code falls through to storage error", 0xBEEF},
 	}
 	for _, tc := range categories {

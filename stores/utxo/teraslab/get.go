@@ -88,6 +88,16 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 
 	slot := records[0].Slots[sp.Vout]
 
+	// A stored slot with an all-zero hash is a data output (OP_RETURN): Create
+	// stores a zero hash and never computes a real one for these. A genuine
+	// SHA-based UTXO hash is never all-zero, so a zero hash uniquely identifies
+	// a non-spendable data slot. Report it as absent — matching Aerospike, which
+	// returns a NOT_FOUND status with nil error rather than a Go error. This is
+	// distinct from a missing record (handled above with ErrTxNotFound).
+	if isZeroHash(slot.Hash) {
+		return &utxo.SpendResponse{Status: int(utxo.Status_NOT_FOUND)}, nil
+	}
+
 	// Validate UTXO hash — if the caller provided a hash and it doesn't match
 	// the stored hash, the UTXO doesn't exist (e.g. after reassignment).
 	if sp.UTXOHash != nil {
@@ -101,8 +111,13 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 
 	switch slot.Status {
 	case teraslab.SlotUnspent:
+		// For an unspent slot the server stores the absolute spendable-at block
+		// height in SpendingData[0:4] (block_height + spendable_after; 0 means
+		// immediately spendable — see teraslab record.rs UtxoSlot docs). The UTXO
+		// is only immature while the current chain height has not yet reached that
+		// height, matching Aerospike's maturity check (spendableIn > blockHeight).
 		spendableHeight := binary.LittleEndian.Uint32(slot.SpendingData[0:4])
-		if spendableHeight > 0 {
+		if spendableHeight > s.blockHeight.Load() {
 			resp.Status = int(utxo.Status_IMMATURE)
 		} else {
 			resp.Status = int(utxo.Status_OK)
@@ -118,4 +133,16 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 	}
 
 	return resp, nil
+}
+
+// isZeroHash reports whether a stored slot hash is all-zero bytes, which the
+// store uses to mark a data (OP_RETURN) output. A real SHA-based UTXO hash is
+// never all-zero, so this unambiguously distinguishes a data slot.
+func isZeroHash(h teraslab.UtxoHash) bool {
+	for _, b := range h {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }

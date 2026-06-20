@@ -64,6 +64,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		for _, h := range hashes {
 			data, err := s.Get(ctx, h)
 			if err != nil {
+				s.logger.Warnf("[TeraSlab] SetMinedMulti fallback Get failed for %s: %v", h.String(), err)
 				continue
 			}
 			if data != nil {

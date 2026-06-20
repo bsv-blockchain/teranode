@@ -103,6 +103,9 @@ func TestUnspendSurfacesPartialError(t *testing.T) {
 
 	err := store.Unspend(ctx, spends, false)
 	require.Error(t, err, "Unspend must return the partial error instead of nil")
+	// The mapped Teranode error must remain matchable via errors.Is so callers'
+	// sentinel checks work; the missing tx yields a per-item TxNotFound.
+	assert.ErrorIs(t, err, teranodeerrors.ErrTxNotFound)
 }
 
 // TestPreserveTransactionsSurfacesPartialError verifies gap #14b: PartialError

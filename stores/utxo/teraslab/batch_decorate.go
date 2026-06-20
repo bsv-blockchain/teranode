@@ -29,6 +29,11 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 
 	for i, umd := range unresolvedMetaDataSlice {
 		if i >= len(records) || !records[i].Found {
+			// Mark not-found items so callers can distinguish "not found" from
+			// "not processed" — mirrors the Aerospike backend, which sets a
+			// TxNotFound error on the item when the key is missing.
+			umd.Data = nil
+			umd.Err = errors.NewTxNotFoundError("%s not found", umd.Hash.String())
 			continue
 		}
 

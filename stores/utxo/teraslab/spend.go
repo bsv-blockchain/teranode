@@ -153,10 +153,13 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 
 	_, err := s.client.UnspendBatch(ctx, params, items)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
+		if pe, ok := err.(*teraslab.PartialError); ok {
 			// Surface partial failures to the caller so reorg / restore flows can
-			// react. Keep a warn log to preserve the existing operational signal.
+			// react. Keep a warn log to preserve the existing operational signal,
+			// but return the mapped Teranode error so callers' errors.Is checks
+			// (e.g. ErrTxNotFound) match instead of the raw client error type.
 			s.logger.Warnf("[TeraSlab] partial error during unspend: %v", err)
+			return partialErrorToError("Unspend", pe)
 		}
 		return err
 	}
