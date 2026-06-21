@@ -77,6 +77,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		if pe, ok := err.(*teraslab.PartialError); ok {
 			// Map partial errors back to spend results
 			hasError := false
+			needsRollback := false
 			for _, itemErr := range pe.Errors {
 				if int(itemErr.ItemIndex) < len(spendResults) {
 					spendErr := mapErrorCode(itemErr.Code)
@@ -88,6 +89,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 						if conflictingSD != nil {
 							spendResults[itemErr.ItemIndex].ConflictingTxID = conflictingSD.TxID
 						}
+					}
+					if spendCodeNeedsRollback(itemErr.Code) {
+						needsRollback = true
 					}
 					hasError = true
 				}
@@ -103,6 +107,30 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			if hasError {
+				// Atomic-spend semantics: when the transaction is genuinely
+				// invalid (double-spend, frozen, conflicting, locked, hash
+				// mismatch, ...), roll back the sibling inputs that DID spend so
+				// those parent UTXOs remain spendable by a later valid tx. The
+				// Teranode validator relies on Spend being all-or-nothing here —
+				// it does not reverse partial spends itself — and the Aerospike
+				// backend behaves the same way (needsSpendRollback + Unspend).
+				// Skip rollback for transient/internal errors so an idempotent
+				// retry can reuse the successful spends.
+				if needsRollback {
+					succeeded := make([]*utxo.Spend, 0, len(spendResults))
+					for _, sp := range spendResults {
+						if sp.Err == nil {
+							succeeded = append(succeeded, sp)
+						}
+					}
+					if len(succeeded) > 0 {
+						// Use a fresh context so a cancelled caller context cannot
+						// abort the rollback and leak the partial spends.
+						if rbErr := s.Unspend(context.Background(), succeeded); rbErr != nil {
+							s.logger.Errorf("[TeraSlab] failed to roll back partial spend for %s: %v", spendingTxID.String(), rbErr)
+						}
+					}
+				}
 				return spendResults, errors.ErrUtxoError
 			}
 			return spendResults, nil
@@ -121,6 +149,29 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	return spendResults, nil
+}
+
+// spendCodeNeedsRollback reports whether a per-item spend error code means the
+// transaction is genuinely invalid (so its already-succeeded sibling spends must
+// be rolled back) rather than a transient/internal server fault (where the
+// successful spends can safely remain for an idempotent retry). Mirrors the
+// Aerospike backend's needsSpendRollback.
+func spendCodeNeedsRollback(code uint16) bool {
+	switch code {
+	case teraslab.ErrCodeAlreadySpent,
+		teraslab.ErrCodeConflicting,
+		teraslab.ErrCodeFrozen,
+		teraslab.ErrCodeAlreadyFrozen,
+		teraslab.ErrCodeFrozenUntil,
+		teraslab.ErrCodeLocked,
+		teraslab.ErrCodeUtxoHashMismatch,
+		teraslab.ErrCodeInvalidSpend,
+		teraslab.ErrCodeCoinbaseImmature,
+		teraslab.ErrCodeVoutOutOfRange:
+		return true
+	default:
+		return false
+	}
 }
 
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.

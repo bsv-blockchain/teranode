@@ -412,6 +412,14 @@ func recordToMetaData(rec teraslab.TxRecord) (*meta.Data, error) {
 			}
 			if slot.Status == teraslab.SlotFrozen {
 				data.Frozen = true
+				// Surface a frozen UTXO as the FrozenBytesTxHash sentinel in its
+				// spending data, mirroring GetSpend and the Aerospike backend.
+				// The shared conflict-resolution helpers (GetConflictingChildren /
+				// GetCounterConflictingTxHashes) treat this sentinel as a frozen
+				// child and reject a reorg/blessing that would re-enable a tx whose
+				// counter-party is frozen. Without it, conflict resolution silently
+				// ignores frozen UTXOs and lets such blocks through.
+				data.SpendingDatas[i] = spend.NewSpendingData(&subtree.FrozenBytesTxHash, i)
 			}
 		}
 	}

@@ -335,8 +335,12 @@ func TestRecordToMetaData(t *testing.T) {
 		require.Len(t, data.SpendingDatas, 3)
 		require.NotNil(t, data.SpendingDatas[0])
 		assert.Equal(t, spendTxid.String(), data.SpendingDatas[0].TxID.String())
-		assert.Nil(t, data.SpendingDatas[1])
+		// A frozen slot surfaces the FrozenBytesTxHash sentinel as its spending
+		// data so the conflict-resolution helpers detect frozen UTXOs.
+		require.NotNil(t, data.SpendingDatas[1])
+		assert.Equal(t, subtree.FrozenBytesTxHash, *data.SpendingDatas[1].TxID)
 		assert.True(t, data.Frozen)
+		assert.Nil(t, data.SpendingDatas[2])
 	})
 
 	t.Run("cold data reconstructs tx inputs/outputs/inpoints", func(t *testing.T) {
