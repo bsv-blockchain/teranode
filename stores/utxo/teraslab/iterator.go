@@ -24,6 +24,10 @@ type unminedTxIterator struct {
 }
 
 // GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
+//
+// TeraSlab has no streaming iteration, so every unmined txid is queried upfront
+// (QueryOldUnmined with a MaxUint32 cutoff) and held in memory by the iterator;
+// Next then fetches metadata in batches. The scan is not streamed.
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	ctx := context.Background()
 
@@ -45,6 +49,10 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 }
 
 // GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner's needs.
+//
+// As with GetUnminedTxIterator, the matching txids (those older than
+// cutoffBlockHeight) are queried upfront via QueryOldUnmined and held in memory;
+// the scan is not streamed.
 func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
 	ctx := context.Background()
 
@@ -175,6 +183,19 @@ type consistencyScanIterator struct {
 // ScanInconsistentUnminedTxs returns an iterator that surfaces unmined-since
 // inconsistencies (transactions with unmined_since set but block entries
 // already present).
+//
+// This is an approximation of a full record scan, not an exhaustive one. The
+// wire protocol exposes no full-record scan, so the candidate set comes from the
+// unmined secondary index (QueryOldUnmined with a MaxUint32 cutoff). It therefore
+// only finds inconsistencies among records the unmined index still lists; cases
+// where the unmined index and the record metadata have diverged (e.g. a record
+// whose unmined_since was cleared while block entries linger) are not detectable
+// here.
+//
+// All candidate txids are loaded into memory upfront when the iterator is
+// constructed; the scan is not streamed. Next then pages through that in-memory
+// slice in batches. Callers scanning a very large unmined set should account for
+// the upfront memory cost.
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	ctx := context.Background()
 

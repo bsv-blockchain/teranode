@@ -160,4 +160,25 @@ func TestGetSpendImmatureAfterReassign(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int(utxo.Status_OK), resp.Status)
 	})
+
+	// Reassigning a slot that was never frozen is rejected server-side, so the
+	// failed item is surfaced as a PartialError and must be mapped through
+	// partialErrorToError (the A6 fix) rather than returned raw. A non-Docker
+	// unit test cannot exercise this because Store holds a concrete client; the
+	// mapping itself is covered by TestPartialErrorToError.
+	t.Run("partial failure is surfaced as a mapped error", func(t *testing.T) {
+		// Output 1 of tx was never frozen (only output 0 was). Reassigning an
+		// unfrozen slot is rejected per-item by the server, so the failure comes
+		// back as a PartialError and must be mapped through partialErrorToError
+		// (the A6 fix) — i.e. the surfaced error names the "ReAssignUTXO" op.
+		unfrozenOld, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
+		require.NoError(t, err)
+
+		err = store.ReAssignUTXO(ctx,
+			&utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 1, UTXOHash: unfrozenOld},
+			&utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 1, UTXOHash: oldHash},
+			tSettings)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ReAssignUTXO")
+	})
 }

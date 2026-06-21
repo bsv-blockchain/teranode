@@ -461,7 +461,7 @@ require (
 )
 
 require (
-	github.com/icellan/teraslab/client/go v0.5.1
+	github.com/icellan/teraslab/client/go v0.5.2-0.20260621142100-dfce7fafd771
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/labstack/gommon v0.4.2
 	github.com/spf13/cobra v1.10.2 // indirect

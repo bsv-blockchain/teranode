@@ -58,10 +58,25 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 	affectedParentSpends := make([]*utxo.Spend, 0)
 	spendingTxHashes := make([]chainhash.Hash, 0)
 
-	for i := range txHashes {
-		txHash := txHashes[i]
+	// Fetch every tx's record in a single batched read instead of one Get per
+	// tx (the previous N+1 fan-out). The records are index-aligned with txids
+	// (same contract BatchDecorate relies on). A missing record is a hard error
+	// here exactly as the per-tx Get path was: Get returns ErrTxNotFound for an
+	// absent record, which aborted the whole call.
+	records, err := s.client.GetRecordBatch(ctx, buildFieldMask([]fields.FieldName{fields.Tx}), txids)
+	if err != nil {
+		if _, ok := err.(*teraslab.NotFoundError); ok {
+			return nil, nil, errors.ErrTxNotFound
+		}
+		return nil, nil, err
+	}
 
-		data, err := s.Get(ctx, &txHash, fields.Tx)
+	for i := range txHashes {
+		if i >= len(records) || !records[i].Found {
+			return nil, nil, errors.ErrTxNotFound
+		}
+
+		data, err := recordToMetaData(records[i])
 		if err != nil {
 			return nil, nil, err
 		}

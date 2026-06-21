@@ -62,7 +62,14 @@ func TestHealth(t *testing.T) {
 	store, ctx, deferFn := initTeraSlabWithDefaults(t)
 	defer deferFn()
 
-	status, details, err := store.Health(ctx, true)
+	// Shallow check: server Health only, no liveness Ping.
+	status, details, err := store.Health(ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, 200, status)
+	assert.Contains(t, details, "TeraSlab")
+
+	// Liveness check: server Health plus a Ping round trip.
+	status, details, err = store.Health(ctx, true)
 	require.NoError(t, err)
 	assert.Equal(t, 200, status)
 	assert.Contains(t, details, "TeraSlab")

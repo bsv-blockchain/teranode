@@ -61,6 +61,47 @@ func TestMapErrorCode(t *testing.T) {
 			assert.Error(t, mapErrorCode(tc.code))
 		})
 	}
+
+	// Cluster / replication / migration codes (15-37). The client v0.5.1 has no
+	// named constants for these, so they are pinned by their wire values from
+	// src/protocol/opcodes.rs. Transient codes must be retryable so the caller's
+	// backoff loop kicks in; the rest carry a descriptive storage/processing
+	// error and must not be flagged retryable.
+	transient := []struct {
+		name string
+		code uint16
+	}{
+		{"NoQuorum", 15},
+		{"MigrationInProgress", 19},
+		{"ReplicationFailed", 20},
+		{"StaleEpoch", 24},
+	}
+	for _, tc := range transient {
+		t.Run(tc.name+" is retryable", func(t *testing.T) {
+			err := mapErrorCode(tc.code)
+			require.Error(t, err)
+			assert.True(t, errors.IsRetryableError(err), "expected code %d to map to a retryable error", tc.code)
+		})
+	}
+
+	t.Run("ClusterNotReady is a storage error mentioning cluster not ready", func(t *testing.T) {
+		err := mapErrorCode(25)
+		require.Error(t, err)
+		var tErr *errors.Error
+		require.True(t, errors.As(err, &tErr))
+		assert.Equal(t, errors.ERR_STORAGE_ERROR, tErr.Code())
+		// Distinct message so startup gating can identify a not-ready cluster.
+		assert.Contains(t, tErr.Message(), "cluster not ready")
+	})
+
+	t.Run("PayloadMalformed is a processing error", func(t *testing.T) {
+		err := mapErrorCode(28)
+		require.Error(t, err)
+		var tErr *errors.Error
+		require.True(t, errors.As(err, &tErr))
+		assert.Equal(t, errors.ERR_PROCESSING, tErr.Code())
+		assert.Contains(t, tErr.Message(), "payload malformed")
+	})
 }
 
 // TestPartialErrorToError covers the per-item aggregation used by the batch

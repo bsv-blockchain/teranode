@@ -78,5 +78,12 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, newUtxo
 	}
 
 	_, err := s.client.ReassignBatch(ctx, params, items)
-	return err
+	if err != nil {
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			return partialErrorToError("ReAssignUTXO", pe)
+		}
+		return err
+	}
+
+	return nil
 }

@@ -48,7 +48,7 @@ type Store struct {
 }
 
 // New creates a new TeraSlab-based UTXO store.
-// The URL format is: teraslab://host:port?pool_size=16&cluster=host2:port2,host3:port3
+// The URL format is: teraslab://host:port?pool_size=16&cluster=host2:port2,host3:port3&cluster_secret=...
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, teraslabURL *url.URL) (*Store, error) {
 	addr := teraslabURL.Host
 
@@ -71,6 +71,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// Include the primary address as a seed
 		cfg.Seeds = append([]string{addr}, seeds...)
 		cfg.Addr = "" // Clear addr when using cluster mode
+	}
+
+	// Parse the optional cluster_secret used to HMAC-sign inter-node opcodes
+	// (OP_GET_PARTITION_MAP) when the cluster runs with a shared secret. The
+	// secret travels in the connection URL's query, never in logs (only the
+	// host is logged below).
+	if secret := teraslabURL.Query().Get("cluster_secret"); secret != "" {
+		cfg.ClusterSecret = []byte(secret)
 	}
 
 	client, err := teraslab.New(ctx, cfg)
@@ -110,11 +118,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 }
 
 // Health checks the health status of the TeraSlab store.
+//
+// It always performs a shallow server health check (OpHealth). When
+// checkLiveness is true it additionally issues a Ping (OpPing) round trip to
+// confirm the connection is live end-to-end; any error from either check is
+// returned with a StatusServiceUnavailable code.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := "TeraSlab store"
 
 	if err := s.client.Health(ctx); err != nil {
 		return http.StatusServiceUnavailable, details, err
+	}
+
+	if checkLiveness {
+		if _, err := s.client.Ping(ctx); err != nil {
+			return http.StatusServiceUnavailable, details, err
+		}
 	}
 
 	return http.StatusOK, details, nil

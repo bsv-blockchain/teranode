@@ -33,6 +33,20 @@ teraslab://host:port?pool_size=16&cluster=host2:port2,host3:port3
 Parameters:
 - `pool_size` — max TCP connections per node (default: 16)
 - `cluster` — comma-separated additional seed nodes for cluster mode
+- `cluster_secret` — shared secret to HMAC-sign inter-node bootstrap
+  (`OP_GET_PARTITION_MAP`) when the cluster runs with a secret
+
+### Cluster mode
+
+All batch operations fan out across shards (split by txid, parallel sub-batches,
+results merged in original order), and the pruner/iterator queries
+(`QueryOldUnminedTransactions`, `GetConflictingTxIterator`) fan out to every node
+and return the deduplicated union. The client follows shard-table-versioned
+redirects with loop detection and retries transient cluster errors
+(migration-in-progress, stale-epoch, no-quorum) with bounded backoff.
+
+Note: iterators still load all matching txids into memory upfront — TeraSlab has
+no streaming iteration — so very large mempools can be memory-heavy.
 
 ## File Layout
 

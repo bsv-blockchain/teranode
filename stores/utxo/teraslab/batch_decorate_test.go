@@ -5,11 +5,46 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestBatchPreviousOutputsDecorateNoFetch exercises the BatchPreviousOutputsDecorate
+// fast paths that never reach the client: an empty tx slice and txs whose inputs
+// are all already decorated. Both must return nil without a server round trip, so
+// they run against a zero-value Store with no Docker container.
+func TestBatchPreviousOutputsDecorateNoFetch(t *testing.T) {
+	store := &teraslabstore.Store{}
+	ctx := context.Background()
+
+	t.Run("empty slice is a no-op", func(t *testing.T) {
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, nil))
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{}))
+	})
+
+	t.Run("already-decorated inputs need no fetch", func(t *testing.T) {
+		script, err := bscript.NewFromHexString("76a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac")
+		require.NoError(t, err)
+
+		tx := &bt.Tx{Inputs: []*bt.Input{{
+			PreviousTxOutIndex: 0,
+			PreviousTxSatoshis: 1000,
+			PreviousTxScript:   script,
+		}}}
+		require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{}))
+
+		// nil txs in the slice must also be tolerated alongside real ones.
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{nil, tx}))
+
+		// The pre-existing decoration must be left untouched.
+		assert.Equal(t, uint64(1000), tx.Inputs[0].PreviousTxSatoshis)
+		assert.Equal(t, script, tx.Inputs[0].PreviousTxScript)
+	})
+}
 
 func TestBatchDecorate(t *testing.T) {
 	store, _, deferFn := initTeraSlabWithDefaults(t)
