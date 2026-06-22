@@ -1,11 +1,13 @@
 package teraslab_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/stretchr/testify/require"
 )
 
 // Ensure Store implements the utxo.Store interface.
@@ -105,4 +107,16 @@ func TestSetMinedWithSpent(t *testing.T) {
 	store, _, deferFn := initTeraSlabWithDefaults(t)
 	defer deferFn()
 	tests.SetMinedWithSpent(t, store)
+}
+
+func TestMinedThenSpendAllPrunes(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+
+	prunerSvc, err := store.GetPrunerService()
+	require.NoError(t, err)
+	require.NotNil(t, prunerSvc, "teraslab store must provide a pruner service")
+	prunerSvc.Start(context.Background())
+
+	tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
 }
