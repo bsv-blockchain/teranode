@@ -583,8 +583,16 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 				nil,
 			).Once()
 
+		// GetBlockHeader conveys both existence and height in a single RPC during
+		// common-ancestor finding: a not-found error means the block is absent from
+		// our chain and stops the walk. Peer headers we don't have must surface as
+		// not-found, mirroring the old GetBlockExists=false behavior. Without this,
+		// the catch-all returning empty success makes every peer header look present,
+		// so the walk selects a bogus height-0 ancestor (forkDepth = 1020) and then
+		// panics in the unmocked fork-cleanup GetBlockHeadersByHeight call.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlock for validation
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{Height: 1015}, nil).Maybe()
