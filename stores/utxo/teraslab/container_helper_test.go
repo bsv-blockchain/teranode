@@ -28,11 +28,10 @@ func initTeraSlab(t *testing.T, tSettings *settings.Settings, logger ulogger.Log
 	ctx := context.Background()
 
 	image := teraslabDefaultImage
-	// Force a registry pull for the default :latest tag so CI always tests the
-	// published image. When an explicit TERASLAB_IMAGE is provided (e.g. a
-	// locally-built dev image not in any registry), do NOT force a pull —
-	// otherwise testcontainers errors trying to fetch a tag that only exists
-	// in the local Docker daemon.
+	// Force a registry pull for the default published image so CI always tests
+	// it. When an explicit TERASLAB_IMAGE is provided (e.g. a locally-built dev
+	// image not in any registry), do NOT force a pull — otherwise testcontainers
+	// errors trying to fetch a tag that only exists in the local Docker daemon.
 	alwaysPull := true
 	if envImage := os.Getenv("TERASLAB_IMAGE"); envImage != "" {
 		image = envImage

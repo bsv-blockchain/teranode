@@ -4,7 +4,6 @@ package teraslab
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -61,7 +60,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if poolSizeStr := teraslabURL.Query().Get("pool_size"); poolSizeStr != "" {
 		poolSize, err := strconv.Atoi(poolSizeStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid pool_size: %w", err)
+			// Typed so callers can classify via errors.Is, matching the other backends.
+			return nil, errors.NewInvalidArgumentError("invalid pool_size %q", poolSizeStr, err)
 		}
 		cfg.Pool.MaxConns = poolSize
 	}
@@ -84,7 +84,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	client, err := teraslab.New(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("teraslab client init: %w", err)
+		// Connecting to the external TeraSlab server failed — a storage-class
+		// fault. Typed so callers can classify it and the cause is preserved.
+		return nil, errors.NewStorageError("teraslab client init", err)
 	}
 
 	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize

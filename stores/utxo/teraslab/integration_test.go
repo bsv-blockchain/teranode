@@ -60,6 +60,8 @@ func TestGetMeta(t *testing.T) {
 	assert.Equal(t, uint64(215), data.Fee)
 	assert.Equal(t, uint64(328), data.SizeInBytes)
 	assert.False(t, data.IsCoinbase)
+	// GetMeta returns metadata only — it must not reconstruct the full tx body.
+	assert.Nil(t, data.Tx, "GetMeta must not populate data.Tx")
 }
 
 // ---------------------------------------------------------------------------

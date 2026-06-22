@@ -60,6 +60,11 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Da
 	}
 
 	*data = *result.data
+	// GetMeta returns metadata only, not the full transaction body. The metadata
+	// fetch pulls cold data (TxInpoints lives there), which also reconstructs
+	// data.Tx as a side effect — clear it so GetMeta honors its contract, matching
+	// the SQL backend (stores/utxo/sql/sql.go GetMeta). TxInpoints is retained.
+	data.Tx = nil
 	return nil
 }
 
