@@ -46,13 +46,13 @@ func mapErrorCode(code uint16) error {
 	case teraslab.ErrCodeLocked:
 		return errors.ErrTxLocked
 	case teraslab.ErrCodeCoinbaseImmature:
-		return errors.ErrNonFinal
+		return errors.ErrTxCoinbaseImmature
 	case teraslab.ErrCodeAlreadyExists:
 		return errors.ErrTxExists
 	case teraslab.ErrCodeVoutOutOfRange:
 		return errors.NewUtxoError("vout out of range")
 	case teraslab.ErrCodeUtxoHashMismatch:
-		return errors.NewUtxoError("utxo hash mismatch")
+		return errors.ErrUtxoHashMismatch
 	case teraslab.ErrCodeInvalidSpend:
 		return errors.NewUtxoError("invalid spend")
 	case teraslab.ErrCodeFrozenUntil:

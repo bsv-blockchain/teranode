@@ -5,8 +5,10 @@ import (
 	"math"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	teraslab "github.com/icellan/teraslab/client/go"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
@@ -116,7 +118,9 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 		wireIDs[i] = hashToTxID(&h)
 	}
 
-	records, err := it.store.client.GetRecordBatch(ctx, teraslab.FieldAllMetadata|teraslab.FieldBlockEntries, wireIDs)
+	// FieldColdData carries the serialized inpoints used to populate TxInpoints;
+	// the pruner relies on ParentTxHashes to preserve parents of unmined txs.
+	records, err := it.store.client.GetRecordBatch(ctx, teraslab.FieldAllMetadata|teraslab.FieldBlockEntries|teraslab.FieldColdData, wireIDs)
 	if err != nil {
 		it.err = err
 		return nil, err
@@ -128,13 +132,32 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 			continue
 		}
 
-		ut := &utxo.UnminedTransaction{}
+		// The embedded *subtree.Node must always be set: block assembly reads the
+		// promoted Hash (and uses Fee/SizeInBytes), and nil-panics otherwise.
+		node := &subtree.Node{Hash: pageTxids[i]}
+		ut := &utxo.UnminedTransaction{Node: node}
 
 		if records[i].Metadata != nil {
 			md := records[i].Metadata
 			ut.UnminedSince = int(md.UnminedSince)
 			ut.CreatedAt = int(md.CreatedAt)
 			ut.Locked = md.Flags&0x04 != 0 // TeraSlab TxFlags bit 2 = LOCKED
+			node.Fee = md.Fee
+			node.SizeInBytes = md.SizeInBytes
+		}
+
+		// Reconstruct TxInpoints from cold data. A decode failure is corrupt store
+		// data and aborts the scan rather than silently dropping parent links.
+		// Always leave a non-nil value so consumers never dereference nil.
+		if records[i].TxData != nil && len(records[i].TxData.Inpoints) > 0 {
+			txInpoints, err := subtree.NewTxInpointsFromBytes(records[i].TxData.Inpoints)
+			if err != nil {
+				it.err = err
+				return nil, errors.NewProcessingError("teraslab: unmined iterator could not decode inpoints for %s", pageTxids[i].String(), err)
+			}
+			ut.TxInpoints = &txInpoints
+		} else {
+			ut.TxInpoints = &subtree.TxInpoints{}
 		}
 
 		if len(records[i].BlockEntries) > 0 {

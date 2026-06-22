@@ -32,7 +32,8 @@ func TestMapErrorCode(t *testing.T) {
 		{"FrozenUntil", teraslab.ErrCodeFrozenUntil, errors.ErrFrozen},
 		{"Conflicting", teraslab.ErrCodeConflicting, errors.ErrTxConflicting},
 		{"Locked", teraslab.ErrCodeLocked, errors.ErrTxLocked},
-		{"CoinbaseImmature", teraslab.ErrCodeCoinbaseImmature, errors.ErrNonFinal},
+		{"CoinbaseImmature", teraslab.ErrCodeCoinbaseImmature, errors.ErrTxCoinbaseImmature},
+		{"UtxoHashMismatch", teraslab.ErrCodeUtxoHashMismatch, errors.ErrUtxoHashMismatch},
 		{"AlreadyExists", teraslab.ErrCodeAlreadyExists, errors.ErrTxExists},
 	}
 	for _, tc := range sentinels {
@@ -50,7 +51,6 @@ func TestMapErrorCode(t *testing.T) {
 	}{
 		{"UtxoNotFrozen", teraslab.ErrCodeUtxoNotFrozen},
 		{"VoutOutOfRange", teraslab.ErrCodeVoutOutOfRange},
-		{"UtxoHashMismatch", teraslab.ErrCodeUtxoHashMismatch},
 		{"InvalidSpend", teraslab.ErrCodeInvalidSpend},
 		{"Internal", teraslab.ErrCodeInternal},
 		{"Redirect", teraslab.ErrCodeRedirect},

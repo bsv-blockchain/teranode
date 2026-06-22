@@ -111,29 +111,35 @@ func TestSerializeDeserializeInputs(t *testing.T) {
 		assert.Equal(t, tx.Inputs[0].PreviousTxSatoshis, got[0].PreviousTxSatoshis)
 	})
 
-	t.Run("empty/too-short data yields nil", func(t *testing.T) {
-		got, err := deserializeInputs([]byte{0x01, 0x02})
+	t.Run("zero-length data yields nil (no stored inputs)", func(t *testing.T) {
+		got, err := deserializeInputs(nil)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
 
-	t.Run("truncated entry header stops cleanly", func(t *testing.T) {
-		// count=1 but the entry length/body is missing.
-		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, 1)
-		got, err := deserializeInputs(buf)
-		require.NoError(t, err)
-		assert.Empty(t, got)
+	t.Run("truncated count header is an error", func(t *testing.T) {
+		// A non-empty blob too short to even hold the 4-byte count is corrupt and
+		// must surface an error, not be silently treated as empty.
+		_, err := deserializeInputs([]byte{0x01, 0x02})
+		require.Error(t, err)
 	})
 
-	t.Run("entry length larger than buffer stops cleanly", func(t *testing.T) {
+	t.Run("declared count exceeding buffer is an error", func(t *testing.T) {
+		// count=1 but the entry length/body is missing — a truncated blob must
+		// error rather than silently returning fewer inputs than declared.
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, 1)
+		_, err := deserializeInputs(buf)
+		require.Error(t, err)
+	})
+
+	t.Run("entry length larger than buffer is an error", func(t *testing.T) {
 		// count=1, declared entry length 9999 but body absent.
 		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint32(buf[0:4], 1)
 		binary.LittleEndian.PutUint32(buf[4:8], 9999)
-		got, err := deserializeInputs(buf)
-		require.NoError(t, err)
-		assert.Empty(t, got)
+		_, err := deserializeInputs(buf)
+		require.Error(t, err)
 	})
 
 	t.Run("malformed entry body surfaces a parse error", func(t *testing.T) {
@@ -168,19 +174,23 @@ func TestSerializeDeserializeOutputs(t *testing.T) {
 		assert.NotNil(t, got[2])
 	})
 
-	t.Run("empty/too-short data yields nil", func(t *testing.T) {
-		got, err := deserializeOutputs([]byte{0x00})
+	t.Run("zero-length data yields nil (no stored outputs)", func(t *testing.T) {
+		got, err := deserializeOutputs(nil)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
 
-	t.Run("entry length larger than buffer stops cleanly", func(t *testing.T) {
+	t.Run("truncated count header is an error", func(t *testing.T) {
+		_, err := deserializeOutputs([]byte{0x00})
+		require.Error(t, err)
+	})
+
+	t.Run("entry length larger than buffer is an error", func(t *testing.T) {
 		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint32(buf[0:4], 1)
 		binary.LittleEndian.PutUint32(buf[4:8], 9999)
-		got, err := deserializeOutputs(buf)
-		require.NoError(t, err)
-		assert.Empty(t, got)
+		_, err := deserializeOutputs(buf)
+		require.Error(t, err)
 	})
 
 	t.Run("malformed entry body surfaces a parse error", func(t *testing.T) {
@@ -197,29 +207,32 @@ func TestSerializeDeserializeOutputs(t *testing.T) {
 func TestTxToCreateItem(t *testing.T) {
 	t.Run("standard tx computes fee and utxo hashes", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 10, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 10, 100, utxo.CreateOptions{})
 		require.NoError(t, err)
 		assert.Equal(t, uint64(215), item.Fee)
 		assert.False(t, item.IsCoinbase)
-		assert.Equal(t, uint32(0), item.SpendingHeight)
+		assert.Equal(t, uint32(0), item.SpendingHeight, "non-coinbase has no spending height")
 		assert.Len(t, item.UtxoHashes, len(tx.Outputs))
 		assert.Equal(t, hashToTxID(tx.TxIDChainHash()), item.TxID)
 		assert.NotEmpty(t, item.TxData.Inputs)
 		assert.NotEmpty(t, item.TxData.Outputs)
 	})
 
-	t.Run("coinbase zeroes fee and sets spending height", func(t *testing.T) {
+	t.Run("coinbase zeroes fee and sets maturity spending height", func(t *testing.T) {
 		tx := mustTx(t, internalCoinbaseHex)
-		item, err := txToCreateItem(tx, 42, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 42, 100, utxo.CreateOptions{})
 		require.NoError(t, err)
 		assert.True(t, item.IsCoinbase)
 		assert.Equal(t, uint64(0), item.Fee)
-		assert.Equal(t, uint32(42), item.SpendingHeight)
+		// Coinbase outputs mature at blockHeight + CoinbaseMaturity, matching the
+		// Aerospike backend (create.go: blockHeight + CoinbaseMaturity). Storing
+		// just blockHeight would make the coinbase spendable at its creation height.
+		assert.Equal(t, uint32(142), item.SpendingHeight)
 	})
 
 	t.Run("conflicting populates deduped parent txids", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, utxo.CreateOptions{Conflicting: true})
+		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{Conflicting: true})
 		require.NoError(t, err)
 		require.Len(t, item.ParentTxIDs, 1)
 		assert.Equal(t, hashToTxID(tx.Inputs[0].PreviousTxIDChainHash()), item.ParentTxIDs[0])
@@ -228,7 +241,7 @@ func TestTxToCreateItem(t *testing.T) {
 
 	t.Run("flags reflect locked and frozen options", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, utxo.CreateOptions{Locked: true, Frozen: true})
+		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{Locked: true, Frozen: true})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(0x01|0x04), item.Flags)
 	})
@@ -243,7 +256,7 @@ func TestTxToCreateItem(t *testing.T) {
 			{Satoshis: 1000, LockingScript: tx0LockingScript(t)},
 			{Satoshis: 0, LockingScript: dataScript},
 		}
-		item, err := txToCreateItem(tx, 0, utxo.CreateOptions{})
+		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{})
 		require.NoError(t, err)
 		require.Len(t, item.UtxoHashes, 2)
 		assert.NotEqual(t, teraslab.UtxoHash{}, item.UtxoHashes[0])
@@ -255,16 +268,16 @@ func TestTxToCreateItem(t *testing.T) {
 		override := &chainhash.Hash{}
 		override[0] = 0x99
 		cb := true
-		item, err := txToCreateItem(tx, 7, utxo.CreateOptions{TxID: override, IsCoinbase: &cb})
+		item, err := txToCreateItem(tx, 7, 100, utxo.CreateOptions{TxID: override, IsCoinbase: &cb})
 		require.NoError(t, err)
 		assert.Equal(t, hashToTxID(override), item.TxID)
 		assert.True(t, item.IsCoinbase)
-		assert.Equal(t, uint32(7), item.SpendingHeight)
+		assert.Equal(t, uint32(107), item.SpendingHeight, "coinbase spending height = blockHeight + maturity")
 	})
 
 	t.Run("mined block info populates pointers", func(t *testing.T) {
 		tx := mustTx(t, internalTestTxHex)
-		item, err := txToCreateItem(tx, 0, utxo.CreateOptions{
+		item, err := txToCreateItem(tx, 0, 100, utxo.CreateOptions{
 			MinedBlockInfos: []utxo.MinedBlockInfo{{BlockID: 5, BlockHeight: 6, SubtreeIdx: 7}},
 		})
 		require.NoError(t, err)
@@ -365,6 +378,49 @@ func TestRecordToMetaData(t *testing.T) {
 		assert.Equal(t, src.Version, data.Tx.Version)
 		assert.Len(t, data.Tx.Inputs, len(src.Inputs))
 		assert.Len(t, data.Tx.Outputs, len(src.Outputs))
+	})
+
+	t.Run("corrupt cold data propagates an error instead of a partial tx", func(t *testing.T) {
+		// A stored inputs blob that declares one entry but is truncated must abort
+		// recordToMetaData with an error — a store read error must never be
+		// swallowed and surfaced as a silently-incomplete tx.
+		corrupt := make([]byte, 8)
+		binary.LittleEndian.PutUint32(corrupt[0:4], 1)    // declares 1 input
+		binary.LittleEndian.PutUint32(corrupt[4:8], 9999) // body absent
+		_, err := recordToMetaData(teraslab.TxRecord{
+			Found:  true,
+			TxData: &teraslab.TxData{Inputs: corrupt},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("corrupt stored outputs propagate an error", func(t *testing.T) {
+		corrupt := make([]byte, 9)
+		binary.LittleEndian.PutUint32(corrupt[0:4], 1)
+		binary.LittleEndian.PutUint32(corrupt[4:8], 1)
+		corrupt[8] = 0xFF // not a valid output body
+		_, err := recordToMetaData(teraslab.TxRecord{
+			Found:  true,
+			TxData: &teraslab.TxData{Outputs: corrupt},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("truncated block entries surface an error, not a partial set", func(t *testing.T) {
+		// TeraSlab returns at most MaxInlineBlockEntries (3) block entries inline and
+		// flags the rest as truncated. Silently returning a capped BlockIDs set would
+		// corrupt reorg/rewind decisions (Aerospike stores the full set), so a
+		// truncated record must error rather than hand back an incomplete list.
+		_, err := recordToMetaData(teraslab.TxRecord{
+			Found: true,
+			BlockEntries: []teraslab.BlockEntry{
+				{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0},
+				{BlockID: 2, BlockHeight: 2, SubtreeIdx: 0},
+				{BlockID: 3, BlockHeight: 3, SubtreeIdx: 0},
+			},
+			BlockEntriesTruncated: true,
+		})
+		require.Error(t, err)
 	})
 
 	t.Run("block entries and conflicting children decode", func(t *testing.T) {

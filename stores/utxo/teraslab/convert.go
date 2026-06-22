@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	teraslab "github.com/icellan/teraslab/client/go"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -48,12 +49,16 @@ var fieldNameToMask = map[fields.FieldName]uint32{
 }
 
 // defaultGetMask is the field mask used when Get() is called with no specific
-// fields. Matches utxo.MetaFieldsWithTx: metadata + transaction data.
-var defaultGetMask = buildFieldMaskFrom(utxo.MetaFieldsWithTx)
+// fields. The Aerospike backend returns the full metadata set plus transaction
+// data by default, so this requests all metadata bits (including unmined_since,
+// created_at and spending_height — which utxo.MetaFieldsWithTx omits) plus the
+// cold data needed to reconstruct the tx and the block entries.
+var defaultGetMask = teraslab.FieldAllMetadata | teraslab.FieldColdData | teraslab.FieldBlockEntries
 
-// defaultGetMetaMask is the field mask used by GetMeta(). Matches
-// utxo.MetaFields: metadata without transaction data.
-var defaultGetMetaMask = buildFieldMaskFrom(utxo.MetaFields)
+// defaultGetMetaMask is the field mask used by GetMeta(). Same metadata coverage
+// as the default Get mask; TxInpoints reconstruction already requires the cold
+// data, so it is included.
+var defaultGetMetaMask = teraslab.FieldAllMetadata | teraslab.FieldColdData | teraslab.FieldBlockEntries
 
 // buildFieldMask converts Teranode field names to a TeraSlab field mask.
 // If no fields are specified, uses the default Get mask (MetaFieldsWithTx).
@@ -201,26 +206,40 @@ func serializeOutputs(outputs []*bt.Output) []byte {
 }
 
 // deserializeInputs reads back inputs from the format written by serializeInputs.
+//
+// A zero-length blob means "no inputs stored" and yields (nil, nil). Any other
+// malformation — a truncated count header, a declared count the buffer cannot
+// hold, an entry length that overruns, or an unparseable entry body — is a
+// corrupt store read and returns an error rather than a silently-partial slice.
 func deserializeInputs(data []byte) ([]*bt.Input, error) {
-	if len(data) < 4 {
+	if len(data) == 0 {
 		return nil, nil
+	}
+	if len(data) < 4 {
+		return nil, errors.NewProcessingError("teraslab: inputs blob truncated (%d bytes, need >=4 for count header)", len(data))
 	}
 	count := binary.LittleEndian.Uint32(data[0:4])
 	pos := 4
+	// Each entry consumes at least a 4-byte length prefix, so a declared count
+	// larger than the remaining bytes can hold is corrupt. This also bounds the
+	// preallocation so a bogus count cannot force a huge up-front allocation.
+	if count > uint32((len(data)-4)/4) { //nolint:gosec
+		return nil, errors.NewProcessingError("teraslab: inputs blob declares %d entries but only %d bytes remain", count, len(data)-4)
+	}
 	inputs := make([]*bt.Input, 0, count)
 
 	for i := uint32(0); i < count; i++ {
 		if pos+4 > len(data) {
-			break
+			return nil, errors.NewProcessingError("teraslab: inputs blob truncated reading entry %d length prefix", i)
 		}
 		entryLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 		pos += 4
 		if pos+entryLen > len(data) {
-			break
+			return nil, errors.NewProcessingError("teraslab: inputs blob entry %d length %d overruns buffer", i, entryLen)
 		}
 		input := &bt.Input{}
 		if _, err := input.ReadFromExtended(bytes.NewReader(data[pos : pos+entryLen])); err != nil {
-			return inputs, err
+			return nil, errors.NewProcessingError("teraslab: inputs blob entry %d malformed", i, err)
 		}
 		inputs = append(inputs, input)
 		pos += entryLen
@@ -230,17 +249,30 @@ func deserializeInputs(data []byte) ([]*bt.Input, error) {
 }
 
 // deserializeOutputs reads back outputs from the format written by serializeOutputs.
+//
+// A zero-length blob means "no outputs stored" and yields (nil, nil). Any other
+// malformation is treated as a corrupt store read and returns an error rather
+// than a silently-partial slice. A zero-length entry is a legitimately nil
+// output (preserved by serializeOutputs).
 func deserializeOutputs(data []byte) ([]*bt.Output, error) {
-	if len(data) < 4 {
+	if len(data) == 0 {
 		return nil, nil
+	}
+	if len(data) < 4 {
+		return nil, errors.NewProcessingError("teraslab: outputs blob truncated (%d bytes, need >=4 for count header)", len(data))
 	}
 	count := binary.LittleEndian.Uint32(data[0:4])
 	pos := 4
+	// Each entry consumes at least a 4-byte length prefix; reject a declared
+	// count the buffer cannot hold and bound the preallocation in one check.
+	if count > uint32((len(data)-4)/4) { //nolint:gosec
+		return nil, errors.NewProcessingError("teraslab: outputs blob declares %d entries but only %d bytes remain", count, len(data)-4)
+	}
 	outputs := make([]*bt.Output, 0, count)
 
 	for i := uint32(0); i < count; i++ {
 		if pos+4 > len(data) {
-			break
+			return nil, errors.NewProcessingError("teraslab: outputs blob truncated reading entry %d length prefix", i)
 		}
 		entryLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 		pos += 4
@@ -249,11 +281,11 @@ func deserializeOutputs(data []byte) ([]*bt.Output, error) {
 			continue
 		}
 		if pos+entryLen > len(data) {
-			break
+			return nil, errors.NewProcessingError("teraslab: outputs blob entry %d length %d overruns buffer", i, entryLen)
 		}
 		output := &bt.Output{}
 		if _, err := output.ReadFrom(bytes.NewReader(data[pos : pos+entryLen])); err != nil {
-			return outputs, err
+			return nil, errors.NewProcessingError("teraslab: outputs blob entry %d malformed", i, err)
 		}
 		outputs = append(outputs, output)
 		pos += entryLen
@@ -266,7 +298,7 @@ func deserializeOutputs(data []byte) ([]*bt.Output, error) {
 // txToCreateItem: bt.Tx → teraslab.CreateItem
 // ---------------------------------------------------------------------------
 
-func txToCreateItem(tx *bt.Tx, blockHeight uint32, opts utxo.CreateOptions) (teraslab.CreateItem, error) {
+func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, opts utxo.CreateOptions) (teraslab.CreateItem, error) {
 	txHash := tx.TxIDChainHash()
 
 	var txid teraslab.TxID
@@ -317,9 +349,14 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, opts utxo.CreateOptions) (ter
 		flags |= 0x04
 	}
 
+	// Coinbase outputs are only spendable after the maturity window. Store the
+	// absolute spendable-at height (blockHeight + CoinbaseMaturity) as the server
+	// records the SpendingHeight verbatim, matching the Aerospike backend
+	// (create.go: blockHeight + CoinbaseMaturity). Sending just blockHeight would
+	// make the coinbase spendable at its creation height.
 	var spendingHeight uint32
 	if isCoinbase {
-		spendingHeight = blockHeight
+		spendingHeight = blockHeight + coinbaseMaturity
 	}
 
 	// Serialize tx data for cold storage
@@ -433,27 +470,40 @@ func recordToMetaData(rec teraslab.TxRecord) (*meta.Data, error) {
 		}
 		if len(rec.TxData.Inputs) > 0 {
 			inputs, err := deserializeInputs(rec.TxData.Inputs)
-			if err == nil {
-				tx.Inputs = inputs
+			if err != nil {
+				return nil, errors.NewTxInvalidError("teraslab: could not read stored inputs", err)
 			}
+			tx.Inputs = inputs
 		}
 		if len(rec.TxData.Outputs) > 0 {
 			outputs, err := deserializeOutputs(rec.TxData.Outputs)
-			if err == nil {
-				tx.Outputs = outputs
+			if err != nil {
+				return nil, errors.NewTxInvalidError("teraslab: could not read stored outputs", err)
 			}
+			tx.Outputs = outputs
 		}
 		if len(rec.TxData.Inpoints) > 0 {
 			txInpoints, err := subtree.NewTxInpointsFromBytes(rec.TxData.Inpoints)
-			if err == nil {
-				data.TxInpoints = txInpoints
+			if err != nil {
+				return nil, errors.NewTxInvalidError("teraslab: could not read stored inpoints", err)
 			}
+			data.TxInpoints = txInpoints
 		}
 		data.Tx = tx
 	}
 
 	if data.Tx == nil {
 		data.Tx = &bt.Tx{}
+	}
+
+	// TeraSlab returns at most MaxInlineBlockEntries block entries inline and flags
+	// the surplus as truncated (the overflow lives in on-disk storage the normal
+	// read does not return). A truncated set would silently cap BlockIDs and
+	// corrupt reorg/rewind block-membership decisions — which depend on the full
+	// set — so surface an error rather than hand back an incomplete list. The
+	// Aerospike backend stores the full set and never truncates.
+	if rec.BlockEntriesTruncated {
+		return nil, errors.NewProcessingError("teraslab: block entries truncated (more than the inline cap); the full block-membership set is unavailable")
 	}
 
 	if len(rec.BlockEntries) > 0 {

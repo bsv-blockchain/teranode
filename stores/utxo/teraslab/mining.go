@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	teraslab "github.com/icellan/teraslab/client/go"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
@@ -59,13 +60,18 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		}
 	}
 
-	// If no successes reported, do a Get to retrieve block IDs
+	// If no successes reported, do a Get to retrieve block IDs.
+	//
+	// The interface postcondition (when UnsetMined is false and a nil error is
+	// returned) is that every input hash appears in the result map. A fallback Get
+	// that fails must therefore surface the error, not be swallowed with a Warn +
+	// continue, which would return a silently-incomplete map and skip downstream
+	// double-spend detection for the missing tx.
 	if len(result) == 0 {
 		for _, h := range hashes {
 			data, err := s.Get(ctx, h)
 			if err != nil {
-				s.logger.Warnf("[TeraSlab] SetMinedMulti fallback Get failed for %s: %v", h.String(), err)
-				continue
+				return result, errors.NewStorageError("teraslab: SetMinedMulti fallback Get failed for %s", h.String(), err)
 			}
 			if data != nil {
 				result[*h] = data.BlockIDs

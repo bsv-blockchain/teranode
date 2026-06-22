@@ -416,12 +416,15 @@ func TestSpendAndGetSpendErrorPaths(t *testing.T) {
 		assert.Empty(t, spends)
 	})
 
-	t.Run("GetSpend on missing tx returns TxNotFound", func(t *testing.T) {
+	t.Run("GetSpend on missing tx returns NOT_FOUND status with nil error", func(t *testing.T) {
+		// Not-found is a status, not an error — matching the Store contract and the
+		// Aerospike/SQL backends (see tests.GetSpendNotFound).
 		missing := &chainhash.Hash{}
 		missing[0] = 0xC0
-		_, err := store.GetSpend(ctx, &utxo.Spend{TxID: missing, Vout: 0})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, errors.ErrTxNotFound)
+		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: missing, Vout: 0})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 	})
 
 	t.Run("GetSpend with vout out of range errors", func(t *testing.T) {

@@ -285,8 +285,18 @@ func TestGetUnminedTxIterator(t *testing.T) {
 		batch, err := iter.Next(context.Background())
 		require.NoError(t, err)
 		// Should return at least our unmined tx
-		assert.GreaterOrEqual(t, len(batch), 1)
+		require.GreaterOrEqual(t, len(batch), 1)
 		assert.Nil(t, iter.Err())
+
+		// The embedded *subtree.Node must be populated — block assembly reads the
+		// promoted Hash (and Fee/SizeInBytes) and nil-panics otherwise.
+		ut := batch[0]
+		require.NotNil(t, ut.Node, "UnminedTransaction.Node must be set")
+		assert.Equal(t, tx.TxIDChainHash().String(), ut.Hash.String())
+		// TxInpoints must be non-nil and carry the tx's parents — the pruner uses
+		// ParentTxHashes to preserve parents of unmined txs.
+		require.NotNil(t, ut.TxInpoints, "UnminedTransaction.TxInpoints must be set")
+		assert.NotEmpty(t, ut.TxInpoints.ParentTxHashes, "TxInpoints must carry parent hashes")
 	})
 
 	t.Run("prunable iterator with matching cutoff", func(t *testing.T) {

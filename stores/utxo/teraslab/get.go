@@ -69,17 +69,22 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 
 	// Use GetRecordBatch with FieldUtxoSlots to get slot hashes for validation.
 	// The wire-level GetSpendBatch does not return slot hashes, so we cannot
-	// validate that the requested UTXOHash matches the stored hash.
-	records, err := s.client.GetRecordBatch(ctx, teraslab.FieldUtxoSlots, []teraslab.TxID{txid})
+	// validate that the requested UTXOHash matches the stored hash. FieldFlags is
+	// also requested so the tx-level conflicting/locked flags can override the
+	// per-slot status (matching the Aerospike backend).
+	records, err := s.client.GetRecordBatch(ctx, teraslab.FieldUtxoSlots|teraslab.FieldFlags, []teraslab.TxID{txid})
 	if err != nil {
+		// A missing record is a status, not an error: the Store contract (and the
+		// Aerospike/SQL backends) returns NOT_FOUND with a nil error so callers can
+		// distinguish "absent" from a real failure. Only genuine errors propagate.
 		if _, ok := err.(*teraslab.NotFoundError); ok {
-			return nil, errors.ErrTxNotFound
+			return &utxo.SpendResponse{Status: int(utxo.Status_NOT_FOUND)}, nil
 		}
 		return nil, err
 	}
 
 	if len(records) == 0 || !records[0].Found {
-		return nil, errors.ErrTxNotFound
+		return &utxo.SpendResponse{Status: int(utxo.Status_NOT_FOUND)}, nil
 	}
 
 	if int(sp.Vout) >= len(records[0].Slots) {
@@ -130,6 +135,18 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 		resp.SpendingData = spend.NewSpendingData(&subtree.FrozenBytesTxHash, int(sp.Vout))
 	default:
 		resp.Status = int(utxo.Status_OK)
+	}
+
+	// The conflicting and locked flags are tx-level metadata, not per-slot status.
+	// Apply them as overrides after the slot status, matching the Aerospike
+	// backend's precedence (conflicting, then locked — locked wins).
+	if records[0].Metadata != nil {
+		if records[0].Metadata.Flags&0x02 != 0 { // CONFLICTING
+			resp.Status = int(utxo.Status_CONFLICTING)
+		}
+		if records[0].Metadata.Flags&0x04 != 0 { // LOCKED
+			resp.Status = int(utxo.Status_LOCKED)
+		}
 	}
 
 	return resp, nil

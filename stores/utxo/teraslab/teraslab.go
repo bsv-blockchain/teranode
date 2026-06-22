@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/go-batcher/v2"
 	teraslab "github.com/icellan/teraslab/client/go"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -142,7 +143,9 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 // SetBlockHeight updates the current block height in the store.
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	if blockHeight == 0 {
-		return fmt.Errorf("block height cannot be zero")
+		// Use the typed invalid-argument error so callers can classify it via
+		// errors.Is, matching the Aerospike/SQL backends.
+		return errors.NewInvalidArgumentError("block height cannot be zero")
 	}
 	s.blockHeight.Store(blockHeight)
 	return nil

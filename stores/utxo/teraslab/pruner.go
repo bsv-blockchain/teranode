@@ -35,9 +35,13 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	_, err := s.client.PreserveTransactions(ctx, preserveUntilHeight, txids)
 	if err != nil {
-		if _, ok := err.(*teraslab.PartialError); ok {
-			// Surface partial failures so the pruner can decide how to retry.
+		if pe, ok := err.(*teraslab.PartialError); ok {
+			// Map per-item failures to Teranode errors so the caller can branch on
+			// errors.Is, matching every other mutation path in this package
+			// (Unspend, SetLocked, SetMinedMulti). Returning the raw client type
+			// would break the errors.Is chain.
 			s.logger.Warnf("[TeraSlab] partial error during PreserveTransactions: %v", err)
+			return partialErrorToError("PreserveTransactions", pe)
 		}
 		return err
 	}
