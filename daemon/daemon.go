@@ -340,7 +340,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// Get listener using util.GetListener
 	listener, listenAddress, _, err := util.GetListener(appSettings.Context, "health", "http://", appSettings.HealthCheckHTTPListenAddress)
 	if err != nil {
+		// Fatalf is expected to terminate the process in production, but test
+		// loggers only record the message and return. Without an explicit return
+		// here, execution would fall through to server.Serve(listener) with a nil
+		// listener and panic. Return so a failed listener never reaches Serve.
 		logger.Fatalf("Failed to get health check listener: %v", err)
+		return
 	}
 
 	server := &http.Server{

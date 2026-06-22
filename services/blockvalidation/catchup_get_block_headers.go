@@ -206,13 +206,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// iterations), so abort as soon as we see the flag rather than fetching
 		// the next header batch.
 		if u.isPeerMalicious(ctx, identifier) {
-			u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", chainTipHash.String(), baseURL)
+			u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", chainTipHash.String(), identifier)
 
 			if circuitBreaker != nil {
 				circuitBreaker.RecordFailure()
 			}
 
-			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", baseURL)
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
 		}
 
 		// Create context with iteration timeout to prevent slow-loris attacks
