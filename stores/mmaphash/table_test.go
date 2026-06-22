@@ -250,25 +250,123 @@ func TestProbingHandlesCollisions(t *testing.T) {
 	}
 }
 
-func TestSegmentFullReturnsError(t *testing.T) {
-	// Expected tiny -> 1 segment of minSegSlots (64). Fill the segment with
-	// colliding keys until it overflows.
-	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "f", KeySize: 32, ValueSize: 8, Expected: 1})
+// TestTableGrowsOnSegmentFull is the core of issue #1080: a single hot segment
+// that fills must grow transparently rather than returning ErrTableFull. All
+// keys here share segment+start-bucket (collidingKey), so they pile into one
+// segment of an initially tiny table — far more than its minSegSlots capacity.
+func TestTableGrowsOnSegmentFull(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "grow", KeySize: 32, ValueSize: 8, Expected: 1})
 	require.NoError(t, err)
 	defer tbl.Close()
 	require.Equal(t, uint64(minSegSlots), tbl.slotsPerSeg)
 	require.Equal(t, uint64(0), tbl.segMask) // single segment
 
-	var gotFull bool
-	for i := uint64(0); i < minSegSlots+5; i++ {
-		_, _, err := tbl.Upsert(collidingKey(i), i)
-		if err != nil {
-			require.ErrorIs(t, err, ErrTableFull)
-			gotFull = true
-			break
-		}
+	const n = minSegSlots * 8 // 8x the initial single-segment capacity
+	for i := uint64(0); i < n; i++ {
+		_, inserted, err := tbl.Upsert(collidingKey(i), i)
+		require.NoErrorf(t, err, "insert %d must grow, not overflow", i)
+		require.Truef(t, inserted, "insert %d should be newly inserted", i)
 	}
-	require.True(t, gotFull, "expected ErrTableFull when segment overflows")
+	require.Equal(t, int64(n), tbl.Len())
+	require.Greater(t, tbl.slotsPerSeg, uint64(minSegSlots), "table must have grown its per-segment capacity")
+	require.Equal(t, uint64(0), tbl.segMask, "growth keeps the segment count (and segMask) fixed")
+
+	// every key still resolves correctly through the grown probe chains
+	for i := uint64(0); i < n; i++ {
+		v, found, err := tbl.Lookup(collidingKey(i))
+		require.NoError(t, err)
+		require.Truef(t, found, "key %d lost across grow", i)
+		require.Equal(t, i, v)
+		// re-inserting any key is detected as an existing entry
+		_, inserted, err := tbl.Upsert(collidingKey(i), 0)
+		require.NoError(t, err)
+		require.Falsef(t, inserted, "key %d should be a duplicate after grow", i)
+	}
+}
+
+// TestTableGrowPreservesEntries drives many grows (a tiny table forced to hold
+// thousands of entries) and asserts no entry is lost and none is duplicated.
+func TestTableGrowPreservesEntries(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "grow2", KeySize: 36, ValueSize: 0, Expected: 1})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	const n = 5000
+	for i := uint64(0); i < n; i++ {
+		_, inserted, err := tbl.Upsert(mkKey(36, i), 0)
+		require.NoError(t, err)
+		require.True(t, inserted)
+	}
+	require.Equal(t, int64(n), tbl.Len())
+
+	for i := uint64(0); i < n; i++ {
+		_, found, err := tbl.Lookup(mkKey(36, i))
+		require.NoError(t, err)
+		require.Truef(t, found, "key %d lost across grows", i)
+	}
+}
+
+// TestTableGrowWithValues confirms values survive a grow+rehash (the
+// DiskTxMapUint64 case, ValueSize=8).
+func TestTableGrowWithValues(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "growv", KeySize: 32, ValueSize: 8, Expected: 1})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	const n = minSegSlots * 4
+	for i := uint64(0); i < n; i++ {
+		v, inserted, err := tbl.Upsert(collidingKey(i), i*7+1)
+		require.NoError(t, err)
+		require.True(t, inserted)
+		require.Equal(t, i*7+1, v)
+	}
+	for i := uint64(0); i < n; i++ {
+		got, found, err := tbl.Lookup(collidingKey(i))
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equalf(t, i*7+1, got, "value for key %d not preserved across grow", i)
+	}
+}
+
+// TestTableGrowConcurrent races many writers against an undersized table so
+// that grows happen under contention. Exactly-once insertion and a correct
+// final count must hold (run under -race).
+func TestTableGrowConcurrent(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "growc", KeySize: 32, ValueSize: 8, Expected: 100})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	const keys = 20000
+	const writersPerKey = 4
+	var insertedCount atomic.Int64
+	var wg sync.WaitGroup
+
+	for w := 0; w < writersPerKey; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := uint64(0); i < keys; i++ {
+				_, inserted, err := tbl.Upsert(mkKey(32, i), i)
+				if err != nil {
+					t.Errorf("upsert: %v", err)
+					return
+				}
+				if inserted {
+					insertedCount.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(keys), insertedCount.Load(), "each key inserted exactly once despite concurrent grows")
+	require.Equal(t, int64(keys), tbl.Len())
+	for i := uint64(0); i < keys; i++ {
+		v, found, err := tbl.Lookup(mkKey(32, i))
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, i, v)
+	}
 }
 
 func TestConcurrentUpsertExactlyOnce(t *testing.T) {

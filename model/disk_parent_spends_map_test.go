@@ -194,8 +194,11 @@ func TestDiskParentSpendsMap_ManyEntries(t *testing.T) {
 
 func TestDiskParentSpendsMap_SetIfNotExists_Overflow(t *testing.T) {
 	// FilterCapacity 1 -> a single minimal segment (minSegSlots slots). Inserting
-	// many unique inpoints (all in the single segment) must eventually overflow,
-	// and that overflow MUST surface as a non-nil error -- never a silent false.
+	// far more unique inpoints than that must NOT halt (issue #1080): the backing
+	// table grows transparently. Each insert of a fresh inpoint MUST report
+	// inserted=true with no error -- overflow is never misreported as a silent
+	// duplicate (false). This is the unique-key-spread overflow shape;
+	// TestDiskParentSpendsMap_GrowsBeyondCapacity covers the same-parent cluster.
 	m, err := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 		BasePaths:      []string{t.TempDir()},
 		FilterCapacity: 1,
@@ -203,15 +206,16 @@ func TestDiskParentSpendsMap_SetIfNotExists_Overflow(t *testing.T) {
 	require.NoError(t, err)
 	defer m.Close()
 
-	var gotErr error
-	for i := uint64(0); i < 100000 && gotErr == nil; i++ {
+	const n = 100000
+	for i := uint64(0); i < n; i++ {
 		var h chainhash.Hash
 		binary.LittleEndian.PutUint64(h[0:8], i)
 		binary.LittleEndian.PutUint64(h[8:16], i*0x9e3779b97f4a7c15)
-		_, e := m.SetIfNotExists(subtreepkg.Inpoint{Hash: h, Index: uint32(i)})
-		gotErr = e
+		got, e := m.SetIfNotExists(subtreepkg.Inpoint{Hash: h, Index: uint32(i)})
+		require.NoErrorf(t, e, "insert %d beyond initial capacity must grow, not error", i)
+		require.Truef(t, got, "fresh inpoint %d must be inserted=true, never a silent false", i)
 	}
-	require.Error(t, gotErr, "filling beyond capacity must surface an error, not a silent false")
+	require.Equal(t, int64(n), m.Stats().Entries)
 }
 
 func TestDiskParentSpendsMap_Stats(t *testing.T) {
@@ -317,15 +321,14 @@ func TestNewDiskParentSpendsMap_RejectsZeroCapacity(t *testing.T) {
 }
 
 // TestDiskParentSpendsMap_SameParentClustering covers ordishs's review point:
-// inpoints that share one parent hash but differ only in output index land in
-// the SAME segment and SAME start bucket (the index lives in key[32:36],
-// outside both the segment window key[8:16] and bucket window key[0:8]), so a
-// consolidation/sweep of many outputs of one parent forms a probe chain in a
-// single segment. This asserts correctness under that clustering: every
-// distinct (hash, index) is inserted exactly once, and re-inserting any is
-// detected as a duplicate — with capacity sized for the load.
+// a consolidation/sweep of many outputs of one parent (shared parent hash,
+// differing output index). inpointKey now folds the index into the bucket and
+// segment windows (see TestInpointKey_DispersesSameParent), so these no longer
+// collide into one probe chain — but the correctness contract must hold either
+// way: every distinct (hash, index) is inserted exactly once, and re-inserting
+// any is detected as a duplicate.
 func TestDiskParentSpendsMap_SameParentClustering(t *testing.T) {
-	const n = 20000 // many outputs of ONE parent, all clustering in one segment
+	const n = 20000 // many outputs of ONE parent
 
 	m, err := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 		BasePaths:      []string{t.TempDir()},
@@ -336,7 +339,7 @@ func TestDiskParentSpendsMap_SameParentClustering(t *testing.T) {
 
 	var parent chainhash.Hash
 	binary.LittleEndian.PutUint64(parent[0:8], 0xDEADBEEF)
-	binary.LittleEndian.PutUint64(parent[8:16], 0xC0FFEE) // fixes segment+bucket for all
+	binary.LittleEndian.PutUint64(parent[8:16], 0xC0FFEE) // shared parent; index disperses placement
 
 	// First pass: every distinct output index is a new entry.
 	for i := uint64(0); i < n; i++ {
@@ -359,4 +362,80 @@ func TestDiskParentSpendsMap_SameParentClustering(t *testing.T) {
 	got, err := m.SetIfNotExists(subtreepkg.Inpoint{Hash: other, Index: 0})
 	require.NoError(t, err)
 	require.True(t, got, "different parent hash must be a distinct entry")
+}
+
+// TestInpointKey_DispersesSameParent verifies that inpoints sharing one parent
+// hash but differing in output index spread across the mmap table's bucket
+// (key[0:8]) and segment (key[8:16]) windows, instead of all colliding into one
+// probe chain. Without dispersion every same-parent inpoint lands in the same
+// segment+bucket, making insert and grow-rehash O(N^2) for a single-parent
+// consolidation — the workload this map exists for.
+func TestInpointKey_DispersesSameParent(t *testing.T) {
+	var parent chainhash.Hash
+	binary.LittleEndian.PutUint64(parent[0:8], 0xDEADBEEF)
+	binary.LittleEndian.PutUint64(parent[8:16], 0xC0FFEE)
+
+	const n = 1000
+	buckets := make(map[uint64]struct{}, n)
+	segs := make(map[uint64]struct{}, n)
+	for i := 0; i < n; i++ {
+		k := inpointKey(subtreepkg.Inpoint{Hash: parent, Index: uint32(i)})
+		buckets[binary.LittleEndian.Uint64(k[0:8])] = struct{}{}
+		segs[binary.LittleEndian.Uint64(k[8:16])] = struct{}{}
+	}
+	require.Greaterf(t, len(buckets), n*9/10, "same-parent inpoints must disperse across bucket windows, got %d distinct of %d", len(buckets), n)
+	require.Greaterf(t, len(segs), n*9/10, "same-parent inpoints must disperse across segment windows, got %d distinct of %d", len(segs), n)
+}
+
+// TestInpointKey_Injective guards the dispersion transform: distinct (hash,index)
+// pairs must still map to distinct keys, or duplicate-input detection would
+// either miss a real duplicate or flag a false one.
+func TestInpointKey_Injective(t *testing.T) {
+	seen := make(map[[dpsInpointKeySize]byte]subtreepkg.Inpoint)
+	for h := 0; h < 64; h++ {
+		var hash chainhash.Hash
+		binary.LittleEndian.PutUint64(hash[0:8], uint64(h))
+		binary.LittleEndian.PutUint64(hash[16:24], uint64(h)*0x9e3779b97f4a7c15)
+		for idx := 0; idx < 64; idx++ {
+			ip := subtreepkg.Inpoint{Hash: hash, Index: uint32(idx)}
+			k := inpointKey(ip)
+			prev, ok := seen[k]
+			require.Falsef(t, ok, "key collision between %v and %v", prev, ip)
+			seen[k] = ip
+		}
+	}
+}
+
+// TestDiskParentSpendsMap_GrowsBeyondCapacity is the issue #1080 behaviour at the
+// map level: with FilterCapacity deliberately undersized, a same-parent cluster
+// that far exceeds the initial sizing must NOT halt with a storage error — the
+// backing mmap table grows transparently. The capacity is now a soft hint, not
+// a hard cap. Duplicate detection must still be exact after growth.
+func TestDiskParentSpendsMap_GrowsBeyondCapacity(t *testing.T) {
+	const n = 10000 // many outputs of ONE parent, all in one segment
+
+	m, err := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
+		BasePaths:      []string{t.TempDir()},
+		FilterCapacity: 64, // deliberately far smaller than n
+	})
+	require.NoError(t, err)
+	defer m.Close()
+
+	var parent chainhash.Hash
+	binary.LittleEndian.PutUint64(parent[0:8], 0xDEADBEEF)
+	binary.LittleEndian.PutUint64(parent[8:16], 0xC0FFEE) // shared parent; index disperses placement
+
+	for i := uint64(0); i < n; i++ {
+		got, err := m.SetIfNotExists(subtreepkg.Inpoint{Hash: parent, Index: uint32(i)})
+		require.NoErrorf(t, err, "insert of index %d must grow, not halt, at undersized capacity", i)
+		require.Truef(t, got, "index %d should be newly inserted", i)
+	}
+	require.Equal(t, int64(n), m.Stats().Entries)
+
+	// every entry is now detected as a duplicate (probe chains survived the grows)
+	for i := uint64(0); i < n; i++ {
+		got, err := m.SetIfNotExists(subtreepkg.Inpoint{Hash: parent, Index: uint32(i)})
+		require.NoError(t, err)
+		require.Falsef(t, got, "index %d should be detected as duplicate after grow", i)
+	}
 }
