@@ -9,7 +9,7 @@
 //
 // Run with:  go test -tags teraslab ./test/sequentialtest/double_spend/...
 // Override the image with the TERASLAB_IMAGE env var (defaults to
-// ghcr.io/icellan/teraslab:latest).
+// ghcr.io/icellan/teraslab:0.6.1).
 
 package doublespendtest
 
