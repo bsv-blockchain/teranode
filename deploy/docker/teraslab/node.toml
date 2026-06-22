@@ -1,0 +1,40 @@
+# TeraSlab single-node server config for local Teranode development.
+#
+# Mounted into the container at /etc/teraslab/node.toml (the image's default
+# --config path). ServerConfig is #[serde(default)], so this partial config is
+# sufficient; unset fields fall back to the server's built-in defaults.
+
+# Single-node mode (no cluster_secret / gossip required).
+node_id = 0
+
+# Bind on all interfaces so the host (and host-native Teranode) can reach the
+# mapped ports. enable_remote_bind permits the non-loopback bind; this is a
+# local dev setup with no mTLS, so keep the server on a trusted/local network.
+listen_addr        = "0.0.0.0:3300"
+http_listen_addr   = "0.0.0.0:9100"
+enable_remote_bind = true
+
+# Slab device. The file is sparse, so device_size is only a capacity ceiling —
+# it costs nothing on disk until records are actually written. 64 GiB is ample
+# headroom for the TeraTestNet UTXO set; raise it if you expect to exceed that.
+# The .redo and .tombstone logs are created alongside this path, and the cold
+# blobstore (tx bodies > 8 KiB) defaults to ./teraslab-blobstore — both are
+# mapped to host volumes by the compose file.
+device_paths = ["/data/teraslab.dat"]
+device_size  = 68719476736 # 64 GiB
+
+# --- Recovery / checkpoint ---
+# The redo log is a fixed-size linear WAL. When it fills before the checkpoint
+# task drains it, appends return RedoError::LogFull, which the spend path
+# surfaces to Teranode as "redo log append failed" (STORAGE_IO). The default
+# 64 MiB fills during block-validation spend bursts on TeraTestNet, so give it a
+# large buffer and checkpoint more aggressively. (The .redo file is fully
+# allocated, so redo_log_size consumes that much real disk on the working dir.)
+redo_log_size               = 1073741824 # 1 GiB redo buffer (default 64 MiB)
+checkpoint_poll_interval_ms = 250        # sample/drain ~4x more often (sampling is cheap)
+checkpoint_high_water       = 0.5        # start draining at half-full for more headroom
+
+# --- Index ---
+# In-memory index initial-sizing hint (~2x expected UTXO count keeps the load
+# factor low). The table auto-resizes, so this only avoids early resize churn.
+expected_records = 10000000
