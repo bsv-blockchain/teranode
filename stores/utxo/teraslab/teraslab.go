@@ -12,12 +12,11 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // Ensure Store implements the utxo.Store interface.
@@ -45,6 +44,7 @@ type Store struct {
 
 	storeBatcher batcherIfc[batchStoreItem]
 	getBatcher   batcherIfc[batchGetItem]
+	spendBatcher batcherIfc[batchSpendItem]
 }
 
 // New creates a new TeraSlab-based UTXO store.
@@ -110,9 +110,18 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchDuration := time.Duration(tSettings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond
 	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, !tSettings.BatcherDrainMode)
 
+	// Spend batcher: coalesces per-transaction spends into shared SpendBatch RPCs
+	// (grouped by params in sendSpendBatch) so the server amortizes its per-RPC
+	// redo fsync across many transactions — without this every validated tx
+	// incurs its own fsync, which caps catchup throughput on fsync-bound storage.
+	spendBatchSize := tSettings.UtxoStore.SpendBatcherSize
+	spendBatchDuration := time.Duration(tSettings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond
+	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatch, !tSettings.BatcherDrainMode)
+
 	if tSettings.BatcherDrainMode {
 		s.getBatcher.SetDrainMode(true)
 		s.storeBatcher.SetDrainMode(true)
+		s.spendBatcher.SetDrainMode(true)
 	}
 
 	logger.Infof("[TeraSlab] store initialised with address: %s", addr)

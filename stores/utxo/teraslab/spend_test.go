@@ -2,9 +2,11 @@ package teraslab_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -166,4 +168,85 @@ func TestSpendConflictingTxFails(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.Len(t, spends, 1)
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxConflicting)
+}
+
+// TestSpendConcurrentBatched exercises the spend batcher's new path: many
+// transactions spending at the SAME block height fire concurrently and coalesce
+// into one SpendBatch RPC. It verifies the global-indexed response is routed back
+// per-transaction without cross-contamination — valid spends each get their own
+// vout's result, and a concurrently-batched invalid spend (non-existent parent)
+// fails in isolation without affecting its siblings.
+func TestSpendConcurrentBatched(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	ctx := context.Background()
+
+	parent := newTestTx(t)
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+	height := store.GetBlockHeight() + 1
+
+	n := len(parent.Outputs)
+
+	// Build all spend txs up front (no testify calls inside goroutines).
+	validTxs := make([]*bt.Tx, n)
+	for i := 0; i < n; i++ {
+		validTxs[i] = makeSpendTx(t, parent, uint32(i))
+	}
+	// One invalid spend referencing a non-existent parent, batched alongside.
+	missing, _ := chainhash.NewHashFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	invalidTx := &bt.Tx{Version: 1, Inputs: []*bt.Input{{
+		PreviousTxOutIndex: 0,
+		PreviousTxScript:   parent.Outputs[0].LockingScript,
+		PreviousTxSatoshis: parent.Outputs[0].Satoshis,
+	}}, Outputs: []*bt.Output{{Satoshis: parent.Outputs[0].Satoshis, LockingScript: parent.Outputs[0].LockingScript}}}
+	require.NoError(t, invalidTx.Inputs[0].PreviousTxIDAdd(missing))
+
+	type res struct {
+		spends []*utxo.Spend
+		err    error
+	}
+	validRes := make([]res, n)
+	var invalidRes res
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(vout int) {
+			defer wg.Done()
+			validRes[vout].spends, validRes[vout].err = store.Spend(ctx, validTxs[vout], height)
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		invalidRes.spends, invalidRes.err = store.Spend(ctx, invalidTx, height)
+	}()
+	wg.Wait()
+
+	// Every valid, distinct-output spend succeeds and maps to its own vout.
+	for i := 0; i < n; i++ {
+		require.NoError(t, validRes[i].err, "valid spend vout %d", i)
+		require.Len(t, validRes[i].spends, 1)
+		assert.Nil(t, validRes[i].spends[0].Err, "valid spend vout %d result err", i)
+		assert.Equal(t, uint32(i), validRes[i].spends[0].Vout, "result must reference its own vout")
+	}
+
+	// The invalid spend fails in isolation (non-existent parent) — no sibling contamination.
+	require.Error(t, invalidRes.err)
+	require.ErrorIs(t, invalidRes.err, errors.ErrUtxoError)
+	require.Len(t, invalidRes.spends, 1)
+	assert.ErrorIs(t, invalidRes.spends[0].Err, errors.ErrTxNotFound)
+
+	// Confirm each parent output is now SPENT by ITS spending tx (no swap).
+	for i := 0; i < n; i++ {
+		utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[i], uint32(i))
+		require.NoError(t, err)
+		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: uint32(i), UTXOHash: utxoHash})
+		require.NoError(t, err)
+		assert.Equal(t, int(utxo.Status_SPENT), resp.Status, "vout %d should be spent", i)
+		require.NotNil(t, resp.SpendingData)
+		assert.Equal(t, validTxs[i].TxIDChainHash().String(), resp.SpendingData.TxID.String(),
+			"vout %d must be spent by its own tx", i)
+	}
 }

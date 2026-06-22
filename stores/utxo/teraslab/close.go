@@ -9,12 +9,12 @@ import (
 // Close drains every in-flight batched write and releases the backing TeraSlab
 // client (connection pools, cluster connections).
 //
-// The two batchers (store, get) each own a background worker goroutine. Their
-// Close() drains all queued items through the flush fn and blocks until the
+// The three batchers (store, get, spend) each own a background worker goroutine.
+// Their Close() drains all queued items through the flush fn and blocks until the
 // worker has fully unwound, so callers that already received a successful
-// response for a queued Create are guaranteed the write reached the server
-// before Close returns. (Spend, SetLocked and the other mutations call the
-// client directly and are not batched.)
+// response for a queued Create/Spend are guaranteed the write reached the server
+// before Close returns. (SetLocked and the other mutations call the client
+// directly and are not batched.)
 //
 // Unlike the Aerospike backend there is no inter-batcher drain dependency here:
 // each send*Batch writes directly to the client and replies on per-item done
@@ -42,9 +42,12 @@ func (s *Store) Close(ctx context.Context) error {
 		if s.getBatcher != nil {
 			s.getBatcher.Close()
 		}
-		// State-mutating writer last so it drains closest to the deadline.
+		// State-mutating writers last so they drain closest to the deadline.
 		if s.storeBatcher != nil {
 			s.storeBatcher.Close()
+		}
+		if s.spendBatcher != nil {
+			s.spendBatcher.Close()
 		}
 
 		// Always close the client after the batchers drain, even if ctx has

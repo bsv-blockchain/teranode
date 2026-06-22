@@ -6,12 +6,10 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	teraslab "github.com/icellan/teraslab/client/go"
-
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // Spend marks UTXOs as spent based on the transaction's inputs.
@@ -65,90 +63,33 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return spendResults, nil
 	}
 
-	params := teraslab.SpendBatchParams{
-		IgnoreConflicting:    flags.IgnoreConflicting,
-		IgnoreLocked:         flags.IgnoreLocked,
-		CurrentBlockHeight:   blockHeight,
-		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
+	// Submit the whole transaction to the spend batcher. sendSpendBatch coalesces
+	// transactions that share these params into one SpendBatch RPC (one server
+	// redo fsync), and routes the per-input results — and any all-or-nothing
+	// rollback — back here scoped to this transaction. The per-tx error mapping,
+	// conflicting-txid extraction and atomic rollback live in finalizeSpendResults
+	// / flushSpendGroup.
+	done := make(chan batchSpendResult, 1)
+	s.spendBatcher.Put(&batchSpendItem{
+		ctx:          ctx,
+		items:        items,
+		results:      spendResults,
+		spendingTxID: spendingTxID,
+		params: teraslab.SpendBatchParams{
+			IgnoreConflicting:    flags.IgnoreConflicting,
+			IgnoreLocked:         flags.IgnoreLocked,
+			CurrentBlockHeight:   blockHeight,
+			BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
+		},
+		done: done,
+	})
+
+	select {
+	case res := <-done:
+		return res.spends, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-
-	resp, err := s.client.SpendBatch(ctx, params, items)
-	if err != nil {
-		if pe, ok := err.(*teraslab.PartialError); ok {
-			// Map partial errors back to spend results
-			hasError := false
-			needsRollback := false
-			for _, itemErr := range pe.Errors {
-				if int(itemErr.ItemIndex) < len(spendResults) {
-					spendErr := mapErrorCode(itemErr.Code)
-					spendResults[itemErr.ItemIndex].Err = spendErr
-
-					// For AlreadySpent, extract the conflicting txid from error data
-					if itemErr.Code == teraslab.ErrCodeAlreadySpent && len(itemErr.Data) >= 36 {
-						conflictingSD := wireToSpendingData(teraslab.SpendingData(itemErr.Data[:36]))
-						if conflictingSD != nil {
-							spendResults[itemErr.ItemIndex].ConflictingTxID = conflictingSD.TxID
-						}
-					}
-					if spendCodeNeedsRollback(itemErr.Code) {
-						needsRollback = true
-					}
-					hasError = true
-				}
-			}
-
-			// Populate block IDs from successes
-			if resp != nil {
-				for _, success := range resp.Successes {
-					if int(success.ItemIndex) < len(spendResults) {
-						spendResults[success.ItemIndex].BlockIDs = success.BlockIDs
-					}
-				}
-			}
-
-			if hasError {
-				// Atomic-spend semantics: when the transaction is genuinely
-				// invalid (double-spend, frozen, conflicting, locked, hash
-				// mismatch, ...), roll back the sibling inputs that DID spend so
-				// those parent UTXOs remain spendable by a later valid tx. The
-				// Teranode validator relies on Spend being all-or-nothing here —
-				// it does not reverse partial spends itself — and the Aerospike
-				// backend behaves the same way (needsSpendRollback + Unspend).
-				// Skip rollback for transient/internal errors so an idempotent
-				// retry can reuse the successful spends.
-				if needsRollback {
-					succeeded := make([]*utxo.Spend, 0, len(spendResults))
-					for _, sp := range spendResults {
-						if sp.Err == nil {
-							succeeded = append(succeeded, sp)
-						}
-					}
-					if len(succeeded) > 0 {
-						// Use a fresh context so a cancelled caller context cannot
-						// abort the rollback and leak the partial spends.
-						if rbErr := s.Unspend(context.Background(), succeeded); rbErr != nil {
-							s.logger.Errorf("[TeraSlab] failed to roll back partial spend for %s: %v", spendingTxID.String(), rbErr)
-						}
-					}
-				}
-				return spendResults, errors.ErrUtxoError
-			}
-			return spendResults, nil
-		}
-
-		return nil, err
-	}
-
-	// Populate block IDs from successes
-	if resp != nil {
-		for _, success := range resp.Successes {
-			if int(success.ItemIndex) < len(spendResults) {
-				spendResults[success.ItemIndex].BlockIDs = success.BlockIDs
-			}
-		}
-	}
-
-	return spendResults, nil
 }
 
 // spendCodeNeedsRollback reports whether a per-item spend error code means the
