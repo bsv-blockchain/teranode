@@ -34,6 +34,14 @@ redo_log_size               = 1073741824 # 1 GiB redo buffer (default 64 MiB)
 checkpoint_poll_interval_ms = 250        # sample/drain ~4x more often (sampling is cheap)
 checkpoint_high_water       = 0.5        # start draining at half-full for more headroom
 
+# Index snapshot path. MUST be absolute with an existing parent dir: the
+# checkpoint writes the snapshot via a temp-file-in-parent + rename, and the
+# default relative "teraslab-index.snap" has an empty parent path, so temp-file
+# creation fails with ENOENT — every checkpoint then fails, the redo never
+# drains, and it fills (→ "redo log append failed"). /data is the mounted
+# working dir, so the snapshot + its .height/.tmp siblings land there.
+index_snapshot_path = "/data/teraslab-index.snap"
+
 # --- Index ---
 # In-memory index initial-sizing hint (~2x expected UTXO count keeps the load
 # factor low). The table auto-resizes, so this only avoids early resize churn.
