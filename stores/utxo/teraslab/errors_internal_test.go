@@ -3,9 +3,8 @@ package teraslab
 import (
 	"testing"
 
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
+	teraslab "github.com/icellan/teraslab/client/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

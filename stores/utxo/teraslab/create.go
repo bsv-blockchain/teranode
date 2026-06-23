@@ -5,10 +5,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // Create stores a new transaction's outputs as UTXOs and returns associated metadata.

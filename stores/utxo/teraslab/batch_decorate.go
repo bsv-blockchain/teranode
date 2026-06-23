@@ -4,11 +4,10 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // BatchDecorate efficiently fetches metadata for multiple transactions.

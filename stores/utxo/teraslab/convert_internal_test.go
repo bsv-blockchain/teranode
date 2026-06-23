@@ -8,11 +8,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	teraslab "github.com/icellan/teraslab/client/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -8,14 +8,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // fieldNameToMask maps a Teranode FieldName to the TeraSlab field mask bits

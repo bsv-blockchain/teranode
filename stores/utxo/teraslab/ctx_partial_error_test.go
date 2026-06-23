@@ -2,7 +2,6 @@ package teraslab_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -33,7 +32,7 @@ func TestCreateRespectsCallerContext(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+		assert.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
 		// Returning before the batcher's flush window proves we did not block on the channel.
 		assert.Less(t, elapsed, 250*time.Millisecond, "Create should return promptly on a cancelled context")
 	})
@@ -51,7 +50,7 @@ func TestCreateRespectsCallerContext(t *testing.T) {
 		_, err := store.Create(ctx, tx2, 0)
 		require.Error(t, err)
 		assert.True(t,
-			errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
+			teranodeerrors.Is(err, context.DeadlineExceeded) || teranodeerrors.Is(err, context.Canceled),
 			"expected DeadlineExceeded or Canceled, got %v", err)
 	})
 }
@@ -71,7 +70,7 @@ func TestGetRespectsCallerContext(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+	assert.True(t, teranodeerrors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
 	assert.Less(t, elapsed, 250*time.Millisecond, "Get should return promptly on a cancelled context")
 }
 

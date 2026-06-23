@@ -5,9 +5,8 @@ import (
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // batchStoreItem is a single item in the store batcher.

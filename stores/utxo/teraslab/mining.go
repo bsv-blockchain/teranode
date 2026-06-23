@@ -4,10 +4,9 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // SetMinedMulti updates the block ID for multiple transactions that have been mined.

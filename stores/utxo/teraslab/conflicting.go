@@ -4,13 +4,12 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.

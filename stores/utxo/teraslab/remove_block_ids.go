@@ -3,10 +3,9 @@ package teraslab
 import (
 	"context"
 
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // RemoveBlockIDs trims the supplied block IDs from each transaction's block

@@ -1,9 +1,8 @@
 package teraslab
 
 import (
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/errors"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // partialErrorToError converts a TeraSlab PartialError into a single joined

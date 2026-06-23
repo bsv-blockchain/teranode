@@ -3,10 +3,9 @@ package teraslab
 import (
 	"context"
 
-	teraslab "github.com/icellan/teraslab/client/go"
-
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teraslab "github.com/icellan/teraslab/client/go"
 )
 
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
