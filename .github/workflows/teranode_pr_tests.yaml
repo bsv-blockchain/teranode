@@ -56,6 +56,35 @@ jobs:
           path: golangci-lint-report.xml
           retention-days: 1
 
+  test-teraslab:
+    name: test-teraslab
+    runs-on: teranode-runner-16-core-arm
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      # TeraSlab integration tests run behind the `teraslab` build tag and start a
+      # testcontainer per test, so they live in their own job with a longer timeout
+      # rather than blowing the default `test` job's 10m per-package budget.
+      - name: Run TeraSlab integration tests
+        run: make test-teraslab
+
   test:
     name: test
     runs-on: teranode-runner-16-core-arm
@@ -152,4 +181,3 @@ jobs:
           name: sonar-filename-report
           path: sonar_filename_report.json
           retention-days: 1
-

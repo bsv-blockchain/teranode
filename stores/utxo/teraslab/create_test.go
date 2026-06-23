@@ -1,3 +1,5 @@
+//go:build teraslab
+
 package teraslab_test
 
 import (
