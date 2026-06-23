@@ -118,7 +118,7 @@ func TestDelete(t *testing.T) {
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
 
-func TestCreateAfterSpendReturnsErrSpent(t *testing.T) {
+func TestCreateAfterSpendReturnsErrTxExists(t *testing.T) {
 	store, _, deferFn := initTeraSlabWithDefaults(t)
 	defer deferFn()
 	ctx := context.Background()
@@ -139,8 +139,13 @@ func TestCreateAfterSpendReturnsErrSpent(t *testing.T) {
 	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
-	// Creating again should return ErrSpent (not ErrTxExists)
+	// Re-creating an existing tx returns ErrTxExists regardless of whether its
+	// outputs have since been spent — matching the Aerospike backend. Block
+	// Assembly's processCoinbaseUtxos relies on this: during catch-up it
+	// re-creates coinbases that may already be mature and spent by a later
+	// block, and tolerates ONLY ErrTxExists. Upgrading to ErrSpent here aborts
+	// catch-up with "error processing coinbase utxos -> UTXO_SPENT".
 	_, err = store.Create(ctx, tx, 0)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrSpent))
+	assert.True(t, errors.Is(err, errors.ErrTxExists))
 }
