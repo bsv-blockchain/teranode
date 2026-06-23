@@ -15,7 +15,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/conflictwal"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/usql"
 	teraslab "github.com/icellan/teraslab/client/go"
 )
 
@@ -45,6 +48,13 @@ type Store struct {
 	storeBatcher batcherIfc[batchStoreItem]
 	getBatcher   batcherIfc[batchGetItem]
 	spendBatcher batcherIfc[batchSpendItem]
+
+	// walDB / walEngine back the conflict-resolution WAL (#861). The TeraSlab
+	// server cannot hold arbitrary intent records, so the WAL reuses the shared
+	// conflictwal package over a dedicated SQL connection (Postgres in prod,
+	// SQLite for dev — see New).
+	walDB     *usql.DB
+	walEngine string
 }
 
 // New creates a new TeraSlab-based UTXO store.
@@ -94,11 +104,36 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		utxoBatchSize = 20000
 	}
 
+	// Open the conflict-resolution WAL backing store (#861). The TeraSlab server
+	// cannot hold arbitrary intent records, so the WAL reuses the standard SQL
+	// store mechanism: set utxostore_teraslab_conflictWalStore to a postgres://
+	// URL in production (durable, shared, scalable); defaults to a local SQLite
+	// file under DataFolder for development.
+	walURL := tSettings.UtxoStore.TeraSlabConflictWALStore
+	if walURL == nil || walURL.String() == "" {
+		walURL, err = url.Parse("sqlite:///teraslab_conflict_wal")
+		if err != nil {
+			return nil, errors.NewStorageError("teraslab: parse default conflict WAL URL", err)
+		}
+	}
+
+	walDB, err := util.InitSQLDB(logger, walURL, tSettings, tSettings.UtxoStore.PostgresPool)
+	if err != nil {
+		return nil, errors.NewStorageError("teraslab: open conflict WAL store", err)
+	}
+
+	if err := conflictwal.CreateTable(walDB, walURL.Scheme); err != nil {
+		_ = walDB.Close()
+		return nil, err
+	}
+
 	s := &Store{
 		client:        client,
 		logger:        logger,
 		settings:      tSettings,
 		utxoBatchSize: utxoBatchSize,
+		walDB:         walDB,
+		walEngine:     walURL.Scheme,
 	}
 
 	// Initialize batchers

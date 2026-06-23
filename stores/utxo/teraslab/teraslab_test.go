@@ -120,3 +120,15 @@ func TestMinedThenSpendAllPrunes(t *testing.T) {
 
 	tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
 }
+
+func TestConflictWAL(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.ConflictWAL(t, store)
+}
+
+func TestConflictWALCrashRecovery(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.ConflictWALCrashRecovery(t, store)
+}

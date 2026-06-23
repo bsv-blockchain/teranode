@@ -57,6 +57,13 @@ func (s *Store) Close(ctx context.Context) error {
 				closeErr = errors.NewStorageError("teraslab client close", err)
 			}
 		}
+
+		// Release the conflict-WAL SQL connection.
+		if s.walDB != nil {
+			if err := s.walDB.Close(); err != nil && closeErr == nil {
+				closeErr = errors.NewStorageError("teraslab conflict WAL close", err)
+			}
+		}
 	}()
 
 	select {
